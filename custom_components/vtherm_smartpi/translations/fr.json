@@ -3,7 +3,29 @@
   "config": {
     "step": {
       "user": {
+        "title": "Configuration SmartPI",
+        "menu": {
+          "thermostat": "Configurer un thermostat",
+          "global": "Configurer les valeurs par défaut"
+        }
+      },
+      "global": {
         "title": "Paramètres SmartPI",
+        "data": {
+          "minimal_activation_delay": "Délai minimal d'activation",
+          "minimal_deactivation_delay": "Délai minimal de désactivation",
+          "smart_pi_deadband": "Bande morte",
+          "smart_pi_hysteresis_on": "Hystérésis marche",
+          "smart_pi_hysteresis_off": "Hystérésis arrêt",
+          "smart_pi_release_tau_factor": "Facteur tau de relâchement",
+          "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
+          "smart_pi_use_ff3": "Utiliser FF3",
+          "smart_pi_deadband_allow_p": "Autoriser P dans la bande morte",
+          "smart_pi_debug": "Mode debug"
+        }
+      },
+      "thermostat": {
+        "title": "SmartPI par thermostat",
         "data": {
           "target_vtherm_unique_id": "Thermostat cible",
           "minimal_activation_delay": "Délai minimal d'activation",
@@ -28,7 +50,6 @@
       "init": {
         "title": "Paramètres SmartPI",
         "data": {
-          "target_vtherm_unique_id": "Thermostat cible",
           "minimal_activation_delay": "Délai minimal d'activation",
           "minimal_deactivation_delay": "Délai minimal de désactivation",
           "smart_pi_deadband": "Bande morte",

@@ -132,9 +132,14 @@ class SmartPIHandler:
             ),
             None,
         )
-        if matching_entry is not None:
-            config.update(matching_entry.data)
-            config.update(matching_entry.options)
+        global_entry = next(
+            (entry for entry in plugin_entries if entry.unique_id == DOMAIN),
+            None,
+        )
+        entry_to_apply = matching_entry or global_entry
+        if entry_to_apply is not None:
+            config.update(entry_to_apply.data)
+            config.update(entry_to_apply.options)
 
         return config
 
