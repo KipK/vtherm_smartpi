@@ -1,6 +1,7 @@
 {
   "domain": "vtherm_smartpi",
   "name": "Versatile Thermostat SmartPI",
+  "description": "SmartPI proportional algorithm plugin for Versatile Thermostat",
   "version": "0.1.0",
   "config_flow": true,
   "dependencies": [
