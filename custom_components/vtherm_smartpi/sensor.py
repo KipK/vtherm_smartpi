@@ -111,4 +111,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
             return
 
         self._attr_native_value = "active"
-        self._attr_extra_state_attributes = algo.get_diagnostics()
+        if getattr(algo, "_debug_mode", False):
+            self._attr_extra_state_attributes = algo.get_debug_diagnostics() or algo.get_published_diagnostics()
+        else:
+            self._attr_extra_state_attributes = algo.get_published_diagnostics()
