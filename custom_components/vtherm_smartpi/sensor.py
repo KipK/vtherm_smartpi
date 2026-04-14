@@ -111,26 +111,4 @@ class SmartPIDiagnosticSensor(SensorEntity):
             return
 
         self._attr_native_value = "active"
-        
-        attrs = {}
-        
-        properties = [
-            "phase", "calibration_state", "Kp", "Ki", "_current_governance_regime",
-            "meas_count_a", "meas_count_b", "a", "b", "on_percent", "calculated_on_percent",
-            "committed_on_percent", "integral_error", "kp", "ki", "u_ff", "u_ff3", "u_pi",
-            "kp_reel", "ki_reel", "tau_min", "tau_reliable", "learn_ok_count",
-            "learn_ok_count_a", "learn_ok_count_b", "learn_skip_count", "learn_last_reason",
-            "learning_start_dt", "last_decision_thermal", "freeze_reason_thermal"
-        ]
-        
-        for prop in properties:
-            try:
-                # remove leading underscore to make attribute names prettier
-                key = prop.lstrip('_')
-                val = getattr(algo, prop, None)
-                if val is not None:
-                    attrs[key] = str(val) if isinstance(val, Enum) else val
-            except Exception:
-                pass
-                
-        self._attr_extra_state_attributes = attrs
+        self._attr_extra_state_attributes = algo.get_diagnostics()
