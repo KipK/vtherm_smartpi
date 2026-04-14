@@ -89,14 +89,12 @@ def build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 def build_user_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Build the SmartPI per-thermostat schema."""
-    schema = build_options_schema(defaults).schema.copy()
-    schema.update(
-        {
-            vol.Required(CONF_TARGET_VTHERM): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=CLIMATE_DOMAIN)
-            )
-        }
-    )
+    schema = {
+        vol.Required(CONF_TARGET_VTHERM): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=CLIMATE_DOMAIN)
+        )
+    }
+    schema.update(build_options_schema(defaults).schema)
     return vol.Schema(schema)
 
 
