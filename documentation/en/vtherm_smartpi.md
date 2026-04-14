@@ -10,7 +10,7 @@
 
 ## How it works
 
-SmartPI is an alternative to the classic TPI approach. Its goal is straightforward: learn the real thermal behavior of the room, then adapt the regulation automatically.
+SmartPI is an alternative to the classic TPI approach, provided as a standalone integration (**vtherm_smartpi**) for Versatile Thermostat. Its goal is straightforward: learn the real thermal behavior of the room, then adapt the regulation automatically.
 
 In practice, SmartPI continuously learns three main things:
 

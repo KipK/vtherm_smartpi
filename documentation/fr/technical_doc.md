@@ -2,7 +2,7 @@
 
 ## 1. Introduction
 
-**Smart-PI** est le régulateur proportionnel-intégral discret auto-adaptatif de *Versatile Thermostat*. Il vise à remplacer un TPI à coefficients fixes par une boucle qui apprend en ligne le comportement thermique réel de la pièce.
+**Smart-PI** est un régulateur proportionnel-intégral discret auto-adaptatif, disponible sous forme d'intégration autonome pour *Versatile Thermostat*. Il vise à remplacer un TPI à coefficients fixes par une boucle qui apprend en ligne le comportement thermique réel de la pièce.
 
 Le code actuel repose sur trois idées directrices :
 
