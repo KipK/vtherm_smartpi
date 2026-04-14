@@ -5,6 +5,7 @@
       "user": {
         "title": "Paramètres SmartPI",
         "data": {
+          "target_vtherm_unique_id": "Thermostat cible",
           "minimal_activation_delay": "Délai minimal d'activation",
           "minimal_deactivation_delay": "Délai minimal de désactivation",
           "smart_pi_deadband": "Bande morte",
@@ -27,6 +28,7 @@
       "init": {
         "title": "Paramètres SmartPI",
         "data": {
+          "target_vtherm_unique_id": "Thermostat cible",
           "minimal_activation_delay": "Délai minimal d'activation",
           "minimal_deactivation_delay": "Délai minimal de désactivation",
           "smart_pi_deadband": "Bande morte",

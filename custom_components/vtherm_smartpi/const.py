@@ -48,6 +48,11 @@ HVAC_OFF_REASON_WINDOW_DETECTION = "hvac_off_window_detection"
 PROP_FUNCTION_SMART_PI = "smartpi"
 
 DATA_FACTORY_REGISTERED = "factory_registered"
+DATA_SERVICES_REGISTERED = "services_registered"
+
+SERVICE_RESET_SMARTPI_LEARNING = "reset_smartpi_learning"
+SERVICE_FORCE_SMARTPI_CALIBRATION = "force_smartpi_calibration"
+SERVICE_RESET_SMARTPI_INTEGRAL = "reset_smartpi_integral"
 
 
 class EventType(Enum):

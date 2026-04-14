@@ -132,10 +132,9 @@ class SmartPIHandler:
             ),
             None,
         )
-        plugin_entry = matching_entry or (plugin_entries[0] if plugin_entries else None)
-        if plugin_entry is not None:
-            config.update(plugin_entry.data)
-            config.update(plugin_entry.options)
+        if matching_entry is not None:
+            config.update(matching_entry.data)
+            config.update(matching_entry.options)
 
         return config
 

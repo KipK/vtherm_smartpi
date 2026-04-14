@@ -6,7 +6,7 @@ Current scope:
 
 - registers the `smartpi` proportional algorithm in VT
 - embeds the SmartPI core and runtime handler
-- exposes one global plugin configuration entry for SmartPI default settings
+- provides per-thermostat SmartPI configuration entries
 
 Planned next steps:
 

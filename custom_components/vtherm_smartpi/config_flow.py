@@ -7,6 +7,8 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, OptionsFlow
 from homeassistant.helpers import selector
+from homeassistant.helpers import entity_registry as er
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 
 from .const import (
     CONF_MINIMAL_ACTIVATION_DELAY,
@@ -19,6 +21,7 @@ from .const import (
     CONF_SMART_PI_RELEASE_TAU_FACTOR,
     CONF_SMART_PI_USE_FF3,
     CONF_SMART_PI_USE_SETPOINT_FILTER,
+    CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
     NAME,
@@ -84,6 +87,18 @@ def build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
         }
     )
 
+def build_user_schema(defaults: dict[str, Any]) -> vol.Schema:
+    """Build the SmartPI per-thermostat schema."""
+    schema = build_options_schema(defaults).schema.copy()
+    schema.update(
+        {
+            vol.Required(CONF_TARGET_VTHERM): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=CLIMATE_DOMAIN)
+            )
+        }
+    )
+    return vol.Schema(schema)
+
 
 class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
     """Create a singleton SmartPI plugin entry."""
@@ -92,15 +107,28 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Handle the initial config flow step."""
-        await self.async_set_unique_id(DOMAIN)
-        self._abort_if_unique_id_configured()
-
         if user_input is not None:
-            return self.async_create_entry(title=NAME, data=user_input)
+            entity_id = user_input.get(CONF_TARGET_VTHERM)
+            registry = er.async_get(self.hass)
+            reg_entry = registry.async_get(entity_id)
+            if reg_entry is None or reg_entry.unique_id is None:
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=build_user_schema(DEFAULT_OPTIONS),
+                    errors={CONF_TARGET_VTHERM: "invalid_entity"},
+                )
+
+            target_unique_id = reg_entry.unique_id
+            await self.async_set_unique_id(f"{DOMAIN}-{target_unique_id}")
+            self._abort_if_unique_id_configured()
+
+            data = dict(user_input)
+            data[CONF_TARGET_VTHERM] = target_unique_id
+            return self.async_create_entry(title=NAME, data=data)
 
         return self.async_show_form(
             step_id="user",
-            data_schema=build_options_schema(DEFAULT_OPTIONS),
+            data_schema=build_user_schema(DEFAULT_OPTIONS),
         )
 
     @staticmethod

@@ -7,10 +7,21 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
+from homeassistant.helpers import service as service_helper
 from vtherm_api.log_collector import get_vtherm_logger
 from vtherm_api.vtherm_api import VThermAPI
 
-from .const import CONF_PROP_FUNCTION, DATA_FACTORY_REGISTERED, DOMAIN, PROP_FUNCTION_SMART_PI
+from .const import (
+    CONF_PROP_FUNCTION,
+    DATA_FACTORY_REGISTERED,
+    DATA_SERVICES_REGISTERED,
+    DOMAIN,
+    PROP_FUNCTION_SMART_PI,
+    SERVICE_FORCE_SMARTPI_CALIBRATION,
+    SERVICE_RESET_SMARTPI_INTEGRAL,
+    SERVICE_RESET_SMARTPI_LEARNING,
+)
 from .factory import SmartPIHandlerFactory
 
 VT_DOMAIN = "versatile_thermostat"
@@ -51,6 +62,57 @@ def _unregister_factory(hass: HomeAssistant) -> None:
     _ensure_domain_data(hass)[DATA_FACTORY_REGISTERED] = False
 
 
+def _register_services(hass: HomeAssistant) -> None:
+    """Register SmartPI services on the plugin domain."""
+    data = _ensure_domain_data(hass)
+    if data.get(DATA_SERVICES_REGISTERED) is True:
+        return
+
+    async def _call_on_vtherms(call, method_name: str) -> None:
+        entity_ids = service_helper.async_extract_entity_ids(hass, call)
+        component = hass.data.get(CLIMATE_DOMAIN)
+        if not component:
+            return
+        for entity in list(component.entities):
+            if entity.entity_id not in entity_ids:
+                continue
+            if getattr(entity, "proportional_function", None) != PROP_FUNCTION_SMART_PI:
+                continue
+            handler = getattr(entity, method_name, None)
+            if handler is None:
+                _LOGGER.warning(
+                    "Service %s not available on %s", method_name, entity.entity_id
+                )
+                continue
+            await handler()
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESET_SMARTPI_LEARNING,
+        lambda call: _call_on_vtherms(call, "service_reset_smart_pi_learning"),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_FORCE_SMARTPI_CALIBRATION,
+        lambda call: _call_on_vtherms(call, "service_force_smartpi_calibration"),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESET_SMARTPI_INTEGRAL,
+        lambda call: _call_on_vtherms(call, "service_reset_smartpi_integral"),
+    )
+
+    data[DATA_SERVICES_REGISTERED] = True
+
+
+def _unregister_services(hass: HomeAssistant) -> None:
+    """Unregister SmartPI services from the plugin domain."""
+    hass.services.async_remove(DOMAIN, SERVICE_RESET_SMARTPI_LEARNING)
+    hass.services.async_remove(DOMAIN, SERVICE_FORCE_SMARTPI_CALIBRATION)
+    hass.services.async_remove(DOMAIN, SERVICE_RESET_SMARTPI_INTEGRAL)
+    _ensure_domain_data(hass)[DATA_SERVICES_REGISTERED] = False
+
+
 async def _reload_smartpi_vtherms(hass: HomeAssistant) -> None:
     """Reload VT entries that currently target the SmartPI proportional function."""
     reload_tasks = [
@@ -66,6 +128,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up vtherm_smartpi from YAML."""
     del config
     _register_factory(hass)
+    _register_services(hass)
     return True
 
 
@@ -73,6 +136,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up vtherm_smartpi from a config entry."""
     _ensure_domain_data(hass)[entry.entry_id] = entry.entry_id
     _register_factory(hass)
+    _register_services(hass)
     await _reload_smartpi_vtherms(hass)
     return True
 
@@ -82,8 +146,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = _ensure_domain_data(hass)
     data.pop(entry.entry_id, None)
 
-    if not [key for key in data if key != DATA_FACTORY_REGISTERED]:
+    if not [key for key in data if key not in (DATA_FACTORY_REGISTERED, DATA_SERVICES_REGISTERED)]:
         _unregister_factory(hass)
+        _unregister_services(hass)
 
     await _reload_smartpi_vtherms(hass)
     return True

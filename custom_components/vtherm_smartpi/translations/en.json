@@ -5,6 +5,7 @@
       "user": {
         "title": "SmartPI defaults",
         "data": {
+          "target_vtherm_unique_id": "Target thermostat",
           "minimal_activation_delay": "Minimal activation delay",
           "minimal_deactivation_delay": "Minimal deactivation delay",
           "smart_pi_deadband": "Deadband",
@@ -27,6 +28,7 @@
       "init": {
         "title": "SmartPI defaults",
         "data": {
+          "target_vtherm_unique_id": "Target thermostat",
           "minimal_activation_delay": "Minimal activation delay",
           "minimal_deactivation_delay": "Minimal deactivation delay",
           "smart_pi_deadband": "Deadband",
