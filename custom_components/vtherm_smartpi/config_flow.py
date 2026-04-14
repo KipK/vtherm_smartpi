@@ -124,7 +124,9 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
 
             data = dict(user_input)
             data[CONF_TARGET_VTHERM] = target_unique_id
-            return self.async_create_entry(title=NAME, data=data)
+            state = self.hass.states.get(entity_id)
+            title = state.name if state is not None else entity_id
+            return self.async_create_entry(title=title, data=data)
 
         return self.async_show_form(
             step_id="user",
