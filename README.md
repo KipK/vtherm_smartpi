@@ -1,4 +1,4 @@
-# Versatile Thermostat SmartPI
+# SmartPI algorithm for Versatile Thermostat
 
 <p align="center">
   <img src="assets/brand/logo.png" alt="SmartPI Logo" width="300" />
