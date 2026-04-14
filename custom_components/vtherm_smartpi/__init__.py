@@ -132,17 +132,26 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     return True
 
 
+from homeassistant.const import Platform
+
+PLATFORMS = [Platform.SENSOR]
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up vtherm_smartpi from a config entry."""
     _ensure_domain_data(hass)[entry.entry_id] = entry.entry_id
     _register_factory(hass)
     _register_services(hass)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await _reload_smartpi_vtherms(hass)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a vtherm_smartpi config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
+
     data = _ensure_domain_data(hass)
     data.pop(entry.entry_id, None)
 
