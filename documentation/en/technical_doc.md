@@ -2,7 +2,7 @@
 
 ## 1. Introduction
 
-**Smart-PI** is the self-adaptive discrete proportional-integral controller used by *Versatile Thermostat*. Its goal is to replace a fixed-coefficient TPI with a loop that learns the real thermal behavior of the room online.
+**Smart-PI** is a self-adaptive discrete proportional-integral controller, available as a standalone integration for *Versatile Thermostat*. Its goal is to replace a fixed-coefficient TPI with a loop that learns the real thermal behavior of the room online.
 
 The current codebase is built around three guiding ideas:
 

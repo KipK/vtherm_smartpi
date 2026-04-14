@@ -10,7 +10,7 @@
 
 ## Principe de fonctionnement
 
-SmartPI est une alternative au TPI classique. Son but est simple : apprendre progressivement le comportement thermique réel de la pièce, puis ajuster automatiquement la régulation.
+SmartPI est une alternative au TPI classique, fournie sous forme d'intégration autonome (**vtherm_smartpi**) pour Versatile Thermostat. Son but est simple : apprendre progressivement le comportement thermique réel de la pièce, puis ajuster automatiquement la régulation.
 
 Concrètement, SmartPI apprend en continu trois éléments principaux :
 
