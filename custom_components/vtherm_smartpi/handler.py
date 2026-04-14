@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from homeassistant.util import slugify
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from datetime import timedelta
 
 from .algo import SmartPI
@@ -369,6 +370,9 @@ class SmartPIHandler:
                     _LOGGER.warning(
                         "%s - AutoCalib: calibration requested by supervisor", t.name
                     )
+
+        # Dispatch an update signal to the diagnostic sensor so it records attributes for this cycle
+        async_dispatcher_send(t.hass, f"smartpi_diag_update_{t.unique_id}")
 
     async def on_state_changed(self):
         """Handle state changes."""

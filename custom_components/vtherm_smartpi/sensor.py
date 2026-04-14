@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 
 from .const import CONF_TARGET_VTHERM, DOMAIN
@@ -73,6 +74,9 @@ class SmartPIDiagnosticSensor(SensorEntity):
         self._unsub = async_track_state_change_event(
             self.hass, [self._climate_entity_id], self._async_climate_changed
         )
+        self._unsub_diag = async_dispatcher_connect(
+            self.hass, f"smartpi_diag_update_{self._unique_id_base}", self._async_force_update
+        )
         self._update_from_climate()
 
     async def async_will_remove_from_hass(self):
@@ -80,10 +84,19 @@ class SmartPIDiagnosticSensor(SensorEntity):
         if self._unsub:
             self._unsub()
             self._unsub = None
+        if hasattr(self, '_unsub_diag') and self._unsub_diag:
+            self._unsub_diag()
+            self._unsub_diag = None
 
     @callback
     def _async_climate_changed(self, event):
         """Handle climate state change."""
+        self._update_from_climate()
+        self.async_write_ha_state()
+
+    @callback
+    def _async_force_update(self):
+        """Handle forced diagnostic update from SmartPI handler."""
         self._update_from_climate()
         self.async_write_ha_state()
 
