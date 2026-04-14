@@ -6,7 +6,7 @@ import asyncio
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.helpers import service as service_helper
 from vtherm_api.log_collector import get_vtherm_logger
@@ -142,7 +142,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _register_factory(hass)
     _register_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    await _reload_smartpi_vtherms(hass)
+    # Only reload VT entries when HA is already running (live install/update).
+    # During initial startup, VT handles deferred algorithm init via async_startup
+    # which fires after EVENT_HOMEASSISTANT_STARTED — reloading here would force
+    # entity re-creation before the recorder has restored previous states.
+    if hass.state == CoreState.running:
+        await _reload_smartpi_vtherms(hass)
     return True
 
 
