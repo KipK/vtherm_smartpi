@@ -1,0 +1,46 @@
+{
+  "title": "Versatile Thermostat SmartPI",
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartPI defaults",
+        "data": {
+          "minimal_activation_delay": "Minimal activation delay",
+          "minimal_deactivation_delay": "Minimal deactivation delay",
+          "max_on_percent": "Maximum on percent",
+          "smart_pi_deadband": "Deadband",
+          "smart_pi_hysteresis_on": "Hysteresis on",
+          "smart_pi_hysteresis_off": "Hysteresis off",
+          "smart_pi_release_tau_factor": "Release tau factor",
+          "smart_pi_use_setpoint_filter": "Use setpoint filter",
+          "smart_pi_use_ff3": "Use FF3",
+          "smart_pi_deadband_allow_p": "Allow P inside deadband",
+          "smart_pi_debug": "Debug mode"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one SmartPI plugin configuration is allowed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SmartPI defaults",
+        "data": {
+          "minimal_activation_delay": "Minimal activation delay",
+          "minimal_deactivation_delay": "Minimal deactivation delay",
+          "max_on_percent": "Maximum on percent",
+          "smart_pi_deadband": "Deadband",
+          "smart_pi_hysteresis_on": "Hysteresis on",
+          "smart_pi_hysteresis_off": "Hysteresis off",
+          "smart_pi_release_tau_factor": "Release tau factor",
+          "smart_pi_use_setpoint_filter": "Use setpoint filter",
+          "smart_pi_use_ff3": "Use FF3",
+          "smart_pi_deadband_allow_p": "Allow P inside deadband",
+          "smart_pi_debug": "Debug mode"
+        }
+      }
+    }
+  }
+}
