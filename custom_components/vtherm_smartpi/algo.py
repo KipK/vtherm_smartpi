@@ -2051,15 +2051,23 @@ class SmartPI:
         """
         Compute the next duty-cycle command.
         """
+        def _is_hvac_mode_like(value: Any) -> bool:
+            """Return True when a value looks like a VTherm HVAC mode object."""
+            return value is not None and str(value) in {
+                str(VThermHvacMode_OFF),
+                str(VThermHvacMode_HEAT),
+                str(VThermHvacMode_COOL),
+            }
+
         # Compatibility handling for old signature: calculate(t, c, dt_min, now, hvac_mode)
         # In old calls: ext_current_temp=dt_min, hvac_mode=now, slope=hvac_mode
-        if isinstance(slope, VThermHvacMode) and not isinstance(hvac_mode, VThermHvacMode):
+        if _is_hvac_mode_like(slope) and not _is_hvac_mode_like(hvac_mode):
             # old call: positional args were (target, current, ext, slope_float, hvac_mode)
             # hvac_mode param received the slope float (or None), slope param received the VThermHvacMode
             _slope_val = hvac_mode  # save the float (or None) that landed in hvac_mode
             hvac_mode = slope       # move VThermHvacMode to its proper param
             slope = _slope_val if isinstance(_slope_val, (int, float)) else None
-        elif hvac_mode is None and len(args) > 0 and isinstance(args[0], VThermHvacMode):
+        elif hvac_mode is None and len(args) > 0 and _is_hvac_mode_like(args[0]):
             # another old call variant
             hvac_mode = args[0]
 
