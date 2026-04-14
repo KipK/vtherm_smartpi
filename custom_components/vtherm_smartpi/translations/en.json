@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "SmartPI configuration",
-        "menu": {
+        "menu_options": {
           "thermostat": "Configure a thermostat",
           "global": "Configure global defaults"
         }
