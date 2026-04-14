@@ -51,6 +51,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
         """Initialize the sensor."""
         self.hass = hass
         self._climate_entity_id = climate_entity_id
+        self._unique_id_base = unique_id_base
         self._attr_unique_id = f"smartpi_diag_{unique_id_base}"
         self._attr_name = "SmartPI Diagnostics"
         self._attr_native_value = "unknown"
