@@ -45,7 +45,7 @@ DEFAULT_OPTIONS: dict[str, float | bool | int] = {
 }
 
 HVAC_OFF_REASON_WINDOW_DETECTION = "hvac_off_window_detection"
-PROP_FUNCTION_SMART_PI = "smart_pi"
+PROP_FUNCTION_SMART_PI = "smartpi"
 
 DATA_FACTORY_REGISTERED = "factory_registered"
 

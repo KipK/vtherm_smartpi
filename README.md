@@ -4,7 +4,7 @@ Home Assistant integration that provides the SmartPI proportional algorithm for 
 
 Current scope:
 
-- registers the `smart_pi` proportional algorithm in VT
+- registers the `smartpi` proportional algorithm in VT
 - embeds the SmartPI core and runtime handler
 - exposes one global plugin configuration entry for SmartPI default settings
 
