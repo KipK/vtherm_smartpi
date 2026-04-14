@@ -26,6 +26,4 @@ Current scope:
 
 ## 🛠 Planned Next Steps
 
-- move SmartPI services to the plugin domain
-- add SmartPI entities for diagnostics and calibration state
 - port and adapt the SmartPI test suite to the standalone plugin runtime
