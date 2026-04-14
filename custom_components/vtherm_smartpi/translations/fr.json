@@ -7,7 +7,6 @@
         "data": {
           "minimal_activation_delay": "Délai minimal d'activation",
           "minimal_deactivation_delay": "Délai minimal de désactivation",
-          "max_on_percent": "Pourcentage maximal d'activation",
           "smart_pi_deadband": "Bande morte",
           "smart_pi_hysteresis_on": "Hystérésis marche",
           "smart_pi_hysteresis_off": "Hystérésis arrêt",
@@ -30,7 +29,6 @@
         "data": {
           "minimal_activation_delay": "Délai minimal d'activation",
           "minimal_deactivation_delay": "Délai minimal de désactivation",
-          "max_on_percent": "Pourcentage maximal d'activation",
           "smart_pi_deadband": "Bande morte",
           "smart_pi_hysteresis_on": "Hystérésis marche",
           "smart_pi_hysteresis_off": "Hystérésis arrêt",

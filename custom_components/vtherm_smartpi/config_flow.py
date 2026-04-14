@@ -9,7 +9,6 @@ from homeassistant.config_entries import ConfigFlow, OptionsFlow
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_MAX_ON_PERCENT,
     CONF_MINIMAL_ACTIVATION_DELAY,
     CONF_MINIMAL_DEACTIVATION_DELAY,
     CONF_SMART_PI_DEADBAND,
@@ -41,12 +40,6 @@ def build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=defaults[CONF_MINIMAL_DEACTIVATION_DELAY],
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=3600, step=1, mode=selector.NumberSelectorMode.BOX, unit_of_measurement="s")
-            ),
-            vol.Optional(
-                CONF_MAX_ON_PERCENT,
-                default=defaults[CONF_MAX_ON_PERCENT],
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.0, max=1.0, step=0.01, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Optional(
                 CONF_SMART_PI_DEADBAND,

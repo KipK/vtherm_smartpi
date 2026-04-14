@@ -7,7 +7,6 @@
         "data": {
           "minimal_activation_delay": "Minimal activation delay",
           "minimal_deactivation_delay": "Minimal deactivation delay",
-          "max_on_percent": "Maximum on percent",
           "smart_pi_deadband": "Deadband",
           "smart_pi_hysteresis_on": "Hysteresis on",
           "smart_pi_hysteresis_off": "Hysteresis off",
@@ -30,7 +29,6 @@
         "data": {
           "minimal_activation_delay": "Minimal activation delay",
           "minimal_deactivation_delay": "Minimal deactivation delay",
-          "max_on_percent": "Maximum on percent",
           "smart_pi_deadband": "Deadband",
           "smart_pi_hysteresis_on": "Hysteresis on",
           "smart_pi_hysteresis_off": "Hysteresis off",

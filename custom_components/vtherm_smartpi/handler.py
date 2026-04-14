@@ -22,7 +22,6 @@ from .const import (
     CONF_TARGET_VTHERM,
     CONF_MINIMAL_ACTIVATION_DELAY,
     CONF_MINIMAL_DEACTIVATION_DELAY,
-    CONF_MAX_ON_PERCENT,
     CONF_SMART_PI_DEADBAND,
     CONF_SMART_PI_USE_SETPOINT_FILTER,
     CONF_SMART_PI_USE_FF3,
@@ -82,7 +81,7 @@ class SmartPIHandler:
         cycle_min = t.cycle_min
         minimal_activation_delay = entry.get(CONF_MINIMAL_ACTIVATION_DELAY, 0)
         minimal_deactivation_delay = entry.get(CONF_MINIMAL_DEACTIVATION_DELAY, 0)
-        max_on_percent = entry.get(CONF_MAX_ON_PERCENT, 1.0)
+        max_on_percent = getattr(t, "max_on_percent", None)
 
         # Update thermostat attributes directly (like TPIHandler)
         t.minimal_activation_delay = minimal_activation_delay
