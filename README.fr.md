@@ -89,6 +89,16 @@ Les contributions sont bienvenues ! Consultez la documentation pour les lignes d
 - [@bontiv](https://github.com/bontiv) pour le site [Versatile Thermostat](https://www.versatile-thermostat.org/)
 - Tous les testeurs qui ont aidé lors du développement de SmartPI
 
+## ☕ Soutien
+
+Si SmartPI vous est utile, vous pouvez soutenir son développement ici :
+
+<p>
+  <a href="https://www.buymeacoffee.com/kipk" target="_blank" rel="noopener noreferrer">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="217" height="60" />
+  </a>
+</p>
+
 ## 📄 Licence
 
 Ce projet est distribué selon les conditions de licence Smart-PI. Voir [LICENSE.md](LICENSE.md) pour plus de détails.
