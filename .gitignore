@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 tmp/
 plans/
+dev_tests/

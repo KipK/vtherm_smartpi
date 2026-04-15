@@ -322,23 +322,9 @@ class SmartPIController:
             if self.integral_hold_active:
                 u_pi = kp * error_p_db + ki * self.integral
                 self.last_i_mode = f"I:HOLD({self.integral_hold_mode})"
-
-                if error <= 0.0 and self.integral > 0.0 and not block_negative_integral:
-                    leak_eff = INTEGRAL_LEAK ** (dt_min / max(1e-9, float(cycle_min)))
-                    self.integral *= leak_eff
-                    u_pi = kp * error_p_db + ki * self.integral
-                    self.last_i_mode = f"I:BLEED({self.integral_hold_mode})"
             elif integrator_hold:
                 u_pi = kp * error_p_db + ki * self.integral
                 self.last_i_mode = "I:HOLD"
-                
-                # Signed overshoot bleeding — valid in both HEAT and COOL.
-                if error <= 0.0 and not block_negative_integral:
-                    if self.integral > 0.0:
-                        leak_eff = INTEGRAL_LEAK ** (dt_min / max(1e-9, float(cycle_min)))
-                        self.integral *= leak_eff
-                        u_pi = kp * error_p_db + ki * self.integral
-                        self.last_i_mode = "I:BLEED(hold_ovr)"
             else:
                 # Conditional Integration
                 if (sat == "SAT_HI" and error > 0) or (sat == "SAT_LO" and error < 0):
