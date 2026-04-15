@@ -136,9 +136,16 @@ from homeassistant.const import Platform
 
 PLATFORMS = [Platform.SENSOR]
 
+
+async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up vtherm_smartpi from a config entry."""
     _ensure_domain_data(hass)[entry.entry_id] = entry.entry_id
+    entry.async_on_unload(entry.add_update_listener(_async_update_options))
     _register_factory(hass)
     _register_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
