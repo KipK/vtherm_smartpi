@@ -1,295 +1,196 @@
-# The SmartPI Algorithm
+# SmartPI
 
-- [The SmartPI Algorithm](#the-smartpi-algorithm)
-  - [How it works](#how-it-works)
+- [SmartPI](#smartpi)
+  - [What SmartPI does](#what-smartpi-does)
+  - [Before you start](#before-you-start)
   - [Operating phases](#operating-phases)
-    - [Phase 1: Hysteresis and bootstrap](#phase-1-hysteresis-and-bootstrap)
-    - [Phase 2: Stable SmartPI regulation](#phase-2-stable-smartpi-regulation)
-    - [Phase 3: Auto-calibration](#phase-3-auto-calibration)
-  - [Advanced features](#advanced-features)
-    - [1. Automatic dead time estimation](#1-automatic-dead-time-estimation)
-    - [2. Setpoint-adjacent zone management](#2-setpoint-adjacent-zone-management)
-    - [3. Setpoint change handling](#3-setpoint-change-handling)
-    - [4. Hold behavior inside the deadband](#4-hold-behavior-inside-the-deadband)
-    - [5. Additional protections](#5-additional-protections)
+    - [Learning phase](#learning-phase)
+    - [Stable phase](#stable-phase)
+    - [Automatic recalibration](#automatic-recalibration)
+  - [Recommended settings](#recommended-settings)
   - [Configuration](#configuration)
-  - [Diagnostic metrics](#diagnostic-metrics)
-    - [Published structure in normal mode](#published-structure-in-normal-mode)
-    - [Focus on `ab_learning`](#focus-on-ab_learning)
-    - [Debug mode](#debug-mode)
+  - [Diagnostics and Markdown card](#diagnostics-and-markdown-card)
   - [Services](#services)
-    - [`reset_smart_pi_learning`](#reset_smart_pi_learning)
-    - [`force_smart_pi_calibration`](#force_smart_pi_calibration)
-    - [`reset_smartpi_integral`](#reset_smartpi_integral)
 
-## How it works
+## What SmartPI does
 
-SmartPI is an alternative to the classic TPI approach, provided as a standalone integration (**vtherm_smartpi**) for Versatile Thermostat. Its goal is straightforward: learn the real thermal behavior of the room, then adapt the regulation automatically.
+SmartPI is an alternative to the classic TPI algorithm for Versatile Thermostat.
 
-In practice, SmartPI continuously learns three main things:
+Its goal is simple: instead of using fixed behavior, it learns how your room really heats up and cools down, then adjusts regulation automatically.
 
-- **a**: heating capability,
-- **b**: thermal loss rate,
-- **dead times**: the delay between a heating change and the visible temperature response.
+In practice, SmartPI learns:
 
-From that model, SmartPI builds a more precise heating command than a fixed TPI:
+- how strongly your heating system warms the room,
+- how quickly the room loses heat,
+- how long the room takes to react after heating starts or stops.
 
-- a **PI** part to correct the current error,
-- a **feed-forward** part to anticipate the holding power,
-- extra protections when the temperature is close to the target.
+From that, SmartPI builds a heating command that is usually more precise than a fixed TPI:
 
-The algorithm is recalculated regularly and keeps learning whenever the current conditions are considered reliable.
+- it corrects the current temperature error,
+- it estimates the power needed to hold the target,
+- it applies protections near the setpoint to reduce overshoot and limit unnecessary oscillations.
+
+You do not need to understand PI control theory to use SmartPI effectively. The important idea is simply that SmartPI needs a first learning period before it can regulate in its normal mode.
+
+## Before you start
+
+For SmartPI to learn correctly, make sure the thermostat has:
+
+- a reliable indoor temperature,
+- an outdoor temperature source,
+- enough time to observe normal heating and cooling behavior.
+
+For the first learning phase, try to avoid:
+
+- opening windows for long periods,
+- major schedule changes,
+- unusual heat gains such as strong sun, fireplace use, or many guests,
+- changing many SmartPI settings while learning is still in progress.
+
+Two practical recommendations help a lot:
+
+- let SmartPI run without interruption during the first day or two,
+- use a setpoint high enough above outdoor temperature for the room to show a clear heating response.
+
+In practice, learning may take around 24 to 48 hours before SmartPI can switch to stable regulation. On slow or highly inertial systems, it can take longer.
 
 ## Operating phases
 
-### Phase 1: Hysteresis and bootstrap
+### Learning phase
 
-At startup, SmartPI begins with a learning phase in hysteresis mode.
+SmartPI starts in a bootstrap phase based on hysteresis.
 
 By default:
 
-- heating starts below `Setpoint - 0.3°C`,
-- heating stops above `Setpoint + 0.5°C`.
+- heating starts below `setpoint - 0.3°C`,
+- heating stops above `setpoint + 0.5°C`.
 
-These thresholds are configurable.
+During this phase, SmartPI first measures reaction delays, then collects valid heating and cooling observations, then consolidates its thermal model.
 
-During this phase, learning follows a strict order visible in `specific_states.smart_pi.ab_learning.bootstrap_status`:
+As long as the model is not considered reliable enough, SmartPI stays in this learning mode.
 
-1. **Dead time measurement**: SmartPI waits until it has measured the heating and cooling delays.
-2. **Initial collection**: it gathers the first reliable samples.
-3. **Model consolidation**: it completes the history until the model becomes robust enough.
+What to expect:
 
-Useful reference points:
+- regulation is intentionally simple at this stage,
+- diagnostics are especially useful during this phase,
+- progress depends on the quality of real observations, not only on elapsed time.
 
-- `b` needs at least **11** validated samples,
-- `a` can start earlier, with a minimum of **7** samples, but remains partially gated until `b` has progressed enough,
-- the full history target is **31** validated measurements per parameter.
+### Stable phase
 
-As long as this phase is not reliable enough, SmartPI stays in hysteresis mode.
+When the thermal model becomes reliable, SmartPI switches to its normal regulation mode.
 
-### Phase 2: Stable SmartPI regulation
+At that point, SmartPI:
 
-When the thermal model becomes reliable, SmartPI switches to stable mode.
+- computes PI gains automatically from the learned model,
+- adds an anticipative holding term based on the room and outdoor conditions,
+- adapts behavior near the setpoint with a deadband and additional protections.
 
-In this phase, the command combines:
+Near the target temperature, SmartPI tries to avoid constant micro-corrections. The result should be steadier regulation with fewer unnecessary corrections than a fixed TPI.
 
-- a **PI controller**,
-- a **feed-forward** holding term based on setpoint and outdoor temperature,
-- dedicated handling for zones close to the setpoint.
+If the `FF3` option is enabled, SmartPI can also apply a small predictive correction near the setpoint when it detects a credible external disturbance context.
 
-Near the target, SmartPI uses:
+### Automatic recalibration
 
-- a **deadband** to avoid permanent micro-corrections,
-- a **near-band** to adapt behavior around the target,
-- a dedicated **hold** mode that converges toward the power really needed to stay stable.
+SmartPI keeps watching the quality of its model over time.
 
-If the **FF3** option is enabled, SmartPI can also apply a small short-horizon predictive correction. This feature is only used in heating mode, close to the setpoint, outside setpoint trajectories, and only when a credible external-disturbance context is detected from a persistent mismatch between the thermal-twin prediction and the observed response, combined with compatible thermal dynamics.
+If learning quality stops improving enough, it can trigger an automatic recalibration sequence to refresh the model and dead times.
 
-### Phase 3: Auto-calibration
+Useful points to know:
 
-SmartPI also supervises the quality of its learning over time.
+- a reference snapshot is stored once the model becomes reliable,
+- a rolling snapshot is refreshed over time,
+- if cooling dead time cannot be learned for a long time, SmartPI can still continue with a partial snapshot,
+- after repeated unsuccessful recalibration attempts, SmartPI continues to run and reports a degraded model in diagnostics.
 
-The general behavior is:
-
-1. When the model becomes reliable, SmartPI stores a reference **snapshot**.
-2. Then an hourly supervision loop checks whether learning is still progressing.
-3. If the model is stagnating, an automatic calibration can be triggered.
-
-The calibration cycle forces a simple sequence:
-
-1. cool down,
-2. forced heating,
-3. final cool down.
-
-This sequence is mainly used to revalidate dead times and restart cleaner learning.
-
-Two practical points:
-
-- a rolling snapshot is refreshed roughly every **5 days**,
-- if cooling dead time stays unavailable for **7 days**, SmartPI can continue with a partial snapshot,
-- after **3** unsuccessful calibration attempts, the thermostat keeps running but reports a degraded model in diagnostics.
-
-## Advanced features
-
-### 1. Automatic dead time estimation
-
-SmartPI automatically measures the delay between a heating change and the room reaction. This is especially useful on slow or highly inertial systems.
-
-### 2. Setpoint-adjacent zone management
-
-When the temperature gets close to the target, SmartPI does not behave the same as when it is far away:
-
-- it uses an asymmetric **near-band** in heating mode,
-- it applies protections to limit overshoot,
-- it can stop or restart a cycle earlier when needed.
-
-### 3. Setpoint change handling
-
-When a significant thermal gap appears and the model is considered reliable, SmartPI activates an analytical trajectory on the P branch to shape the proportional reference.
-
-This trajectory:
-
-- leaves the I branch using the raw setpoint,
-- publishes a filtered reference as `filtered_setpoint` for the P branch,
-- keeps the raw setpoint on the P branch while the room is still far from the target,
-- uses the exact learned 1R1C model, `deadtime_cool`, the remaining cycle latency, the currently committed cycle power, and the expected next-cycle power to detect when late braking must begin,
-- lowers the proportional reference smoothly only near the target while keeping a small positive P demand to avoid over-braking,
-- raises the filtered reference back to the raw target progressively when braking is no longer needed,
-- once the release phase starts for a setpoint-driven trajectory, it stays in that phase until the trajectory ends,
-- keeps the final handoff bumpless by waiting for both a small enough proportional command gap and a measured temperature close enough to the target before disabling the trajectory,
-- exposes its status through `trajectory_active`,
-- stops once that final handoff remains bumpless and the measured temperature is close enough to the target, or when the reliability conditions are no longer met.
-
-The integral is not used the same way during recovery phases:
-
-- after a significant setpoint change,
-- after resuming from a detected window opening,
-- after resuming from power shedding,
-- during a disturbance-recovery trajectory.
-
-In these cases, SmartPI blocks positive integral growth while the system is still catching up. The integral is still allowed to discharge if the signal changes direction.
-
-Release no longer depends only on the near-band:
-
-- it waits for a real stabilization phase, detected through a persistently collapsed recovery slope,
-- that slope check uses both a relative threshold based on the observed recovery peak and a small absolute floor, so release stays robust across different thermal speeds,
-- during an active setpoint trajectory, it relies on the error of the reference actually followed by the P branch (`error_p`, i.e. the filtered setpoint),
-- outside a trajectory, it still relies on the raw setpoint error (`error_i`),
-- in case of a real signed overshoot, release remains immediate from the raw error.
-
-Once the guard is released, the trajectory-specific attenuation of positive integral growth is no longer applied, so the integral can resume a normal correction of the residual steady-state error.
-
-Window resumes and power-shedding resumes also follow a stricter rule in heating mode:
-
-- SmartPI first enters an explicit `I:HOLD` while heating is still inside the useful `deadtime_heat` window,
-- at the end of that phase it re-evaluates the residual error,
-- it arms the positive-integral guard only if that residual error is still significant enough,
-- otherwise it returns directly to normal integral behavior.
-
-This prevents the integral from learning a pure catch-up transient while the heating response is still not fully observable.
-
-Transient recovery states are not carried across a restart:
-
-- an active analytical trajectory,
-- a temporary resume `I:HOLD`,
-- an already armed recovery guard.
-
-After a reboot, SmartPI therefore starts again without replaying these transient servo states into the next runtime session.
-
-### 4. Hold behavior inside the deadband
-
-Inside the deadband, SmartPI does more than simply "do nothing":
-
-- it enters hold without a brutal command jump,
-- it keeps aiming for a coherent holding power,
-- it slowly adjusts its feed-forward bias if the room drifts repeatedly.
-
-SmartPI also distinguishes two notions:
-
-- the hysteretic deadband state, used to stabilize the state machine,
-- the actual configured deadband, used to decide whether P and I must really be frozen.
-
-This avoids keeping a small residual error frozen only because the hysteresis shell still holds `in_deadband`.
-
-### 5. Additional protections
-
-SmartPI also includes several useful protections:
-
-- integral anti-windup,
-- temporary blocking of positive integral growth during resumes and catch-up phases,
-- thermal guard when the setpoint is lowered,
-- near-setpoint protections that cut faster on overshoot or restart earlier when the room falls back.
-
-## Configuration
+## Recommended settings
 
 Default settings are suitable for most installations.
 
-| Parameter                      | Role                                                                                     | Default value |
-| ------------------------------ | ---------------------------------------------------------------------------------------- | ------------- |
-| **Deadband**                   | Tolerance zone around the setpoint.                                                      | `0.05°C`      |
-| **Setpoint filter**            | Enables the late-braking trajectory on the P branch.                                     | `disabled`    |
-| **FF3**                        | Short-horizon predictive correction reserved for disturbance recovery near the setpoint. | `enabled`     |
-| **Lower hysteresis threshold** | Restart threshold during bootstrap.                                                      | `0.3°C`       |
-| **Upper hysteresis threshold** | Stop threshold during bootstrap.                                                         | `0.5°C`       |
-| **SmartPI debug mode**         | Adds detailed diagnostics.                                                               | `disabled`    |
+Start simple:
 
-> If the temperature oscillates too much around the setpoint, the first setting to review is usually the **deadband**.
+- keep the default hysteresis thresholds,
+- keep `FF3` enabled unless you have a specific reason to disable it,
+- leave the setpoint filter disabled at first if you want the easiest initial setup,
+- adjust the deadband first if the temperature oscillates too much around the target.
 
-## Diagnostic metrics
+Do not try to tune several parameters at once during the first learning period. It is better to let SmartPI complete a clean first learning cycle, then adjust only what is really needed.
 
-SmartPI diagnostics are published in `specific_states.smart_pi`.
+## Configuration
 
-- in normal mode, this block contains a structured summary of the current behavior,
-- in debug mode, the same block is kept and `specific_states.smart_pi.debug` is added.
+| Parameter | Role | Default value |
+| --- | --- | --- |
+| **Deadband** | Tolerance zone around the setpoint. | `0.05°C` |
+| **Setpoint filter** | Enables the proportional setpoint shaping near the target. | `disabled` |
+| **FF3** | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled` |
+| **Lower hysteresis threshold** | Restart threshold during bootstrap learning. | `0.3°C` |
+| **Upper hysteresis threshold** | Stop threshold during bootstrap learning. | `0.5°C` |
+| **SmartPI debug mode** | Publishes more detailed diagnostics. | `disabled` |
 
-### Published structure in normal mode
+## Diagnostics and Markdown card
 
-| Block         | Content                                                                                  |
-| ------------- | ---------------------------------------------------------------------------------------- |
-| `control`     | current phase, mode, hysteresis state, `kp`, `ki`, restart reason                        |
-| `power`       | current cycle percent, next cycle percent, PI, feed-forward and hold contributions       |
-| `temperature` | measured temperature, error, integral, current integral mode, integral guard source      |
-| `model`       | thermal model state: `a`, `b`, confidence level, dead times                              |
-| `ab_learning` | learning tracking: stage, bootstrap progress, sample counters, last accept/reject reason |
-| `governance`  | current regime and thermal update decision                                               |
-| `feedforward` | FF3 status, thermal twin usability, deadband power source                                |
-| `setpoint`    | `filtered_setpoint`, `trajectory_active`, trajectory source                              |
-| `autocalib`   | automatic supervision state                                                              |
-| `calibration` | forced calibration state                                                                 |
+SmartPI publishes its diagnostics in `specific_states.smart_pi`.
 
-### Focus on `ab_learning`
+This is the main place to check:
 
-The `ab_learning` block is the most useful entry point to follow learning without enabling debug mode:
+- whether SmartPI is still learning or already stable,
+- whether the model is considered reliable,
+- whether recalibration or degraded mode has been reported.
 
-| Field                            | Description                                                            |
-| -------------------------------- | ---------------------------------------------------------------------- |
-| `stage`                          | high-level state: `bootstrap`, `learning`, `monitoring`, or `degraded` |
-| `bootstrap_progress_percent`     | bootstrap progress                                                     |
-| `bootstrap_status`               | current bootstrap step                                                 |
-| `accepted_samples_a`             | number of validated `a` samples                                        |
-| `accepted_samples_b`             | number of validated `b` samples                                        |
-| `target_samples`                 | target history size                                                    |
-| `last_reason`                    | last reason produced by the learning logic                             |
-| `a_drift_state`, `b_drift_state` | drift monitoring state                                                 |
+The most useful block during learning is `specific_states.smart_pi.ab_learning`.
 
-### Debug mode
+Important fields:
 
-When SmartPI debug mode is enabled, `specific_states.smart_pi.debug` additionally exposes:
+- `stage`: overall state such as `bootstrap`, `learning`, `monitoring`, or `degraded`,
+- `bootstrap_progress_percent`: bootstrap progress,
+- `bootstrap_status`: current bootstrap step,
+- `accepted_samples_a`: validated heating samples,
+- `accepted_samples_b`: validated cooling samples,
+- `target_samples`: target history size,
+- `last_reason`: last learning accept or reject reason.
 
-- learning internals (`tau_min`, counters, rejection reasons),
-- the full command chain (`u_cmd`, `u_limited`, `u_applied`, `aw_du`),
-- the full feed-forward chain (`u_ff1`, `u_ff2`, `u_ff_final`, `u_ff3`, `u_ff_eff`),
-- the FF3 activation context (`ff3_disturbance_active`, `ff3_disturbance_reason`, `ff3_disturbance_kind`, `ff3_residual_persistent`, `ff3_dynamic_coherent`),
-- band, protection, and dead-time states, including the detailed integral guard state and the `core deadband`,
-- setpoint trajectory details (`trajectory_start_sp`, `trajectory_target_sp`, `trajectory_tau_ref`, `trajectory_elapsed_s`, `trajectory_phase`, `trajectory_pending_target_change_braking`, `trajectory_braking_needed`, `trajectory_model_ready`, `trajectory_remaining_cycle_min`, `trajectory_next_cycle_u_ref`, `trajectory_bumpless_u_delta`, `trajectory_bumpless_ready`),
-- auto-calibration details,
-- advanced thermal twin diagnostics when available.
+Other useful blocks in normal mode:
+
+- `control`: current regulation phase and mode,
+- `power`: current and next cycle command information,
+- `temperature`: measured temperature, error, integral state,
+- `model`: learned `a`, `b`, confidence, and dead times,
+- `feedforward`: feed-forward and FF3 status,
+- `setpoint`: filtered setpoint information,
+- `autocalib`: automatic supervision state,
+- `calibration`: forced calibration state.
+
+If SmartPI debug mode is enabled, `specific_states.smart_pi.debug` adds more detailed internal data.
+
+A Home Assistant Markdown card is also available to display SmartPI diagnostics in a simpler way in the dashboard.
 
 ## Services
 
-### `reset_smart_pi_learning`
+SmartPI exposes three services in the `vtherm_smartpi` domain.
 
-Use this if the thermal behavior of the room has changed significantly, for example after replacing emitters or improving insulation.
+### `reset_smartpi_learning`
 
-This service resets SmartPI learning and forces a return to bootstrap mode.
+Use this when the thermal behavior of the room has significantly changed, for example after insulation work or after changing emitters.
 
-### `force_smart_pi_calibration`
+This service clears SmartPI learning and forces a return to bootstrap mode.
 
-Requests a SmartPI calibration to refresh dead-time measurement and also help adjust `a` and `b`.
+### `force_smartpi_calibration`
+
+Use this when you want SmartPI to run a calibration cycle without waiting for the automatic trigger.
 
 This service is useful when:
 
-- the reported dead times look inconsistent,
-- the regulation behaves worse than before,
-- you want to restart a recalibration sequence without waiting for the automatic trigger.
+- reported dead times seem inconsistent,
+- regulation behaves worse than before,
+- you want to refresh learning after a significant change in real conditions.
 
-If the thermostat is still in bootstrap/hysteresis mode, the request is ignored.
+If SmartPI is still in bootstrap mode, the request is ignored.
 
 ### `reset_smartpi_integral`
 
-Resets the SmartPI controller integral accumulator to zero and releases any active integral hold.
+Use this when the integral term has kept an unsuitable value after an exceptional event.
 
-This service is useful when:
+Typical examples:
 
-- the integral has accumulated an unsuitable value following an exceptional event (prolonged heating outage, window left open for a long time, etc.),
-- you want to restart from a neutral integral state without resetting the entire SmartPI learning.
+- a long heating outage,
+- a window left open for a long time,
+- any situation where you want to keep the learned model but restart from a neutral integral state.
