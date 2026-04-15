@@ -90,4 +90,4 @@ Contributions are welcome! Please see the documentation for development guidelin
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Smart-PI licensing terms. See [LICENSE.md](LICENSE.md) for details.

@@ -91,4 +91,4 @@ Les contributions sont bienvenues ! Consultez la documentation pour les lignes d
 
 ## 📄 Licence
 
-Ce projet est sous licence MIT - voir le fichier LICENSE pour plus de détails.
+Ce projet est distribué selon les conditions de licence Smart-PI. Voir [LICENSE.md](LICENSE.md) pour plus de détails.
