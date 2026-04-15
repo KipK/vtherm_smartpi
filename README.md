@@ -14,16 +14,15 @@
 
 ## 🌟 What is SmartPI?
 
-SmartPI is a sophisticated proportional-integral-derivative (PID) inspired algorithm specifically engineered for thermostat control in Home Assistant. Unlike traditional on/off thermostats, SmartPI provides:
+SmartPI is an advanced PI-based thermal control algorithm built around a first-order thermal model (1R1C) rather than a classic PID loop. It learns your room's heating capability, heat loss rate and dead time, then uses that model to compute a much more accurate heating command than fixed-time proportional controllers.
 
 - **Precise Temperature Control**: Maintains target temperatures with minimal fluctuations
-- **Energy Efficiency**: Optimizes heating/cooling cycles to reduce energy consumption
-- **Adaptive Learning**: Continuously adjusts based on your home's thermal characteristics
-- **Proportional Response**: Calculates optimal valve positions for gradual, natural temperature changes
-- **Advanced Features**: Includes hysteresis, deadbands, anti-windup protection, and more
+- **Energy Efficiency**: Optimizes heating cycles using learned thermal behavior
+- **Adaptive Learning**: Continuously adjusts based on your home's thermal model
+- **Model-based Response**: Uses a 1R1C approximation to anticipate how the room reacts to heating changes
+- **Advanced Protections**: Includes hysteresis, deadbands, anti-windup and setpoint recovery handling
 
-SmartPI transforms your basic thermostat into an intelligent climate control system that learns and adapts to your home's unique thermal behavior.
-
+SmartPI transforms your thermostat control into a model-aware algorithm that learns and adapts to the real thermal behavior of your home.
 ## 🔗 Integration with Versatile Thermostat
 
 This integration extends the popular [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) integration by adding the SmartPI algorithm as a plugin. Versatile Thermostat already provides comprehensive thermostat management in Home Assistant, and with SmartPI, you get:

@@ -3,10 +3,24 @@
 - [The SmartPI Algorithm](#the-smartpi-algorithm)
   - [How it works](#how-it-works)
   - [Operating phases](#operating-phases)
+    - [Phase 1: Hysteresis and bootstrap](#phase-1-hysteresis-and-bootstrap)
+    - [Phase 2: Stable SmartPI regulation](#phase-2-stable-smartpi-regulation)
+    - [Phase 3: Auto-calibration](#phase-3-auto-calibration)
   - [Advanced features](#advanced-features)
+    - [1. Automatic dead time estimation](#1-automatic-dead-time-estimation)
+    - [2. Setpoint-adjacent zone management](#2-setpoint-adjacent-zone-management)
+    - [3. Setpoint change handling](#3-setpoint-change-handling)
+    - [4. Hold behavior inside the deadband](#4-hold-behavior-inside-the-deadband)
+    - [5. Additional protections](#5-additional-protections)
   - [Configuration](#configuration)
   - [Diagnostic metrics](#diagnostic-metrics)
+    - [Published structure in normal mode](#published-structure-in-normal-mode)
+    - [Focus on `ab_learning`](#focus-on-ab_learning)
+    - [Debug mode](#debug-mode)
   - [Services](#services)
+    - [`reset_smart_pi_learning`](#reset_smart_pi_learning)
+    - [`force_smart_pi_calibration`](#force_smart_pi_calibration)
+    - [`reset_smartpi_integral`](#reset_smartpi_integral)
 
 ## How it works
 
@@ -190,14 +204,14 @@ SmartPI also includes several useful protections:
 
 Default settings are suitable for most installations.
 
-| Parameter | Role | Default value |
-|-----------|------|---------------|
-| **Deadband** | Tolerance zone around the setpoint. | `0.05°C` |
-| **Setpoint filter** | Enables the late-braking trajectory on the P branch. | `disabled` |
-| **FF3** | Short-horizon predictive correction reserved for disturbance recovery near the setpoint. | `enabled` |
-| **Lower hysteresis threshold** | Restart threshold during bootstrap. | `0.3°C` |
-| **Upper hysteresis threshold** | Stop threshold during bootstrap. | `0.5°C` |
-| **SmartPI debug mode** | Adds detailed diagnostics. | `disabled` |
+| Parameter                      | Role                                                                                     | Default value |
+| ------------------------------ | ---------------------------------------------------------------------------------------- | ------------- |
+| **Deadband**                   | Tolerance zone around the setpoint.                                                      | `0.05°C`      |
+| **Setpoint filter**            | Enables the late-braking trajectory on the P branch.                                     | `disabled`    |
+| **FF3**                        | Short-horizon predictive correction reserved for disturbance recovery near the setpoint. | `enabled`     |
+| **Lower hysteresis threshold** | Restart threshold during bootstrap.                                                      | `0.3°C`       |
+| **Upper hysteresis threshold** | Stop threshold during bootstrap.                                                         | `0.5°C`       |
+| **SmartPI debug mode**         | Adds detailed diagnostics.                                                               | `disabled`    |
 
 > If the temperature oscillates too much around the setpoint, the first setting to review is usually the **deadband**.
 
@@ -210,33 +224,33 @@ SmartPI diagnostics are published in `specific_states.smart_pi`.
 
 ### Published structure in normal mode
 
-| Block | Content |
-|-------|---------|
-| `control` | current phase, mode, hysteresis state, `kp`, `ki`, restart reason |
-| `power` | current cycle percent, next cycle percent, PI, feed-forward and hold contributions |
-| `temperature` | measured temperature, error, integral, current integral mode, integral guard source |
-| `model` | thermal model state: `a`, `b`, confidence level, dead times |
+| Block         | Content                                                                                  |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| `control`     | current phase, mode, hysteresis state, `kp`, `ki`, restart reason                        |
+| `power`       | current cycle percent, next cycle percent, PI, feed-forward and hold contributions       |
+| `temperature` | measured temperature, error, integral, current integral mode, integral guard source      |
+| `model`       | thermal model state: `a`, `b`, confidence level, dead times                              |
 | `ab_learning` | learning tracking: stage, bootstrap progress, sample counters, last accept/reject reason |
-| `governance` | current regime and thermal update decision |
-| `feedforward` | FF3 status, thermal twin usability, deadband power source |
-| `setpoint` | `filtered_setpoint`, `trajectory_active`, trajectory source |
-| `autocalib` | automatic supervision state |
-| `calibration` | forced calibration state |
+| `governance`  | current regime and thermal update decision                                               |
+| `feedforward` | FF3 status, thermal twin usability, deadband power source                                |
+| `setpoint`    | `filtered_setpoint`, `trajectory_active`, trajectory source                              |
+| `autocalib`   | automatic supervision state                                                              |
+| `calibration` | forced calibration state                                                                 |
 
 ### Focus on `ab_learning`
 
 The `ab_learning` block is the most useful entry point to follow learning without enabling debug mode:
 
-| Field | Description |
-|-------|-------------|
-| `stage` | high-level state: `bootstrap`, `learning`, `monitoring`, or `degraded` |
-| `bootstrap_progress_percent` | bootstrap progress |
-| `bootstrap_status` | current bootstrap step |
-| `accepted_samples_a` | number of validated `a` samples |
-| `accepted_samples_b` | number of validated `b` samples |
-| `target_samples` | target history size |
-| `last_reason` | last reason produced by the learning logic |
-| `a_drift_state`, `b_drift_state` | drift monitoring state |
+| Field                            | Description                                                            |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| `stage`                          | high-level state: `bootstrap`, `learning`, `monitoring`, or `degraded` |
+| `bootstrap_progress_percent`     | bootstrap progress                                                     |
+| `bootstrap_status`               | current bootstrap step                                                 |
+| `accepted_samples_a`             | number of validated `a` samples                                        |
+| `accepted_samples_b`             | number of validated `b` samples                                        |
+| `target_samples`                 | target history size                                                    |
+| `last_reason`                    | last reason produced by the learning logic                             |
+| `a_drift_state`, `b_drift_state` | drift monitoring state                                                 |
 
 ### Debug mode
 
