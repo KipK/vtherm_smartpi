@@ -1,14 +1,62 @@
-# SmartPI algorithm for Versatile Thermostat
+# Versatile Thermostat SmartPI
 
 <p align="center">
   <img src="assets/brand/logo.png" alt="SmartPI Logo" width="300" />
 </p>
 
-Home Assistant integration that provides the SmartPI proportional algorithm for [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) through the `vtherm_api` plugin registry.
+<p align="center">
+  <strong>Advanced Proportional Thermostat Control for Home Assistant</strong>
+</p>
+
+<p align="center">
+  Elevate your home heating/cooling system with SmartPI, the cutting-edge proportional algorithm designed for precision temperature management.
+</p>
+
+## 🌟 What is SmartPI?
+
+SmartPI is a sophisticated proportional-integral-derivative (PID) inspired algorithm specifically engineered for thermostat control in Home Assistant. Unlike traditional on/off thermostats, SmartPI provides:
+
+- **Precise Temperature Control**: Maintains target temperatures with minimal fluctuations
+- **Energy Efficiency**: Optimizes heating/cooling cycles to reduce energy consumption
+- **Adaptive Learning**: Continuously adjusts based on your home's thermal characteristics
+- **Proportional Response**: Calculates optimal valve positions for gradual, natural temperature changes
+- **Advanced Features**: Includes hysteresis, deadbands, anti-windup protection, and more
+
+SmartPI transforms your basic thermostat into an intelligent climate control system that learns and adapts to your home's unique thermal behavior.
+
+## 🔗 Integration with Versatile Thermostat
+
+This integration extends the popular [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat) integration by adding the SmartPI algorithm as a plugin. Versatile Thermostat already provides comprehensive thermostat management in Home Assistant, and with SmartPI, you get:
+
+- Professional-grade temperature control algorithms
+- Seamless integration with existing VT configurations
+- Per-device customization options
+- Global defaults for easy setup
+
+## 📦 Installation
+
+### Via HACS (Recommended)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=KipK&repository=vtherm_smartpi&category=Integration)
+
+1. Ensure you have [HACS](https://hacs.xyz/) installed in your Home Assistant instance
+2. Click the button above or manually add this repository in HACS
+3. Search for "Versatile Thermostat SmartPI" in HACS
+4. Install the integration
+5. Restart Home Assistant
+6. Configure the SmartPI algorithm in your Versatile Thermostat devices
+
+### Manual Installation
+
+1. Download the latest release from the [Releases](https://github.com/KipK/vtherm_smartpi/releases) page
+2. Extract the `vtherm_smartpi.zip` file
+3. Copy the `custom_components/vtherm_smartpi` folder to your Home Assistant `custom_components` directory
+4. Restart Home Assistant
+5. Configure as above
 
 ## 📖 Documentation
 
-The full documentation for the SmartPI algorithm, including how it works, configuration options, and technical details, is available here:
+Comprehensive documentation is available in multiple languages:
 
 - 🇫🇷 [Documentation utilisateur (Français)](documentation/fr/vtherm_smartpi.md)
 - 🇫🇷 [Documentation technique (Français)](documentation/fr/technical_doc.md)
@@ -17,13 +65,23 @@ The full documentation for the SmartPI algorithm, including how it works, config
 
 ## 🚀 Features
 
-Current scope:
+- **SmartPI Algorithm**: Advanced proportional control for precise temperature management
+- **Versatile Integration**: Works seamlessly with Versatile Thermostat
+- **Per-Device Configuration**: Customize settings for each thermostat
+- **Global Defaults**: Easy setup with fallback configurations
+- **Robust Implementation**: Includes safety features like anti-windup and hysteresis
+- **Open Source**: Fully transparent and community-driven development
 
-- registers the `smartpi` proportional algorithm in VT
-- embeds the SmartPI core and runtime handler
-- provides per-thermostat SmartPI configuration entries
-- supports an optional global defaults entry used when no per-thermostat entry matches
+## 🤝 Contributing
 
-## 🛠 Planned Next Steps
+Contributions are welcome! Please see the documentation for development guidelines and testing procedures.
 
-- port and adapt the SmartPI test suite to the standalone plugin runtime
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🙏 Acknowledgments
+
+- Thanks to the Versatile Thermostat community for the excellent base integration
+- Special recognition to the SmartPI algorithm developers for the advanced control logic
+- Gratitude to the Home Assistant and HACS communities for making this possible
