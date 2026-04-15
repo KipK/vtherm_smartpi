@@ -71,16 +71,23 @@ Comprehensive documentation is available in English:
 - **Robust Implementation**: Includes safety features like anti-windup and hysteresis
 - **Open Source**: Fully transparent and community-driven development
 
+## 👥 Authors
+
+- [@KipK](https://github.com/KipK)
+- [@gael1980](https://github.com/gael1980)
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please see the documentation for development guidelines and testing procedures.
 
+## 🙏 Thanks To
+
+- [@gael1980](https://github.com/gael1980) for the scientific foundation and theory behind SmartPI
+- [@caiusseverus](https://github.com/caiusseverus) for his helpful [heating simulator](https://github.com/caiusseverus/heating-simulator) and his support with testing SmartPI and sharing knowledge
+- [@jmcollin](https://github.com/jmcollin78) for developing [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat)
+- [@bontiv](https://github.com/bontiv) for the [Versatile Thermostat website](https://www.versatile-thermostat.org/)
+- All the people who tested SmartPI during development
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- Thanks to the Versatile Thermostat community for the excellent base integration
-- Special recognition to the SmartPI algorithm developers for the advanced control logic
-- Gratitude to the Home Assistant and HACS communities for making this possible

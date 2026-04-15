@@ -72,9 +72,22 @@ La documentation complète est disponible en français :
 - **Implémentation robuste** : inclut des protections comme anti-windup et hystérésis
 - **Open Source** : développement transparent et communautaire
 
+## 👥 Auteurs
+
+- [@KipK](https://github.com/KipK)
+- [@gael1980](https://github.com/gael1980)
+
 ## 🤝 Contribution
 
 Les contributions sont bienvenues ! Consultez la documentation pour les lignes directrices de développement et les procédures de test.
+
+## 🙏 Remerciements
+
+- [@gael1980](https://github.com/gael1980) pour les fondations scientifiques et la théorie derrière SmartPI
+- [@caiusseverus](https://github.com/caiusseverus) pour son [simulateur de chauffage](https://github.com/caiusseverus/heating-simulator) et son aide pour les tests de SmartPI et son expertise
+- [@jmcollin](https://github.com/jmcollin78) pour le développement de [Versatile Thermostat](https://github.com/jmcollin78/versatile_thermostat)
+- [@bontiv](https://github.com/bontiv) pour le site [Versatile Thermostat](https://www.versatile-thermostat.org/)
+- Tous les testeurs qui ont aidé lors du développement de SmartPI
 
 ## 📄 Licence
 
