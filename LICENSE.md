@@ -18,13 +18,6 @@ The Software may be used **only for non-commercial purposes**, including but not
 - Open-source projects that are distributed free of charge
 - Home automation systems operated by individuals for private use
 
-#### Home Assistant Core Exception
-Notwithstanding the restrictions of this license, the Software may be used, modified, and distributed **as part of Home Assistant Core**, provided that:
-- Home Assistant Core remains free and open-source
-- Smart-PI is not offered as a paid feature, add-on, or subscription
-- No fee is charged specifically for access to Smart-PI functionality
-- This exception applies **only** to Home Assistant Core and does not extend to forks, commercial distributions, or derivative platforms
-
 ### 2. Prohibited Uses
 The following uses are **strictly prohibited without a separate commercial license**:
 - Selling, licensing, or sublicensing the Software
@@ -101,9 +94,7 @@ Smart-PI is **dual-licensed**:
 - **Non-Commercial Use** → Smart-PI Non-Commercial License (SP-NCL)
 - **Commercial Use** → Smart-PI Commercial License (SP-CL)
 
-A specific exception is granted for **Home Assistant Core**, as defined in Section 1.
-
-If your use case involves any form of monetization, resale, hosted service, or commercial deployment outside of this exception, you **must** obtain a commercial license.
+If your use case involves any form of monetization, resale, hosted service, or commercial deployment, you **must** obtain a commercial license.
 
 ---
 
