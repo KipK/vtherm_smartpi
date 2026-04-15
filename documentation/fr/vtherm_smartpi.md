@@ -110,7 +110,7 @@ Pour démarrer simplement :
 
 - gardez les seuils d'hystérésis par défaut,
 - laissez `FF3` activé sauf raison précise de le désactiver,
-- laissez au départ le filtre de consigne désactivé si vous voulez la configuration la plus simple,
+- laissez le filtre de consigne activé par défaut,
 - ajustez d'abord la deadband si la température oscille trop autour de la cible.
 
 Évitez de modifier plusieurs paramètres à la fois pendant la première phase d'apprentissage. Il vaut mieux laisser SmartPI terminer un cycle d'apprentissage propre, puis ne changer que ce qui est réellement nécessaire.
@@ -120,7 +120,7 @@ Pour démarrer simplement :
 | Paramètre | Rôle | Valeur par défaut |
 | --- | --- | --- |
 | **Deadband** | Zone de tolérance autour de la consigne. | `0.05°C` |
-| **Filtre de consigne** | Active le lissage de consigne proportionnel près de la cible. | `désactivé` |
+| **Filtre de consigne** | Active le lissage de consigne proportionnel près de la cible. | `activé` |
 | **FF3** | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé` |
 | **Seuil bas d'hystérésis** | Seuil de redémarrage pendant le bootstrap. | `0.3°C` |
 | **Seuil haut d'hystérésis** | Seuil d'arrêt pendant le bootstrap. | `0.5°C` |
@@ -128,7 +128,7 @@ Pour démarrer simplement :
 
 ## Diagnostics et carte Markdown
 
-SmartPI publie ses diagnostics dans `specific_states.smart_pi`.
+SmartPI publie ses diagnostics directement à la racine des attributs de l'entité capteur de diagnostic SmartPI.
 
 C'est l'endroit principal à consulter pour savoir :
 
@@ -136,7 +136,7 @@ C'est l'endroit principal à consulter pour savoir :
 - si le modèle est considéré comme fiable,
 - si une recalibration ou un mode dégradé a été signalé.
 
-Le bloc le plus utile pendant l'apprentissage est `specific_states.smart_pi.ab_learning`.
+Le bloc le plus utile pendant l'apprentissage est `ab_learning`.
 
 Champs importants :
 
@@ -159,7 +159,7 @@ Autres blocs utiles en mode normal :
 - `autocalib` : état de la supervision automatique,
 - `calibration` : état d'une calibration forcée.
 
-Si le mode debug SmartPI est activé, `specific_states.smart_pi.debug` ajoute des informations internes plus détaillées.
+Si le mode debug SmartPI est activé, le bloc `debug` ajoute des informations internes plus détaillées.
 
 Une carte Markdown Home Assistant est aussi disponible pour afficher plus simplement les diagnostics SmartPI dans le tableau de bord.
 

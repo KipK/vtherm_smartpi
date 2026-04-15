@@ -110,7 +110,7 @@ Start simple:
 
 - keep the default hysteresis thresholds,
 - keep `FF3` enabled unless you have a specific reason to disable it,
-- leave the setpoint filter disabled at first if you want the easiest initial setup,
+- keep the setpoint filter enabled by default,
 - adjust the deadband first if the temperature oscillates too much around the target.
 
 Do not try to tune several parameters at once during the first learning period. It is better to let SmartPI complete a clean first learning cycle, then adjust only what is really needed.
@@ -120,7 +120,7 @@ Do not try to tune several parameters at once during the first learning period. 
 | Parameter | Role | Default value |
 | --- | --- | --- |
 | **Deadband** | Tolerance zone around the setpoint. | `0.05°C` |
-| **Setpoint filter** | Enables the proportional setpoint shaping near the target. | `disabled` |
+| **Setpoint filter** | Enables the proportional setpoint shaping near the target. | `enabled` |
 | **FF3** | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled` |
 | **Lower hysteresis threshold** | Restart threshold during bootstrap learning. | `0.3°C` |
 | **Upper hysteresis threshold** | Stop threshold during bootstrap learning. | `0.5°C` |
@@ -128,7 +128,7 @@ Do not try to tune several parameters at once during the first learning period. 
 
 ## Diagnostics and Markdown card
 
-SmartPI publishes its diagnostics in `specific_states.smart_pi`.
+SmartPI publishes its diagnostics directly at the root of the attributes of the SmartPI diagnostic sensor entity.
 
 This is the main place to check:
 
@@ -136,7 +136,7 @@ This is the main place to check:
 - whether the model is considered reliable,
 - whether recalibration or degraded mode has been reported.
 
-The most useful block during learning is `specific_states.smart_pi.ab_learning`.
+The most useful block during learning is `ab_learning`.
 
 Important fields:
 
@@ -159,7 +159,7 @@ Other useful blocks in normal mode:
 - `autocalib`: automatic supervision state,
 - `calibration`: forced calibration state.
 
-If SmartPI debug mode is enabled, `specific_states.smart_pi.debug` adds more detailed internal data.
+If SmartPI debug mode is enabled, the `debug` block adds more detailed internal data.
 
 A Home Assistant Markdown card is also available to display SmartPI diagnostics in a simpler way in the dashboard.
 
