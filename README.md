@@ -1,5 +1,7 @@
 # Versatile Thermostat SmartPI
 
+[Lire la version française](README.fr.md)
+
 <p align="center">
   <img src="assets/brand/logo.png" alt="SmartPI Logo" width="300" />
 </p>
@@ -55,10 +57,8 @@ This integration extends the popular [Versatile Thermostat](https://github.com/j
 
 ## 📖 Documentation
 
-Comprehensive documentation is available in multiple languages:
+Comprehensive documentation is available in English:
 
-- 🇫🇷 [Documentation utilisateur (Français)](documentation/fr/vtherm_smartpi.md)
-- 🇫🇷 [Documentation technique (Français)](documentation/fr/technical_doc.md)
 - 🇬🇧 [User Documentation (English)](documentation/en/vtherm_smartpi.md)
 - 🇬🇧 [Technical Documentation (English)](documentation/en/technical_doc.md)
 
