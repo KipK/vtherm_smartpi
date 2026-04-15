@@ -45,6 +45,9 @@ class SmartPIDiagnosticSensor(SensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    # Persist one history sample per SmartPI publication, even when the state
+    # stays "active" and the compact attributes happen to be unchanged.
+    _attr_force_update = True
     _attr_icon = "mdi:chart-timeline"
 
     def __init__(self, hass: HomeAssistant, climate_entity_id: str, unique_id_base: str, climate_entry):
