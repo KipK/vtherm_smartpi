@@ -22,8 +22,8 @@ jobs:
               with:
                   tag_name: ${{ github.ref_name }}
                   name: Release ${{ github.ref_name }}
-                  draft: false
-                  prerelease: true
+                  draft: true
+                  prerelease: false
                   generate_release_notes: true
                   files: vtherm_smartpi.zip
               env:
