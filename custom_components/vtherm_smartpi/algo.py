@@ -275,6 +275,7 @@ class SmartPI:
 
         # Track last sensor temperature (unrounded) used in calculations
         self._last_current_temp: float | None = None
+        self._last_ext_temp: float | None = None
 
         # Track last HVAC mode for integral reset on HEAT/COOL transitions
         self._last_hvac_mode: VThermHvacMode | None = None
@@ -419,6 +420,7 @@ class SmartPI:
         self._learn_last_ts = None
         self._last_target_temp = None
         self._last_current_temp = None
+        self._last_ext_temp = None
         self._last_hvac_mode = None
         self._learning_start_date = datetime.now()
         self._current_cycle_start_monotonic = None
@@ -2207,6 +2209,7 @@ class SmartPI:
             self.ctl.last_i_mode = "calibration"
             self._last_target_temp = target_temp
             self._last_current_temp = current_temp
+            self._last_ext_temp = ext_current_temp
             # Refresh tau_reliable for twin diagnostics
             self._tau_reliable = self.est.tau_reliability().reliable
             # Update Twin Diagnostics even in calibration
@@ -2237,6 +2240,7 @@ class SmartPI:
             # Update Twin Diagnostics even in hysteresis
             self._update_twin_diagnostics(current_temp, ext_current_temp, target_temp, hvac_mode, dt_s=dt_min * 60.0)
             self._last_current_temp = current_temp
+            self._last_ext_temp = ext_current_temp
             return
 
         # --- 6. Control Context & Deadband ---
@@ -2385,6 +2389,7 @@ class SmartPI:
         self._last_u_ff = self.ctl.u_ff
         self._last_u_cmd = u_cmd
         self._last_current_temp = current_temp
+        self._last_ext_temp = ext_current_temp
         self._last_target_temp = target_temp
 
         # --- 14b. FF trim sample recording & saturation tracking ---

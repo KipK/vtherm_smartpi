@@ -57,6 +57,7 @@ ESSENTIAL_KEYS = {
     "autocalib_snapshot_age_h",
     # Sensor temperature
     "sensor_temperature",
+    "ext_sensor_temperature",
     # Adaptive T_int filter
     "t_int_clean",
     # FFv2 essential keys
@@ -151,6 +152,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         },
         "temperature": {
             "sensor": diag["sensor_temperature"],
+            "ext_sensor": diag["ext_sensor_temperature"],
             "error": diag["error"],
             "integral_error": diag["integral_error"],
             "integral_mode": diag["i_mode"],
@@ -444,6 +446,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "boost_active": algo.sp_mgr.boost_active,
         # Sensor temperature (unrounded) used in last calculation cycle
         "sensor_temperature": algo._last_current_temp,
+        "ext_sensor_temperature": algo._last_ext_temp,
         # Adaptive T_int filter
         "t_int_raw": algo._last_current_temp,
         "t_int_lp": round(algo.tint_filter.t_int_lp, 4) if algo.tint_filter.t_int_lp is not None else None,
