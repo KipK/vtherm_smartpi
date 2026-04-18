@@ -14,3 +14,10 @@ All notable changes to this project will be documented in this file.
 ## [0.1.2] - 2026-04-18
 
 - replace vtherm api to main repo
+
+## [0.1.3] - 2026-04-18
+
+- harden plugin services and refresh state after reset
+
+
+
