@@ -3,6 +3,11 @@
 - [SmartPI](#smartpi)
   - [Ce que fait SmartPI](#ce-que-fait-smartpi)
   - [Avant de commencer](#avant-de-commencer)
+  - [Installation et mise en place](#installation-et-mise-en-place)
+    - [Sélectionner SmartPI dans Versatile Thermostat](#sélectionner-smartpi-dans-versatile-thermostat)
+    - [Configurer SmartPI](#configurer-smartpi)
+      - [Valeurs par défaut globales](#valeurs-par-défaut-globales)
+      - [Configuration par thermostat](#configuration-par-thermostat)
   - [Phases de fonctionnement](#phases-de-fonctionnement)
     - [Phase d'apprentissage](#phase-dapprentissage)
     - [Phase stable](#phase-stable)
@@ -53,6 +58,47 @@ Deux conseils pratiques aident beaucoup :
 - utilisez une consigne suffisamment au-dessus de la température extérieure pour que la réponse de chauffe soit bien visible.
 
 En pratique, il faut souvent compter environ 24 à 48 heures avant que SmartPI puisse passer en régulation stable. Sur les systèmes lents ou très inertiels, cela peut prendre davantage de temps.
+
+## Installation et mise en place
+
+Installez l'intégration via HACS (ou manuellement) comme décrit dans le [README](../../README.fr.md), puis redémarrez Home Assistant.
+
+Deux étapes sont nécessaires après le redémarrage : activer SmartPI dans Versatile Thermostat, puis ajouter l'intégration SmartPI dans Home Assistant.
+
+### Sélectionner SmartPI dans Versatile Thermostat
+
+Ouvrez la configuration de l'appareil Versatile Thermostat que vous souhaitez piloter avec SmartPI. Dans l'étape **Underlyings**, repérez le sélecteur d'algorithme et choisissez **SmartPI**.
+
+![VT underlyings — sélection de l'algorithme SmartPI](../../assets/screens/config_algo.png)
+
+Répétez cette étape pour chaque thermostat que vous souhaitez faire fonctionner avec SmartPI.
+
+### Configurer SmartPI
+
+Une fois SmartPI sélectionné comme algorithme dans au moins un thermostat, ajoutez l'intégration **SmartPI** dans Home Assistant : allez dans **Paramètres → Intégrations → Ajouter une intégration**, puis recherchez *SmartPI*.
+
+Un menu s'affiche avec deux options :
+
+- **Configurer les valeurs par défaut** — définit les paramètres qui s'appliquent à tous les thermostats non configurés individuellement.
+- **Configurer un thermostat** — définit les paramètres pour un thermostat spécifique, prioritaires sur les valeurs par défaut globales pour cet appareil.
+
+Vous pouvez ajouter les deux types : une entrée globale et autant d'entrées par thermostat que nécessaire. Chaque entrée par thermostat prend la priorité sur les valeurs globales pour l'appareil sélectionné.
+
+#### Valeurs par défaut globales
+
+Choisissez **Configurer les valeurs par défaut** pour définir les paramètres de repli utilisés par tous les thermostats sans entrée SmartPI dédiée.
+
+![SmartPI — configuration des valeurs par défaut](../../assets/screens/config_smartpi_select.png)
+
+Les valeurs par défaut conviennent à la plupart des installations. Consultez la section [Configuration](#configuration) pour la description de chaque paramètre.
+
+#### Configuration par thermostat
+
+Choisissez **Configurer un thermostat** pour créer une entrée SmartPI dédiée à un thermostat précis. Sélectionnez le thermostat cible dans la liste, puis ajustez les paramètres selon vos besoins.
+
+![SmartPI — configuration par thermostat](../../assets/screens/config_smartpi.png)
+
+Les paramètres disponibles sont identiques à ceux des valeurs par défaut globales. Tout paramètre défini ici remplace la valeur globale correspondante pour ce thermostat uniquement.
 
 ## Phases de fonctionnement
 

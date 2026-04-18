@@ -3,6 +3,11 @@
 - [SmartPI](#smartpi)
   - [What SmartPI does](#what-smartpi-does)
   - [Before you start](#before-you-start)
+  - [Setup](#setup)
+    - [Selecting SmartPI in Versatile Thermostat](#selecting-smartpi-in-versatile-thermostat)
+    - [Configuring SmartPI](#configuring-smartpi)
+      - [Global defaults](#global-defaults)
+      - [Per-thermostat configuration](#per-thermostat-configuration)
   - [Operating phases](#operating-phases)
     - [Learning phase](#learning-phase)
     - [Stable phase](#stable-phase)
@@ -53,6 +58,47 @@ Two practical recommendations help a lot:
 - use a setpoint high enough above outdoor temperature for the room to show a clear heating response.
 
 In practice, learning may take around 24 to 48 hours before SmartPI can switch to stable regulation. On slow or highly inertial systems, it can take longer.
+
+## Setup
+
+Install the integration via HACS (or manually) as described in the [README](../../README.md), then restart Home Assistant.
+
+Two steps are required after the restart: activating SmartPI in Versatile Thermostat, then adding the SmartPI integration in Home Assistant.
+
+### Selecting SmartPI in Versatile Thermostat
+
+Open the configuration of the Versatile Thermostat device you want to control with SmartPI. In the **Underlyings** step, locate the algorithm selector and choose **SmartPI**.
+
+![VT underlyings — SmartPI algorithm selection](../../assets/screens/config_algo.png)
+
+Repeat this step for each thermostat you want to run with SmartPI.
+
+### Configuring SmartPI
+
+Once SmartPI is selected as the algorithm in at least one thermostat, add the **SmartPI** integration in Home Assistant: go to **Settings → Integrations → Add integration**, then search for *SmartPI*.
+
+A menu appears with two options:
+
+- **Configure global defaults** — sets parameters that apply to all thermostats not individually configured.
+- **Configure a thermostat** — sets parameters for one specific thermostat, overriding global defaults for that device.
+
+You can add both types: one global entry and as many per-thermostat entries as needed. Each per-thermostat entry takes priority over global defaults for the selected device.
+
+#### Global defaults
+
+Choose **Configure global defaults** to set fallback values used by every thermostat that does not have its own SmartPI entry.
+
+![SmartPI — global defaults configuration](../../assets/screens/config_smartpi_select.png)
+
+Default values are suitable for most installations. See the [Configuration](#configuration) section for a description of each parameter.
+
+#### Per-thermostat configuration
+
+Choose **Configure a thermostat** to create a dedicated SmartPI entry for one specific thermostat. Select the target thermostat from the list, then adjust the parameters as needed.
+
+![SmartPI — per-thermostat configuration](../../assets/screens/config_smartpi.png)
+
+The parameters available are the same as for global defaults. Any parameter set here overrides the corresponding global default for the selected thermostat only.
 
 ## Operating phases
 
