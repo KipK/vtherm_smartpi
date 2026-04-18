@@ -9,3 +9,8 @@ All notable changes to this project will be documented in this file.
 - HACS integration support
 - Comprehensive documentation in French and English
 - GitHub Actions for automated validation and releases
+-
+
+## [0.1.2] - 2026-04-18
+
+- replace vtherm api to main repo
