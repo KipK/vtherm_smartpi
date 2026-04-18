@@ -72,16 +72,46 @@ def _register_services(hass: HomeAssistant) -> None:
         return
 
     async def _call_on_vtherms(call, method_name: str) -> None:
-        entity_ids = service_helper.async_extract_entity_ids(hass, call)
+        entity_ids = set(await service_helper.async_extract_entity_ids(call))
+
+        call_target = getattr(call, "target", None)
+        if isinstance(call_target, dict):
+            target_entity_ids = call_target.get("entity_id")
+            if isinstance(target_entity_ids, str):
+                entity_ids.add(target_entity_ids)
+            elif isinstance(target_entity_ids, list):
+                entity_ids.update(
+                    entity_id for entity_id in target_entity_ids if isinstance(entity_id, str)
+                )
+
+        explicit_entity_ids = call.data.get("entity_id")
+        if isinstance(explicit_entity_ids, str):
+            entity_ids.add(explicit_entity_ids)
+        elif isinstance(explicit_entity_ids, list):
+            entity_ids.update(
+                entity_id for entity_id in explicit_entity_ids if isinstance(entity_id, str)
+            )
+
         component = hass.data.get(CLIMATE_DOMAIN)
-        if not component:
+        if not component or not entity_ids:
             return
-        for entity in list(component.entities):
-            if entity.entity_id not in entity_ids:
+
+        for entity_id in sorted(entity_ids):
+            entity = component.get_entity(entity_id) if hasattr(component, "get_entity") else None
+            if entity is None:
+                entity = next(
+                    (candidate for candidate in list(component.entities) if candidate.entity_id == entity_id),
+                    None,
+                )
+            if entity is None:
                 continue
+
             if getattr(entity, "proportional_function", None) != PROP_FUNCTION_SMART_PI:
                 continue
             handler = getattr(entity, method_name, None)
+            if handler is None:
+                algo_handler = getattr(entity, "_algo_handler", None)
+                handler = getattr(algo_handler, method_name, None) if algo_handler is not None else None
             if handler is None:
                 _LOGGER.warning(
                     "Service %s not available on %s", method_name, entity.entity_id
@@ -89,20 +119,32 @@ def _register_services(hass: HomeAssistant) -> None:
                 continue
             await handler()
 
+    async def _handle_reset_learning(call) -> None:
+        """Handle SmartPI learning reset with a real async callable."""
+        await _call_on_vtherms(call, "service_reset_smart_pi_learning")
+
+    async def _handle_force_calibration(call) -> None:
+        """Handle SmartPI calibration forcing with a real async callable."""
+        await _call_on_vtherms(call, "service_force_smartpi_calibration")
+
+    async def _handle_reset_integral(call) -> None:
+        """Handle SmartPI integral reset with a real async callable."""
+        await _call_on_vtherms(call, "service_reset_smartpi_integral")
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_RESET_SMARTPI_LEARNING,
-        lambda call: _call_on_vtherms(call, "service_reset_smart_pi_learning"),
+        _handle_reset_learning,
     )
     hass.services.async_register(
         DOMAIN,
         SERVICE_FORCE_SMARTPI_CALIBRATION,
-        lambda call: _call_on_vtherms(call, "service_force_smartpi_calibration"),
+        _handle_force_calibration,
     )
     hass.services.async_register(
         DOMAIN,
         SERVICE_RESET_SMARTPI_INTEGRAL,
-        lambda call: _call_on_vtherms(call, "service_reset_smartpi_integral"),
+        _handle_reset_integral,
     )
 
     data[DATA_SERVICES_REGISTERED] = True
