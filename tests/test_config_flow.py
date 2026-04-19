@@ -24,8 +24,8 @@ async def test_first_user_step_creates_default_entry(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_step_shows_menu_when_entry_already_exists(hass) -> None:
-    """Later flow runs must keep the manual scope selection menu."""
+async def test_user_step_shows_thermostat_form_when_entry_already_exists(hass) -> None:
+    """Later flow runs must open the thermostat form directly."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="SmartPI defaults",
@@ -39,6 +39,5 @@ async def test_user_step_shows_menu_when_entry_already_exists(hass) -> None:
         context={"source": SOURCE_USER},
     )
 
-    assert result["type"] == FlowResultType.MENU
-    assert result["step_id"] == "user"
-    assert result["menu_options"] == ["thermostat", "global"]
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "thermostat"

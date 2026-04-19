@@ -2,13 +2,6 @@
   "title": "Versatile Thermostat SmartPI",
   "config": {
     "step": {
-      "user": {
-        "title": "SmartPI configuration",
-        "menu_options": {
-          "thermostat": "Configure a thermostat",
-          "global": "Configure global defaults"
-        }
-      },
       "global": {
         "title": "SmartPI defaults",
         "data": {

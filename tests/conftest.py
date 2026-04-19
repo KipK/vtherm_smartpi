@@ -9,8 +9,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_ROOT = Path(__file__).resolve().parent
-VTHERM_API_ROOT = Path("/workspaces/vtherm_api/src")
-VERSATILE_THERMOSTAT_ROOT = Path("/workspaces/workspace/versatile_thermostat")
+WORKSPACE_ROOT = REPO_ROOT.parent
+VTHERM_API_ROOT = WORKSPACE_ROOT / "vtherm_api" / "src"
+VERSATILE_THERMOSTAT_ROOT = WORKSPACE_ROOT / "versatile_thermostat"
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -20,10 +21,10 @@ if str(REPO_ROOT) not in sys.path:
 if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
 
-if str(VTHERM_API_ROOT) not in sys.path:
+if VTHERM_API_ROOT.exists() and str(VTHERM_API_ROOT) not in sys.path:
     sys.path.insert(0, str(VTHERM_API_ROOT))
 
-if str(VERSATILE_THERMOSTAT_ROOT) not in sys.path:
+if VERSATILE_THERMOSTAT_ROOT.exists() and str(VERSATILE_THERMOSTAT_ROOT) not in sys.path:
     sys.path.insert(0, str(VERSATILE_THERMOSTAT_ROOT))
 
 from fakes.fake_thermostat_runtime import FakeThermostatRuntime
