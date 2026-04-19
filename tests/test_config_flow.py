@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.data_entry_flow import FlowResultType
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.vtherm_smartpi.const import DEFAULT_OPTIONS, DOMAIN
 
 
+@pytest.mark.asyncio
 async def test_first_user_step_creates_default_entry(hass) -> None:
     """The first flow run must create the default global entry immediately."""
     result = await hass.config_entries.flow.async_init(
@@ -21,6 +23,7 @@ async def test_first_user_step_creates_default_entry(hass) -> None:
     assert result["data"] == DEFAULT_OPTIONS
 
 
+@pytest.mark.asyncio
 async def test_user_step_shows_menu_when_entry_already_exists(hass) -> None:
     """Later flow runs must keep the manual scope selection menu."""
     entry = MockConfigEntry(
