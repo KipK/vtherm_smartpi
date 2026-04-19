@@ -1,6 +1,8 @@
 """SmartPI Guard Manager."""
+
+from __future__ import annotations
+
 import logging
-from typing import TypedDict, Optional
 
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_HEAT
 
@@ -11,12 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 # NEAR_BAND_HYSTERESIS_C = 0.05 (We can pass this in or define it here)
 NEAR_BAND_HYSTERESIS_C = 0.05
 
-class GuardState(TypedDict):
-    """Guard state for persistence."""
-    guard_cut_active: bool
-    guard_cut_count: int
-    guard_kick_active: bool
-    guard_kick_count: int
+GuardState = dict[str, int]
 
 class GuardAction:
     """Action returned by check_guards."""
