@@ -16,8 +16,8 @@ jobs:
 
             - name: Create ZIP
               run: |
-                  cd custom_components
-                  zip -r ../vtherm_smartpi.zip vtherm_smartpi/
+                  cd custom_components/vtherm_smartpi
+                  zip -r ../../vtherm_smartpi.zip .
 
             - name: Create Release
               uses: softprops/action-gh-release@v1
