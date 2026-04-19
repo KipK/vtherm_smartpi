@@ -99,12 +99,20 @@ def build_user_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Create a singleton SmartPI plugin entry."""
+    """Manage SmartPI plugin config entries."""
 
     VERSION = 1
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
-        """Show the configuration scope menu."""
+        """Create default plugin settings on first install."""
+        if not self._async_current_entries():
+            await self.async_set_unique_id(DOMAIN)
+            self._abort_if_unique_id_configured()
+            return self.async_create_entry(
+                title="SmartPI defaults",
+                data=dict(DEFAULT_OPTIONS),
+            )
+
         return self.async_show_menu(
             step_id="user",
             menu_options=["thermostat", "global"],
