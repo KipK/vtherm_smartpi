@@ -8,7 +8,7 @@
     "versatile_thermostat"
   ],
   "requirements": [
-    "vtherm_api@git+https://github.com/jmcollin78/vtherm_api.git@main"
+    "vtherm_api"
   ],
   "integration_type": "service",
   "iot_class": "calculated",
