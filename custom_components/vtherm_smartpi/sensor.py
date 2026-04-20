@@ -18,6 +18,7 @@ from .const import (
     PROP_FUNCTION_SMART_PI,
 )
 from .algo import SmartPI
+from .smartpi.const import SmartPIPhase
 
 _LOGGER = logging.getLogger(__name__)
 VT_DOMAIN = "versatile_thermostat"
@@ -75,6 +76,18 @@ def _get_default_target_unique_ids(hass: HomeAssistant) -> list[str]:
         target_unique_ids.append(reg_entry.unique_id)
 
     return target_unique_ids
+
+
+def _get_diagnostic_state(algo: SmartPI) -> str:
+    """Return the top-level diagnostic state for the SmartPI sensor."""
+    phase = algo.phase
+    if phase == SmartPIPhase.HYSTERESIS:
+        return "bootstrap_hysteresis"
+    if phase == SmartPIPhase.CALIBRATION:
+        return "calibration"
+    if phase == SmartPIPhase.STABLE:
+        return "stable"
+    return str(phase).lower().replace(" ", "_")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
@@ -190,7 +203,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
             self._attr_native_value = "inactive"
             return
 
-        self._attr_native_value = "active"
+        self._attr_native_value = _get_diagnostic_state(algo)
         if getattr(algo, "_debug_mode", False):
             self._attr_extra_state_attributes = algo.get_debug_diagnostics() or algo.get_published_diagnostics()
         else:

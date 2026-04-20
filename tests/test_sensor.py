@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 import pytest
 from homeassistant.helpers import entity_registry as er
@@ -15,9 +16,27 @@ from custom_components.vtherm_smartpi.const import (
     DOMAIN,
     PROP_FUNCTION_SMART_PI,
 )
+from custom_components.vtherm_smartpi.algo import SmartPI
+from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
 from custom_components.vtherm_smartpi.sensor import async_setup_entry
+from custom_components.vtherm_smartpi.sensor import SmartPIDiagnosticSensor
 
 VT_DOMAIN = "versatile_thermostat"
+
+
+class DummySmartPI(SmartPI):
+    """Minimal SmartPI test double exposing only published phase data."""
+
+    def __init__(self, phase: SmartPIPhase) -> None:
+        self._phase = phase
+        self._debug_mode = False
+
+    @property
+    def phase(self) -> SmartPIPhase:
+        return self._phase
+
+    def get_published_diagnostics(self):
+        return {"control": {"phase": self.phase.value}}
 
 
 @pytest.mark.asyncio
@@ -77,3 +96,36 @@ async def test_global_entry_creates_only_default_bound_diagnostic_sensors(hass) 
     created_entities = async_add_entities.call_args.args[0]
     assert len(created_entities) == 1
     assert created_entities[0].unique_id == "smartpi_diag_vt-default"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phase", "expected_state"),
+    [
+        (SmartPIPhase.HYSTERESIS, "bootstrap_hysteresis"),
+        (SmartPIPhase.STABLE, "stable"),
+        (SmartPIPhase.CALIBRATION, "calibration"),
+    ],
+)
+async def test_diagnostic_sensor_state_reflects_smartpi_phase(
+    hass,
+    phase: SmartPIPhase,
+    expected_state: str,
+) -> None:
+    """The diagnostic sensor state must expose the SmartPI top-level phase."""
+    climate_entity_id = "climate.test_vtherm"
+    hass.states.async_set(climate_entity_id, "heat")
+    hass.data["climate"] = SimpleNamespace(
+        entities=[
+            SimpleNamespace(
+                entity_id=climate_entity_id,
+                prop_algorithm=DummySmartPI(phase),
+            )
+        ]
+    )
+
+    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm", None)
+
+    sensor._update_from_climate()
+
+    assert sensor.native_value == expected_state

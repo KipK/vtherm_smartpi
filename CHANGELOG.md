@@ -19,5 +19,17 @@ All notable changes to this project will be documented in this file.
 
 - harden plugin services and refresh state after reset
 
+## [0.1.4] - 2026-04-19
 
+Fix GuardState runtime typing in SmartPI guards
 
+Auto-create SmartPI default config entry on first setup
+
+## [0.1.5] - 2026-04-19
+
+Remove default config entry in menu
+
+## [0.1.6] - 2026-04-20
+
+Fix diagnostics sensor creation for default-bound thermostats
+Expose SmartPI phase as diagnostics sensor state
