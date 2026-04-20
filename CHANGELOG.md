@@ -34,3 +34,7 @@ Remove default config entry in menu
 Fix diagnostics sensor creation for default-bound thermostats
 Expose SmartPI phase as diagnostics sensor state
 Mark SmartPI diagnostics sensor as diagnostic entity
+
+## [0.1.7] - 2026-04-20
+
+switch to official vtherm_api package
