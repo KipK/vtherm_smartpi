@@ -33,3 +33,4 @@ Remove default config entry in menu
 
 Fix diagnostics sensor creation for default-bound thermostats
 Expose SmartPI phase as diagnostics sensor state
+Mark SmartPI diagnostics sensor as diagnostic entity
