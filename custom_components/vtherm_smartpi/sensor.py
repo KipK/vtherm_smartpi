@@ -1,7 +1,6 @@
 """Sensor platform for vtherm_smartpi."""
 
 import logging
-from enum import Enum
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -12,32 +11,96 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 
-from .const import CONF_TARGET_VTHERM, DOMAIN
+from .const import (
+    CONF_PROP_FUNCTION,
+    CONF_TARGET_VTHERM,
+    DOMAIN,
+    PROP_FUNCTION_SMART_PI,
+)
 from .algo import SmartPI
 
 _LOGGER = logging.getLogger(__name__)
+VT_DOMAIN = "versatile_thermostat"
+
+
+def _get_dedicated_target_unique_ids(hass: HomeAssistant) -> set[str]:
+    """Return thermostat unique ids that already have a dedicated plugin entry."""
+    return {
+        plugin_entry.data[CONF_TARGET_VTHERM]
+        for plugin_entry in hass.config_entries.async_entries(DOMAIN)
+        if plugin_entry.data.get(CONF_TARGET_VTHERM)
+    }
+
+
+def _get_climate_entry(
+    hass: HomeAssistant,
+    target_unique_id: str,
+):
+    """Resolve the VT climate registry entry for a thermostat unique id."""
+    registry = er.async_get(hass)
+    climate_entity_id = registry.async_get_entity_id(
+        CLIMATE_DOMAIN,
+        VT_DOMAIN,
+        target_unique_id,
+    )
+    if not climate_entity_id:
+        return None, None
+
+    climate_entry = registry.async_get(climate_entity_id)
+    return climate_entity_id, climate_entry
+
+
+def _get_default_target_unique_ids(hass: HomeAssistant) -> list[str]:
+    """Return SmartPI thermostat unique ids that inherit the global entry."""
+    dedicated_target_unique_ids = _get_dedicated_target_unique_ids(hass)
+    registry = er.async_get(hass)
+    target_unique_ids: list[str] = []
+
+    for reg_entry in registry.entities.values():
+        if reg_entry.domain != CLIMATE_DOMAIN:
+            continue
+        if reg_entry.platform != VT_DOMAIN:
+            continue
+        if reg_entry.unique_id in dedicated_target_unique_ids:
+            continue
+        if reg_entry.config_entry_id is None:
+            continue
+
+        vt_entry = hass.config_entries.async_get_entry(reg_entry.config_entry_id)
+        if vt_entry is None or vt_entry.domain != VT_DOMAIN:
+            continue
+        if vt_entry.data.get(CONF_PROP_FUNCTION) != PROP_FUNCTION_SMART_PI:
+            continue
+
+        target_unique_ids.append(reg_entry.unique_id)
+
+    return target_unique_ids
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
     """Set up the SmartPI sensor platform."""
     if entry.unique_id == DOMAIN:
-        return
+        target_unique_ids = _get_default_target_unique_ids(hass)
+    else:
+        target_unique_id = entry.data.get(CONF_TARGET_VTHERM)
+        target_unique_ids = [target_unique_id] if target_unique_id else []
 
-    target_unique_id = entry.data.get(CONF_TARGET_VTHERM)
-    if not target_unique_id:
-        return
+    entities: list[SmartPIDiagnosticSensor] = []
+    for target_unique_id in target_unique_ids:
+        climate_entity_id, climate_entry = _get_climate_entry(hass, target_unique_id)
+        if not climate_entity_id:
+            continue
+        entities.append(
+            SmartPIDiagnosticSensor(
+                hass,
+                climate_entity_id,
+                target_unique_id,
+                climate_entry,
+            )
+        )
 
-    registry = er.async_get(hass)
-    
-    # Try looking for versatile thermostat first
-    climate_entity_id = registry.async_get_entity_id(CLIMATE_DOMAIN, "versatile_thermostat", target_unique_id)
-    
-    if not climate_entity_id:
-        # Fallback to checking all climates if needed
-        return
-
-    climate_entry = registry.async_get(climate_entity_id)
-
-    async_add_entities([SmartPIDiagnosticSensor(hass, climate_entity_id, target_unique_id, climate_entry)])
+    if entities:
+        async_add_entities(entities)
 
 
 class SmartPIDiagnosticSensor(SensorEntity):
