@@ -4,6 +4,7 @@ import logging
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
@@ -121,6 +122,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     # Persist one history sample per SmartPI publication, even when the state
     # stays "active" and the compact attributes happen to be unchanged.
     _attr_force_update = True
