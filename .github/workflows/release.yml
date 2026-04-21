@@ -19,6 +19,11 @@ jobs:
                   cd custom_components/vtherm_smartpi
                   zip -r ../../vtherm_smartpi.zip .
 
+            - name: "Set version number from trigger's tag"
+              run: |
+                  yq -i -o json '.version="${{ github.ref_name }}"' \
+                  "${{ github.workspace }}/custom_components/vtherm_smartpi/manifest.json"
+
             - name: Create Release
               uses: softprops/action-gh-release@v1
               with:
