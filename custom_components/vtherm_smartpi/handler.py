@@ -170,7 +170,7 @@ class SmartPIHandler:
                 _LOGGER.debug("%s - SmartPI startup: ready for cycle management", t)
 
         # Check if we need to start the periodic recalculation timer
-        await self.on_state_changed()
+        await self.on_state_changed(True)
 
     async def _async_save(self):
         """Save SmartPI state to storage."""
@@ -374,8 +374,9 @@ class SmartPIHandler:
         # Dispatch an update signal to the diagnostic sensor so it records attributes for this cycle
         async_dispatcher_send(t.hass, f"smartpi_diag_update_{t.unique_id}")
 
-    async def on_state_changed(self):
+    async def on_state_changed(self, changed: bool):
         """Handle state changes."""
+        del changed
         t = self._thermostat
         if t.vtherm_hvac_mode in [VThermHvacMode_HEAT, VThermHvacMode_COOL]:
             # Check if we're resuming from OFF (timer was stopped)

@@ -385,7 +385,7 @@ async def test_smartpi_resume_from_off_resets_cycle():
 
     # Trigger on_state_changed (what happens when window closes)
     with patch.object(handler, '_start_recalc_timer'):
-        await handler.on_state_changed()
+        await handler.on_state_changed(True)
 
     # Verify cycle start state was reset to current time (not old_time)
     # The handler on_state_changed calls check_cycle_state which calls start_new_cycle...
