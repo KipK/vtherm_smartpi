@@ -38,3 +38,7 @@ Mark SmartPI diagnostics sensor as diagnostic entity
 ## [0.1.7] - 2026-04-20
 
 switch to official vtherm_api package
+
+## [0.1.8] - 2026-04-21
+
+Align prop handler state change hook with changed flag API
