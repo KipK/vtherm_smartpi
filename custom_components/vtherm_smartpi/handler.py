@@ -309,14 +309,28 @@ class SmartPIHandler:
             # Check if on_percent has changed
             on_percent_changed = abs(on_percent - self._last_on_percent) > 0.001
             self._last_on_percent = on_percent
+            was_cycle_running = bool(getattr(t.cycle_scheduler, "is_cycle_running", False))
+            force_cycle = (
+                force
+                or (t.prop_algorithm.phase == SmartPIPhase.CALIBRATION)
+                or (t.prop_algorithm.phase == SmartPIPhase.HYSTERESIS and on_percent_changed)
+            )
 
             await t.cycle_scheduler.start_cycle(
                 t.vtherm_hvac_mode,
                 on_percent,
-                force
-                or (t.prop_algorithm.phase == SmartPIPhase.CALIBRATION)
-                or (t.prop_algorithm.phase == SmartPIPhase.HYSTERESIS and on_percent_changed),
+                force_cycle,
             )
+            if (
+                algo is not None
+                and was_cycle_running
+                and not force_cycle
+                and bool(getattr(t.cycle_scheduler, "is_valve_mode", False))
+            ):
+                algo.on_applied_power_updated(
+                    on_percent=on_percent,
+                    hvac_mode=t.vtherm_hvac_mode,
+                )
 
         if (
             algo is not None

@@ -10,6 +10,7 @@ class FakeCycleScheduler:
 
     def __init__(self) -> None:
         self.is_cycle_running = False
+        self.is_valve_mode = False
         self.start_cycle = AsyncMock(side_effect=self._start_cycle)
         self.cancel_cycle = AsyncMock(side_effect=self._cancel_cycle)
         self._cycle_start_callbacks: list = []
@@ -37,4 +38,3 @@ class FakeCycleScheduler:
     async def _cancel_cycle(self) -> None:
         """Record that a cycle was cancelled."""
         self.is_cycle_running = False
-

@@ -1393,6 +1393,23 @@ class SmartPI:
             self._name, du, dI, beta, old_i, self.integral,
         )
 
+    def on_applied_power_updated(
+        self,
+        *,
+        on_percent: float,
+        hvac_mode: VThermHvacMode,
+    ) -> None:
+        """Synchronize state after a valve command is applied mid-cycle."""
+        applied_on_percent = clamp(on_percent, 0.0, 1.0)
+        if abs(applied_on_percent - self._committed_on_percent) <= 0.001:
+            return
+
+        now = time.monotonic()
+        self._committed_on_percent = applied_on_percent
+        self.u_prev = applied_on_percent
+        self._last_u_applied = applied_on_percent
+        self._update_deadtime_episode_status(applied_on_percent, hvac_mode, now)
+
     def save_state(self) -> dict:
         """Save algorithm state for persistence."""
         state = {
