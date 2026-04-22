@@ -7,9 +7,6 @@
   "dependencies": [
     "versatile_thermostat"
   ],
-  "requirements": [
-    "vtherm_api"
-  ],
   "integration_type": "service",
   "iot_class": "calculated",
   "codeowners": [
