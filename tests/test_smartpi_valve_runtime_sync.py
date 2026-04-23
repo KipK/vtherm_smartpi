@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -31,16 +31,18 @@ async def test_handler_syncs_applied_power_after_valve_mid_cycle_update(
     algo._committed_on_percent = 0.2
     algo.u_prev = 0.2
     algo._last_u_applied = 0.2
-    algo.phase = SmartPIPhase.STABLE
     algo.guards.check_guard_cut = MagicMock(return_value=GuardAction.NONE)
     algo.guards.check_guard_kick = MagicMock(return_value=GuardAction.NONE)
-    algo.deadband_mgr.deadband_changed = False
-    algo.deadband_mgr.near_band_changed = False
+    algo.deadband_mgr._last_deadband_changed = False
+    algo.deadband_mgr._last_near_band_changed = False
 
     def fake_calculate(*_args, **_kwargs) -> None:
         algo._on_percent = 0.6
 
-    with patch.object(algo, "calculate", side_effect=fake_calculate):
+    with (
+        patch.object(type(algo), "phase", new_callable=PropertyMock, return_value=SmartPIPhase.STABLE),
+        patch.object(algo, "calculate", side_effect=fake_calculate),
+    ):
         await handler.control_heating(timestamp=None)
 
     assert algo.committed_on_percent == pytest.approx(0.6)
