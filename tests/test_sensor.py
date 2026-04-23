@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.vtherm_smartpi.const import (
@@ -15,6 +16,7 @@ from custom_components.vtherm_smartpi.const import (
     DEFAULT_OPTIONS,
     DOMAIN,
     PROP_FUNCTION_SMART_PI,
+    SIGNAL_SMARTPI_TARGET_UPDATED,
 )
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
@@ -96,6 +98,49 @@ async def test_global_entry_creates_only_default_bound_diagnostic_sensors(hass) 
     created_entities = async_add_entities.call_args.args[0]
     assert len(created_entities) == 1
     assert created_entities[0].unique_id == "smartpi_diag_vt-default"
+
+
+@pytest.mark.asyncio
+async def test_global_entry_adds_default_bound_diagnostic_sensor_when_vtherm_becomes_smartpi(
+    hass,
+) -> None:
+    """The global entry must add diagnostics when a default-bound thermostat becomes SmartPI."""
+    global_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="SmartPI defaults",
+        unique_id=DOMAIN,
+        data=dict(DEFAULT_OPTIONS),
+    )
+    global_entry.add_to_hass(hass)
+
+    async_add_entities = Mock()
+
+    await async_setup_entry(hass, global_entry, async_add_entities)
+
+    async_add_entities.assert_not_called()
+
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="vt-added",
+        data={CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI},
+    )
+    vt_entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "climate",
+        VT_DOMAIN,
+        "vt-added",
+        suggested_object_id="vt_added",
+        config_entry=vt_entry,
+    )
+
+    async_dispatcher_send(hass, SIGNAL_SMARTPI_TARGET_UPDATED, "vt-added")
+
+    async_add_entities.assert_called_once()
+    created_entities = async_add_entities.call_args.args[0]
+    assert len(created_entities) == 1
+    assert created_entities[0].unique_id == "smartpi_diag_vt-added"
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ from .const import (
     CONF_TARGET_VTHERM,
     DOMAIN,
     PROP_FUNCTION_SMART_PI,
+    SIGNAL_SMARTPI_TARGET_UPDATED,
 )
 from .algo import SmartPI
 from .smartpi.const import SmartPIPhase
@@ -95,6 +96,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     """Set up the SmartPI sensor platform."""
     if entry.unique_id == DOMAIN:
         target_unique_ids = _get_default_target_unique_ids(hass)
+        tracked_unique_ids = set(target_unique_ids)
+
+        @callback
+        def _async_add_default_target(target_unique_id: str | None = None) -> None:
+            """Add diagnostics for a default-bound thermostat when it becomes SmartPI."""
+            default_target_unique_ids = _get_default_target_unique_ids(hass)
+            candidates = (
+                [target_unique_id]
+                if target_unique_id is not None
+                else default_target_unique_ids
+            )
+            new_entities: list[SmartPIDiagnosticSensor] = []
+            for candidate_unique_id in candidates:
+                if candidate_unique_id in tracked_unique_ids:
+                    continue
+                if candidate_unique_id not in default_target_unique_ids:
+                    continue
+                climate_entity_id, climate_entry = _get_climate_entry(
+                    hass, candidate_unique_id
+                )
+                if not climate_entity_id:
+                    continue
+                tracked_unique_ids.add(candidate_unique_id)
+                new_entities.append(
+                    SmartPIDiagnosticSensor(
+                        hass,
+                        climate_entity_id,
+                        candidate_unique_id,
+                        climate_entry,
+                    )
+                )
+
+            if new_entities:
+                async_add_entities(new_entities)
+
+        entry.async_on_unload(
+            async_dispatcher_connect(
+                hass, SIGNAL_SMARTPI_TARGET_UPDATED, _async_add_default_target
+            )
+        )
     else:
         target_unique_id = entry.data.get(CONF_TARGET_VTHERM)
         target_unique_ids = [target_unique_id] if target_unique_id else []

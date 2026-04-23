@@ -34,6 +34,7 @@ from .const import (
     DEFAULT_OPTIONS,
     DOMAIN,
     EventType,
+    SIGNAL_SMARTPI_TARGET_UPDATED,
 )
 from .hvac_mode import VThermHvacMode_OFF, VThermHvacMode_HEAT, VThermHvacMode_COOL
 from .commons import write_event_log
@@ -117,6 +118,7 @@ class SmartPIHandler:
         )
 
         _LOGGER.info("%s - SmartPI Algorithm initialized", t)
+        async_dispatcher_send(t.hass, SIGNAL_SMARTPI_TARGET_UPDATED, t.unique_id)
 
     def _get_effective_config(self) -> dict:
         """Return the merged SmartPI configuration for the thermostat."""
