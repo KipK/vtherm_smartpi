@@ -44,7 +44,8 @@ from .const import (
     AB_DRIFT_RECENTER_MAX_CYCLES,
     AB_DRIFT_RECENTER_STEP_MAX_FACTOR,
     AB_DRIFT_SEQ_GAP_MAX,
-    AB_MIN_POINTS_FOR_PUBLISH,
+    AB_MIN_POINTS_FOR_PUBLISH_A,
+    AB_MIN_POINTS_FOR_PUBLISH_B,
     AB_MIN_SAMPLES_A,
     AB_MIN_SAMPLES_A_CONVERGED,
     AB_MIN_SAMPLES_B,
@@ -507,12 +508,17 @@ class ABEstimator:
         """Append a real measurement and publish the aggregated parameter."""
 
         history.append(value)
+        min_points_for_publish = (
+            AB_MIN_POINTS_FOR_PUBLISH_A
+            if param_name == "a"
+            else AB_MIN_POINTS_FOR_PUBLISH_B
+        )
         new_value, ab_diag = ab_publish(
             history,
             plateau_n=AB_WMED_PLATEAU_N,
             alpha=AB_WMED_ALPHA,
             r=AB_WMED_R,
-            min_points_for_publish=AB_MIN_POINTS_FOR_PUBLISH,
+            min_points_for_publish=min_points_for_publish,
             default_value=default_value,
         )
         self.diag_ab_bootstrap = ab_diag.get("ab_bootstrap", False)
@@ -613,11 +619,11 @@ class ABEstimator:
                 self.learn_last_reason = "skip: a delta too small"
                 return
 
-            if self.learn_ok_count_b < AB_A_SOFT_GATE_MIN_B:
+            if len(self.b_meas_hist) < AB_A_SOFT_GATE_MIN_B:
                 self.learn_skip_count += 1
                 self.learn_last_reason = (
                     f"skip: a blocked (b insufficient, "
-                    f"{self.learn_ok_count_b}/{AB_A_SOFT_GATE_MIN_B} b samples)"
+                    f"{len(self.b_meas_hist)}/{AB_A_SOFT_GATE_MIN_B} b samples)"
                 )
                 return
 

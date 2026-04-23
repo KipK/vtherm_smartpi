@@ -247,9 +247,9 @@ LEARN_BOOTSTRAP_COUNT = 10      # Number of learn cycles before applying strict 
 # --- SmartPI Robust Learning Constants ---
 # Median+MAD Strategy Constants
 AB_HISTORY_SIZE = 31      # Keep last 31 (ODD) values
-AB_MIN_SAMPLES_B = 11     # Min samples for b median (OFF phase)
-AB_MIN_SAMPLES_A = 7      # Min samples for a median before b converges (ON phase)
-AB_MIN_SAMPLES_A_CONVERGED = 11  # Min samples for a median once b converged
+AB_MIN_SAMPLES_B = 8      # Min samples for b publication (OFF phase)
+AB_MIN_SAMPLES_A = 6      # Min samples for a publication (ON phase)
+AB_MIN_SAMPLES_A_CONVERGED = 6  # Min samples for a publication once b converged
 AB_MAD_SIGMA_MULT = 3.0   # Outlier rejection threshold (sigma)
 
 AB_MAD_K = 1.4826         # Sigma scaling factor for MAD
@@ -267,13 +267,15 @@ AB_B_CONVERGENCE_MIN_SAMPLES: int = 11
 AB_B_CONVERGENCE_MAD_RATIO: float = 0.30
 AB_B_CONVERGENCE_RANGE_RATIO: float = 0.10
 AB_B_CONVERGENCE_MIN_BHIST: int = 5
-AB_A_SOFT_GATE_MIN_B: int = 5
+AB_A_SOFT_GATE_MIN_B: int = 8
 
 # --- ABEstimator weighted-median aggregation parameters ---
 AB_WMED_PLATEAU_N: int = 11          # Most-recent N points assigned weight 1.0 (plateau)
 AB_WMED_ALPHA: float = 1.0           # Weight factor at the start of the tail
 AB_WMED_R: float = 0.85              # Geometric decay factor for tail weights
-AB_MIN_POINTS_FOR_PUBLISH: int = 11  # Below this count: freeze to default value
+AB_MIN_POINTS_FOR_PUBLISH_A: int = 6  # Below this count: freeze a to default value
+AB_MIN_POINTS_FOR_PUBLISH_B: int = 8  # Below this count: freeze b to default value
+AB_MIN_POINTS_FOR_PUBLISH: int = AB_MIN_POINTS_FOR_PUBLISH_B
 
 # --- ABEstimator persistent drift detection ---
 AB_DRIFT_BUFFER_MAXLEN: int = 8
@@ -348,6 +350,10 @@ class ABConfidenceState(str, Enum):
     AB_DEGRADED = "ab_degraded"
     AB_BAD = "ab_bad"
 
+
+# AB confidence thresholds keep full confidence stricter than bootstrap exit.
+AB_CONFIDENCE_MIN_SAMPLES_A = 11
+AB_CONFIDENCE_MIN_SAMPLES_B = 11
 
 # --- FFv2 Normative Constants ---
 

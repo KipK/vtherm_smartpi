@@ -111,9 +111,11 @@ Par défaut :
 - la chauffe démarre sous `consigne - 0.3°C`,
 - la chauffe s'arrête au-dessus de `consigne + 0.5°C`.
 
-Pendant cette phase, SmartPI mesure d'abord les délais de réaction, puis collecte des observations de chauffe et de refroidissement, puis consolide son modèle thermique.
+Pendant cette phase, SmartPI mesure d'abord les délais de réaction, puis collecte des observations de chauffe et de refroidissement.
 
-Tant que le modèle n'est pas jugé assez fiable, SmartPI reste dans ce mode d'apprentissage.
+SmartPI quitte le bootstrap lorsqu'il dispose de suffisamment d'observations pour publier son premier modèle thermique : 8 observations de refroidissement pour `b` et 6 observations de chauffe pour `a`. Les buffers d'observation continuent ensuite à se remplir jusqu'à 31 échantillons pendant la régulation SmartPI normale, ce qui permet au modèle de continuer à se consolider après le bootstrap.
+
+La confiance complète du modèle reste plus stricte que la sortie du bootstrap. Tant que le nombre d'observations n'est pas suffisant pour cette confiance complète, SmartPI peut réguler avec le modèle publié tout en gardant le trim lent du feed-forward gelé.
 
 Ce qu'il faut retenir :
 
@@ -191,7 +193,7 @@ Champs importants :
 - `bootstrap_status` : étape bootstrap en cours,
 - `accepted_samples_a` : échantillons de chauffe validés,
 - `accepted_samples_b` : échantillons de refroidissement validés,
-- `target_samples` : taille cible de l'historique,
+- `target_samples` : taille cible des buffers A/B complets,
 - `last_reason` : dernière raison d'acceptation ou de rejet d'apprentissage.
 
 Autres blocs utiles en mode normal :

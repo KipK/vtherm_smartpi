@@ -111,7 +111,8 @@ def test_abestimator_a_drift_is_disabled_until_b_converges():
 
     est = ABEstimator()
     est.b = 0.001
-    est.learn_ok_count_b = 5
+    est.learn_ok_count_b = 8
+    est.b_meas_hist.extend([0.001] * 8)
     est.a_meas_hist.extend([0.020] * 31)
 
     for _ in range(8):

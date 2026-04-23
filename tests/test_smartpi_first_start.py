@@ -9,6 +9,8 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     HYST_UPPER_C,
     HYST_LOWER_C,
     AB_HISTORY_SIZE,
+    AB_MIN_SAMPLES_A,
+    AB_MIN_SAMPLES_B,
 )
 from custom_components.vtherm_smartpi.smartpi.integral_guard import IntegralGuardSource
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
@@ -198,8 +200,8 @@ class TestSmartPIHysteresisPhase:
 class TestSmartPIPhaseTransition:
     """Tests for transition from HYSTERESIS to STABLE phase."""
 
-    def test_transition_requires_31_measurements(self):
-        """Test that phase transitions to STABLE only after 31 A and B measurements."""
+    def test_transition_requires_publishable_measurements(self):
+        """Test that phase transitions to STABLE only after publishable A and B measurements."""
         smartpi = SmartPI(
             hass=MagicMock(),
             cycle_min=10,
@@ -211,20 +213,21 @@ class TestSmartPIPhaseTransition:
         # Initially in HYSTERESIS
         assert smartpi.phase == SmartPIPhase.HYSTERESIS
         
-        # Add 30 measurements (not enough)
-        for i in range(30):
-            smartpi.est.a_meas_hist.append(0.01 + i * 0.001)
+        # Add measurements below the bootstrap thresholds.
+        for i in range(AB_MIN_SAMPLES_B - 1):
             smartpi.est.b_meas_hist.append(0.001 + i * 0.0001)
+        for i in range(AB_MIN_SAMPLES_A - 1):
+            smartpi.est.a_meas_hist.append(0.01 + i * 0.001)
         
-        assert smartpi.phase == SmartPIPhase.HYSTERESIS, "Should still be HYSTERESIS with 30 measurements"
+        assert smartpi.phase == SmartPIPhase.HYSTERESIS, "Should still be HYSTERESIS below publishable counts"
         
-        # Add the 31st measurement
+        # Complete the publishable A/B measurement counts.
         smartpi.est.a_meas_hist.append(0.05)
         smartpi.est.b_meas_hist.append(0.005)
         
-        assert len(smartpi.est.a_meas_hist) == 31
-        assert len(smartpi.est.b_meas_hist) == 31
-        assert smartpi.phase == SmartPIPhase.STABLE, "Should transition to STABLE with 31 measurements"
+        assert len(smartpi.est.a_meas_hist) == AB_MIN_SAMPLES_A
+        assert len(smartpi.est.b_meas_hist) == AB_MIN_SAMPLES_B
+        assert smartpi.phase == SmartPIPhase.STABLE, "Should transition to STABLE with publishable measurements"
 
     def test_diagnostics_change_after_transition(self):
         """Test that diagnostics show 'smartpi' mode after transition."""

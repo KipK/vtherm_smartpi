@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Optional
 from .timestamp_utils import convert_monotonic_to_wall_ts
 
 from .const import (
-    AB_A_SOFT_GATE_MIN_B,
     DELTA_MIN,
     DT_MAX_MIN,
     U_CV_MAX,

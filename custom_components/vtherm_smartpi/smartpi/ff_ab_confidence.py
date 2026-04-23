@@ -15,8 +15,8 @@ import logging
 from .const import (
     ABConfidenceState,
     AB_BAD_PERSIST_CYCLES,
-    AB_MIN_SAMPLES_A_CONVERGED,
-    AB_MIN_SAMPLES_B,
+    AB_CONFIDENCE_MIN_SAMPLES_A,
+    AB_CONFIDENCE_MIN_SAMPLES_B,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,8 +46,8 @@ class ABConfidence:
         Returns:
             New ABConfidenceState.
         """
-        enough_a = learn_ok_count_a >= AB_MIN_SAMPLES_A_CONVERGED
-        enough_b = learn_ok_count_b >= AB_MIN_SAMPLES_B
+        enough_a = learn_ok_count_a >= AB_CONFIDENCE_MIN_SAMPLES_A
+        enough_b = learn_ok_count_b >= AB_CONFIDENCE_MIN_SAMPLES_B
 
         if tau_reliable and enough_a and enough_b:
             new_state = ABConfidenceState.AB_OK

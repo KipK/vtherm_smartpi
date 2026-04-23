@@ -111,9 +111,11 @@ By default:
 - heating starts below `setpoint - 0.3°C`,
 - heating stops above `setpoint + 0.5°C`.
 
-During this phase, SmartPI first measures reaction delays, then collects valid heating and cooling observations, then consolidates its thermal model.
+During this phase, SmartPI first measures reaction delays, then collects valid heating and cooling observations.
 
-As long as the model is not considered reliable enough, SmartPI stays in this learning mode.
+SmartPI leaves bootstrap once it has enough observations to publish its first thermal model: 8 cooling observations for `b` and 6 heating observations for `a`. The observation buffers then continue filling up to 31 samples during normal SmartPI regulation, so the model keeps consolidating after bootstrap.
+
+Full model confidence remains stricter than bootstrap exit. Until enough observations are available for full confidence, SmartPI can regulate with the published model while keeping the slow feed-forward trim frozen.
 
 What to expect:
 
@@ -191,7 +193,7 @@ Important fields:
 - `bootstrap_status`: current bootstrap step,
 - `accepted_samples_a`: validated heating samples,
 - `accepted_samples_b`: validated cooling samples,
-- `target_samples`: target history size,
+- `target_samples`: target history size for the full A/B buffers,
 - `last_reason`: last learning accept or reject reason.
 
 Other useful blocks in normal mode:

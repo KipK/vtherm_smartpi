@@ -69,12 +69,16 @@ In phase `HYSTERESIS`, learning follows a strict order:
 
 Rules effectively coded:
 
-- `AB_MIN_SAMPLES_B = 11`,
-- `AB_MIN_SAMPLES_A = 7`,
-- `AB_MIN_SAMPLES_A_CONVERGED = 11`,
-- `AB_A_SOFT_GATE_MIN_B = 5`.
+- `AB_MIN_SAMPLES_B = 8`,
+- `AB_MIN_SAMPLES_A = 6`,
+- `AB_MIN_SAMPLES_A_CONVERGED = 6`,
+- `AB_A_SOFT_GATE_MIN_B = 8`.
 
-The `b` convergence used to tighten the `a` threshold relies on `b_converged_for_a()`:
+SmartPI leaves `HYSTERESIS` once `b` has 8 measurements and `a` has
+6 measurements. Both buffers continue filling up to `AB_HISTORY_SIZE = 31`
+during normal SmartPI regulation.
+
+The `b` convergence used for drift-aware `a` learning relies on `b_converged_for_a()`:
 
 1. `learn_ok_count_b >= 11`,
 2. `len(_b_hat_hist) >= 5`,
@@ -450,10 +454,12 @@ When the thermal twin is usable, a `pred` sub-block is added to debug diagnostic
 | Constant                       | Value  |
 | ------------------------------ | ------ |
 | `AB_HISTORY_SIZE`              | `31`   |
-| `AB_MIN_SAMPLES_B`             | `11`   |
-| `AB_MIN_SAMPLES_A`             | `7`    |
-| `AB_MIN_SAMPLES_A_CONVERGED`   | `11`   |
-| `AB_A_SOFT_GATE_MIN_B`         | `5`    |
+| `AB_MIN_SAMPLES_B`             | `8`    |
+| `AB_MIN_SAMPLES_A`             | `6`    |
+| `AB_MIN_SAMPLES_A_CONVERGED`   | `6`    |
+| `AB_A_SOFT_GATE_MIN_B`         | `8`    |
+| `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
+| `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
 | `AB_B_CONVERGENCE_MIN_SAMPLES` | `11`   |
 | `AB_B_CONVERGENCE_MIN_BHIST`   | `5`    |
 | `AB_B_CONVERGENCE_MAD_RATIO`   | `0.30` |

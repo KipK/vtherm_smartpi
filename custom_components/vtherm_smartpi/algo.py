@@ -501,7 +501,7 @@ class SmartPI:
     def phase(self) -> str:
         if self.calibration_mgr.state != SmartPICalibrationPhase.IDLE:
             return SmartPIPhase.CALIBRATION
-        if len(self.est.a_meas_hist) < AB_HISTORY_SIZE or len(self.est.b_meas_hist) < AB_HISTORY_SIZE:
+        if len(self.est.a_meas_hist) < AB_MIN_SAMPLES_A or len(self.est.b_meas_hist) < AB_MIN_SAMPLES_B:
             return SmartPIPhase.HYSTERESIS
         return SmartPIPhase.STABLE
 
@@ -959,14 +959,14 @@ class SmartPI:
         """
         Progress of the bootstrap (hysteresis) phase in percent (0-100).
         Returns None if not in Hysteresis phase.
-        Formula: ((len(a) + len(b)) / (2 * 31)) * 100
         """
         if self.phase != SmartPIPhase.HYSTERESIS:
             return None
 
-        # Total needed: 31 samples of A + 31 samples of B
-        total_needed = AB_HISTORY_SIZE * 2
-        current_count = len(self.est.a_meas_hist) + len(self.est.b_meas_hist)
+        total_needed = AB_MIN_SAMPLES_A + AB_MIN_SAMPLES_B
+        current_count = min(len(self.est.a_meas_hist), AB_MIN_SAMPLES_A) + min(
+            len(self.est.b_meas_hist), AB_MIN_SAMPLES_B
+        )
 
         pct = (current_count / total_needed) * 100.0
         return int(clamp(pct, 0, 100))
@@ -1005,7 +1005,7 @@ class SmartPI:
         # Step 2: both deadtimes acquired, collecting initial emeas
         b_converged = self.est.b_converged_for_a()
         min_a = AB_MIN_SAMPLES_A_CONVERGED if b_converged else AB_MIN_SAMPLES_A
-        b_target = AB_HISTORY_SIZE if nb_b >= AB_MIN_SAMPLES_B else AB_MIN_SAMPLES_B
+        b_target = AB_MIN_SAMPLES_B
         if nb_a < min_a or nb_b < AB_MIN_SAMPLES_B:
             return f"step2 - collecting emeas: A:{nb_a}/{min_a} B:{nb_b}/{b_target}"
 
@@ -1955,7 +1955,11 @@ class SmartPI:
             k_ff = 0.0
             warmup_scale = 0.0
         else:
-            if self.est.learn_ok_count_a >= 10 and self._tau_reliable:
+            model_ready = (
+                len(self.est.a_meas_hist) >= AB_MIN_SAMPLES_A
+                and len(self.est.b_meas_hist) >= AB_MIN_SAMPLES_B
+            )
+            if model_ready and self._tau_reliable:
                 k_ff = clamp(self.est.b / max(self.est.a, 1e-6), 0.0, 3.0)
             else:
                 k_ff = 0.0

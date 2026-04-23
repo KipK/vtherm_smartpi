@@ -69,12 +69,16 @@ En phase `HYSTERESIS`, l'apprentissage suit un ordre strict :
 
 Règles effectivement codées :
 
-- `AB_MIN_SAMPLES_B = 11`,
-- `AB_MIN_SAMPLES_A = 7`,
-- `AB_MIN_SAMPLES_A_CONVERGED = 11`,
-- `AB_A_SOFT_GATE_MIN_B = 5`.
+- `AB_MIN_SAMPLES_B = 8`,
+- `AB_MIN_SAMPLES_A = 6`,
+- `AB_MIN_SAMPLES_A_CONVERGED = 6`,
+- `AB_A_SOFT_GATE_MIN_B = 8`.
 
-La convergence de `b` utilisée pour le durcissement du seuil de `a` repose sur `b_converged_for_a()` :
+SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 8 mesures et `a` de
+6 mesures. Les deux buffers continuent ensuite à se remplir jusqu'à
+`AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale.
+
+La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dérive repose sur `b_converged_for_a()` :
 
 1. `learn_ok_count_b >= 11`,
 2. `len(_b_hat_hist) >= 5`,
@@ -459,10 +463,12 @@ Quand le jumeau thermique est exploitable, un sous-bloc `pred` est ajouté au de
 | Constante                      | Valeur |
 | ------------------------------ | ------ |
 | `AB_HISTORY_SIZE`              | `31`   |
-| `AB_MIN_SAMPLES_B`             | `11`   |
-| `AB_MIN_SAMPLES_A`             | `7`    |
-| `AB_MIN_SAMPLES_A_CONVERGED`   | `11`   |
-| `AB_A_SOFT_GATE_MIN_B`         | `5`    |
+| `AB_MIN_SAMPLES_B`             | `8`    |
+| `AB_MIN_SAMPLES_A`             | `6`    |
+| `AB_MIN_SAMPLES_A_CONVERGED`   | `6`    |
+| `AB_A_SOFT_GATE_MIN_B`         | `8`    |
+| `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
+| `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
 | `AB_B_CONVERGENCE_MIN_SAMPLES` | `11`   |
 | `AB_B_CONVERGENCE_MIN_BHIST`   | `5`    |
 | `AB_B_CONVERGENCE_MAD_RATIO`   | `0.30` |
