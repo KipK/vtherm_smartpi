@@ -46,3 +46,11 @@ Align prop handler state change hook with changed flag API
 ## [0.1.9] - 2026-04-22
 
 remove vtherm_api dependency ( use VT installed one )
+
+## [0.1.10] - 2026-04-24
+
+- Sync SmartPI committed power after valve mid-cycle updates
+- Fix SmartPI default diagnostics registration
+- Quicker boostrap phase:
+  Adjust SmartPI bootstrap thresholds and AB publication
+ (now needs only 8 B & 6 A before quitting bootstrap mode.)
