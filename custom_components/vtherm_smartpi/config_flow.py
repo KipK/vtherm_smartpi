@@ -33,6 +33,10 @@ from .const import (
 
 ERROR_INVALID_VALVE_CURVE = "invalid_valve_curve"
 THERMOSTAT_TYPE_VALVE = "thermostat_over_valve"
+THERMOSTAT_TYPE_CLIMATE = "thermostat_over_climate"
+AUTO_REGULATION_VALVE = "auto_regulation_valve"
+CONF_THERMOSTAT_TYPE_KEY = "thermostat_type"
+CONF_AUTO_REGULATION_MODE_KEY = "auto_regulation_mode"
 
 
 def build_main_options_schema(
@@ -228,10 +232,47 @@ def _is_valve_state(state: Any) -> bool:
     """Return whether a VTherm state exposes a valve command space."""
     attributes = getattr(state, "attributes", {}) or {}
     configuration = attributes.get("configuration") or {}
+    if _is_valve_config(configuration):
+        return True
     return (
-        configuration.get("type") == THERMOSTAT_TYPE_VALVE
-        or configuration.get("have_valve_regulation") is True
+        attributes.get("vtherm_over_valve") is not None
+        or attributes.get("vtherm_over_climate_valve", {}).get("have_valve_regulation")
+        is True
     )
+
+
+def _is_valve_config(config: dict[str, Any]) -> bool:
+    """Return whether a VTherm config entry targets valve command space."""
+    thermostat_type = config.get(CONF_THERMOSTAT_TYPE_KEY) or config.get("type")
+    return (
+        thermostat_type == THERMOSTAT_TYPE_VALVE
+        or (
+            thermostat_type == THERMOSTAT_TYPE_CLIMATE
+            and config.get(CONF_AUTO_REGULATION_MODE_KEY) == AUTO_REGULATION_VALVE
+        )
+        or config.get("have_valve_regulation") is True
+    )
+
+
+def _is_valve_entity(hass: Any, entity_id: str, target_unique_id: str) -> bool:
+    """Return whether a registered VTherm entity targets valve command space."""
+    registry = er.async_get(hass)
+    reg_entry = registry.async_get(entity_id)
+    if reg_entry is not None and reg_entry.config_entry_id is not None:
+        config_entry = hass.config_entries.async_get_entry(reg_entry.config_entry_id)
+        if config_entry is not None and _is_valve_config(config_entry.data):
+            return True
+
+    state = hass.states.get(entity_id)
+    if state is not None:
+        return _is_valve_state(state)
+
+    for entry in registry.entities.values():
+        if entry.domain != CLIMATE_DOMAIN or entry.unique_id != target_unique_id:
+            continue
+        fallback_state = hass.states.get(entry.entity_id)
+        return fallback_state is not None and _is_valve_state(fallback_state)
+    return False
 
 
 def _validate_valve_curve_config(config: dict[str, Any]) -> dict[str, str]:
@@ -303,12 +344,14 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(f"{DOMAIN}-{target_unique_id}")
             self._abort_if_unique_id_configured()
 
-            state = self.hass.states.get(entity_id)
             self._pending_thermostat_data = {CONF_TARGET_VTHERM: target_unique_id}
             self._pending_thermostat_entity_id = entity_id
-            self._pending_thermostat_is_valve = (
-                state is not None and _is_valve_state(state)
+            self._pending_thermostat_is_valve = _is_valve_entity(
+                self.hass,
+                entity_id,
+                target_unique_id,
             )
+            state = self.hass.states.get(entity_id)
             self._pending_thermostat_title = state.name if state is not None else entity_id
             return await self.async_step_thermostat_settings()
 
@@ -403,8 +446,11 @@ class SmartPIOptionsFlow(OptionsFlow):
         for entry in registry.entities.values():
             if entry.domain != CLIMATE_DOMAIN or entry.unique_id != target_unique_id:
                 continue
-            state = self.hass.states.get(entry.entity_id)
-            return state is not None and _is_valve_state(state)
+            return _is_valve_entity(
+                self.hass,
+                entry.entity_id,
+                target_unique_id,
+            )
         return False
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
