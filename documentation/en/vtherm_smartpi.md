@@ -8,6 +8,11 @@
     - [Configuring SmartPI](#configuring-smartpi)
       - [Global defaults](#global-defaults)
       - [Per-thermostat configuration](#per-thermostat-configuration)
+  - [Radiator valves and curve linearization](#radiator-valves-and-curve-linearization)
+    - [Why a valve can be hard to regulate](#why-a-valve-can-be-hard-to-regulate)
+    - [What linearization does](#what-linearization-does)
+    - [When to enable it](#when-to-enable-it)
+    - [Choosing the values](#choosing-the-values)
   - [Operating phases](#operating-phases)
     - [Learning phase](#learning-phase)
     - [Stable phase](#stable-phase)
@@ -100,6 +105,86 @@ Choose **Configure a thermostat** to create a dedicated SmartPI entry for one sp
 
 The parameters available are the same as for global defaults. Any parameter set here overrides the corresponding global default for the selected thermostat only.
 
+## Radiator valves and curve linearization
+
+This section only applies to thermostats that directly drive a valve, for example a radiator TRV.
+
+### Why a valve can be hard to regulate
+
+A radiator valve does not always behave like an electric heater.
+
+With an electric heater, asking for `40%` usually gives about twice as much heat as asking for `20%`. With many radiator valves, the response is less regular: the first few percent may do almost nothing, then a small extra opening can let a lot of hot water through.
+
+On some installations, a valve can already pass most of the flow when it is only around `20%` open. Opening it further then changes the flow much less.
+
+In practice, it may feel like this:
+
+| Command sent to the valve | Possible radiator effect |
+| --- | --- |
+| `0%` to a few percent | no visible heat |
+| small opening | the radiator just starts heating |
+| around `15%` to `25%` | most of the flow is already present |
+| above that | smaller change, sometimes mostly more hydraulic noise |
+
+The exact values depend on the valve, the valve body, radiator balancing and the hydraulic installation. Do not try to find a perfect value on the first attempt.
+
+### What linearization does
+
+Valve curve linearization translates the SmartPI demand into a valve position.
+
+SmartPI still works with a simple heating demand:
+
+- `0%` means no heating,
+- `50%` means medium demand,
+- `100%` means maximum demand.
+
+Linearization then transforms that demand into a valve opening better suited to the real radiator behavior. The goal is to use the small area where the valve really changes the flow more precisely, instead of sending the raw demand directly to the valve.
+
+Simplified example:
+
+| SmartPI demand | Opening sent to the valve |
+| --- | --- |
+| `0%` | `0%` |
+| low demand | around the useful minimum opening |
+| `80%` | around the knee opening |
+| `100%` | allowed maximum opening |
+
+This correction does not replace SmartPI learning. It only helps SmartPI speak more naturally to a non-linear valve.
+
+### When to enable it
+
+Enable this option if:
+
+- your VTherm thermostat is a valve thermostat,
+- SmartPI directly drives a valve opening,
+- the radiator seems to go quickly from cold to very hot with only a few percent of opening,
+- small command changes create reactions that are too strong or too irregular.
+
+The option is offered only for thermostats that expose a valve command.
+
+### Choosing the values
+
+Default values give a reasonable starting point. Adjust them only if you have observed the behavior of your radiator.
+
+| Parameter | What it means | Starting value |
+| --- | --- | --- |
+| **Minimum valve opening** | First opening where the radiator really starts heating. | `7%` |
+| **Demand at knee** | SmartPI demand where the valve is considered to reach its high-flow area. | `80%` |
+| **Valve opening at knee** | Physical valve position at that demand. | `15%` |
+| **Maximum valve opening** | Maximum allowed opening. | `100%` |
+
+To find the minimum opening, the simplest method is to observe the radiator:
+
+1. Let the radiator cool down.
+2. Start a heating demand.
+3. Increase the valve opening slowly, in small steps.
+4. Wait at least one minute between attempts.
+5. Note the first value where the pipe or radiator really starts warming up.
+
+If you do not want to test carefully, keep the defaults. If your valve reacts very quickly, a knee opening around `20%` to `25%` can be a reasonable trial. If the radiator becomes noisy at full opening, lower the maximum opening.
+
+After changing a value, let SmartPI run for several cycles before judging the result. One heating cycle is not always enough to conclude.
+
 ## Operating phases
 
 ### Learning phase
@@ -173,6 +258,11 @@ Do not try to tune several parameters at once during the first learning period. 
 | **Lower hysteresis threshold** | Restart threshold during bootstrap learning. | `0.3°C` |
 | **Upper hysteresis threshold** | Stop threshold during bootstrap learning. | `0.5°C` |
 | **SmartPI debug mode** | Publishes more detailed diagnostics. | `disabled` |
+| **Valve curve linearization** | Adapts SmartPI demand to non-linear radiator valves. | `disabled` |
+| **Minimum valve opening** | First useful opening when linearization is enabled. | `7%` |
+| **Demand at knee** | SmartPI demand corresponding to the valve slope change. | `80%` |
+| **Valve opening at knee** | Physical valve opening at the slope change. | `15%` |
+| **Maximum valve opening** | Maximum allowed opening when linearization is enabled. | `100%` |
 
 ## Diagnostics and Markdown card
 

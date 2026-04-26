@@ -18,15 +18,6 @@
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
         }
       },
-      "global_valve_curve": {
-        "title": "Valve curve",
-        "data": {
-          "smart_pi_min_valve": "Minimum valve opening",
-          "smart_pi_knee_demand": "Demand at knee",
-          "smart_pi_knee_valve": "Valve opening at knee",
-          "smart_pi_max_valve": "Maximum valve opening"
-        }
-      },
       "thermostat": {
         "title": "SmartPI per-thermostat",
         "data": {

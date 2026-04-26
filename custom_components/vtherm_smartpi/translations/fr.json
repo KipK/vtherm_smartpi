@@ -18,15 +18,6 @@
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
       },
-      "global_valve_curve": {
-        "title": "Courbe de vanne",
-        "data": {
-          "smart_pi_min_valve": "Ouverture minimale de vanne",
-          "smart_pi_knee_demand": "Demande au coude",
-          "smart_pi_knee_valve": "Ouverture de vanne au coude",
-          "smart_pi_max_valve": "Ouverture maximale de vanne"
-        }
-      },
       "thermostat": {
         "title": "SmartPI par thermostat",
         "data": {

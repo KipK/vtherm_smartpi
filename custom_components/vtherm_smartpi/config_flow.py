@@ -191,7 +191,7 @@ def build_valve_curve_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 def build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Build the SmartPI defaults schema."""
-    return build_main_options_schema(defaults, include_valve_linearization=True)
+    return build_main_options_schema(defaults, include_valve_linearization=False)
 
 
 def build_user_target_schema() -> vol.Schema:
@@ -256,7 +256,6 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
     """Manage SmartPI plugin config entries."""
 
     VERSION = 1
-    _pending_global_data: dict[str, Any] | None = None
     _pending_thermostat_data: dict[str, Any] | None = None
     _pending_thermostat_entity_id: str | None = None
     _pending_thermostat_is_valve: bool = False
@@ -280,39 +279,11 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         if user_input is not None:
-            self._pending_global_data = dict(user_input)
-            if user_input.get(CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION):
-                return self.async_show_form(
-                    step_id="global_valve_curve",
-                    data_schema=build_valve_curve_schema(_schema_defaults(user_input)),
-                )
             return self.async_create_entry(title="SmartPI defaults", data=user_input)
 
         return self.async_show_form(
             step_id="global",
             data_schema=build_options_schema(DEFAULT_OPTIONS),
-        )
-
-    async def async_step_global_valve_curve(
-        self, user_input: dict[str, Any] | None = None
-    ):
-        """Handle the global valve curve defaults entry."""
-        data = dict(self._pending_global_data or {})
-
-        if user_input is not None:
-            data.update(user_input)
-            errors = _validate_valve_curve_config(_schema_defaults(data))
-            if errors:
-                return self.async_show_form(
-                    step_id="global_valve_curve",
-                    data_schema=build_valve_curve_schema(_schema_defaults(data)),
-                    errors=errors,
-                )
-            return self.async_create_entry(title="SmartPI defaults", data=data)
-
-        return self.async_show_form(
-            step_id="global_valve_curve",
-            data_schema=build_valve_curve_schema(_schema_defaults(data)),
         )
 
     async def async_step_thermostat(self, user_input: dict[str, Any] | None = None):
@@ -422,16 +393,34 @@ class SmartPIOptionsFlow(OptionsFlow):
         self._config_entry = config_entry
         self._pending_options_data: dict[str, Any] | None = None
 
+    def _is_valve_target_entry(self) -> bool:
+        """Return whether the edited entry targets a valve thermostat."""
+        target_unique_id = self._config_entry.data.get(CONF_TARGET_VTHERM)
+        if target_unique_id is None:
+            return False
+
+        registry = er.async_get(self.hass)
+        for entry in registry.entities.values():
+            if entry.domain != CLIMATE_DOMAIN or entry.unique_id != target_unique_id:
+                continue
+            state = self.hass.states.get(entry.entity_id)
+            return state is not None and _is_valve_state(state)
+        return False
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Handle the options flow."""
         defaults = dict(DEFAULT_OPTIONS)
         defaults.update(self._config_entry.options or self._config_entry.data)
+        is_valve_target = self._is_valve_target_entry()
 
         if user_input is not None:
             data = dict(defaults)
             data.update(user_input)
             self._pending_options_data = data
-            if user_input.get(CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION):
+            if (
+                is_valve_target
+                and user_input.get(CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION)
+            ):
                 return self.async_show_form(
                     step_id="valve_curve",
                     data_schema=build_valve_curve_schema(data),
@@ -440,7 +429,10 @@ class SmartPIOptionsFlow(OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=build_options_schema(defaults),
+            data_schema=build_main_options_schema(
+                defaults,
+                include_valve_linearization=is_valve_target,
+            ),
         )
 
     async def async_step_valve_curve(self, user_input: dict[str, Any] | None = None):

@@ -17,8 +17,14 @@ from custom_components.vtherm_smartpi.const import (
     DEFAULT_OPTIONS,
     DOMAIN,
 )
+from custom_components.vtherm_smartpi.config_flow import build_options_schema
 
 VT_DOMAIN = "versatile_thermostat"
+
+
+def _schema_keys(schema) -> set[str]:
+    """Return normalized voluptuous schema keys."""
+    return {getattr(key, "schema", key) for key in schema.schema}
 
 
 @pytest.mark.asyncio
@@ -52,6 +58,13 @@ async def test_user_step_shows_thermostat_form_when_entry_already_exists(hass) -
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "thermostat"
+
+
+def test_global_options_schema_hides_valve_linearization() -> None:
+    """Global defaults must not expose valve-only linearization settings."""
+    schema_keys = _schema_keys(build_options_schema(DEFAULT_OPTIONS))
+
+    assert CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION not in schema_keys
 
 
 @pytest.mark.asyncio
@@ -89,10 +102,7 @@ async def test_thermostat_flow_hides_valve_linearization_for_non_valve(hass) -> 
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "thermostat_settings"
-    schema_keys = {
-        getattr(key, "schema", key)
-        for key in result["data_schema"].schema
-    }
+    schema_keys = _schema_keys(result["data_schema"])
     assert CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION not in schema_keys
 
 

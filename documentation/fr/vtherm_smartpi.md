@@ -8,6 +8,11 @@
     - [Configurer SmartPI](#configurer-smartpi)
       - [Valeurs par défaut globales](#valeurs-par-défaut-globales)
       - [Configuration par thermostat](#configuration-par-thermostat)
+  - [Vannes de radiateur et linéarisation](#vannes-de-radiateur-et-linéarisation)
+    - [Pourquoi une vanne peut être difficile à réguler](#pourquoi-une-vanne-peut-être-difficile-à-réguler)
+    - [Ce que fait la linéarisation](#ce-que-fait-la-linéarisation)
+    - [Quand l'activer](#quand-lactiver)
+    - [Choisir les valeurs](#choisir-les-valeurs)
   - [Phases de fonctionnement](#phases-de-fonctionnement)
     - [Phase d'apprentissage](#phase-dapprentissage)
     - [Phase stable](#phase-stable)
@@ -100,6 +105,86 @@ Choisissez **Configurer un thermostat** pour créer une entrée SmartPI dédiée
 
 Les paramètres disponibles sont identiques à ceux des valeurs par défaut globales. Tout paramètre défini ici remplace la valeur globale correspondante pour ce thermostat uniquement.
 
+## Vannes de radiateur et linéarisation
+
+Cette section concerne uniquement les thermostats qui pilotent directement une vanne, par exemple une tête thermostatique de radiateur.
+
+### Pourquoi une vanne peut être difficile à réguler
+
+Une vanne de radiateur ne se comporte pas toujours comme un chauffage électrique.
+
+Avec un chauffage électrique, demander `40%` produit généralement environ deux fois plus de chaleur que demander `20%`. Avec beaucoup de vannes de radiateur, ce n'est pas aussi régulier : les premiers pourcents peuvent ne presque rien faire, puis une petite ouverture supplémentaire peut laisser passer beaucoup d'eau chaude.
+
+Sur certaines installations, une vanne peut déjà laisser passer la majorité du débit alors qu'elle n'est ouverte qu'à environ `20%`. Ensuite, ouvrir davantage change beaucoup moins le débit.
+
+En pratique, cela peut donner ce type de sensation :
+
+| Commande envoyée à la vanne | Effet possible sur le radiateur |
+| --- | --- |
+| `0%` à quelques pourcents | pas de chaleur visible |
+| petite ouverture | le radiateur commence seulement à chauffer |
+| environ `15%` à `25%` | grande partie du débit déjà présente |
+| au-delà | changement plus faible, parfois surtout plus de bruit hydraulique |
+
+Les valeurs exactes dépendent de la vanne, du corps de vanne, de l'équilibrage du radiateur et de l'installation hydraulique. Il faut donc éviter de chercher une valeur parfaite au premier essai.
+
+### Ce que fait la linéarisation
+
+La linéarisation de courbe de vanne sert à traduire la demande SmartPI en position de vanne.
+
+SmartPI continue de raisonner en demande de chauffe simple :
+
+- `0%` signifie pas de chauffe,
+- `50%` signifie une demande moyenne,
+- `100%` signifie une demande maximale.
+
+La linéarisation transforme ensuite cette demande en ouverture de vanne plus adaptée au comportement réel du radiateur. L'objectif est d'utiliser plus finement la petite zone où la vanne change réellement le débit, au lieu d'envoyer directement la demande brute à la vanne.
+
+Exemple simplifié :
+
+| Demande SmartPI | Ouverture envoyée à la vanne |
+| --- | --- |
+| `0%` | `0%` |
+| faible demande | autour de l'ouverture minimale utile |
+| `80%` | autour de l'ouverture au coude |
+| `100%` | ouverture maximale autorisée |
+
+Cette correction ne remplace pas l'apprentissage SmartPI. Elle aide seulement SmartPI à parler plus naturellement à une vanne non linéaire.
+
+### Quand l'activer
+
+Activez cette option si :
+
+- votre thermostat VTherm est de type vanne,
+- SmartPI pilote directement une ouverture de vanne,
+- le radiateur semble passer rapidement de froid à très chaud avec seulement quelques pourcents d'ouverture,
+- les petites variations de commande donnent des réactions trop fortes ou trop irrégulières.
+
+L'option est proposée uniquement pour les thermostats qui exposent une commande de vanne.
+
+### Choisir les valeurs
+
+Les valeurs par défaut donnent un point de départ raisonnable. Ajustez-les seulement si vous avez observé le comportement de votre radiateur.
+
+| Paramètre | À quoi il sert | Valeur de départ |
+| --- | --- | --- |
+| **Ouverture minimale de vanne** | Première ouverture où le radiateur commence réellement à chauffer. | `7%` |
+| **Demande au coude** | Demande SmartPI à partir de laquelle on considère que la vanne arrive dans sa zone de débit élevé. | `80%` |
+| **Ouverture de vanne au coude** | Position physique de la vanne à cette demande. | `15%` |
+| **Ouverture maximale de vanne** | Ouverture maximale autorisée. | `100%` |
+
+Pour trouver l'ouverture minimale, le plus simple est d'observer le radiateur :
+
+1. Laissez le radiateur refroidir.
+2. Lancez une demande de chauffe.
+3. Augmentez doucement l'ouverture de la vanne, par petits pas.
+4. Attendez au moins une minute entre deux essais.
+5. Notez la première valeur où le tuyau ou le radiateur commence vraiment à chauffer.
+
+Si vous n'avez pas envie de tester finement, gardez les valeurs par défaut. Si votre vanne semble très rapide, une ouverture au coude autour de `20%` à `25%` peut être un essai raisonnable. Si le radiateur devient bruyant à pleine ouverture, baissez l'ouverture maximale.
+
+Après un changement, laissez SmartPI fonctionner plusieurs cycles avant de juger le résultat. Une seule chauffe ne suffit pas toujours à conclure.
+
 ## Phases de fonctionnement
 
 ### Phase d'apprentissage
@@ -173,6 +258,11 @@ Pour démarrer simplement :
 | **Seuil bas d'hystérésis** | Seuil de redémarrage pendant le bootstrap. | `0.3°C` |
 | **Seuil haut d'hystérésis** | Seuil d'arrêt pendant le bootstrap. | `0.5°C` |
 | **Mode debug SmartPI** | Publie des diagnostics plus détaillés. | `désactivé` |
+| **Linéarisation de courbe de vanne** | Adapte la demande SmartPI aux vannes de radiateur non linéaires. | `désactivé` |
+| **Ouverture minimale de vanne** | Première ouverture utile lorsque la linéarisation est activée. | `7%` |
+| **Demande au coude** | Demande SmartPI correspondant au changement de pente de la vanne. | `80%` |
+| **Ouverture de vanne au coude** | Ouverture physique de la vanne au changement de pente. | `15%` |
+| **Ouverture maximale de vanne** | Ouverture maximale autorisée lorsque la linéarisation est activée. | `100%` |
 
 ## Diagnostics et carte Markdown
 
