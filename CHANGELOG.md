@@ -54,3 +54,9 @@ remove vtherm_api dependency ( use VT installed one )
 - Quicker boostrap phase:
   Adjust SmartPI bootstrap thresholds and AB publication
  (now needs only 8 B & 6 A before quitting bootstrap mode.)
+
+## [0.2.0] - 2026-04-26
+
+- Valve power curve linearisation
+  Inspired from @caiusseverus blueprint
+  improve valve non linear power curve. more info: https://github.com/jmcollin78/versatile_thermostat/discussions/1704
