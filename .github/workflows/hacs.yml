@@ -17,3 +17,8 @@ jobs:
               uses: "hacs/action@main"
               with:
                   category: "integration"
+            - name: checkout
+              uses: "actions/checkout@v4"
+
+            - name: "Validate Hassfest"
+              uses: "home-assistant/actions/hassfest@master"
