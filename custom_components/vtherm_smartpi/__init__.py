@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import service as service_helper
 from vtherm_api.log_collector import get_vtherm_logger
@@ -27,6 +28,7 @@ from .const import (
 from .factory import SmartPIHandlerFactory
 
 VT_DOMAIN = "versatile_thermostat"
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 _LOGGER = get_vtherm_logger(__name__)
 DATA_SKIP_FULL_RELOAD = "skip_full_reload"
