@@ -16,92 +16,251 @@ from .const import (
     CONF_SMART_PI_DEADBAND,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
     CONF_SMART_PI_DEBUG,
+    CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
     CONF_SMART_PI_HYSTERESIS_OFF,
     CONF_SMART_PI_HYSTERESIS_ON,
+    CONF_SMART_PI_KNEE_DEMAND,
+    CONF_SMART_PI_KNEE_VALVE,
+    CONF_SMART_PI_MAX_VALVE,
+    CONF_SMART_PI_MIN_VALVE,
     CONF_SMART_PI_RELEASE_TAU_FACTOR,
     CONF_SMART_PI_USE_FF3,
     CONF_SMART_PI_USE_SETPOINT_FILTER,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
-    NAME,
 )
+
+ERROR_INVALID_VALVE_CURVE = "invalid_valve_curve"
+THERMOSTAT_TYPE_VALVE = "thermostat_over_valve"
+
+
+def build_main_options_schema(
+    defaults: dict[str, Any],
+    *,
+    include_valve_linearization: bool,
+) -> vol.Schema:
+    """Build the SmartPI main options schema."""
+    schema = {
+        vol.Optional(
+            CONF_MINIMAL_ACTIVATION_DELAY,
+            default=defaults[CONF_MINIMAL_ACTIVATION_DELAY],
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=3600,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="s",
+            )
+        ),
+        vol.Optional(
+            CONF_MINIMAL_DEACTIVATION_DELAY,
+            default=defaults[CONF_MINIMAL_DEACTIVATION_DELAY],
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=3600,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="s",
+            )
+        ),
+        vol.Optional(
+            CONF_SMART_PI_DEADBAND,
+            default=defaults[CONF_SMART_PI_DEADBAND],
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.0,
+                max=2.0,
+                step=0.01,
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
+            CONF_SMART_PI_HYSTERESIS_ON,
+            default=defaults[CONF_SMART_PI_HYSTERESIS_ON],
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.0,
+                max=2.0,
+                step=0.01,
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
+            CONF_SMART_PI_HYSTERESIS_OFF,
+            default=defaults[CONF_SMART_PI_HYSTERESIS_OFF],
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.0,
+                max=2.0,
+                step=0.01,
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
+            CONF_SMART_PI_RELEASE_TAU_FACTOR,
+            default=defaults[CONF_SMART_PI_RELEASE_TAU_FACTOR],
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.0,
+                max=5.0,
+                step=0.01,
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
+            CONF_SMART_PI_USE_SETPOINT_FILTER,
+            default=defaults[CONF_SMART_PI_USE_SETPOINT_FILTER],
+        ): bool,
+        vol.Optional(
+            CONF_SMART_PI_USE_FF3,
+            default=defaults[CONF_SMART_PI_USE_FF3],
+        ): bool,
+        vol.Optional(
+            CONF_SMART_PI_DEADBAND_ALLOW_P,
+            default=defaults[CONF_SMART_PI_DEADBAND_ALLOW_P],
+        ): bool,
+        vol.Optional(
+            CONF_SMART_PI_DEBUG,
+            default=defaults[CONF_SMART_PI_DEBUG],
+        ): bool,
+    }
+    if include_valve_linearization:
+        schema[
+            vol.Optional(
+                CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
+                default=defaults[CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION],
+            )
+        ] = bool
+    return vol.Schema(schema)
+
+
+def build_valve_curve_schema(defaults: dict[str, Any]) -> vol.Schema:
+    """Build the SmartPI valve curve schema."""
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_SMART_PI_MIN_VALVE,
+                default=defaults[CONF_SMART_PI_MIN_VALVE],
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=20,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_SMART_PI_KNEE_DEMAND,
+                default=defaults[CONF_SMART_PI_KNEE_DEMAND],
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=50,
+                    max=95,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_SMART_PI_KNEE_VALVE,
+                default=defaults[CONF_SMART_PI_KNEE_VALVE],
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=10,
+                    max=50,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Optional(
+                CONF_SMART_PI_MAX_VALVE,
+                default=defaults[CONF_SMART_PI_MAX_VALVE],
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=50,
+                    max=100,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+        }
+    )
 
 
 def build_options_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Build the SmartPI defaults schema."""
+    return build_main_options_schema(defaults, include_valve_linearization=True)
+
+
+def build_user_target_schema() -> vol.Schema:
+    """Build the SmartPI target thermostat schema."""
     return vol.Schema(
         {
-            vol.Optional(
-                CONF_MINIMAL_ACTIVATION_DELAY,
-                default=defaults[CONF_MINIMAL_ACTIVATION_DELAY],
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=3600, step=1, mode=selector.NumberSelectorMode.BOX, unit_of_measurement="s")
-            ),
-            vol.Optional(
-                CONF_MINIMAL_DEACTIVATION_DELAY,
-                default=defaults[CONF_MINIMAL_DEACTIVATION_DELAY],
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=3600, step=1, mode=selector.NumberSelectorMode.BOX, unit_of_measurement="s")
-            ),
-            vol.Optional(
-                CONF_SMART_PI_DEADBAND,
-                default=defaults[CONF_SMART_PI_DEADBAND],
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.0, max=2.0, step=0.01, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Optional(
-                CONF_SMART_PI_HYSTERESIS_ON,
-                default=defaults[CONF_SMART_PI_HYSTERESIS_ON],
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.0, max=2.0, step=0.01, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Optional(
-                CONF_SMART_PI_HYSTERESIS_OFF,
-                default=defaults[CONF_SMART_PI_HYSTERESIS_OFF],
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.0, max=2.0, step=0.01, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Optional(
-                CONF_SMART_PI_RELEASE_TAU_FACTOR,
-                default=defaults[CONF_SMART_PI_RELEASE_TAU_FACTOR],
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.0, max=5.0, step=0.01, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Optional(
-                CONF_SMART_PI_USE_SETPOINT_FILTER,
-                default=defaults[CONF_SMART_PI_USE_SETPOINT_FILTER],
-            ): bool,
-            vol.Optional(
-                CONF_SMART_PI_USE_FF3,
-                default=defaults[CONF_SMART_PI_USE_FF3],
-            ): bool,
-            vol.Optional(
-                CONF_SMART_PI_DEADBAND_ALLOW_P,
-                default=defaults[CONF_SMART_PI_DEADBAND_ALLOW_P],
-            ): bool,
-            vol.Optional(
-                CONF_SMART_PI_DEBUG,
-                default=defaults[CONF_SMART_PI_DEBUG],
-            ): bool,
+            vol.Required(CONF_TARGET_VTHERM): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=CLIMATE_DOMAIN)
+            )
         }
     )
 
-def build_user_schema(defaults: dict[str, Any]) -> vol.Schema:
-    """Build the SmartPI per-thermostat schema."""
-    schema = {
-        vol.Required(CONF_TARGET_VTHERM): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain=CLIMATE_DOMAIN)
-        )
-    }
-    schema.update(build_options_schema(defaults).schema)
+
+def build_user_settings_schema(defaults: dict[str, Any], is_valve: bool) -> vol.Schema:
+    """Build the SmartPI per-thermostat settings schema."""
+    schema = dict(
+        build_main_options_schema(
+            defaults,
+            include_valve_linearization=is_valve,
+        ).schema
+    )
     return vol.Schema(schema)
+
+
+def _schema_defaults(user_input: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return form defaults merged with the latest submitted values."""
+    defaults = dict(DEFAULT_OPTIONS)
+    if user_input is not None:
+        defaults.update(user_input)
+    return defaults
+
+
+def _is_valve_state(state: Any) -> bool:
+    """Return whether a VTherm state exposes a valve command space."""
+    attributes = getattr(state, "attributes", {}) or {}
+    configuration = attributes.get("configuration") or {}
+    return (
+        configuration.get("type") == THERMOSTAT_TYPE_VALVE
+        or configuration.get("have_valve_regulation") is True
+    )
+
+
+def _validate_valve_curve_config(config: dict[str, Any]) -> dict[str, str]:
+    """Validate cross-field valve curve constraints."""
+    try:
+        min_valve = float(config[CONF_SMART_PI_MIN_VALVE])
+        knee_demand = float(config[CONF_SMART_PI_KNEE_DEMAND])
+        knee_valve = float(config[CONF_SMART_PI_KNEE_VALVE])
+        max_valve = float(config[CONF_SMART_PI_MAX_VALVE])
+    except (KeyError, TypeError, ValueError):
+        return {"base": ERROR_INVALID_VALVE_CURVE}
+
+    if (
+        0.0 <= min_valve < knee_valve < max_valve <= 100.0
+        and 0.0 < knee_demand < 100.0
+    ):
+        return {}
+    return {"base": ERROR_INVALID_VALVE_CURVE}
 
 
 class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
     """Manage SmartPI plugin config entries."""
 
     VERSION = 1
+    _pending_global_data: dict[str, Any] | None = None
+    _pending_thermostat_data: dict[str, Any] | None = None
+    _pending_thermostat_entity_id: str | None = None
+    _pending_thermostat_is_valve: bool = False
+    _pending_thermostat_title: str | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Create default plugin settings on first install."""
@@ -121,6 +280,12 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         if user_input is not None:
+            self._pending_global_data = dict(user_input)
+            if user_input.get(CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION):
+                return self.async_show_form(
+                    step_id="global_valve_curve",
+                    data_schema=build_valve_curve_schema(_schema_defaults(user_input)),
+                )
             return self.async_create_entry(title="SmartPI defaults", data=user_input)
 
         return self.async_show_form(
@@ -128,8 +293,30 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=build_options_schema(DEFAULT_OPTIONS),
         )
 
+    async def async_step_global_valve_curve(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Handle the global valve curve defaults entry."""
+        data = dict(self._pending_global_data or {})
+
+        if user_input is not None:
+            data.update(user_input)
+            errors = _validate_valve_curve_config(_schema_defaults(data))
+            if errors:
+                return self.async_show_form(
+                    step_id="global_valve_curve",
+                    data_schema=build_valve_curve_schema(_schema_defaults(data)),
+                    errors=errors,
+                )
+            return self.async_create_entry(title="SmartPI defaults", data=data)
+
+        return self.async_show_form(
+            step_id="global_valve_curve",
+            data_schema=build_valve_curve_schema(_schema_defaults(data)),
+        )
+
     async def async_step_thermostat(self, user_input: dict[str, Any] | None = None):
-        """Handle the per-thermostat entry."""
+        """Select the target thermostat."""
         if user_input is not None:
             entity_id = user_input.get(CONF_TARGET_VTHERM)
             registry = er.async_get(self.hass)
@@ -137,7 +324,7 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
             if reg_entry is None or reg_entry.unique_id is None:
                 return self.async_show_form(
                     step_id="thermostat",
-                    data_schema=build_user_schema(DEFAULT_OPTIONS),
+                    data_schema=build_user_target_schema(),
                     errors={CONF_TARGET_VTHERM: "invalid_entity"},
                 )
 
@@ -145,15 +332,80 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(f"{DOMAIN}-{target_unique_id}")
             self._abort_if_unique_id_configured()
 
-            data = dict(user_input)
-            data[CONF_TARGET_VTHERM] = target_unique_id
             state = self.hass.states.get(entity_id)
-            title = state.name if state is not None else entity_id
-            return self.async_create_entry(title=title, data=data)
+            self._pending_thermostat_data = {CONF_TARGET_VTHERM: target_unique_id}
+            self._pending_thermostat_entity_id = entity_id
+            self._pending_thermostat_is_valve = (
+                state is not None and _is_valve_state(state)
+            )
+            self._pending_thermostat_title = state.name if state is not None else entity_id
+            return await self.async_step_thermostat_settings()
 
         return self.async_show_form(
             step_id="thermostat",
-            data_schema=build_user_schema(DEFAULT_OPTIONS),
+            data_schema=build_user_target_schema(),
+        )
+
+    async def async_step_thermostat_settings(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Handle the per-thermostat main settings entry."""
+        data = dict(self._pending_thermostat_data or {})
+
+        if user_input is not None:
+            data.update(user_input)
+            self._pending_thermostat_data = data
+            if (
+                self._pending_thermostat_is_valve
+                and user_input.get(CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION)
+            ):
+                return self.async_show_form(
+                    step_id="thermostat_valve_curve",
+                    data_schema=build_valve_curve_schema(_schema_defaults(user_input)),
+                )
+
+            return self.async_create_entry(
+                title=(
+                    self._pending_thermostat_title
+                    or self._pending_thermostat_entity_id
+                ),
+                data=data,
+            )
+
+        return self.async_show_form(
+            step_id="thermostat_settings",
+            data_schema=build_user_settings_schema(
+                _schema_defaults(data),
+                self._pending_thermostat_is_valve,
+            ),
+        )
+
+    async def async_step_thermostat_valve_curve(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Handle the per-thermostat valve curve entry."""
+        data = dict(self._pending_thermostat_data or {})
+
+        if user_input is not None:
+            data.update(user_input)
+            errors = _validate_valve_curve_config(_schema_defaults(data))
+            if errors:
+                return self.async_show_form(
+                    step_id="thermostat_valve_curve",
+                    data_schema=build_valve_curve_schema(_schema_defaults(data)),
+                    errors=errors,
+                )
+            return self.async_create_entry(
+                title=(
+                    self._pending_thermostat_title
+                    or self._pending_thermostat_entity_id
+                ),
+                data=data,
+            )
+
+        return self.async_show_form(
+            step_id="thermostat_valve_curve",
+            data_schema=build_valve_curve_schema(_schema_defaults(data)),
         )
 
     @staticmethod
@@ -168,15 +420,47 @@ class SmartPIOptionsFlow(OptionsFlow):
     def __init__(self, config_entry) -> None:
         """Store the config entry being edited."""
         self._config_entry = config_entry
+        self._pending_options_data: dict[str, Any] | None = None
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Handle the options flow."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
         defaults = dict(DEFAULT_OPTIONS)
         defaults.update(self._config_entry.options or self._config_entry.data)
+
+        if user_input is not None:
+            data = dict(defaults)
+            data.update(user_input)
+            self._pending_options_data = data
+            if user_input.get(CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION):
+                return self.async_show_form(
+                    step_id="valve_curve",
+                    data_schema=build_valve_curve_schema(data),
+                )
+            return self.async_create_entry(title="", data=data)
+
         return self.async_show_form(
             step_id="init",
             data_schema=build_options_schema(defaults),
+        )
+
+    async def async_step_valve_curve(self, user_input: dict[str, Any] | None = None):
+        """Handle the options valve curve flow."""
+        defaults = dict(DEFAULT_OPTIONS)
+        defaults.update(self._config_entry.options or self._config_entry.data)
+        data = dict(self._pending_options_data or defaults)
+
+        if user_input is not None:
+            data.update(user_input)
+            errors = _validate_valve_curve_config(_schema_defaults(data))
+            if errors:
+                return self.async_show_form(
+                    step_id="valve_curve",
+                    data_schema=build_valve_curve_schema(_schema_defaults(data)),
+                    errors=errors,
+                )
+            return self.async_create_entry(title="", data=data)
+
+        return self.async_show_form(
+            step_id="valve_curve",
+            data_schema=build_valve_curve_schema(_schema_defaults(data)),
         )

@@ -31,6 +31,11 @@ from .const import (
     CONF_SMART_PI_RELEASE_TAU_FACTOR,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
     CONF_SMART_PI_DEBUG,
+    CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
+    CONF_SMART_PI_MIN_VALVE,
+    CONF_SMART_PI_KNEE_DEMAND,
+    CONF_SMART_PI_KNEE_VALVE,
+    CONF_SMART_PI_MAX_VALVE,
     DEFAULT_OPTIONS,
     DOMAIN,
     EventType,
@@ -38,6 +43,7 @@ from .const import (
 )
 from .hvac_mode import VThermHvacMode_OFF, VThermHvacMode_HEAT, VThermHvacMode_COOL
 from .commons import write_event_log
+from .smartpi.valve_curve import ValveCurveParams
 
 if TYPE_CHECKING:
     from vtherm_api.interfaces import InterfaceThermostatRuntime
@@ -65,6 +71,8 @@ class SmartPIHandler:
         self._should_publish_intermediate: bool = True
         # Track calibration state for completion detection
         self._prev_is_calibrating: bool = False
+        self._valve_linearization_configured: bool = False
+        self._valve_curve_params: ValveCurveParams | None = None
 
     def init_algorithm(self):
         """Initialize SmartPI algorithm."""
@@ -98,6 +106,46 @@ class SmartPIHandler:
         release_tau_factor = entry.get(CONF_SMART_PI_RELEASE_TAU_FACTOR, 0.5)
         deadband_allow_p = entry.get(CONF_SMART_PI_DEADBAND_ALLOW_P, False)
         debug_mode = entry.get(CONF_SMART_PI_DEBUG, False)
+        self._valve_linearization_configured = entry.get(
+            CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
+            False,
+        )
+        valve_linearization_enabled = (
+            self._valve_linearization_configured
+            and bool(getattr(t.cycle_scheduler, "is_valve_mode", False))
+        )
+        try:
+            self._valve_curve_params = ValveCurveParams(
+                min_valve=float(
+                    entry.get(
+                        CONF_SMART_PI_MIN_VALVE,
+                        DEFAULT_OPTIONS[CONF_SMART_PI_MIN_VALVE],
+                    )
+                ),
+                knee_demand=float(
+                    entry.get(
+                        CONF_SMART_PI_KNEE_DEMAND,
+                        DEFAULT_OPTIONS[CONF_SMART_PI_KNEE_DEMAND],
+                    )
+                ),
+                knee_valve=float(
+                    entry.get(
+                        CONF_SMART_PI_KNEE_VALVE,
+                        DEFAULT_OPTIONS[CONF_SMART_PI_KNEE_VALVE],
+                    )
+                ),
+                max_valve=float(
+                    entry.get(
+                        CONF_SMART_PI_MAX_VALVE,
+                        DEFAULT_OPTIONS[CONF_SMART_PI_MAX_VALVE],
+                    )
+                ),
+            )
+        except (TypeError, ValueError) as err:
+            _LOGGER.error("%s - Invalid SmartPI valve curve parameters: %s", t, err)
+            self._valve_linearization_configured = False
+            valve_linearization_enabled = False
+            self._valve_curve_params = None
         # Create SmartPI instance
         # Note: saved_state is loaded asynchronously later
         t.prop_algorithm = SmartPI(
@@ -115,6 +163,8 @@ class SmartPIHandler:
             release_tau_factor=release_tau_factor,
             deadband_allow_p=deadband_allow_p,
             debug_mode=debug_mode,
+            enable_valve_linearization=valve_linearization_enabled,
+            valve_curve_params=self._valve_curve_params,
         )
 
         _LOGGER.info("%s - SmartPI Algorithm initialized", t)
@@ -198,6 +248,11 @@ class SmartPIHandler:
         """Register SmartPI learning callbacks on the cycle scheduler."""
         algo = self._thermostat.prop_algorithm
         if algo:
+            algo.configure_valve_linearization(
+                self._valve_linearization_configured
+                and bool(getattr(scheduler, "is_valve_mode", False)),
+                self._valve_curve_params,
+            )
             scheduler.register_cycle_start_callback(algo.on_cycle_started)
             scheduler.register_cycle_end_callback(algo.on_cycle_completed)
 

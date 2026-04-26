@@ -14,13 +14,28 @@
           "smart_pi_use_setpoint_filter": "Use setpoint filter",
           "smart_pi_use_ff3": "Use FF3",
           "smart_pi_deadband_allow_p": "Allow P inside deadband",
-          "smart_pi_debug": "Debug mode"
+          "smart_pi_debug": "Debug mode",
+          "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+        }
+      },
+      "global_valve_curve": {
+        "title": "Valve curve",
+        "data": {
+          "smart_pi_min_valve": "Minimum valve opening",
+          "smart_pi_knee_demand": "Demand at knee",
+          "smart_pi_knee_valve": "Valve opening at knee",
+          "smart_pi_max_valve": "Maximum valve opening"
         }
       },
       "thermostat": {
         "title": "SmartPI per-thermostat",
         "data": {
-          "target_vtherm_unique_id": "Target thermostat",
+          "target_vtherm_unique_id": "Target thermostat"
+        }
+      },
+      "thermostat_settings": {
+        "title": "SmartPI per-thermostat",
+        "data": {
           "minimal_activation_delay": "Minimal activation delay",
           "minimal_deactivation_delay": "Minimal deactivation delay",
           "smart_pi_deadband": "Deadband",
@@ -30,9 +45,22 @@
           "smart_pi_use_setpoint_filter": "Use setpoint filter",
           "smart_pi_use_ff3": "Use FF3",
           "smart_pi_deadband_allow_p": "Allow P inside deadband",
-          "smart_pi_debug": "Debug mode"
+          "smart_pi_debug": "Debug mode",
+          "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+        }
+      },
+      "thermostat_valve_curve": {
+        "title": "Valve curve",
+        "data": {
+          "smart_pi_min_valve": "Minimum valve opening",
+          "smart_pi_knee_demand": "Demand at knee",
+          "smart_pi_knee_valve": "Valve opening at knee",
+          "smart_pi_max_valve": "Maximum valve opening"
         }
       }
+    },
+    "error": {
+      "invalid_valve_curve": "The valve curve must satisfy minimum opening < knee opening < maximum opening."
     },
     "abort": {
       "single_instance_allowed": "Only one SmartPI plugin configuration is allowed."
@@ -52,9 +80,22 @@
           "smart_pi_use_setpoint_filter": "Use setpoint filter",
           "smart_pi_use_ff3": "Use FF3",
           "smart_pi_deadband_allow_p": "Allow P inside deadband",
-          "smart_pi_debug": "Debug mode"
+          "smart_pi_debug": "Debug mode",
+          "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+        }
+      },
+      "valve_curve": {
+        "title": "Valve curve",
+        "data": {
+          "smart_pi_min_valve": "Minimum valve opening",
+          "smart_pi_knee_demand": "Demand at knee",
+          "smart_pi_knee_valve": "Valve opening at knee",
+          "smart_pi_max_valve": "Maximum valve opening"
         }
       }
+    },
+    "error": {
+      "invalid_valve_curve": "The valve curve must satisfy minimum opening < knee opening < maximum opening."
     }
   }
 }

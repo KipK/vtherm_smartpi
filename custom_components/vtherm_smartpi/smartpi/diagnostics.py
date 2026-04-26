@@ -353,6 +353,8 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "on_percent": round(algo.on_percent, 6),
         "calculated_on_percent": round(algo.calculated_on_percent, 6),
         "committed_on_percent": round(algo.committed_on_percent, 6),
+        "linear_on_percent": round(algo.linear_on_percent, 6),
+        "linear_committed_on_percent": round(algo.linear_committed_on_percent, 6),
         "cycle_min": round(algo.cycle_min, 3),
         # Setpoint trajectory
         "filtered_setpoint": None if algo.sp_mgr.effective_setpoint is None else round(algo.sp_mgr.effective_setpoint, 2),

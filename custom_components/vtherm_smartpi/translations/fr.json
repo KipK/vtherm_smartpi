@@ -14,13 +14,28 @@
           "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
           "smart_pi_use_ff3": "Utiliser FF3",
           "smart_pi_deadband_allow_p": "Autoriser P dans la bande morte",
-          "smart_pi_debug": "Mode debug"
+          "smart_pi_debug": "Mode debug",
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+        }
+      },
+      "global_valve_curve": {
+        "title": "Courbe de vanne",
+        "data": {
+          "smart_pi_min_valve": "Ouverture minimale de vanne",
+          "smart_pi_knee_demand": "Demande au coude",
+          "smart_pi_knee_valve": "Ouverture de vanne au coude",
+          "smart_pi_max_valve": "Ouverture maximale de vanne"
         }
       },
       "thermostat": {
         "title": "SmartPI par thermostat",
         "data": {
-          "target_vtherm_unique_id": "Thermostat cible",
+          "target_vtherm_unique_id": "Thermostat cible"
+        }
+      },
+      "thermostat_settings": {
+        "title": "SmartPI par thermostat",
+        "data": {
           "minimal_activation_delay": "Délai minimal d'activation",
           "minimal_deactivation_delay": "Délai minimal de désactivation",
           "smart_pi_deadband": "Bande morte",
@@ -30,9 +45,22 @@
           "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
           "smart_pi_use_ff3": "Utiliser FF3",
           "smart_pi_deadband_allow_p": "Autoriser P dans la bande morte",
-          "smart_pi_debug": "Mode debug"
+          "smart_pi_debug": "Mode debug",
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+        }
+      },
+      "thermostat_valve_curve": {
+        "title": "Courbe de vanne",
+        "data": {
+          "smart_pi_min_valve": "Ouverture minimale de vanne",
+          "smart_pi_knee_demand": "Demande au coude",
+          "smart_pi_knee_valve": "Ouverture de vanne au coude",
+          "smart_pi_max_valve": "Ouverture maximale de vanne"
         }
       }
+    },
+    "error": {
+      "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale."
     },
     "abort": {
       "single_instance_allowed": "Une seule configuration du plugin SmartPI est autorisée."
@@ -52,9 +80,22 @@
           "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
           "smart_pi_use_ff3": "Utiliser FF3",
           "smart_pi_deadband_allow_p": "Autoriser P dans la bande morte",
-          "smart_pi_debug": "Mode debug"
+          "smart_pi_debug": "Mode debug",
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+        }
+      },
+      "valve_curve": {
+        "title": "Courbe de vanne",
+        "data": {
+          "smart_pi_min_valve": "Ouverture minimale de vanne",
+          "smart_pi_knee_demand": "Demande au coude",
+          "smart_pi_knee_valve": "Ouverture de vanne au coude",
+          "smart_pi_max_valve": "Ouverture maximale de vanne"
         }
       }
+    },
+    "error": {
+      "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale."
     }
   }
 }

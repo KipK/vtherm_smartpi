@@ -112,6 +112,7 @@ from .smartpi.integral_guard import (
     SmartPIIntegralGuard,
     integral_guard_release_error_threshold,
 )
+from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.const import (
     ABConfidenceState,
     FF_TRIM_REBOOT_FREEZE_CYCLES,
@@ -174,6 +175,8 @@ class SmartPI:
         release_tau_factor: float = 0.5,
         deadband_allow_p: bool = False,
         debug_mode: bool = False,
+        enable_valve_linearization: bool = False,
+        valve_curve_params: ValveCurveParams | None = None,
     ) -> None:
         self._hass = hass
         self._name = name
@@ -182,6 +185,10 @@ class SmartPI:
         self._hyst_off = hysteresis_off
         self._deadband_allow_p = bool(deadband_allow_p)
         self._debug_mode = debug_mode
+        self.valve_curve = build_valve_curve(
+            enable_valve_linearization,
+            valve_curve_params,
+        )
 
         self.deadband_c = float(deadband_c)
 
@@ -230,6 +237,9 @@ class SmartPI:
         # Outputs (duty-cycle only, timing calculated by handler)
         self._on_percent: float = 0.0
         self._committed_on_percent: float = 0.0
+        self._actuator_on_percent: float = 0.0
+        self._actuator_committed_on_percent: float = 0.0
+        self._last_actuator_applied: float = 0.0
         self._pending_fftrim_cycle_sample: dict[str, Any] | None = None
 
         # Diagnostics / status
@@ -377,7 +387,7 @@ class SmartPI:
 
         self._last_error = 0.0
         self._last_error_p = 0.0
-        self._on_percent = 0.0
+        self._set_linear_output(0.0)
         self._output_initialized = False
         self._last_u_ff = 0.0
         self._last_u_pi = 0.0
@@ -402,6 +412,8 @@ class SmartPI:
         self._last_u_limited = 0.0
         self._last_u_applied = 0.0
         self._committed_on_percent = 0.0
+        self._actuator_committed_on_percent = 0.0
+        self._last_actuator_applied = 0.0
         self._pending_fftrim_cycle_sample = None
         self._last_aw_du = 0.0
         self._last_ff_trim_delta = 0.0
@@ -750,11 +762,9 @@ class SmartPI:
         cycle_start_now = time.monotonic()
         self._u_ff3_cycle = self._u_ff3_pending
         self._ff3_active_cycle = self._ff3_pending_active
-        self._committed_on_percent = on_percent
-        self.u_prev = on_percent
-        self._last_u_applied = on_percent
+        linear_on_percent = self._set_committed_actuator_output(on_percent)
         self._current_cycle_start_monotonic = cycle_start_now
-        self._update_deadtime_episode_status(on_percent, hvac_mode, cycle_start_now)
+        self._update_deadtime_episode_status(linear_on_percent, hvac_mode, cycle_start_now)
         self._setpoint_changed_in_cycle = False
         # Reset governance regime tracking for new cycle
         self.gov.on_cycle_start()
@@ -858,16 +868,79 @@ class SmartPI:
     def b(self) -> float:
         return self.est.b
 
+    def _to_actuator_power(self, linear_power: float) -> float:
+        """Convert internal linear demand to actuator command."""
+        return self.valve_curve.apply(linear_power)
+
+    def _to_linear_power(self, actuator_power: float) -> float:
+        """Convert actuator feedback to internal linear demand."""
+        return self.valve_curve.invert(actuator_power)
+
+    def configure_valve_linearization(
+        self,
+        enabled: bool,
+        params: ValveCurveParams | None = None,
+    ) -> None:
+        """Configure the actuator linearization curve."""
+        self.valve_curve = build_valve_curve(enabled, params)
+        self._sync_actuator_on_percent()
+        self._sync_actuator_committed_on_percent()
+        self._last_actuator_applied = self._to_actuator_power(self._last_u_applied)
+
+    def _sync_actuator_on_percent(self) -> None:
+        """Refresh the actuator command from the current linear command."""
+        self._actuator_on_percent = self._to_actuator_power(self._on_percent)
+
+    def _sync_actuator_committed_on_percent(self) -> None:
+        """Refresh the committed actuator command from the linear committed value."""
+        self._actuator_committed_on_percent = self._to_actuator_power(
+            self._committed_on_percent
+        )
+
+    def _set_linear_output(self, linear_power: float) -> None:
+        """Set the candidate output in the internal linear command space."""
+        self._on_percent = clamp(linear_power, 0.0, 1.0)
+        self._sync_actuator_on_percent()
+
+    def _set_committed_actuator_output(self, actuator_power: float) -> float:
+        """Commit an actuator command and return its linear equivalent."""
+        self._actuator_committed_on_percent = clamp(actuator_power, 0.0, 1.0)
+        self._last_actuator_applied = self._actuator_committed_on_percent
+        linear_power = self._to_linear_power(self._actuator_committed_on_percent)
+        self._committed_on_percent = linear_power
+        self.u_prev = linear_power
+        self._last_u_applied = linear_power
+        return linear_power
+
+    def _commit_current_linear_output(self) -> None:
+        """Commit the current linear candidate output and refresh actuator state."""
+        self._committed_on_percent = self._on_percent
+        self.u_prev = self._on_percent
+        self._last_u_applied = self._on_percent
+        self._sync_actuator_on_percent()
+        self._sync_actuator_committed_on_percent()
+        self._last_actuator_applied = self._actuator_committed_on_percent
+
     @property
     def on_percent(self) -> float:
-        return self._on_percent
+        return self._to_actuator_power(self._on_percent)
 
     @property
     def calculated_on_percent(self) -> float:
-        return self._on_percent
+        return self._to_actuator_power(self._on_percent)
 
     @property
     def committed_on_percent(self) -> float:
+        return self._to_actuator_power(self._committed_on_percent)
+
+    @property
+    def linear_on_percent(self) -> float:
+        """Return the current internal linear demand."""
+        return self._on_percent
+
+    @property
+    def linear_committed_on_percent(self) -> float:
+        """Return the current committed internal linear demand."""
         return self._committed_on_percent
 
     @property
@@ -1123,6 +1196,11 @@ class SmartPI:
 
     @property
     def u_applied(self) -> float:
+        return self._to_actuator_power(self._last_u_applied)
+
+    @property
+    def linear_u_applied(self) -> float:
+        """Return the latest applied power in the internal linear command space."""
         return self._last_u_applied
 
     @property
@@ -1281,9 +1359,9 @@ class SmartPI:
 
         # Apply result
         if result.on_percent is not None:
-            self._on_percent = result.on_percent
+            self._set_linear_output(result.on_percent)
         else:
-            self._on_percent = 0.0
+            self._set_linear_output(0.0)
 
         # Update diagnostics
         self.ctl.last_i_mode = "CALIB"
@@ -1313,10 +1391,12 @@ class SmartPI:
                 The energy actually delivered relative to a full cycle is
                 u_applied * elapsed_ratio, which is comparable to the PI model output.
         """
-        # Resolve argument name differences for compatibility with various tests
+        # Resolve argument name differences for compatibility with various tests.
+        # Realized cycle feedback is reported in actuator space.
         val = realized_percent if realized_percent is not None else u_applied
         if val is None:
             return
+        val = self._to_linear_power(val)
 
         # Pre-conditions
         if dt_min <= 0 or abs(self.Ki) < 1e-6:
@@ -1401,14 +1481,12 @@ class SmartPI:
     ) -> None:
         """Synchronize state after a valve command is applied mid-cycle."""
         applied_on_percent = clamp(on_percent, 0.0, 1.0)
-        if abs(applied_on_percent - self._committed_on_percent) <= 0.001:
+        if abs(applied_on_percent - self._actuator_committed_on_percent) <= 0.001:
             return
 
         now = time.monotonic()
-        self._committed_on_percent = applied_on_percent
-        self.u_prev = applied_on_percent
-        self._last_u_applied = applied_on_percent
-        self._update_deadtime_episode_status(applied_on_percent, hvac_mode, now)
+        linear_on_percent = self._set_committed_actuator_output(applied_on_percent)
+        self._update_deadtime_episode_status(linear_on_percent, hvac_mode, now)
 
     def save_state(self) -> dict:
         """Save algorithm state for persistence."""
@@ -1473,8 +1551,10 @@ class SmartPI:
         self.ctl.clear_integral_hold()
 
         self._committed_on_percent = 0.0
+        self._actuator_committed_on_percent = 0.0
         self._pending_fftrim_cycle_sample = None
         self._last_u_applied = 0.0
+        self._last_actuator_applied = 0.0
         self._recovery_hold_armed = False
         self._last_restart_reason = "none"
         self._resume_deadtime_hold_source = IntegralGuardSource.NONE
@@ -1536,7 +1616,7 @@ class SmartPI:
         """
         if target_temp is None or current_temp is None:
             _LOGGER.warning("%s - Missing target or current temp, force 0", self._name)
-            self._on_percent = 0.0
+            self._set_linear_output(0.0)
             self._last_u_cmd = 0.0
             self._last_u_pi = 0.0
             self._last_u_limited = 0.0
@@ -1544,14 +1624,16 @@ class SmartPI:
             return True
 
         if hvac_mode == VThermHvacMode_OFF:
-            self._on_percent = 0.0
+            self._set_linear_output(0.0)
             self._committed_on_percent = 0.0
+            self._actuator_committed_on_percent = 0.0
             self._u_ff3_cycle = 0.0
             self._u_ff3_pending = 0.0
             self._ff3_active_cycle = False
             self._ff3_pending_active = False
             self._pending_fftrim_cycle_sample = None
             self._last_u_applied = 0.0
+            self._last_actuator_applied = 0.0
             self.ctl.u_prev = 0.0
             self._last_u_cmd = 0.0
             self._last_u_pi = 0.0
@@ -1577,14 +1659,16 @@ class SmartPI:
 
         # Handle explicit force off (shedding, windows)
         if power_shedding:
-            self._on_percent = 0.0
+            self._set_linear_output(0.0)
             self._committed_on_percent = 0.0
+            self._actuator_committed_on_percent = 0.0
             self._u_ff3_cycle = 0.0
             self._u_ff3_pending = 0.0
             self._ff3_active_cycle = False
             self._ff3_pending_active = False
             self._pending_fftrim_cycle_sample = None
             self._last_u_applied = 0.0
+            self._last_actuator_applied = 0.0
             self._t_heat_episode_start = None
             self._t_cool_episode_start = None
             self.ctl.u_prev = 0.0
@@ -2054,7 +2138,13 @@ class SmartPI:
             u_limited = clamp(u_cmd, prev_limited - max_step, prev_limited + max_step)
 
         # SATURATION & FINAL OUTPUT
-        self._on_percent = clamp(u_limited, 0.0, self._max_on_percent if self._max_on_percent is not None else 1.0)
+        self._set_linear_output(
+            clamp(
+                u_limited,
+                0.0,
+                self._max_on_percent if self._max_on_percent is not None else 1.0,
+            )
+        )
         return self._on_percent
 
     def calculate(  # pylint: disable=keyword-arg-before-vararg
@@ -2116,7 +2206,7 @@ class SmartPI:
 
         # Guard Cut: force 0% if active
         if self.guards.guard_cut_active:
-            self._on_percent = 0.0
+            self._set_linear_output(0.0)
             return
 
         # --- 1a. Adaptive T_int Filter ---
@@ -2241,13 +2331,11 @@ class SmartPI:
         if self.phase == SmartPIPhase.HYSTERESIS:
             out = self.ctl.calculate_hysteresis(target_temp_filt, current_temp, hvac_mode, self._hyst_off, self._hyst_on)
             if out is not None:
-                self._on_percent = out
+                self._set_linear_output(out)
 
             # Hysteresis transitions are applied immediately by the handler,
             # so commit the bang-bang output now for deadtime tracking.
-            self._committed_on_percent = self._on_percent
-            self.u_prev = self._on_percent
-            self._last_u_applied = self._on_percent
+            self._commit_current_linear_output()
             self._update_deadtime_episode_status(self._committed_on_percent, hvac_mode, now)
             self.dt_est.update(
                 now=now,
@@ -2395,8 +2483,9 @@ class SmartPI:
 
         # --- 13. Timing Constraints & Anti-Windup Tracking ---
         u_final = self.update_timing_constraints(self.u_prev, u_limited)
-        self._on_percent = u_final
+        self._set_linear_output(u_final)
         self._last_u_applied = u_final
+        self._last_actuator_applied = self._actuator_on_percent
 
         # --- 13. Store the candidate output only (AW tracking deferred to on_cycle_completed) ---
         prev_deadtime_hold = self._prev_deadtime_hold
