@@ -39,6 +39,9 @@
 
 {% set current_cycle = power.get('current_cycle_percent', 0) | float(0) %}
 {% set next_cycle = power.get('next_cycle_percent', 0) | float(0) %}
+{% set valve_linearization_enabled = power.get('valve_linearization_enabled', debug.get('valve_linearization_enabled', false)) %}
+{% set linear_current_cycle = power.get('linear_current_cycle_percent', debug.get('linear_committed_on_percent', current_cycle)) | float(0) %}
+{% set linear_next_cycle = power.get('linear_next_cycle_percent', debug.get('linear_on_percent', next_cycle)) | float(0) %}
 {% set ff_pct = power.get('ff_percent', 0) | float(0) %}
 {% set pi_pct = power.get('pi_percent', 0) | float(0) %}
 {% set hold_pct = power.get('hold_percent', 0) | float(0) %}
@@ -439,6 +442,12 @@
 | Maintien | {{ (hold_pct * 100) | round(1) }}% |
 | Hystérésis | `{{ hyst_state }}` |
 | Restart | `{{ restart_reason }}` |
+{%- if valve_linearization_enabled %}
+| Demande SmartPI | {{ (linear_next_cycle * 100) | round(1) }}% |
+| Commande vanne ajustée | {{ (next_cycle * 100) | round(1) }}% |
+| Cycle courant demandé | {{ (linear_current_cycle * 100) | round(1) }}% |
+| Cycle courant ajusté | {{ (current_cycle * 100) | round(1) }}% |
+{%- endif %}
 {%- if has_debug %}
 | `u_cmd` | {{ (u_cmd * 100) | round(1) }}% |
 | `u_limited` | {{ (u_limited * 100) | round(1) }}% |

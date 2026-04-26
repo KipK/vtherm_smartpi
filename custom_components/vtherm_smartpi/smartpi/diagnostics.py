@@ -146,6 +146,9 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "power": {
             "current_cycle_percent": diag["committed_on_percent"],
             "next_cycle_percent": diag["on_percent"],
+            "linear_current_cycle_percent": diag["linear_committed_on_percent"],
+            "linear_next_cycle_percent": diag["linear_on_percent"],
+            "valve_linearization_enabled": diag["valve_linearization_enabled"],
             "pi_percent": diag["u_pi"],
             "ff_percent": diag["u_ff"],
             "hold_percent": diag["u_hold"],
@@ -355,6 +358,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "committed_on_percent": round(algo.committed_on_percent, 6),
         "linear_on_percent": round(algo.linear_on_percent, 6),
         "linear_committed_on_percent": round(algo.linear_committed_on_percent, 6),
+        "valve_linearization_enabled": algo.valve_curve.params is not None,
         "cycle_min": round(algo.cycle_min, 3),
         # Setpoint trajectory
         "filtered_setpoint": None if algo.sp_mgr.effective_setpoint is None else round(algo.sp_mgr.effective_setpoint, 2),
