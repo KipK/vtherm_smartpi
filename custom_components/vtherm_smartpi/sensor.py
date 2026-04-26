@@ -53,6 +53,11 @@ def _get_climate_entry(
     return climate_entity_id, climate_entry
 
 
+def _is_global_entry(entry: ConfigEntry) -> bool:
+    """Return whether the SmartPI entry carries global defaults."""
+    return entry.unique_id == DOMAIN or entry.data.get(CONF_TARGET_VTHERM) is None
+
+
 def _get_default_target_unique_ids(hass: HomeAssistant) -> list[str]:
     """Return SmartPI thermostat unique ids that inherit the global entry."""
     dedicated_target_unique_ids = _get_dedicated_target_unique_ids(hass)
@@ -94,9 +99,35 @@ def _get_diagnostic_state(algo: SmartPI) -> str:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
     """Set up the SmartPI sensor platform."""
-    if entry.unique_id == DOMAIN:
+    tracked_unique_ids: set[str] = set()
+
+    @callback
+    def _async_add_targets(target_unique_ids: list[str]) -> None:
+        """Add diagnostics for resolved thermostat targets."""
+        new_entities: list[SmartPIDiagnosticSensor] = []
+        for target_unique_id in target_unique_ids:
+            if target_unique_id in tracked_unique_ids:
+                continue
+            climate_entity_id, climate_entry = _get_climate_entry(
+                hass, target_unique_id
+            )
+            if not climate_entity_id:
+                continue
+            tracked_unique_ids.add(target_unique_id)
+            new_entities.append(
+                SmartPIDiagnosticSensor(
+                    hass,
+                    climate_entity_id,
+                    target_unique_id,
+                    climate_entry,
+                )
+            )
+
+        if new_entities:
+            async_add_entities(new_entities)
+
+    if _is_global_entry(entry):
         target_unique_ids = _get_default_target_unique_ids(hass)
-        tracked_unique_ids = set(target_unique_ids)
 
         @callback
         def _async_add_default_target(target_unique_id: str | None = None) -> None:
@@ -107,29 +138,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 if target_unique_id is not None
                 else default_target_unique_ids
             )
-            new_entities: list[SmartPIDiagnosticSensor] = []
+            pending_unique_ids: list[str] = []
             for candidate_unique_id in candidates:
                 if candidate_unique_id in tracked_unique_ids:
                     continue
                 if candidate_unique_id not in default_target_unique_ids:
                     continue
-                climate_entity_id, climate_entry = _get_climate_entry(
-                    hass, candidate_unique_id
-                )
-                if not climate_entity_id:
-                    continue
-                tracked_unique_ids.add(candidate_unique_id)
-                new_entities.append(
-                    SmartPIDiagnosticSensor(
-                        hass,
-                        climate_entity_id,
-                        candidate_unique_id,
-                        climate_entry,
-                    )
-                )
+                pending_unique_ids.append(candidate_unique_id)
 
-            if new_entities:
-                async_add_entities(new_entities)
+            _async_add_targets(pending_unique_ids)
 
         entry.async_on_unload(
             async_dispatcher_connect(
@@ -140,22 +157,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         target_unique_id = entry.data.get(CONF_TARGET_VTHERM)
         target_unique_ids = [target_unique_id] if target_unique_id else []
 
-    entities: list[SmartPIDiagnosticSensor] = []
-    for target_unique_id in target_unique_ids:
-        climate_entity_id, climate_entry = _get_climate_entry(hass, target_unique_id)
-        if not climate_entity_id:
-            continue
-        entities.append(
-            SmartPIDiagnosticSensor(
-                hass,
-                climate_entity_id,
-                target_unique_id,
-                climate_entry,
+        @callback
+        def _async_add_dedicated_target(updated_unique_id: str | None = None) -> None:
+            """Add diagnostics for the dedicated thermostat when it becomes SmartPI."""
+            if target_unique_id and updated_unique_id == target_unique_id:
+                _async_add_targets([target_unique_id])
+
+        entry.async_on_unload(
+            async_dispatcher_connect(
+                hass, SIGNAL_SMARTPI_TARGET_UPDATED, _async_add_dedicated_target
             )
         )
 
-    if entities:
-        async_add_entities(entities)
+    _async_add_targets(target_unique_ids)
 
 
 class SmartPIDiagnosticSensor(SensorEntity):

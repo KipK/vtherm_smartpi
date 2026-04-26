@@ -101,6 +101,49 @@ async def test_global_entry_creates_only_default_bound_diagnostic_sensors(hass) 
 
 
 @pytest.mark.asyncio
+async def test_dedicated_entry_adds_diagnostic_sensor_when_target_becomes_smartpi(
+    hass,
+) -> None:
+    """A dedicated entry must add diagnostics when its target is resolved later."""
+    dedicated_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dedicated SmartPI",
+        unique_id=f"{DOMAIN}-vt-dedicated-late",
+        data={CONF_TARGET_VTHERM: "vt-dedicated-late"},
+    )
+    dedicated_entry.add_to_hass(hass)
+
+    async_add_entities = Mock()
+
+    await async_setup_entry(hass, dedicated_entry, async_add_entities)
+
+    async_add_entities.assert_not_called()
+
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="vt-dedicated-late",
+        data={CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI},
+    )
+    vt_entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "climate",
+        VT_DOMAIN,
+        "vt-dedicated-late",
+        suggested_object_id="vt_dedicated_late",
+        config_entry=vt_entry,
+    )
+
+    async_dispatcher_send(hass, SIGNAL_SMARTPI_TARGET_UPDATED, "vt-dedicated-late")
+
+    async_add_entities.assert_called_once()
+    created_entities = async_add_entities.call_args.args[0]
+    assert len(created_entities) == 1
+    assert created_entities[0].unique_id == "smartpi_diag_vt-dedicated-late"
+
+
+@pytest.mark.asyncio
 async def test_global_entry_adds_default_bound_diagnostic_sensor_when_vtherm_becomes_smartpi(
     hass,
 ) -> None:
@@ -141,6 +184,48 @@ async def test_global_entry_adds_default_bound_diagnostic_sensor_when_vtherm_bec
     created_entities = async_add_entities.call_args.args[0]
     assert len(created_entities) == 1
     assert created_entities[0].unique_id == "smartpi_diag_vt-added"
+
+
+@pytest.mark.asyncio
+async def test_legacy_global_entry_without_unique_id_adds_default_bound_sensor(
+    hass,
+) -> None:
+    """A defaults entry without a normalized unique id must still track SmartPI targets."""
+    global_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="SmartPI defaults",
+        data=dict(DEFAULT_OPTIONS),
+    )
+    global_entry.add_to_hass(hass)
+
+    async_add_entities = Mock()
+
+    await async_setup_entry(hass, global_entry, async_add_entities)
+
+    async_add_entities.assert_not_called()
+
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="vt-legacy-global",
+        data={CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI},
+    )
+    vt_entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "climate",
+        VT_DOMAIN,
+        "vt-legacy-global",
+        suggested_object_id="vt_legacy_global",
+        config_entry=vt_entry,
+    )
+
+    async_dispatcher_send(hass, SIGNAL_SMARTPI_TARGET_UPDATED, "vt-legacy-global")
+
+    async_add_entities.assert_called_once()
+    created_entities = async_add_entities.call_args.args[0]
+    assert len(created_entities) == 1
+    assert created_entities[0].unique_id == "smartpi_diag_vt-legacy-global"
 
 
 @pytest.mark.asyncio
