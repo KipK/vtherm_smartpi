@@ -175,24 +175,54 @@ Après un changement, laissez SmartPI fonctionner plusieurs cycles avant de juge
 
 ### Phase d'apprentissage
 
-SmartPI démarre dans une phase bootstrap basée sur l'hystérésis.
+SmartPI démarre dans une phase de bootstrap. Pendant cette phase, il utilise une stratégie de chauffe simple pour observer le comportement de la pièce, puis en extrait les paramètres physiques dont il a besoin pour réguler correctement.
 
-Par défaut :
+#### Comment le bootstrap chauffe
 
-- la chauffe démarre sous `consigne - 0.3°C`,
-- la chauffe s'arrête au-dessus de `consigne + 0.5°C`.
+Pendant le bootstrap, SmartPI ne cherche pas à maintenir la température avec précision. Il alterne entre chauffe complète et arrêt complet pour observer des réponses thermiques nettes :
 
-Pendant cette phase, SmartPI mesure d'abord les délais de réaction, puis collecte des observations de chauffe et de refroidissement.
+- la chauffe démarre quand la température descend sous `consigne - 0.3°C`,
+- la chauffe s'arrête quand la température monte au-dessus de `consigne + 0.5°C`.
 
-SmartPI quitte le bootstrap lorsqu'il dispose de suffisamment d'observations pour publier son premier modèle thermique : 8 observations de refroidissement pour `b` et 6 observations de chauffe pour `a`. Les buffers d'observation continuent ensuite à se remplir jusqu'à 31 échantillons pendant la régulation SmartPI normale, ce qui permet au modèle de continuer à se consolider après le bootstrap.
+Cela produit des oscillations de température visibles, qui sont attendues et volontaires à ce stade.
 
-La confiance complète du modèle reste plus stricte que la sortie du bootstrap. Tant que le nombre d'observations n'est pas suffisant pour cette confiance complète, SmartPI peut réguler avec le modèle publié tout en gardant le trim lent du feed-forward gelé.
+#### Étape 1 — Mesure des temps morts
 
-Ce qu'il faut retenir :
+La première chose que SmartPI doit apprendre est **le temps de réaction de la pièce** quand la chauffe démarre ou s'arrête. Ces délais s'appellent les *temps morts* :
 
+- **temps mort de chauffe** : le délai entre le moment où SmartPI envoie une commande de chauffe et le moment où la température intérieure commence à monter,
+- **temps mort de refroidissement** : le délai entre l'arrêt de la chauffe et le moment où la température commence à baisser.
+
+Les temps morts dépendent du type d'émetteur, de la taille de la pièce et du placement du capteur. Ils doivent être mesurés avant que SmartPI puisse interpréter correctement les observations de chauffe et de refroidissement.
+
+#### Étape 2 — Apprentissage des déperditions (`b`)
+
+Une fois les temps morts considérés comme fiables, SmartPI commence à collecter des **observations de refroidissement** : il mesure à quelle vitesse la pièce perd sa chaleur quand le chauffage est éteint.
+
+À partir de ces observations, il calcule `b`, le coefficient de déperdition thermique. Ce paramètre représente la vitesse à laquelle la pièce se refroidit en fonction de la différence entre température intérieure et extérieure.
+
+SmartPI a besoin d'au moins 8 observations de refroidissement valides avant que `b` soit considéré comme utilisable.
+
+#### Étape 3 — Apprentissage du gain de chauffe (`a`)
+
+Une fois que `b` dispose de suffisamment d'observations pour être considéré comme fiable, SmartPI commence à collecter des **observations de chauffe** : il mesure à quelle vitesse la pièce se réchauffe pour une commande de chauffe donnée.
+
+À partir de ces observations, il calcule `a`, le gain de chauffe. Ce paramètre représente l'efficacité avec laquelle votre système de chauffage fait monter la température intérieure.
+
+SmartPI a besoin d'au moins 6 observations de chauffe valides pour `a`.
+
+#### Sortie du bootstrap
+
+SmartPI quitte le bootstrap et bascule en régulation normale une fois que `a` et `b` disposent de suffisamment d'observations pour publier un premier modèle thermique.
+
+Les buffers d'observation continuent ensuite à se remplir jusqu'à 31 échantillons pendant la régulation normale, ce qui permet au modèle de continuer à se consolider après le bootstrap. La confiance complète reste plus stricte que la sortie de bootstrap — tant que le nombre d'observations n'est pas suffisant pour cette confiance complète, SmartPI régule avec le modèle publié tout en gardant certaines corrections internes gelées.
+
+Ce qu'il faut retenir pendant le bootstrap :
+
+- les oscillations de température sont normales et attendues,
 - la régulation est volontairement simple à ce stade,
-- les diagnostics sont particulièrement utiles pendant cette phase,
-- la progression dépend de la qualité des observations réelles, pas seulement du temps écoulé.
+- les diagnostics sont particulièrement utiles pour suivre la progression,
+- la vitesse dépend de la qualité des observations réelles, pas seulement du temps écoulé.
 
 ### Phase stable
 

@@ -175,24 +175,54 @@ After changing a value, let SmartPI run for several cycles before judging the re
 
 ### Learning phase
 
-SmartPI starts in a bootstrap phase based on hysteresis.
+SmartPI starts in a bootstrap phase. During this phase, it uses a simple heating strategy to observe how the room behaves, then extracts the physical parameters it needs to regulate properly.
 
-By default:
+#### How bootstrap heats
 
-- heating starts below `setpoint - 0.3°C`,
-- heating stops above `setpoint + 0.5°C`.
+During bootstrap, SmartPI does not try to hold the temperature precisely. Instead, it alternates between full heating and full cooling in order to observe clear thermal responses:
 
-During this phase, SmartPI first measures reaction delays, then collects valid heating and cooling observations.
+- heating starts when the temperature drops below `setpoint - 0.3°C`,
+- heating stops when the temperature rises above `setpoint + 0.5°C`.
 
-SmartPI leaves bootstrap once it has enough observations to publish its first thermal model: 8 cooling observations for `b` and 6 heating observations for `a`. The observation buffers then continue filling up to 31 samples during normal SmartPI regulation, so the model keeps consolidating after bootstrap.
+This produces visible temperature swings which are expected and intentional at this stage.
 
-Full model confidence remains stricter than bootstrap exit. Until enough observations are available for full confidence, SmartPI can regulate with the published model while keeping the slow feed-forward trim frozen.
+#### Step 1 — Measuring dead times
 
-What to expect:
+The first thing SmartPI needs to learn is **how long the room takes to react** after heating starts or stops. These delays are called *dead times*:
 
+- **heating dead time**: the delay between the moment SmartPI sends a heating command and the moment the indoor temperature starts rising,
+- **cooling dead time**: the delay between the moment heating stops and the moment the temperature starts dropping.
+
+Dead times depend on the emitter type, room size, and sensor placement. They must be measured before SmartPI can interpret heating and cooling observations correctly.
+
+#### Step 2 — Learning heat loss (`b`)
+
+Once the dead times are considered reliable, SmartPI starts collecting **cooling observations**: it measures how fast the room loses heat when the heater is off.
+
+From these observations, it calculates `b`, the heat-loss coefficient. This parameter represents how quickly the room cools down depending on the difference between indoor and outdoor temperature.
+
+SmartPI needs at least 8 valid cooling observations before `b` is considered usable.
+
+#### Step 3 — Learning heating gain (`a`)
+
+Once `b` has enough observations to be considered reliable, SmartPI starts collecting **heating observations**: it measures how quickly the room warms up for a given heating command.
+
+From these observations, it calculates `a`, the heating gain. This parameter represents how effectively your heating system raises the indoor temperature.
+
+SmartPI needs at least 6 valid heating observations for `a`.
+
+#### Leaving bootstrap
+
+SmartPI leaves bootstrap and switches to its normal regulation mode once both `a` and `b` have enough observations to publish a first thermal model.
+
+The observation buffers then continue filling up to 31 samples during normal regulation, so the model keeps consolidating after bootstrap. Full model confidence remains stricter than bootstrap exit — until enough observations are available for full confidence, SmartPI regulates with the published model while keeping some internal corrections frozen.
+
+What to expect during bootstrap:
+
+- temperature swings are normal and expected,
 - regulation is intentionally simple at this stage,
-- diagnostics are especially useful during this phase,
-- progress depends on the quality of real observations, not only on elapsed time.
+- diagnostics are especially useful to follow progress,
+- speed depends on the quality of real observations, not only on elapsed time.
 
 ### Stable phase
 
