@@ -1,16 +1,16 @@
 {
   "domain": "vtherm_smartpi",
   "name": "Versatile Thermostat SmartPI",
-  "version": "0.0.0",
+  "codeowners": [
+    "@kipk"
+  ],
   "config_flow": true,
   "dependencies": [
     "versatile_thermostat"
   ],
+  "documentation": "https://github.com/kipk/vtherm_smartpi",
   "integration_type": "service",
   "iot_class": "calculated",
-  "codeowners": [
-    "@kipk"
-  ],
-  "documentation": "https://github.com/kipk/vtherm_smartpi",
-  "issue_tracker": "https://github.com/kipk/vtherm_smartpi/issues"
+  "issue_tracker": "https://github.com/kipk/vtherm_smartpi/issues",
+  "version": "0.0.0"
 }
