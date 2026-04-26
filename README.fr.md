@@ -7,24 +7,25 @@
 </p>
 
 <p align="center">
-  <strong>Contrôle thermostatique proportionnel avancé pour Home Assistant</strong>
+  <strong>Régulation PI auto-adaptative pour Home Assistant</strong>
 </p>
 
 <p align="center">
-  Améliorez le chauffage et la climatisation de votre domicile avec SmartPI, l'algorithme proportionnel de pointe conçu pour une gestion de température de haute précision.
+  Un régulateur PI basé sur un modèle thermique qui apprend le comportement réel de votre pièce et adapte la régulation automatiquement — au-delà des approches à coefficients fixes.
 </p>
 
 ## 🌟 Qu'est-ce que SmartPI ?
 
 SmartPI est un algorithme de contrôle thermique avancé basé sur un modèle de premier ordre (1R1C) et non sur une boucle PID classique. Il apprend la capacité de chauffe de la pièce, le taux de perte thermique et les temps morts, puis utilise ce modèle pour calculer une commande de chauffage bien plus précise qu'un contrôleur proportionnel à temps fixe.
 
-- **Contrôle de température précis** : maintient la température cible avec de faibles variations
-- **Efficacité énergétique** : optimise les cycles de chauffe grâce au comportement thermique appris
-- **Apprentissage adaptatif** : s'ajuste en continu selon le modèle thermique de la maison
-- **Commande basée sur un modèle** : anticipe la réaction de la pièce aux changements de chauffage
-- **Protections avancées** : inclut hystérésis, deadbands, anti-windup et gestion de reprise de consigne
-
-SmartPI transforme le pilotage de votre thermostat en un algorithme conscient du modèle thermique réel de votre logement.
+- **Modèle thermique 1R1C** : Apprend le gain de chauffe, le taux de déperdition et les temps morts de votre pièce à partir d'observations réelles — aucun réglage manuel nécessaire
+- **Gains PI auto-calculés** : Calcule Kp et Ki automatiquement à partir de la constante de temps et du temps mort appris, via des règles IMC et heuristiques
+- **Feed-forward basé sur le modèle** : Estime la puissance de maintien nécessaire au point de consigne, complétée par un biais lent et une correction prédictive optionnelle (FF3) en cas de perturbation
+- **Trajectoire analytique de consigne** : Façonne la référence proportionnelle avec un profil de freinage tardif pour atteindre la cible rapidement tout en évitant le dépassement
+- **Gouvernance Safety-First** : Une matrice par régime gèle ou déverrouille l'apprentissage et l'adaptation des gains selon le contexte opérationnel
+- **Auto-calibration** : Surveille la qualité du modèle et déclenche une séquence de recalibration lorsque l'apprentissage stagne
+- **Linéarisation de courbe de vanne** : Traduit la demande SmartPI en position de vanne adaptée au comportement non linéaire des vannes thermostatiques (TRV)
+- **Diagnostics détaillés** : Publie la progression de l'apprentissage, l'état du modèle et les données de régulation — consultable via une carte Markdown Home Assistant dédiée
 
 ## 🔗 Intégration avec Versatile Thermostat
 
@@ -62,15 +63,6 @@ La documentation complète est disponible en français :
 
 - 🇫🇷 [Documentation utilisateur (Français)](documentation/fr/vtherm_smartpi.md)
 - 🇫🇷 [Documentation technique (Français)](documentation/fr/technical_doc.md)
-
-## 🚀 Fonctionnalités
-
-- **Algorithme SmartPI** : contrôle proportionnel avancé pour une gestion de température précise
-- **Intégration Versatile** : fonctionne parfaitement avec Versatile Thermostat
-- **Configuration par appareil** : personnalisez pour chaque thermostat
-- **Valeurs par défaut globales** : installation facile avec des paramètres de secours
-- **Implémentation robuste** : inclut des protections comme anti-windup et hystérésis
-- **Open Source** : développement transparent et communautaire
 
 ## 👥 Auteurs
 
