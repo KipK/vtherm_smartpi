@@ -417,6 +417,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ),
         "landing_release_allowed": algo.sp_mgr.landing_release_allowed,
         "landing_coast_required": algo.sp_mgr.landing_coast_required,
+        "landing_non_constraining_count": algo.sp_mgr.landing_non_constraining_count,
         "landing_u_cmd_before_cap": (
             round(algo.sp_mgr.landing_u_cmd_before_cap, 6)
             if algo.sp_mgr.landing_u_cmd_before_cap is not None else None

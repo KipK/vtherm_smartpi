@@ -6,7 +6,9 @@ import pytest
 
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import (
+    LANDING_NON_CONSTRAINING_PERSISTENCE,
     LANDING_SAFETY_MARGIN_C,
+    TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     TrajectoryPhase,
 )
 from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
@@ -1013,6 +1015,83 @@ class TestLandingDiagnostics:
             "landing_u_cap",
             "landing_coast_required",
         }
+
+
+class TestLandingNonConstraining:
+    """Tests for the non-constraining cap exit path."""
+
+    @staticmethod
+    def _make_manager_in_release():
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=25.0,
+            target_setpoint=25.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+        manager._trajectory.set_target(25.0, phase=TrajectoryPhase.RELEASE)
+        return manager
+
+    def test_landing_non_constraining_release_is_sticky(self):
+        # With defaults: sp_for_p_cap ≈ 25.13. sp_for_p=24.9 is non-constraining.
+        manager = self._make_manager_in_release()
+
+        for i in range(LANDING_NON_CONSTRAINING_PERSISTENCE - 1):
+            d = _decision(manager, signed_error=0.08, sp_for_p=24.9)
+            assert d.active is True, f"should still be active at step {i}"
+            assert d.reason == "cap"
+
+        d = _decision(manager, signed_error=0.08, sp_for_p=24.9)
+        assert d.active is False
+        assert d.reason == "non_constraining_release"
+
+        # Sticky: next call should be residual_release (not re-engaging cap)
+        d = _decision(manager, signed_error=0.08, sp_for_p=24.9)
+        assert d.active is False
+        assert d.reason == "residual_release"
+
+    def test_landing_non_constraining_release_rearms_on_significant_demand(self):
+        manager = self._make_manager_in_release()
+
+        for _ in range(LANDING_NON_CONSTRAINING_PERSISTENCE):
+            _decision(manager, signed_error=0.08, sp_for_p=24.9)
+
+        assert manager._landing_residual_released is True
+
+        # signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD rearms the landing
+        d = _decision(
+            manager,
+            signed_error=TRAJECTORY_ENABLE_ERROR_THRESHOLD + 0.05,
+            sp_for_p=24.9,
+        )
+
+        assert manager._landing_residual_released is False
+        assert d.active is True
+        assert d.reason == "cap"
+
+    def test_landing_stays_active_when_cap_is_constraining(self):
+        # Increase u_ff_eff so sp_for_p_cap ≈ 24.97 < sp_for_p=25.0.
+        manager = self._make_manager_in_release()
+
+        for _ in range(LANDING_NON_CONSTRAINING_PERSISTENCE + 2):
+            d = _decision(manager, signed_error=0.08, u_ff_eff=0.62, sp_for_p=25.0)
+            assert d.active is True
+            assert d.reason == "cap"
+            assert manager._landing_non_constraining_count == 0
+
+    def test_landing_non_constraining_count_resets_outside_landing_band(self):
+        manager = self._make_manager_in_release()
+
+        d = _decision(manager, signed_error=0.08, sp_for_p=24.9)
+        assert d.active is True
+        assert manager.landing_non_constraining_count == 1
+
+        d = _decision(manager, signed_error=0.8, sp_for_p=24.9)
+
+        assert d.active is False
+        assert d.reason == "outside_landing_band"
+        assert manager.landing_non_constraining_count == 0
 
 
 # Reference the imported symbol so static analyzers do not flag it as unused.
