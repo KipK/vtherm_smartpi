@@ -50,6 +50,10 @@ class SmartPIController:
         self.deadband_power_source: str = "none"
         self.integral_hold_mode: str = "none"
 
+        # Setpoint landing command cap (post-PI governor)
+        self.u_cmd_before_cap: float | None = None
+        self.u_cmd_cap: float | None = None
+
         # Hysteresis State
         self.hysteresis_state: str = "off"
         self.hysteresis_thermal_guard: bool = False
@@ -67,8 +71,19 @@ class SmartPIController:
         self.sat_i = False
         self.deadband_power_source = "none"
         self.integral_hold_mode = "none"
+        self.u_cmd_before_cap = None
+        self.u_cmd_cap = None
         self.hysteresis_state = "off"
         self.hysteresis_thermal_guard = False
+
+    def apply_command_cap(self, u_cap: float | None) -> float:
+        """Apply the setpoint-response command cap to u_cmd."""
+        self.u_cmd_before_cap = self.u_cmd
+        self.u_cmd_cap = u_cap
+        if u_cap is None:
+            return self.u_cmd
+        self.u_cmd = clamp(self.u_cmd, 0.0, max(float(u_cap), 0.0))
+        return self.u_cmd
 
     @property
     def integral_hold_active(self) -> bool:

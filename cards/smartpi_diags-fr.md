@@ -75,6 +75,10 @@
 {% set trajectory_active = setpoint.get('trajectory_active', false) %}
 {% set published_filtered_sp = setpoint.get('filtered_setpoint') %}
 {% set trajectory_source_pub = setpoint.get('trajectory_source', 'none') %}
+{% set landing_active = setpoint.get('landing_active', false) %}
+{% set landing_reason = setpoint.get('landing_reason', 'inactive') %}
+{% set landing_u_cap = setpoint.get('landing_u_cap') %}
+{% set landing_coast = setpoint.get('landing_coast_required', false) %}
 
 {% set autocalib_state = autocalib.get('state', 'unknown') %}
 {% set autocalib_degraded = autocalib.get('model_degraded', false) %}
@@ -185,6 +189,14 @@
 {% set traj_next_cycle_u_ref = debug.get('trajectory_next_cycle_u_ref') %}
 {% set traj_bumpless_u_delta = debug.get('trajectory_bumpless_u_delta') %}
 {% set traj_bumpless_ready = debug.get('trajectory_bumpless_ready') %}
+{% set landing_sp_for_p_cap = debug.get('landing_sp_for_p_cap') %}
+{% set landing_predicted_temperature = debug.get('landing_predicted_temperature') %}
+{% set landing_predicted_rise = debug.get('landing_predicted_rise') %}
+{% set landing_target_margin = debug.get('landing_target_margin') %}
+{% set landing_release_allowed = debug.get('landing_release_allowed', true) %}
+{% set landing_coast_required = debug.get('landing_coast_required', landing_coast) %}
+{% set landing_u_cmd_before_cap = debug.get('landing_u_cmd_before_cap') %}
+{% set landing_u_cmd_after_cap = debug.get('landing_u_cmd_after_cap') %}
 {% set learn_progress = debug.get('learn_progress_percent') %}
 {% set learn_time_remaining = debug.get('learn_time_remaining') %}
 {% set learn_u_avg = debug.get('learn_u_avg') %}
@@ -368,6 +380,7 @@
 {%- if has_debug %} · {{ cycle_min }} min{% endif %}
  · `{{ mode }}`
 {%- if trajectory_active %} · 🎯 trajectoire{% endif %}
+{%- if landing_active %} · 🛬 atterrissage{% if landing_coast %} (roue libre){% endif %}{% endif %}
 {%- if ff3_status == 'active' %} · 🔮 FF3{% endif %}
 {%- if has_debug and debug.get('in_deadband', false) %} · 💤 DB{% elif has_debug and debug.get('in_near_band', false) %} · 〰️ NB{% endif %}
 {%- if autocalib_degraded %} · ⚠️ modèle dégradé{% endif %}
@@ -421,8 +434,26 @@
 | Bumpless ready | {% if traj_bumpless_ready is sameas true %}oui{% elif traj_bumpless_ready is sameas false %}non{% else %}—{% endif %} |
 {%- endif %}
 
+{% if has_debug %}
+### 🛬 Atterrissage consigne
+
+| Signal | Valeur |
+|---|---:|
+| Actif | {% if landing_active %}oui{% else %}non{% endif %} |
+| Raison | `{{ landing_reason }}` |
+| `u_cap` | {% if landing_u_cap is not none %}{{ (landing_u_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
+| `SP_for_P` cap | {% if landing_sp_for_p_cap is not none %}{{ landing_sp_for_p_cap | float | round(3) }}°C{% else %}—{% endif %} |
+| Température prédite | {% if landing_predicted_temperature is not none %}{{ landing_predicted_temperature | float | round(3) }}°C{% else %}—{% endif %} |
+| Hausse prédite | {% if landing_predicted_rise is not none %}{{ landing_predicted_rise | float | round(3) }}°C{% else %}—{% endif %} |
+| Marge cible | {% if landing_target_margin is not none %}{{ landing_target_margin | float | round(3) }}°C{% else %}—{% endif %} |
+| Roue libre requise | {% if landing_coast_required %}oui{% else %}non{% endif %} |
+| Sortie autorisée | {% if landing_release_allowed %}oui{% else %}non{% endif %} |
+| `u_cmd` avant cap | {% if landing_u_cmd_before_cap is not none %}{{ (landing_u_cmd_before_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
+| `u_cmd` après cap | {% if landing_u_cmd_after_cap is not none %}{{ (landing_u_cmd_after_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
+
 ---
 
+{% endif %}
 ### ⚡ Commande
 
 {% if has_debug %}
@@ -442,6 +473,9 @@
 | Maintien | {{ (hold_pct * 100) | round(1) }}% |
 | Hystérésis | `{{ hyst_state }}` |
 | Restart | `{{ restart_reason }}` |
+{%- if landing_u_cap is not none %}
+| Cap atterrissage | {{ (landing_u_cap | float * 100) | round(1) }}% |
+{%- endif %}
 {%- if valve_linearization_enabled %}
 | Demande SmartPI | {{ (linear_next_cycle * 100) | round(1) }}% |
 | Commande vanne ajustée | {{ (next_cycle * 100) | round(1) }}% |

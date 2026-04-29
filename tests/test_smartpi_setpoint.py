@@ -1,8 +1,19 @@
 """Tests for SmartPISetpointManager trajectory shaping."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
-from custom_components.vtherm_smartpi.smartpi.const import TrajectoryPhase
+from custom_components.vtherm_smartpi.algo import SmartPI
+from custom_components.vtherm_smartpi.smartpi.const import (
+    LANDING_SAFETY_MARGIN_C,
+    TrajectoryPhase,
+)
+from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
+from custom_components.vtherm_smartpi.smartpi.diagnostics import (
+    _build_full_diagnostics,
+    build_published_diagnostics,
+)
 from custom_components.vtherm_smartpi.smartpi.setpoint import SmartPISetpointManager
 from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
@@ -698,3 +709,250 @@ class TestReset:
         assert manager.effective_setpoint is None
         assert manager.trajectory_active is False
         assert manager.trajectory_phase == TrajectoryPhase.IDLE
+
+
+# ---------------------------------------------------------------------------
+# Setpoint landing tests (HEAT-only command-aware governor)
+# ---------------------------------------------------------------------------
+
+
+def _decision(manager, **overrides):
+    """Call _compute_landing_decision with sensible defaults plus overrides."""
+    kwargs = dict(
+        target_temp=25.0,
+        current_temp=24.75,
+        ext_current_temp=15.0,
+        hvac_mode=VThermHvacMode_HEAT,
+        signed_error=0.25,
+        a=0.075,
+        b=0.0034,
+        u_ref=0.35,
+        u_ff_eff=0.39,
+        kp=1.45,
+        ki=0.0048,
+        integral=-43.0,
+        deadtime_cool_s=765.0,
+        deadtime_cool_reliable=True,
+        tau_reliable=True,
+        deadband_c=0.05,
+        remaining_cycle_min=1.0,
+        temperature_slope_h=0.5,
+    )
+    kwargs.update(overrides)
+    return manager._compute_landing_decision(**kwargs)
+
+
+class TestSetpointLanding:
+    def test_landing_inactive_when_model_unreliable(self):
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=25.0,
+            target_setpoint=25.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+
+        decision = _decision(manager, tau_reliable=False)
+
+        assert manager.landing_active is False
+        assert decision.active is False
+        assert decision.reason == "tau_unreliable"
+
+    def test_landing_inactive_outside_landing_band(self):
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=25.0,
+            target_setpoint=25.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+
+        decision = _decision(manager, signed_error=0.80)
+
+        assert decision.active is False
+        assert decision.reason == "outside_landing_band"
+
+    def test_landing_cap_limits_sp_for_p_heat(self):
+        manager = _make_manager()
+        # Seed last user target.
+        _filter(
+            manager,
+            target=24.0,
+            current=24.0,
+            now=0.0,
+            a=0.075,
+            b=0.0034,
+            ext_temp=15.0,
+            deadtime_cool_s=765.0,
+            u_ref=1.0,
+        )
+        # Arm pending late braking via setpoint change (signed_error=0.5).
+        _filter(
+            manager,
+            target=25.0,
+            current=24.5,
+            now=60.0,
+            a=0.075,
+            b=0.0034,
+            ext_temp=15.0,
+            deadtime_cool_s=765.0,
+            u_ref=1.0,
+        )
+        # Same target, signed_error=0.40 — inside landing band; the model
+        # predicts enough rise for the setpoint trajectory to arm with
+        # source="setpoint", so the landing decision can be evaluated.
+        sp_for_p = manager.filter_setpoint(
+            target_temp=25.0,
+            current_temp=24.6,
+            hvac_mode=VThermHvacMode_HEAT,
+            a=0.075,
+            b=0.0034,
+            ext_current_temp=15.0,
+            u_ref=1.0,
+            deadtime_cool_s=765.0,
+            deadtime_cool_reliable=True,
+            tau_reliable=True,
+            deadband_c=0.05,
+            kp=1.45,
+            next_cycle_u_ref=1.0,
+            cycle_min=10.0,
+            remaining_cycle_min=1.0,
+            now_monotonic=120.0,
+            u_ff_eff=0.39,
+            ki=0.0048,
+            integral=-43.0,
+            temperature_slope_h=0.5,
+        )
+
+        assert manager.trajectory_source == "setpoint"
+        assert manager.landing_active is True
+        assert manager.landing_u_cap is not None
+        assert manager.landing_sp_for_p_cap is not None
+        assert sp_for_p <= manager.landing_sp_for_p_cap + 1e-9
+        assert manager.landing_release_allowed is False
+
+    def test_landing_coast_when_passive_prediction_reaches_margin(self):
+        # Passive cooling alone already overshoots the safety margin:
+        # current temperature is well above target, so the cap collapses to 0.
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=25.0,
+            target_setpoint=25.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+
+        decision = _decision(
+            manager,
+            target_temp=25.0,
+            current_temp=24.99,
+            ext_current_temp=24.99,
+            signed_error=0.01,
+            u_ref=1.0,
+        )
+
+        assert decision.active is True
+        assert decision.coast_required is True
+        assert decision.u_cap == pytest.approx(0.0)
+
+    def test_landing_noop_for_cool(self):
+        manager = _make_manager()
+        # First seed the manager with a COOL passthrough state.
+        result_seed = _filter(
+            manager,
+            target=22.0,
+            current=23.0,
+            now=0.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+        result = _filter(
+            manager,
+            target=22.0,
+            current=22.2,
+            now=60.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+
+        assert result_seed == pytest.approx(22.0)
+        assert manager.landing_active is False
+
+        decision = _decision(
+            manager,
+            hvac_mode=VThermHvacMode_COOL,
+            target_temp=22.0,
+            current_temp=22.2,
+            signed_error=0.2,
+        )
+        assert decision.active is False
+        assert decision.reason == "cool_unsupported"
+        # COOL may keep its existing trajectory shaping; landing must not cap it.
+        assert 22.0 <= result <= 22.2
+        assert manager.landing_u_cap is None
+        assert manager.landing_sp_for_p_cap is None
+
+
+class TestControllerCommandCap:
+    def test_apply_command_cap_clamps_u_cmd_only(self):
+        controller = SmartPIController(name="test")
+        controller.u_cmd = 0.8
+        controller.u_pi = 0.6
+
+        capped = controller.apply_command_cap(0.2)
+
+        assert capped == pytest.approx(0.2)
+        assert controller.u_cmd == pytest.approx(0.2)
+        assert controller.u_cmd_before_cap == pytest.approx(0.8)
+        assert controller.u_cmd_cap == pytest.approx(0.2)
+        # u_pi must remain untouched — it is the raw PI diagnostic.
+        assert controller.u_pi == pytest.approx(0.6)
+
+
+class TestLandingDiagnostics:
+    @staticmethod
+    def _make_algo():
+        return SmartPI(
+            hass=MagicMock(),
+            cycle_min=10,
+            minimal_activation_delay=0,
+            minimal_deactivation_delay=0,
+            name="TestSmartPILandingDiag",
+        )
+
+    def test_full_debug_diagnostics_include_landing_keys(self):
+        algo = self._make_algo()
+        diag = _build_full_diagnostics(algo)
+
+        for key in (
+            "landing_active",
+            "landing_reason",
+            "landing_u_cap",
+            "landing_sp_for_p_cap",
+            "landing_predicted_temperature",
+            "landing_predicted_rise",
+            "landing_target_margin",
+            "landing_release_allowed",
+            "landing_coast_required",
+            "landing_u_cmd_before_cap",
+            "landing_u_cmd_after_cap",
+        ):
+            assert key in diag, f"missing landing key in debug diagnostics: {key}"
+
+    def test_published_setpoint_only_exposes_essential_landing_fields(self):
+        algo = self._make_algo()
+        published = build_published_diagnostics(algo)
+
+        setpoint = published["setpoint"]
+        landing_keys = {k for k in setpoint if k.startswith("landing_")}
+        assert landing_keys == {
+            "landing_active",
+            "landing_reason",
+            "landing_u_cap",
+            "landing_coast_required",
+        }
+
+
+# Reference the imported symbol so static analyzers do not flag it as unused.
+_ = LANDING_SAFETY_MARGIN_C

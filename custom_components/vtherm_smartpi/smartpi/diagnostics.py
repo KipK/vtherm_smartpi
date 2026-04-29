@@ -196,6 +196,10 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "filtered_setpoint": diag["filtered_setpoint"],
             "trajectory_active": diag["setpoint_trajectory_active"],
             "trajectory_source": diag["trajectory_source"],
+            "landing_active": diag["landing_active"],
+            "landing_reason": diag["landing_reason"],
+            "landing_u_cap": diag["landing_u_cap"],
+            "landing_coast_required": diag["landing_coast_required"],
         },
         "autocalib": {
             "state": diag["autocalib_state"],
@@ -388,6 +392,39 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             if algo.sp_mgr.trajectory_bumpless_u_delta is not None else None
         ),
         "trajectory_bumpless_ready": algo.sp_mgr.trajectory_bumpless_ready,
+        # Setpoint landing (HEAT-only)
+        "landing_active": algo.sp_mgr.landing_active,
+        "landing_reason": algo.sp_mgr.landing_reason,
+        "landing_u_cap": (
+            round(algo.sp_mgr.landing_u_cap, 6)
+            if algo.sp_mgr.landing_u_cap is not None else None
+        ),
+        "landing_sp_for_p_cap": (
+            round(algo.sp_mgr.landing_sp_for_p_cap, 3)
+            if algo.sp_mgr.landing_sp_for_p_cap is not None else None
+        ),
+        "landing_predicted_temperature": (
+            round(algo.sp_mgr.landing_predicted_temperature, 3)
+            if algo.sp_mgr.landing_predicted_temperature is not None else None
+        ),
+        "landing_predicted_rise": (
+            round(algo.sp_mgr.landing_predicted_rise, 3)
+            if algo.sp_mgr.landing_predicted_rise is not None else None
+        ),
+        "landing_target_margin": (
+            round(algo.sp_mgr.landing_target_margin, 3)
+            if algo.sp_mgr.landing_target_margin is not None else None
+        ),
+        "landing_release_allowed": algo.sp_mgr.landing_release_allowed,
+        "landing_coast_required": algo.sp_mgr.landing_coast_required,
+        "landing_u_cmd_before_cap": (
+            round(algo.sp_mgr.landing_u_cmd_before_cap, 6)
+            if algo.sp_mgr.landing_u_cmd_before_cap is not None else None
+        ),
+        "landing_u_cmd_after_cap": (
+            round(algo.sp_mgr.landing_u_cmd_after_cap, 6)
+            if algo.sp_mgr.landing_u_cmd_after_cap is not None else None
+        ),
         # Resume skip
         "learning_resume_ts": int(algo.learning_resume_ts) if algo.learning_resume_ts else None,
         # Anti-windup tracking diagnostics

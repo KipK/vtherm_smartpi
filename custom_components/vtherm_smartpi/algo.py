@@ -1845,6 +1845,7 @@ class SmartPI:
         remaining_cycle_min: float = 0.0,
         resumed_from_off: bool = False,
         startup_first_run: bool = False,
+        slope_h: float | None = None,
     ) -> tuple[float, bool, float, float, float | None]:
         """Setpoint filtering and boost logic.
 
@@ -1869,6 +1870,11 @@ class SmartPI:
             )
 
         if self.phase == SmartPIPhase.STABLE and not resumed_from_off and not startup_first_run:
+            u_ff_eff_for_landing = (
+                self._last_ff_result.u_ff_eff
+                if self._last_ff_result is not None
+                else self._last_u_ff
+            )
             target_temp_filt = self.sp_mgr.filter_setpoint(
                 target_temp=target_temp,
                 current_temp=current_temp,
@@ -1887,6 +1893,10 @@ class SmartPI:
                 remaining_cycle_min=remaining_cycle_min,
                 now_monotonic=now_monotonic,
                 allow_disturbance_trigger=allow_disturbance_trigger,
+                u_ff_eff=u_ff_eff_for_landing,
+                ki=self.Ki,
+                integral=self.integral,
+                temperature_slope_h=slope_h,
             )
         else:
             # Bypass shaping outside STABLE and on the first cycle after a
@@ -2239,6 +2249,7 @@ class SmartPI:
             remaining_cycle_min,
             resumed_from_off,
             startup_first_run,
+            slope_h=slope,
         )
 
         # Clear cycle regimes on setpoint change to prevent REGIME_TRANSITION freeze
@@ -2476,6 +2487,12 @@ class SmartPI:
             positive_integral_guard_mode=positive_integral_guard_mode,
             deadband_allow_p=self._deadband_allow_p,
         )
+
+        # --- 11b. Setpoint landing command cap (post-PI governor) ---
+        u_cmd = self.ctl.apply_command_cap(
+            self.sp_mgr.landing_u_cap if self.sp_mgr.landing_active else None
+        )
+        self.sp_mgr.record_landing_command_cap(self.ctl.u_cmd_before_cap, u_cmd)
 
         # --- 12. Soft Constraints ---
         u_limited = self._apply_soft_constraints(u_cmd, dt_min, setpoint_changed)

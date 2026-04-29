@@ -75,6 +75,10 @@
 {% set trajectory_active = setpoint.get('trajectory_active', false) %}
 {% set published_filtered_sp = setpoint.get('filtered_setpoint') %}
 {% set trajectory_source_pub = setpoint.get('trajectory_source', 'none') %}
+{% set landing_active = setpoint.get('landing_active', false) %}
+{% set landing_reason = setpoint.get('landing_reason', 'inactive') %}
+{% set landing_u_cap = setpoint.get('landing_u_cap') %}
+{% set landing_coast = setpoint.get('landing_coast_required', false) %}
 
 {% set autocalib_state = autocalib.get('state', 'unknown') %}
 {% set autocalib_degraded = autocalib.get('model_degraded', false) %}
@@ -185,6 +189,14 @@
 {% set traj_next_cycle_u_ref = debug.get('trajectory_next_cycle_u_ref') %}
 {% set traj_bumpless_u_delta = debug.get('trajectory_bumpless_u_delta') %}
 {% set traj_bumpless_ready = debug.get('trajectory_bumpless_ready') %}
+{% set landing_sp_for_p_cap = debug.get('landing_sp_for_p_cap') %}
+{% set landing_predicted_temperature = debug.get('landing_predicted_temperature') %}
+{% set landing_predicted_rise = debug.get('landing_predicted_rise') %}
+{% set landing_target_margin = debug.get('landing_target_margin') %}
+{% set landing_release_allowed = debug.get('landing_release_allowed', true) %}
+{% set landing_coast_required = debug.get('landing_coast_required', landing_coast) %}
+{% set landing_u_cmd_before_cap = debug.get('landing_u_cmd_before_cap') %}
+{% set landing_u_cmd_after_cap = debug.get('landing_u_cmd_after_cap') %}
 {% set learn_progress = debug.get('learn_progress_percent') %}
 {% set learn_time_remaining = debug.get('learn_time_remaining') %}
 {% set learn_u_avg = debug.get('learn_u_avg') %}
@@ -368,6 +380,7 @@
 {%- if has_debug %} · {{ cycle_min }} min{% endif %}
  · `{{ mode }}`
 {%- if trajectory_active %} · 🎯 trajectory{% endif %}
+{%- if landing_active %} · 🛬 landing{% if landing_coast %} (coast){% endif %}{% endif %}
 {%- if ff3_status == 'active' %} · 🔮 FF3{% endif %}
 {%- if has_debug and debug.get('in_deadband', false) %} · 💤 DB{% elif has_debug and debug.get('in_near_band', false) %} · 〰️ NB{% endif %}
 {%- if autocalib_degraded %} · ⚠️ degraded model{% endif %}
@@ -421,8 +434,26 @@
 | Bumpless ready | {% if traj_bumpless_ready is sameas true %}yes{% elif traj_bumpless_ready is sameas false %}no{% else %}—{% endif %} |
 {%- endif %}
 
+{% if has_debug %}
+### 🛬 Setpoint landing
+
+| Signal | Value |
+|---|---:|
+| Active | {% if landing_active %}yes{% else %}no{% endif %} |
+| Reason | `{{ landing_reason }}` |
+| `u_cap` | {% if landing_u_cap is not none %}{{ (landing_u_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
+| `SP_for_P` cap | {% if landing_sp_for_p_cap is not none %}{{ landing_sp_for_p_cap | float | round(3) }}°C{% else %}—{% endif %} |
+| Predicted temperature | {% if landing_predicted_temperature is not none %}{{ landing_predicted_temperature | float | round(3) }}°C{% else %}—{% endif %} |
+| Predicted rise | {% if landing_predicted_rise is not none %}{{ landing_predicted_rise | float | round(3) }}°C{% else %}—{% endif %} |
+| Target margin | {% if landing_target_margin is not none %}{{ landing_target_margin | float | round(3) }}°C{% else %}—{% endif %} |
+| Coast required | {% if landing_coast_required %}yes{% else %}no{% endif %} |
+| Release allowed | {% if landing_release_allowed %}yes{% else %}no{% endif %} |
+| `u_cmd` before cap | {% if landing_u_cmd_before_cap is not none %}{{ (landing_u_cmd_before_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
+| `u_cmd` after cap | {% if landing_u_cmd_after_cap is not none %}{{ (landing_u_cmd_after_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
+
 ---
 
+{% endif %}
 ### ⚡ Command
 
 {% if has_debug %}
@@ -442,6 +473,9 @@
 | Hold | {{ (hold_pct * 100) | round(1) }}% |
 | Hysteresis | `{{ hyst_state }}` |
 | Restart | `{{ restart_reason }}` |
+{%- if landing_u_cap is not none %}
+| Landing cap | {{ (landing_u_cap | float * 100) | round(1) }}% |
+{%- endif %}
 {%- if valve_linearization_enabled %}
 | SmartPI demand | {{ (linear_next_cycle * 100) | round(1) }}% |
 | Adjusted valve command | {{ (next_cycle * 100) | round(1) }}% |

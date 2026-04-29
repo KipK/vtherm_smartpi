@@ -3,10 +3,16 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from math import exp
 from typing import Optional
 
 from .const import (
+    LANDING_ENABLE_ERROR_THRESHOLD_C,
+    LANDING_MIN_HORIZON_MIN,
+    LANDING_RELEASE_SLOPE_H,
+    LANDING_SAFETY_MARGIN_C,
+    LANDING_U_EPS,
     SETPOINT_BOOST_THRESHOLD,
     SETPOINT_BOOST_ERROR_MIN,
     ServoPhase,
@@ -18,6 +24,7 @@ from .const import (
     TRAJECTORY_BUMPLESS_MAX_U_DELTA,
     TRAJECTORY_MIN_P_ERROR_RATIO,
     TRAJECTORY_RELEASE_TAU_FACTOR as DEFAULT_RELEASE_TAU_FACTOR,
+    clamp,
 )
 from .trajectory import SmartPITrajectoryGenerator
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
@@ -31,6 +38,23 @@ def _signed_delta(value: float, reference: float, hvac_mode: VThermHvacMode | No
     if hvac_mode == VThermHvacMode_COOL:
         return -delta
     return delta
+
+
+@dataclass(slots=True)
+class SetpointLandingDecision:
+    """Setpoint-response landing decision in internal linear command space."""
+
+    active: bool = False
+    reason: str = "inactive"
+    u_cap: float | None = None
+    sp_for_p_cap: float | None = None
+    predicted_temperature: float | None = None
+    predicted_rise: float | None = None
+    target_margin: float | None = None
+    coast_required: bool = False
+    release_allowed: bool = True
+    u_cmd_before_cap: float | None = None
+    u_cmd_after_cap: float | None = None
 
 
 class SmartPISetpointManager:
@@ -68,6 +92,9 @@ class SmartPISetpointManager:
         self._last_bumpless_u_delta: float | None = None
         self._last_bumpless_ready: bool | None = None
         self._trajectory_source: str = "none"
+
+        # Setpoint landing state (HEAT-only, transient — never persisted)
+        self._landing_decision = SetpointLandingDecision()
 
     @property
     def trajectory_active(self) -> bool:
@@ -139,6 +166,51 @@ class SmartPISetpointManager:
         """Source of the currently active trajectory."""
         return self._trajectory_source
 
+    # --- Setpoint landing properties ---
+    @property
+    def landing_active(self) -> bool:
+        return self._landing_decision.active
+
+    @property
+    def landing_reason(self) -> str:
+        return self._landing_decision.reason
+
+    @property
+    def landing_u_cap(self) -> float | None:
+        return self._landing_decision.u_cap
+
+    @property
+    def landing_sp_for_p_cap(self) -> float | None:
+        return self._landing_decision.sp_for_p_cap
+
+    @property
+    def landing_predicted_temperature(self) -> float | None:
+        return self._landing_decision.predicted_temperature
+
+    @property
+    def landing_predicted_rise(self) -> float | None:
+        return self._landing_decision.predicted_rise
+
+    @property
+    def landing_target_margin(self) -> float | None:
+        return self._landing_decision.target_margin
+
+    @property
+    def landing_coast_required(self) -> bool:
+        return self._landing_decision.coast_required
+
+    @property
+    def landing_release_allowed(self) -> bool:
+        return self._landing_decision.release_allowed
+
+    @property
+    def landing_u_cmd_before_cap(self) -> float | None:
+        return self._landing_decision.u_cmd_before_cap
+
+    @property
+    def landing_u_cmd_after_cap(self) -> float | None:
+        return self._landing_decision.u_cmd_after_cap
+
     # Legacy aliases kept for compatibility with older tests / consumers.
     @property
     def servo_active(self) -> bool:
@@ -166,6 +238,7 @@ class SmartPISetpointManager:
         """Reset the trajectory state only."""
         self._trajectory.reset()
         self._trajectory_source = "none"
+        self._landing_decision = SetpointLandingDecision()
 
     def _clear_pending_target_change_braking(self) -> None:
         """Forget any delayed braking request inherited from a setpoint increase."""
@@ -411,6 +484,141 @@ class SmartPISetpointManager:
         """Return True once the measured temperature is close enough to target."""
         return _signed_delta(target_temp, current_temp, hvac_mode) <= TRAJECTORY_COMPLETE_EPS_C
 
+    @staticmethod
+    def _predict_heat_temperature(
+        *,
+        current_temp: float,
+        ext_current_temp: float,
+        a: float,
+        b: float,
+        u_ref: float,
+        horizon_min: float,
+    ) -> tuple[float, float, float]:
+        """Return predicted temperature, passive term, and command gain."""
+        horizon = max(float(horizon_min), LANDING_MIN_HORIZON_MIN)
+        alpha = exp(-b * horizon)
+        passive = ext_current_temp + (current_temp - ext_current_temp) * alpha
+        gain_u = (a / b) * (1.0 - alpha)
+        predicted = passive + gain_u * max(float(u_ref), 0.0)
+        return predicted, passive, gain_u
+
+    def _compute_landing_decision(
+        self,
+        *,
+        target_temp: float,
+        current_temp: float,
+        ext_current_temp: float | None,
+        hvac_mode: VThermHvacMode | None,
+        signed_error: float,
+        a: float,
+        b: float,
+        u_ref: float,
+        u_ff_eff: float,
+        kp: float | None,
+        ki: float | None,
+        integral: float,
+        deadtime_cool_s: float | None,
+        deadtime_cool_reliable: bool,
+        tau_reliable: bool,
+        deadband_c: float,
+        remaining_cycle_min: float,
+        temperature_slope_h: float | None,
+    ) -> SetpointLandingDecision:
+        """Compute the HEAT-only setpoint landing decision."""
+        if hvac_mode == VThermHvacMode_COOL:
+            return SetpointLandingDecision(reason="cool_unsupported")
+        if signed_error <= 0.0:
+            return SetpointLandingDecision(reason="target_reached")
+        if signed_error > LANDING_ENABLE_ERROR_THRESHOLD_C:
+            return SetpointLandingDecision(reason="outside_landing_band")
+        if not tau_reliable:
+            return SetpointLandingDecision(reason="tau_unreliable")
+        if (
+            not deadtime_cool_reliable
+            or deadtime_cool_s is None
+            or deadtime_cool_s <= 0.0
+        ):
+            return SetpointLandingDecision(reason="deadtime_unreliable")
+        if ext_current_temp is None:
+            return SetpointLandingDecision(reason="missing_ext_temp")
+        if a <= 0.0 or b <= 0.0:
+            return SetpointLandingDecision(reason="invalid_model")
+        if kp is None or kp <= 0.0:
+            return SetpointLandingDecision(reason="invalid_kp")
+        if ki is None:
+            return SetpointLandingDecision(reason="invalid_ki")
+        if self._trajectory_source != "setpoint":
+            return SetpointLandingDecision(reason="not_setpoint_trajectory")
+        if not self.trajectory_active:
+            return SetpointLandingDecision(reason="trajectory_inactive")
+
+        deadtime_cool_min = deadtime_cool_s / 60.0
+        h1 = max(float(remaining_cycle_min), 0.0)
+        h2 = max(deadtime_cool_min, LANDING_MIN_HORIZON_MIN)
+        target_margin = target_temp - LANDING_SAFETY_MARGIN_C
+
+        t_after_h1, _, _ = self._predict_heat_temperature(
+            current_temp=current_temp,
+            ext_current_temp=ext_current_temp,
+            a=a,
+            b=b,
+            u_ref=u_ref,
+            horizon_min=h1,
+        )
+
+        _, passive, gain_u = self._predict_heat_temperature(
+            current_temp=t_after_h1,
+            ext_current_temp=ext_current_temp,
+            a=a,
+            b=b,
+            u_ref=0.0,
+            horizon_min=h2,
+        )
+
+        if gain_u <= 0.0:
+            return SetpointLandingDecision(reason="invalid_gain")
+
+        raw_cap = (target_margin - passive) / gain_u
+        u_cap = clamp(raw_cap, 0.0, 1.0)
+        coast_required = raw_cap <= LANDING_U_EPS
+        predicted_temperature = passive + gain_u * u_cap
+        predicted_rise = predicted_temperature - current_temp
+
+        integral_term = float(ki) * float(integral)
+        available_p = u_cap - float(u_ff_eff) - integral_term
+        error_p_db_cap = max(available_p / float(kp), 0.0)
+        if error_p_db_cap <= LANDING_U_EPS:
+            raw_error_p_cap = 0.0
+        else:
+            raw_error_p_cap = max(deadband_c, 0.0) + error_p_db_cap
+        sp_for_p_cap = current_temp + raw_error_p_cap
+
+        slope_ok = (
+            temperature_slope_h is not None
+            and temperature_slope_h <= LANDING_RELEASE_SLOPE_H
+        )
+        release_allowed = (not coast_required) and slope_ok
+
+        reason = "coast" if coast_required else "cap"
+        return SetpointLandingDecision(
+            active=True,
+            reason=reason,
+            u_cap=u_cap,
+            sp_for_p_cap=sp_for_p_cap,
+            predicted_temperature=predicted_temperature,
+            predicted_rise=predicted_rise,
+            target_margin=target_margin,
+            coast_required=coast_required,
+            release_allowed=release_allowed,
+        )
+
+    def record_landing_command_cap(
+        self, before: float | None, after: float | None
+    ) -> None:
+        """Record command values around the setpoint landing cap."""
+        self._landing_decision.u_cmd_before_cap = before
+        self._landing_decision.u_cmd_after_cap = after
+
     def filter_setpoint(
         self,
         target_temp: float,
@@ -430,6 +638,11 @@ class SmartPISetpointManager:
         remaining_cycle_min: float = 0.0,
         now_monotonic: float | None = None,
         allow_disturbance_trigger: bool = True,
+        *,
+        u_ff_eff: float = 0.0,
+        ki: float | None = None,
+        integral: float = 0.0,
+        temperature_slope_h: float | None = None,
     ) -> float:
         """Return SP_for_P for the proportional path.
 
@@ -454,6 +667,8 @@ class SmartPISetpointManager:
         self._last_next_cycle_u_ref = max(float(next_cycle_u_ref), 0.0)
         self._last_bumpless_u_delta = None
         self._last_bumpless_ready = None
+        # Landing decision is recomputed every cycle; default is inactive.
+        self._landing_decision = SetpointLandingDecision()
 
         if self.filtered_setpoint is None:
             self.filtered_setpoint = target_temp
@@ -642,6 +857,33 @@ class SmartPISetpointManager:
                 sp_for_p = current_temp - TRAJECTORY_COMPLETE_EPS_C
             self._trajectory.current_setpoint = sp_for_p
 
+        self._landing_decision = self._compute_landing_decision(
+            target_temp=target_temp,
+            current_temp=current_temp,
+            ext_current_temp=ext_current_temp,
+            hvac_mode=hvac_mode,
+            signed_error=signed_error,
+            a=a,
+            b=b,
+            u_ref=u_ref,
+            u_ff_eff=u_ff_eff,
+            kp=kp,
+            ki=ki,
+            integral=integral,
+            deadtime_cool_s=deadtime_cool_s,
+            deadtime_cool_reliable=deadtime_cool_reliable,
+            tau_reliable=tau_reliable,
+            deadband_c=deadband_c,
+            remaining_cycle_min=remaining_cycle_min,
+            temperature_slope_h=temperature_slope_h,
+        )
+        if (
+            self._landing_decision.active
+            and self._landing_decision.sp_for_p_cap is not None
+        ):
+            sp_for_p = min(sp_for_p, self._landing_decision.sp_for_p_cap)
+            self._trajectory.current_setpoint = sp_for_p
+
         if (
             not braking_needed
             and not entering_release
@@ -660,6 +902,7 @@ class SmartPISetpointManager:
                 deadband_c=deadband_c,
                 kp=kp,
             )
+            and self._landing_decision.release_allowed
         ):
             self._clear_pending_target_change_braking()
             self.set_passthrough(target_temp)
