@@ -21,7 +21,7 @@ SmartPI est un algorithme de contrôle thermique avancé basé sur un modèle de
 - **Modèle thermique 1R1C** : Apprend le gain de chauffe, le taux de déperdition et les temps morts de votre pièce à partir d'observations réelles — aucun réglage manuel nécessaire
 - **Gains PI auto-calculés** : Calcule Kp et Ki automatiquement à partir de la constante de temps et du temps mort appris, via des règles IMC et heuristiques
 - **Feed-forward basé sur le modèle** : Estime la puissance de maintien nécessaire au point de consigne, complétée par un biais lent et une correction prédictive optionnelle (FF3) en cas de perturbation
-- **Trajectoire analytique de consigne** : Façonne la référence proportionnelle avec un profil de freinage tardif pour atteindre la cible rapidement tout en évitant le dépassement
+- **Trajectoire analytique de consigne** : Façonne la référence proportionnelle et applique un cap d'atterrissage basé sur le modèle en chauffage pour atteindre la cible rapidement tout en limitant le dépassement
 - **Gouvernance Safety-First** : Une matrice par régime gèle ou déverrouille l'apprentissage et l'adaptation des gains selon le contexte opérationnel
 - **Auto-calibration** : Surveille la qualité du modèle et déclenche une séquence de recalibration lorsque l'apprentissage stagne
 - **Linéarisation de courbe de vanne** : Traduit la demande SmartPI en position de vanne adaptée au comportement non linéaire des vannes thermostatiques (TRV)

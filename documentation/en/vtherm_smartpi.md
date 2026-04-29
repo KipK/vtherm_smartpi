@@ -236,6 +236,8 @@ At that point, SmartPI:
 
 Near the target temperature, SmartPI tries to avoid constant micro-corrections. The result should be steadier regulation with fewer unnecessary corrections than a fixed TPI.
 
+During a heating setpoint increase, the setpoint filter also uses the learned model to manage the final approach to the target. The proportional branch follows a filtered reference, while the raw setpoint remains available to the integral branch. Near the target, SmartPI can cap the internal heating demand when the model predicts that the already injected heat is enough to reach the setpoint. This landing behavior helps the room slow down before the target instead of continuing to heat only because the feed-forward or frozen PI state is still positive.
+
 If the `FF3` option is enabled, SmartPI can also apply a small predictive correction near the setpoint when it detects a credible external disturbance context.
 
 ### Automatic recalibration
@@ -271,7 +273,7 @@ Do not try to tune several parameters at once during the first learning period. 
 | **Minimal activation delay** | Minimum time the heater stays on once activated. | `0 s` |
 | **Minimal deactivation delay** | Minimum time the heater stays off once deactivated. | `0 s` |
 | **Deadband** | Tolerance zone around the setpoint. | `0.05°C` |
-| **Setpoint filter** | Enables the proportional setpoint shaping near the target. | `enabled` |
+| **Setpoint filter** | Enables proportional setpoint shaping and heating landing control near the target. | `enabled` |
 | **FF3** | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `disabled` |
 | **Allow P inside deadband** | Allows the proportional branch to remain active inside the deadband. | `disabled` |
 | **Release tau factor** | Scales the integral release delay relative to the learned time constant. | `0.5` |
@@ -313,11 +315,21 @@ Other useful blocks in normal mode:
 - `temperature`: measured temperature, error, integral state,
 - `model`: learned `a`, `b`, confidence, and dead times,
 - `feedforward`: feed-forward and FF3 status,
-- `setpoint`: filtered setpoint information,
+- `setpoint`: filtered setpoint and landing information,
 - `autocalib`: automatic supervision state,
 - `calibration`: forced calibration state.
 
-If SmartPI debug mode is enabled, the `debug` block adds more detailed internal data.
+In normal mode, the `setpoint` block can show:
+
+- `filtered_setpoint`: reference followed by the proportional branch,
+- `trajectory_active`: whether a setpoint trajectory is active,
+- `trajectory_source`: why the trajectory is active,
+- `landing_active`: whether heating landing control is active,
+- `landing_reason`: reason for the landing state,
+- `landing_u_cap`: internal heating-demand cap applied during landing,
+- `landing_coast_required`: whether SmartPI is coasting because the model predicts enough stored heat.
+
+If SmartPI debug mode is enabled, the `debug` block adds more detailed internal data, including the landing prediction, target margin, release decision, and command before/after the landing cap.
 
 A Home Assistant Markdown card is also available to display SmartPI diagnostics in a simpler way in the dashboard.
 

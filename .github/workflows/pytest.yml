@@ -15,20 +15,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Checkout vtherm_api
-        uses: actions/checkout@v4
-        with:
-          repository: jmcollin78/vtherm_api
-          ref: main
-          path: vtherm_api_repo
-
-      - name: Checkout versatile_thermostat
-        uses: actions/checkout@v4
-        with:
-          repository: jmcollin78/versatile_thermostat
-          ref: main
-          path: versatile_thermostat_repo
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -39,11 +25,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest pytest-asyncio pytest-homeassistant-custom-component coverage homeassistant
           # Add any additional project requirements if needed in the future
-
-      - name: Add project dependencies to PYTHONPATH
-        run: echo
-          "PYTHONPATH=$PWD:$PWD/vtherm_api_repo/src:$PWD/versatile_thermostat_repo:$PYTHONPATH"
-          >> $GITHUB_ENV
 
       - name: Run Pytest
         run: pytest tests/

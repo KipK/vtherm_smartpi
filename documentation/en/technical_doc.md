@@ -234,15 +234,33 @@ The principle is:
 - the P branch keeps the raw setpoint until the predicted braking zone is reached,
 - the exact learned 1R1C model, `deadtime_cool`, the remaining cycle latency, and the committed cycle power are used to detect the braking zone,
 - a smooth late-braking trajectory is then applied near the target while preserving a minimum positive proportional demand,
+- for HEAT setpoint trajectories, a landing cap can constrain the internal command after PI computation when the model predicts that stored heat is enough to reach the target,
 - when braking is no longer needed, the filtered reference returns progressively to the raw target before the trajectory stops,
 - for a trajectory triggered by a setpoint change, entering the `release` phase keeps that phase locked until the trajectory ends, with no return to `tracking`,
 - `trajectory_active` indicates whether the analytical trajectory is running,
-- the trajectory ends only once the handoff remains bumpless and the measured temperature is close enough to the target, or when the reliability conditions are no longer met.
+- the trajectory ends only once the handoff remains bumpless, the measured temperature is close enough to the target, and the landing state allows release, or when the reliability conditions are no longer met.
+
+The landing cap uses the discrete 1R1C form in internal linear command space:
+
+$$
+\alpha = e^{-b \cdot h}
+$$
+
+$$
+T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
+$$
+
+The cap solves the maximum command that keeps the predicted temperature below `target - LANDING_SAFETY_MARGIN_C`. It is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic while `landing_u_cap` explains the final command reduction.
 
 In normal mode, the `setpoint` diagnostic block publishes only:
 
 - `filtered_setpoint`,
-- `trajectory_active`.
+- `trajectory_active`,
+- `trajectory_source`,
+- `landing_active`,
+- `landing_reason`,
+- `landing_u_cap`,
+- `landing_coast_required`.
 
 In debug mode, it also exposes the trajectory details:
 
@@ -257,9 +275,16 @@ In debug mode, it also exposes the trajectory details:
 - `trajectory_remaining_cycle_min`,
 - `trajectory_next_cycle_u_ref`,
 - `trajectory_bumpless_u_delta`,
-- `trajectory_bumpless_ready`.
+- `trajectory_bumpless_ready`,
+- `landing_sp_for_p_cap`,
+- `landing_predicted_temperature`,
+- `landing_predicted_rise`,
+- `landing_target_margin`,
+- `landing_release_allowed`,
+- `landing_u_cmd_before_cap`,
+- `landing_u_cmd_after_cap`.
 
-The logic remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed.
+The setpoint reference shaping remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed. The landing cap is a separate post-PI command governor for HEAT setpoint trajectories; it does not rewrite the integral and does not change the valve linearization curve.
 
 The current code also applies an explicit guard on positive integral growth during catch-up phases:
 
@@ -376,7 +401,7 @@ The forced cycle is managed by `CalibrationManager`:
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis                  |
 | `deadband.py`          | deadband and near-band                                      |
-| `setpoint.py`          | analytical setpoint trajectory                              |
+| `setpoint.py`          | analytical setpoint trajectory and HEAT landing cap         |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | slow feed-forward bias                                      |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |

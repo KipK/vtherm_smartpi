@@ -234,15 +234,33 @@ Le principe est le suivant :
 - la branche P conserve la consigne brute tant que la zone de freinage prédite n'est pas atteinte,
 - le modèle 1R1C appris, `deadtime_cool`, la latence restante du cycle et la puissance engagée sur le cycle servent à détecter cette zone de freinage,
 - une trajectoire de freinage tardif douce est ensuite appliquée près de la cible tout en conservant une demande proportionnelle minimale positive,
+- pour les trajectoires de consigne en chauffage, un cap d'atterrissage peut contraindre la commande interne après le calcul PI lorsque le modèle prédit que la chaleur stockée suffit à atteindre la cible,
 - lorsque le freinage n'est plus nécessaire, la référence filtrée remonte progressivement vers la consigne brute avant l'arrêt de la trajectoire,
 - pour une trajectoire issue d'un changement de consigne, l'entrée en phase `release` verrouille ensuite cette phase jusqu'à la fin de la trajectoire, sans retour vers `tracking`,
 - `trajectory_active` indique si la trajectoire analytique est en cours,
-- la trajectoire se termine seulement lorsque le handoff reste bumpless et que la température mesurée est assez proche de la cible, ou lorsque les conditions de fiabilité ne sont plus réunies.
+- la trajectoire se termine seulement lorsque le handoff reste bumpless, que la température mesurée est assez proche de la cible et que l'état d'atterrissage autorise le relâchement, ou lorsque les conditions de fiabilité ne sont plus réunies.
+
+Le cap d'atterrissage utilise la forme discrète du modèle 1R1C dans l'espace de commande interne linéaire :
+
+$$
+\alpha = e^{-b \cdot h}
+$$
+
+$$
+T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
+$$
+
+Le cap résout la commande maximale qui garde la température prédite sous `target - LANDING_SAFETY_MARGIN_C`. Il est appliqué après le calcul PI normal et avant les contraintes douces, de sorte que `u_pi` reste le diagnostic PI brut tandis que `landing_u_cap` explique la réduction finale de commande.
 
 En mode normal, le bloc de diagnostic `setpoint` publie seulement :
 
 - `filtered_setpoint`,
-- `trajectory_active`.
+- `trajectory_active`,
+- `trajectory_source`,
+- `landing_active`,
+- `landing_reason`,
+- `landing_u_cap`,
+- `landing_coast_required`.
 
 En mode debug, il ajoute les détails de trajectoire :
 
@@ -257,9 +275,16 @@ En mode debug, il ajoute les détails de trajectoire :
 - `trajectory_remaining_cycle_min`,
 - `trajectory_next_cycle_u_ref`,
 - `trajectory_bumpless_u_delta`,
-- `trajectory_bumpless_ready`.
+- `trajectory_bumpless_ready`,
+- `landing_sp_for_p_cap`,
+- `landing_predicted_temperature`,
+- `landing_predicted_rise`,
+- `landing_target_margin`,
+- `landing_release_allowed`,
+- `landing_u_cmd_before_cap`,
+- `landing_u_cmd_after_cap`.
 
-La logique reste limitée à la branche P afin de préserver la lisibilité de la consigne brute côté intégrale et d’éviter de perturber l’apprentissage.
+Le façonnage de référence reste limité à la branche P afin de préserver la lisibilité de la consigne brute côté intégrale et d’éviter de perturber l’apprentissage. Le cap d'atterrissage est un gouverneur de commande post-PI séparé pour les trajectoires de consigne en chauffage ; il ne réécrit pas l'intégrale et ne change pas la courbe de linéarisation de vanne.
 
 Le code actuel applique aussi une garde explicite sur la croissance positive de l'intégrale pendant les phases de rattrapage :
 
@@ -383,7 +408,7 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
 | `deadband.py`          | deadband et near-band                                    |
-| `setpoint.py`          | trajectoire analytique de consigne                       |
+| `setpoint.py`          | trajectoire analytique de consigne et cap d'atterrissage |
 | `integral_guard.py`    | garde de croissance positive de l'intégrale              |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
 | `ff_trim.py`           | biais lent feed-forward                                  |

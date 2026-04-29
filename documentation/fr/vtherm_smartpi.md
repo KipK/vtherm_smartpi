@@ -236,6 +236,8 @@ Quand le modèle thermique devient fiable, SmartPI bascule dans son mode normal 
 
 Près de la température cible, SmartPI cherche à éviter les micro-corrections permanentes. Le résultat attendu est une régulation plus stable, avec moins de corrections inutiles qu'un TPI fixe.
 
+Lors d'une hausse de consigne en chauffage, le filtre de consigne utilise aussi le modèle appris pour gérer l'approche finale de la cible. La branche proportionnelle suit une référence filtrée, tandis que la consigne brute reste disponible pour la branche intégrale. Près de la cible, SmartPI peut plafonner la demande de chauffe interne quand le modèle prédit que la chaleur déjà injectée suffit à atteindre la consigne. Cet atterrissage aide la pièce à ralentir avant la cible au lieu de continuer à chauffer uniquement parce que le feed-forward ou l'état PI gelé reste positif.
+
 Si l'option `FF3` est activée, SmartPI peut aussi appliquer une petite correction prédictive près de la consigne lorsqu'il détecte un contexte crédible de perturbation externe.
 
 ### Recalibration automatique
@@ -271,7 +273,7 @@ Pour démarrer simplement :
 | **Délai minimal d'activation** | Durée minimale pendant laquelle le chauffage reste allumé une fois activé. | `0 s` |
 | **Délai minimal de désactivation** | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé. | `0 s` |
 | **Deadband** | Zone de tolérance autour de la consigne. | `0.05°C` |
-| **Filtre de consigne** | Active le lissage de consigne proportionnel près de la cible. | `activé` |
+| **Filtre de consigne** | Active le lissage de consigne proportionnel et l'atterrissage de chauffe près de la cible. | `activé` |
 | **FF3** | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `désactivé` |
 | **Autoriser P dans la deadband** | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband. | `désactivé` |
 | **Facteur release tau** | Échelle du délai de relâchement intégral par rapport à la constante de temps apprise. | `0.5` |
@@ -313,11 +315,21 @@ Autres blocs utiles en mode normal :
 - `temperature` : température mesurée, erreur, état de l'intégrale,
 - `model` : `a`, `b`, niveau de confiance et temps morts appris,
 - `feedforward` : état du feed-forward et de FF3,
-- `setpoint` : informations de consigne filtrée,
+- `setpoint` : informations de consigne filtrée et d'atterrissage,
 - `autocalib` : état de la supervision automatique,
 - `calibration` : état d'une calibration forcée.
 
-Si le mode debug SmartPI est activé, le bloc `debug` ajoute des informations internes plus détaillées.
+En mode normal, le bloc `setpoint` peut contenir :
+
+- `filtered_setpoint` : référence suivie par la branche proportionnelle,
+- `trajectory_active` : indique si une trajectoire de consigne est active,
+- `trajectory_source` : indique pourquoi la trajectoire est active,
+- `landing_active` : indique si l'atterrissage de chauffe est actif,
+- `landing_reason` : raison de l'état d'atterrissage,
+- `landing_u_cap` : cap de demande de chauffe interne appliqué pendant l'atterrissage,
+- `landing_coast_required` : indique si SmartPI laisse la pièce en roue libre parce que le modèle prédit assez de chaleur stockée.
+
+Si le mode debug SmartPI est activé, le bloc `debug` ajoute des informations internes plus détaillées, notamment la prédiction d'atterrissage, la marge cible, la décision de relâchement et la commande avant/après le cap d'atterrissage.
 
 Une carte Markdown Home Assistant est aussi disponible pour afficher plus simplement les diagnostics SmartPI dans le tableau de bord.
 
