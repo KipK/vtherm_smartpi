@@ -3,7 +3,7 @@
 [Lire la version française](README.fr.md)
 
 <p align="center">
-  <img src="assets/brand/logo.png" alt="SmartPI Logo" width="300" />
+  <img src="https://github.com/KipK/vtherm_smartpi/raw/master/assets/brand/logo.png" alt="SmartPI Logo" width="300" />
 </p>
 
 <p align="center">
