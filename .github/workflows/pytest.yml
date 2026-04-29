@@ -13,7 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
+      - name: Checkout Versatile Thermostat dependency
+        uses: actions/checkout@v6
+        with:
+          repository: jmcollin78/versatile_thermostat
+          path: versatile_thermostat
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,4 +33,6 @@ jobs:
           # Add any additional project requirements if needed in the future
 
       - name: Run Pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/versatile_thermostat:${{ github.workspace }}
         run: pytest tests/
