@@ -858,6 +858,28 @@ class TestSetpointLanding:
         assert decision.coast_required is True
         assert decision.u_cap == pytest.approx(0.0)
 
+    def test_landing_releases_residual_error_in_release_phase(self):
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=24.9,
+            target_setpoint=25.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+        manager._trajectory.set_target(25.0, phase=TrajectoryPhase.RELEASE)
+
+        decision = _decision(
+            manager,
+            target_temp=25.0,
+            current_temp=24.92,
+            signed_error=0.08,
+            temperature_slope_h=None,
+        )
+
+        assert decision.active is False
+        assert decision.reason == "residual_release"
+
     def test_landing_noop_for_cool(self):
         manager = _make_manager()
         # First seed the manager with a COOL passthrough state.

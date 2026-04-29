@@ -551,6 +551,15 @@ class SmartPISetpointManager:
             return SetpointLandingDecision(reason="not_setpoint_trajectory")
         if not self.trajectory_active:
             return SetpointLandingDecision(reason="trajectory_inactive")
+        if (
+            self.trajectory_phase == TrajectoryPhase.RELEASE
+            and signed_error <= LANDING_SAFETY_MARGIN_C + TRAJECTORY_COMPLETE_EPS_C
+            and (
+                temperature_slope_h is None
+                or temperature_slope_h <= LANDING_RELEASE_SLOPE_H
+            )
+        ):
+            return SetpointLandingDecision(reason="residual_release")
 
         deadtime_cool_min = deadtime_cool_s / 60.0
         h1 = max(float(remaining_cycle_min), 0.0)
