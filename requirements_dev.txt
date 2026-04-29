@@ -20,4 +20,4 @@ ha-ffmpeg
 pymicro_vad
 pyspeex_noise
 radios
-git+https://github.com/KipK/vtherm_api.git@api_algo#egg=vtherm_api
+vtherm_api

@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio pytest-homeassistant-custom-component coverage homeassistant
+          pip install pytest pytest-asyncio pytest-homeassistant-custom-component coverage homeassistant vtherm_api
           # Add any additional project requirements if needed in the future
 
       - name: Run Pytest
