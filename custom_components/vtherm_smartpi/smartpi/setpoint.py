@@ -95,6 +95,7 @@ class SmartPISetpointManager:
 
         # Setpoint landing state (HEAT-only, transient — never persisted)
         self._landing_decision = SetpointLandingDecision()
+        self._landing_residual_released: bool = False
 
     @property
     def trajectory_active(self) -> bool:
@@ -239,6 +240,7 @@ class SmartPISetpointManager:
         self._trajectory.reset()
         self._trajectory_source = "none"
         self._landing_decision = SetpointLandingDecision()
+        self._landing_residual_released = False
 
     def _clear_pending_target_change_braking(self) -> None:
         """Forget any delayed braking request inherited from a setpoint increase."""
@@ -551,6 +553,10 @@ class SmartPISetpointManager:
             return SetpointLandingDecision(reason="not_setpoint_trajectory")
         if not self.trajectory_active:
             return SetpointLandingDecision(reason="trajectory_inactive")
+        if signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD:
+            self._landing_residual_released = False
+        if self._landing_residual_released:
+            return SetpointLandingDecision(reason="residual_release")
         if (
             self.trajectory_phase == TrajectoryPhase.RELEASE
             and signed_error <= LANDING_SAFETY_MARGIN_C + TRAJECTORY_COMPLETE_EPS_C
@@ -559,6 +565,7 @@ class SmartPISetpointManager:
                 or temperature_slope_h <= LANDING_RELEASE_SLOPE_H
             )
         ):
+            self._landing_residual_released = True
             return SetpointLandingDecision(reason="residual_release")
 
         deadtime_cool_min = deadtime_cool_s / 60.0

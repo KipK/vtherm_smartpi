@@ -880,6 +880,45 @@ class TestSetpointLanding:
         assert decision.active is False
         assert decision.reason == "residual_release"
 
+    def test_landing_residual_release_is_sticky_until_demand_recovers(self):
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=24.9,
+            target_setpoint=25.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+        manager._trajectory.set_target(25.0, phase=TrajectoryPhase.RELEASE)
+
+        released = _decision(
+            manager,
+            target_temp=25.0,
+            current_temp=24.92,
+            signed_error=0.08,
+            temperature_slope_h=None,
+        )
+        still_released = _decision(
+            manager,
+            target_temp=25.0,
+            current_temp=24.96,
+            signed_error=0.04,
+            temperature_slope_h=0.5,
+        )
+        rearmed = _decision(
+            manager,
+            target_temp=25.0,
+            current_temp=24.69,
+            signed_error=0.31,
+            temperature_slope_h=0.5,
+        )
+
+        assert released.reason == "residual_release"
+        assert still_released.active is False
+        assert still_released.reason == "residual_release"
+        assert rearmed.active is True
+        assert rearmed.reason == "cap"
+
     def test_landing_noop_for_cool(self):
         manager = _make_manager()
         # First seed the manager with a COOL passthrough state.
