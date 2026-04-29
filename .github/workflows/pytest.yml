@@ -18,15 +18,15 @@ jobs:
       - name: Checkout vtherm_api
         uses: actions/checkout@v4
         with:
-          repository: KipK/vtherm_api
-          ref: api_algo
+          repository: jmcollin78/vtherm_api
+          ref: main
           path: vtherm_api_repo
 
       - name: Checkout versatile_thermostat
         uses: actions/checkout@v4
         with:
           repository: jmcollin78/versatile_thermostat
-          ref: v10
+          ref: main
           path: versatile_thermostat_repo
 
       - name: Set up Python
@@ -41,7 +41,9 @@ jobs:
           # Add any additional project requirements if needed in the future
 
       - name: Add project dependencies to PYTHONPATH
-        run: echo "PYTHONPATH=$PWD:$PWD/vtherm_api_repo/src:$PWD/versatile_thermostat_repo:$PYTHONPATH" >> $GITHUB_ENV
+        run: echo
+          "PYTHONPATH=$PWD:$PWD/vtherm_api_repo/src:$PWD/versatile_thermostat_repo:$PYTHONPATH"
+          >> $GITHUB_ENV
 
       - name: Run Pytest
         run: pytest tests/
