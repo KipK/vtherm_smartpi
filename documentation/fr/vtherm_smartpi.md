@@ -67,21 +67,21 @@ En pratique, l'apprentissage peut prendre de quelques heures à 48 heures sur le
 
 Installez l'intégration via HACS (ou manuellement) comme décrit dans le [README](../../README.fr.md), puis redémarrez Home Assistant.
 
-Deux étapes sont nécessaires après le redémarrage : activer SmartPI dans Versatile Thermostat, puis ajouter l'intégration SmartPI dans Home Assistant.
+Deux étapes sont nécessaires après le redémarrage : ajouter l'intégration SmartPI dans Home Assistant, puis l'activer dans Versatile Thermostat.
+
+### Ajouter l'intégration SmartPI
+
+Allez dans **Paramètres → Intégrations → Ajouter une intégration**, puis recherchez *SmartPI*.
+
+Lors de la première installation, SmartPI crée automatiquement une entrée de configuration par défaut avec des valeurs adaptées. Vous pouvez modifier ces valeurs par défaut globales ensuite depuis **Paramètres → Intégrations → SmartPI → Configurer**.
 
 ### Sélectionner SmartPI dans Versatile Thermostat
 
-Ouvrez la configuration de l'appareil Versatile Thermostat que vous souhaitez piloter avec SmartPI. Dans l'étape **Underlyings**, repérez le sélecteur d'algorithme et choisissez **SmartPI**.
+Une fois l'intégration SmartPI ajoutée, ouvrez la configuration de l'appareil Versatile Thermostat que vous souhaitez piloter avec SmartPI. Dans l'étape **Underlyings**, repérez le sélecteur d'algorithme et choisissez **SmartPI**.
 
 ![VT underlyings — sélection de l'algorithme SmartPI](../../assets/screens/config_algo.png)
 
 Répétez cette étape pour chaque thermostat que vous souhaitez faire fonctionner avec SmartPI.
-
-### Configurer SmartPI
-
-Une fois SmartPI sélectionné comme algorithme dans au moins un thermostat, ajoutez l'intégration **SmartPI** dans Home Assistant : allez dans **Paramètres → Intégrations → Ajouter une intégration**, puis recherchez *SmartPI*.
-
-Lors de la première installation, SmartPI crée automatiquement une entrée de configuration par défaut avec des valeurs adaptées. Vous pouvez modifier ces valeurs par défaut globales ensuite depuis **Paramètres → Intégrations → SmartPI → Configurer**.
 
 #### Configuration par thermostat
 

@@ -47,7 +47,8 @@ This integration extends the popular [Versatile Thermostat](https://github.com/j
 3. Search for "Versatile Thermostat SmartPI" in HACS
 4. Install the integration
 5. Restart Home Assistant
-6. Configure the SmartPI algorithm in your Versatile Thermostat devices
+6. Add `Vtherm_smartpi` integration from Settings / Devices & Services / Integrations
+7. Configure the SmartPI algorithm in your Versatile Thermostat devices
 
 ### Manual Installation
 

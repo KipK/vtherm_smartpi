@@ -67,21 +67,21 @@ In practice, learning may take from a few hours to 48 hours on slow or highly in
 
 Install the integration via HACS (or manually) as described in the [README](../../README.md), then restart Home Assistant.
 
-Two steps are required after the restart: selecting SmartPI as the algorithm in Versatile Thermostat, then adding the SmartPI integration in Home Assistant.
+Two steps are required after the restart: adding the SmartPI integration in Home Assistant, then enabling it in Versatile Thermostat.
+
+### Adding the SmartPI integration
+
+Go to **Settings → Integrations → Add integration**, then search for *SmartPI*.
+
+On first install, SmartPI automatically creates a default configuration entry with sensible defaults. You can edit these global defaults later from **Settings → Integrations → SmartPI → Configure**.
 
 ### Selecting SmartPI in Versatile Thermostat
 
-Open the configuration of the Versatile Thermostat device you want to control with SmartPI. In the **Underlyings** step, locate the algorithm selector and choose **SmartPI**.
+Once the SmartPI integration is added, open the configuration of the Versatile Thermostat device you want to control with SmartPI. In the **Underlyings** step, locate the algorithm selector and choose **SmartPI**.
 
 ![VT underlyings — SmartPI algorithm selection](../../assets/screens/config_algo.png)
 
 Repeat this step for each thermostat you want to run with SmartPI.
-
-### Configuring SmartPI
-
-Once SmartPI is selected as the algorithm in at least one thermostat, add the **SmartPI** integration in Home Assistant: go to **Settings → Integrations → Add integration**, then search for *SmartPI*.
-
-On first install, SmartPI automatically creates a default configuration entry with sensible defaults. You can edit these global defaults later from **Settings → Integrations → SmartPI → Configure**.
 
 #### Per-thermostat configuration
 
