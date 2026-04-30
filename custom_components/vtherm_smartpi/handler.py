@@ -69,6 +69,8 @@ class SmartPIHandler:
         self._last_time = None
         self._last_on_percent = 0.0
         self._should_publish_intermediate: bool = True
+        self._last_publish_signature = None
+        self._pending_publish_signature = None
         # Track calibration state for completion detection
         self._prev_is_calibrating: bool = False
         self._valve_linearization_configured: bool = False
@@ -258,7 +260,22 @@ class SmartPIHandler:
 
     def should_publish_intermediate(self) -> bool:
         """Return True when VT may publish the current control iteration."""
+        if self._should_publish_intermediate:
+            self._last_publish_signature = self._pending_publish_signature
         return self._should_publish_intermediate
+
+    def _build_publish_signature(self):
+        """Return the thermostat inputs that should refresh the climate state."""
+        t = self._thermostat
+        return (
+            t.current_temperature,
+            t.current_outdoor_temperature,
+            t.target_temperature,
+            t.last_temperature_slope,
+            t.vtherm_hvac_mode,
+            getattr(t, "last_temperature_measure", None),
+            getattr(t, "last_ext_temperature_measure", None),
+        )
 
     async def control_heating(self, timestamp=None, force=False):
         """Control heating using SmartPI."""
@@ -268,8 +285,10 @@ class SmartPIHandler:
 
         algo = t.prop_algorithm if isinstance(t.prop_algorithm, SmartPI) else None
         previous_committed = algo.committed_on_percent if algo is not None else None
+        self._pending_publish_signature = self._build_publish_signature()
+        input_changed = self._pending_publish_signature != self._last_publish_signature
         self._should_publish_intermediate = (
-            algo is None or timestamp is not None or force
+            algo is None or timestamp is not None or force or input_changed
         )
 
         # When a forced recalculation is requested by the thermostat state machine
@@ -395,9 +414,8 @@ class SmartPIHandler:
             and not force
             and previous_committed is not None
         ):
-            self._should_publish_intermediate = (
-                abs(algo.committed_on_percent - previous_committed) > 0.001
-            )
+            committed_changed = abs(algo.committed_on_percent - previous_committed) > 0.001
+            self._should_publish_intermediate = self._should_publish_intermediate or committed_changed
 
         # Save state after cycle to persist learning data
         await self._async_save()

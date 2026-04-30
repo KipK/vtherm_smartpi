@@ -128,11 +128,42 @@ async def test_smartpi_60s_timer_interference():
         mock_update.assert_not_called()
 
     # So the fix is indeed changing the CALLER (the timer callback) to pass None.
-    # We can test that by creating the handler, starting the timer, and seeing what it calls.
-    # But async_track_time_interval is hard to fast-forward.
 
-    # Instead, let's verify the "Window too short" logic in Algo separately to ensure
-    # "waiting" message appears instead of "skip".
+
+@pytest.mark.asyncio
+async def test_smartpi_publishes_when_sensor_input_changes_mid_cycle():
+    """Sensor updates must refresh the climate state even inside a running cycle."""
+    t = MockThermostat()
+    handler = SmartPIHandler(t)
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="PublishAlgo",
+        max_on_percent=1.0,
+        deadband_c=0.1,
+    )
+    t.prop_algorithm = algo
+    t.cycle_scheduler.is_cycle_running = True
+
+    with patch.object(handler, "_async_save", new_callable=AsyncMock):
+        await handler.control_heating(timestamp=None)
+        assert handler.should_publish_intermediate() is True
+
+        await handler.control_heating(timestamp=None)
+        assert handler.should_publish_intermediate() is False
+
+        t.current_temperature = 19.2
+        await handler.control_heating(timestamp=None)
+        assert handler.should_publish_intermediate() is True
+
+
+# We can test that by creating the handler, starting the timer, and seeing what it calls.
+# But async_track_time_interval is hard to fast-forward.
+
+# Instead, let's verify the "Window too short" logic in Algo separately to ensure
+# "waiting" message appears instead of "skip".
 
 @pytest.mark.asyncio
 async def test_smartpi_learning_requires_cycle_boundary():
