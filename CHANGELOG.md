@@ -60,3 +60,22 @@ remove vtherm_api dependency ( use VT installed one )
 - Valve power curve linearisation
   Inspired from @caiusseverus blueprint
   improve valve non linear power curve. more info: https://github.com/jmcollin78/versatile_thermostat/discussions/1704
+
+  ## [0.2.1] - 2026-04-29
+
+- Implement setpoint landing cap for SmartPI
+  Adds model-aware landing control to the setpoint filter so heating setpoint increases can reduce internal demand before reaching the target. The proportional trajectory now exposes a HEAT-only landing cap, applied after PI computation and before soft constraints, while keeping the raw PI diagnostic and integral behavior unchanged.
+
+  ## [0.2.2] - 2026-04-29
+
+- Fix landing cap residual release
+  Avoid keeping the setpoint landing cap active in release phase when only a small residual error remains. Add coverage for the stuck filtered setpoint case.
+
+  ## [0.3.0] - 2026-04-30
+
+- Improve SmartPI landing release safety with slope timing guard
+- Add guarded SmartPI landing cap release
+  Release landing when its cap is non-constraining in the residual zone, keep the release sticky, and reset counters on inactive landing paths.
+- Make SmartPI landing residual release sticky
+  Prevent the landing cap from reactivating after residual release during the same trajectory, while allowing rearm when demand becomes significant again. Add focused landing coverage.
+- updated markdown cards
