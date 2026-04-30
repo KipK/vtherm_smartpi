@@ -299,6 +299,10 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "error": round(algo.error, 4),
         "error_p": round(algo.error_p, 4),
         "error_filtered": round(algo.error_filtered, 4) if algo.error_filtered != 0.0 or algo._e_filt is not None else None,
+        "temperature_slope_h": (
+            round(algo.temperature_slope_h, 6)
+            if algo.temperature_slope_h is not None else None
+        ),
         # 2DOF/scheduling
         "near_band_deg": round(algo.near_band_deg, 3),
         "kp_near_factor": round(algo.kp_near_factor, 3),

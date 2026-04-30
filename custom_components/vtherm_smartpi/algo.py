@@ -245,6 +245,7 @@ class SmartPI:
         # Diagnostics / status
         self._last_error: float = 0.0
         self._last_error_p: float = 0.0
+        self._last_temperature_slope_h: float | None = None
         self._last_u_ff: float = 0.0
         self._last_u_pi: float = 0.0
         self._last_ff_raw: float = 0.0
@@ -1140,6 +1141,10 @@ class SmartPI:
     @property
     def error_p(self) -> float:
         return self._last_error_p
+
+    @property
+    def temperature_slope_h(self) -> float | None:
+        return self._last_temperature_slope_h
 
     @property
     def error_filtered(self) -> float:
@@ -2193,6 +2198,8 @@ class SmartPI:
         elif hvac_mode is None and len(args) > 0 and _is_hvac_mode_like(args[0]):
             # another old call variant
             hvac_mode = args[0]
+
+        self._last_temperature_slope_h = float(slope) if isinstance(slope, (int, float)) else None
 
         now = time.monotonic()
         self._pending_fftrim_cycle_sample = None
