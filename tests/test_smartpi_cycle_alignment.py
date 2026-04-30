@@ -302,6 +302,8 @@ async def test_smartpi_ff3_is_latched_on_cycle_start():
 
     assert algo._u_ff3_cycle == pytest.approx(0.05)
     assert algo._ff3_active_cycle is True
+    assert algo._last_ff3_deadtime_cycles == 0
+    assert algo._last_ff3_horizon_capped is False
 
 @pytest.mark.asyncio
 async def test_smartpi_power_stability_abort():

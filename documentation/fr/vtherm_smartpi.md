@@ -238,7 +238,7 @@ Près de la température cible, SmartPI cherche à éviter les micro-corrections
 
 Lors d'une hausse de consigne en chauffage, le filtre de consigne utilise aussi le modèle appris pour gérer l'approche finale de la cible. La branche proportionnelle suit une référence filtrée, tandis que la consigne brute reste disponible pour la branche intégrale. Près de la cible, SmartPI peut plafonner la demande de chauffe interne quand le modèle prédit que la chaleur déjà injectée suffit à atteindre la consigne. Cet atterrissage aide la pièce à ralentir avant la cible au lieu de continuer à chauffer uniquement parce que le feed-forward ou l'état PI gelé reste positif.
 
-Si l'option `FF3` est activée, SmartPI peut aussi appliquer une petite correction prédictive près de la consigne lorsqu'il détecte un contexte crédible de perturbation externe.
+Avec `FF3`, activé par défaut, SmartPI peut aussi appliquer une petite correction prédictive près de la consigne lorsqu'il détecte un contexte crédible de perturbation externe.
 
 ### Recalibration automatique
 
@@ -274,7 +274,7 @@ Pour démarrer simplement :
 | **Délai minimal de désactivation** | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé. | `0 s` |
 | **Deadband** | Zone de tolérance autour de la consigne. | `0.05°C` |
 | **Filtre de consigne** | Active le lissage de consigne proportionnel et l'atterrissage de chauffe près de la cible. | `activé` |
-| **FF3** | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `désactivé` |
+| **FF3** | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé` |
 | **Autoriser P dans la deadband** | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband. | `désactivé` |
 | **Facteur release tau** | Échelle du délai de relâchement intégral par rapport à la constante de temps apprise. | `0.5` |
 | **Seuil bas d'hystérésis** | Seuil de redémarrage pendant le bootstrap. | `0.3°C` |

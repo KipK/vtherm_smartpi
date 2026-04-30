@@ -20,7 +20,7 @@ SmartPI is an advanced PI-based thermal control algorithm built around a first-o
 
 - **1R1C Thermal Model**: Learns your room's heating gain, heat-loss rate, and reaction dead times from real observations — no manual tuning required
 - **Auto-Tuned PI Gains**: Computes Kp and Ki automatically from the learned time constant and dead time using IMC and heuristic rules
-- **Model-Based Feed-Forward**: Estimates the steady-state power needed to hold the setpoint, combined with a slow bias trim and an optional short-horizon predictive correction (FF3) for disturbance recovery
+- **Model-Based Feed-Forward**: Estimates the steady-state power needed to hold the setpoint, combined with a slow bias trim and an FF3 predictive correction enabled by default for disturbance recovery
 - **Analytical Setpoint Trajectory**: Shapes the proportional reference and applies a model-aware landing cap in heating mode to reach the target quickly while limiting overshoot
 - **Safety-First Governance**: A regime-based matrix freezes or unlocks learning and gain adaptation depending on the current operating context
 - **Auto-Calibration**: Monitors model quality over time and triggers a recalibration sequence when learning stagnates

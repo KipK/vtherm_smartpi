@@ -269,6 +269,12 @@ class SmartPI:
         self._last_ff3_disturbance_kind: str = "none"
         self._last_ff3_residual_persistent: bool = False
         self._last_ff3_dynamic_coherent: bool = False
+        self._last_ff3_prediction_quality: str = "unavailable"
+        self._last_ff3_authority_factor: float = 0.0
+        self._last_ff3_deadtime_cycles: int = 0
+        self._last_ff3_horizon_capped: bool = False
+        self._last_ff3_action_sensitivity: float = 0.0
+        self._last_ff3_raw_reason_disabled: str = "config_disabled"
         self._tau_reliable: bool = False
         self._sign_flip_active: bool = False
         self._last_integral_guard_mode: str = "off"
@@ -409,6 +415,12 @@ class SmartPI:
         self._last_ff3_disturbance_kind = "none"
         self._last_ff3_residual_persistent = False
         self._last_ff3_dynamic_coherent = False
+        self._last_ff3_prediction_quality = "unavailable"
+        self._last_ff3_authority_factor = 0.0
+        self._last_ff3_deadtime_cycles = 0
+        self._last_ff3_horizon_capped = False
+        self._last_ff3_action_sensitivity = 0.0
+        self._last_ff3_raw_reason_disabled = "reset"
         self._last_u_cmd = 0.0
         self._last_u_limited = 0.0
         self._last_u_applied = 0.0
@@ -1636,6 +1648,17 @@ class SmartPI:
             self._u_ff3_pending = 0.0
             self._ff3_active_cycle = False
             self._ff3_pending_active = False
+            self._last_ff3_enabled = False
+            self._last_ff3_reason_disabled = "hvac_off"
+            self._last_ff3_candidate_scores = []
+            self._last_ff3_selected_candidate = 0.0
+            self._last_ff3_horizon_cycles = 1
+            self._last_ff3_prediction_quality = "unavailable"
+            self._last_ff3_authority_factor = 0.0
+            self._last_ff3_deadtime_cycles = 0
+            self._last_ff3_horizon_capped = False
+            self._last_ff3_action_sensitivity = 0.0
+            self._last_ff3_raw_reason_disabled = self._last_ff3_reason_disabled
             self._pending_fftrim_cycle_sample = None
             self._last_u_applied = 0.0
             self._last_actuator_applied = 0.0
@@ -1671,6 +1694,17 @@ class SmartPI:
             self._u_ff3_pending = 0.0
             self._ff3_active_cycle = False
             self._ff3_pending_active = False
+            self._last_ff3_enabled = False
+            self._last_ff3_reason_disabled = "power_shedding"
+            self._last_ff3_candidate_scores = []
+            self._last_ff3_selected_candidate = 0.0
+            self._last_ff3_horizon_cycles = 1
+            self._last_ff3_prediction_quality = "unavailable"
+            self._last_ff3_authority_factor = 0.0
+            self._last_ff3_deadtime_cycles = 0
+            self._last_ff3_horizon_capped = False
+            self._last_ff3_action_sensitivity = 0.0
+            self._last_ff3_raw_reason_disabled = self._last_ff3_reason_disabled
             self._pending_fftrim_cycle_sample = None
             self._last_u_applied = 0.0
             self._last_actuator_applied = 0.0
@@ -1778,11 +1812,7 @@ class SmartPI:
             trajectory_source=self.sp_mgr.trajectory_source,
         )
         twin_disabled_reason = get_ff3_twin_unavailability_reason(self._last_twin_diag)
-        twin_reliable = (
-            self._last_twin_diag.get("status") == "ok"
-            and self._last_twin_diag.get("model_reliable") is True
-            and self._last_twin_diag.get("warming_up") is not True
-        )
+        twin_reliable = ff3_context.prediction_usable
         ff3_result: FF3Result = compute_ff3(
             enabled=self._use_ff3,
             twin=self.twin,
@@ -1797,6 +1827,8 @@ class SmartPI:
             in_near_band=self.deadband_mgr.in_near_band,
             disturbance_context_active=ff3_context.disturbance_active,
             disturbance_context_reason=ff3_context.reason,
+            authority_factor=ff3_context.authority_factor,
+            prediction_quality=ff3_context.prediction_quality,
             is_calibrating=(self.calibration_state != SmartPICalibrationPhase.IDLE),
             power_shedding=power_shedding,
             setpoint_changed=setpoint_changed,
@@ -1826,6 +1858,12 @@ class SmartPI:
         self._last_ff3_disturbance_kind = ff3_context.disturbance_kind
         self._last_ff3_residual_persistent = ff3_context.residual_persistent
         self._last_ff3_dynamic_coherent = ff3_context.dynamic_coherent
+        self._last_ff3_prediction_quality = ff3_context.prediction_quality
+        self._last_ff3_authority_factor = ff3_context.authority_factor
+        self._last_ff3_raw_reason_disabled = ff3_result.reason_disabled
+        self._last_ff3_deadtime_cycles = ff3_result.deadtime_cycles
+        self._last_ff3_horizon_capped = ff3_result.horizon_capped
+        self._last_ff3_action_sensitivity = ff3_result.action_sensitivity
         return self._u_ff3_pending
 
     def _disable_ff3_for_next_cycle_in_deadband(self) -> None:

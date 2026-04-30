@@ -238,7 +238,7 @@ Near the target temperature, SmartPI tries to avoid constant micro-corrections. 
 
 During a heating setpoint increase, the setpoint filter also uses the learned model to manage the final approach to the target. The proportional branch follows a filtered reference, while the raw setpoint remains available to the integral branch. Near the target, SmartPI can cap the internal heating demand when the model predicts that the already injected heat is enough to reach the setpoint. This landing behavior helps the room slow down before the target instead of continuing to heat only because the feed-forward or frozen PI state is still positive.
 
-If the `FF3` option is enabled, SmartPI can also apply a small predictive correction near the setpoint when it detects a credible external disturbance context.
+With `FF3`, enabled by default, SmartPI can also apply a small predictive correction near the setpoint when it detects a credible external disturbance context.
 
 ### Automatic recalibration
 
@@ -274,7 +274,7 @@ Do not try to tune several parameters at once during the first learning period. 
 | **Minimal deactivation delay** | Minimum time the heater stays off once deactivated. | `0 s` |
 | **Deadband** | Tolerance zone around the setpoint. | `0.05°C` |
 | **Setpoint filter** | Enables proportional setpoint shaping and heating landing control near the target. | `enabled` |
-| **FF3** | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `disabled` |
+| **FF3** | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled` |
 | **Allow P inside deadband** | Allows the proportional branch to remain active inside the deadband. | `disabled` |
 | **Release tau factor** | Scales the integral release delay relative to the learned time constant. | `0.5` |
 | **Lower hysteresis threshold** | Restart threshold during bootstrap learning. | `0.3°C` |

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .const import FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR
+
 
 @dataclass(frozen=True)
 class FF3DisturbanceContext:
@@ -16,6 +18,9 @@ class FF3DisturbanceContext:
     residual_persistent: bool
     dynamic_coherent: bool
     model_reliable: bool
+    prediction_usable: bool
+    prediction_quality: str
+    authority_factor: float
     bias_warning: bool
     external_gain_detected: bool
     external_loss_detected: bool
@@ -96,9 +101,18 @@ def get_ff3_twin_unavailability_reason(twin_diag: dict) -> str:
         return "twin_unavailable"
     if twin_diag.get("warming_up") is True:
         return "twin_warming_up"
-    if twin_diag.get("model_reliable") is not True:
-        return "twin_not_reliable"
+    if twin_diag.get("T_steady_valid") is False:
+        return "twin_steady_invalid"
     return "none"
+
+
+def _prediction_quality_from_twin(twin_diag: dict) -> tuple[bool, str, float]:
+    twin_reason = get_ff3_twin_unavailability_reason(twin_diag)
+    if twin_reason != "none":
+        return False, twin_reason, 0.0
+    if twin_diag.get("model_reliable") is True:
+        return True, "reliable", 1.0
+    return True, "degraded", FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR
 
 
 def build_ff3_disturbance_context(
@@ -110,9 +124,8 @@ def build_ff3_disturbance_context(
 ) -> FF3DisturbanceContext:
     """Build the FF3 disturbance-only eligibility context."""
     twin_status = str(twin_diag.get("status", "unavailable"))
-    twin_reason = get_ff3_twin_unavailability_reason(twin_diag)
+    prediction_usable, prediction_quality, authority_factor = _prediction_quality_from_twin(twin_diag)
     model_reliable = twin_status == "ok" and twin_diag.get("model_reliable") is True
-    warming_up = twin_diag.get("warming_up") is True
     bias_warning = twin_diag.get("bias_warning") is True
     external_gain_detected = twin_diag.get("external_gain_detected") is True
     external_loss_detected = twin_diag.get("external_loss_detected") is True
@@ -138,8 +151,8 @@ def build_ff3_disturbance_context(
 
     if trajectory_active and trajectory_source == "setpoint":
         reason = "trajectory_setpoint_active"
-    elif twin_reason != "none":
-        reason = twin_reason
+    elif prediction_usable is False:
+        reason = prediction_quality
     elif not residual_persistent:
         reason = "residual_not_persistent"
     elif disturbance_kind == "none":
@@ -158,6 +171,9 @@ def build_ff3_disturbance_context(
         residual_persistent=residual_persistent,
         dynamic_coherent=dynamic_coherent,
         model_reliable=model_reliable,
+        prediction_usable=prediction_usable,
+        prediction_quality=prediction_quality,
+        authority_factor=authority_factor,
         bias_warning=bias_warning,
         external_gain_detected=external_gain_detected,
         external_loss_detected=external_loss_detected,

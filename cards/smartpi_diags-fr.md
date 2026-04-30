@@ -236,8 +236,14 @@
 {% set fftrim_cycle_admissible = debug.get('fftrim_cycle_admissible', false) %}
 {% set ff3_enabled = debug.get('ff3_enabled', false) %}
 {% set ff3_reason = debug.get('ff3_reason_disabled', '—') %}
+{% set ff3_raw_reason = debug.get('ff3_raw_reason_disabled', ff3_reason) %}
 {% set ff3_selected_candidate = debug.get('ff3_selected_candidate') %}
 {% set ff3_horizon = debug.get('ff3_horizon_cycles', 1) %}
+{% set ff3_deadtime_cycles = debug.get('ff3_deadtime_cycles', 0) %}
+{% set ff3_horizon_capped = debug.get('ff3_horizon_capped', false) %}
+{% set ff3_action_sensitivity = debug.get('ff3_action_sensitivity') %}
+{% set ff3_prediction_quality = debug.get('ff3_prediction_quality', 'unavailable') %}
+{% set ff3_authority_factor = debug.get('ff3_authority_factor') %}
 {% set ff3_disturbance_active = debug.get('ff3_disturbance_active', false) %}
 {% set ff3_disturbance_reason = debug.get('ff3_disturbance_reason', '—') %}
 {% set ff3_disturbance_kind = debug.get('ff3_disturbance_kind', 'none') %}
@@ -317,6 +323,8 @@
   'tau_not_reliable': 'tau non fiable',
   'twin_not_initialized': 'twin non initialisé',
   'twin_not_reliable': 'twin non fiable',
+  'twin_unavailable': 'twin indisponible',
+  'twin_steady_invalid': 'état stable invalide',
   'calibration': 'calibration',
   'power_shedding': 'shedding',
   'recent_setpoint_change': 'consigne récente',
@@ -326,6 +334,11 @@
   'saturated_high': 'saturation haute',
   'system_not_stable': 'instable',
   'score_not_better': 'gain insuffisant',
+  'authority_zero': 'autorité nulle',
+  'authority_tapered_to_zero': 'autorité effacée',
+  'horizon_no_candidate_effect': 'horizon sans effet candidat',
+  'simulation_invalid_params': 'simulation paramètres invalides',
+  'simulation_invalid_prediction': 'simulation invalide',
   'trajectory_setpoint_active': 'trajectoire consigne active',
   'twin_not_ready': 'twin indisponible',
   'twin_warming_up': 'twin en warm-up',
@@ -338,8 +351,10 @@
   'none': 'contexte valide',
   'trajectory_setpoint_active': 'trajectoire consigne active',
   'twin_not_ready': 'twin indisponible',
+  'twin_unavailable': 'twin indisponible',
   'twin_warming_up': 'twin en warm-up',
   'twin_not_reliable': 'twin non fiable',
+  'twin_steady_invalid': 'état stable invalide',
   'residual_not_persistent': 'résidu non persistant',
   'disturbance_unclassified': 'perturbation non classée',
   'dynamic_incoherent': 'dynamique incohérente'
@@ -613,12 +628,16 @@
 | FF warmup | {{ ff_ok }}/{{ ff_cyc }} |
 | État FF3 | {% if ff3_enabled %}🔮 actif{% else %}⚪ inactif{% endif %} |
 | Raison FF3 | `{{ ff3_label }}` |
+| Raison brute FF3 | `{{ ff3_raw_reason }}` |
+| Qualité prédiction | `{{ ff3_prediction_quality }}` |
+| Autorité FF3 | {% if ff3_authority_factor is not none %}{{ (ff3_authority_factor | float * 100) | round(0) }}%{% else %}—{% endif %} |
 | Contexte perturbation | {% if ff3_disturbance_active %}✅ actif{% else %}non{% endif %} |
 | Raison contexte | `{{ ff3_disturbance_reason_label }}` |
 | Type perturbation | `{{ ff3_disturbance_kind_label }}` |
 | Résidu persistant | {% if ff3_residual_persistent %}oui{% else %}non{% endif %} |
 | Cohérence dynamique | {% if ff3_dynamic_coherent %}oui{% else %}non{% endif %} |
-| Horizon FF3 | {{ ff3_horizon }} cycle |
+| Horizon FF3 | {{ ff3_horizon }} cycle · deadtime {{ ff3_deadtime_cycles }} · {% if ff3_horizon_capped %}capé{% else %}non capé{% endif %} |
+| Sensibilité FF3 | {% if ff3_action_sensitivity is not none %}{{ ff3_action_sensitivity | float | round(6) }} °C{% else %}—{% endif %} |
 | Candidat FF3 | {% if ff3_selected_candidate is not none %}{{ (ff3_selected_candidate | float * 100) | round(1) }}%{% else %}—{% endif %} |
 
 ---

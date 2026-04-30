@@ -46,7 +46,7 @@ with:
 
 - `u_ff1`: structural feed-forward derived from $b/a$,
 - `u_ff2`: slow `FFTrim` bias,
-- `u_ff3`: optional short-horizon predictive correction,
+- `u_ff3`: bounded short-horizon predictive correction, enabled by default and zero outside eligible contexts,
 - `u_pi`: discrete PI term.
 
 The value effectively injected into the controller is `u_ff_eff + u_pi`, then it goes through:
@@ -191,11 +191,13 @@ This is combined with:
 
 ### 4.3 FF3
 
-`ff3.py` adds an optional predictive correction:
+`ff3.py` adds a predictive correction that is enabled by default and can be disabled by configuration:
 
-- horizon derived from `FF3_PREDICTION_HORIZON_MIN = 30`,
-- max authority `FF3_MAX_AUTHORITY = 0.20`,
-- exploration step `FF3_DELTA_U = 0.05`.
+- horizon computed by `ff3_predictor.compute_ff3_horizon()`: `deadtime_cycles + FF3_RESPONSE_LOOKAHEAD_CYCLES`, clamped between `FF3_MIN_HORIZON_CYCLES` and `FF3_MAX_HORIZON_CYCLES`,
+- local open-loop prediction with the exact discrete ZOH 1R1C model, without calling `ThermalTwin1R1C.step()` and without updating the twin observer,
+- max authority `FF3_MAX_AUTHORITY = 0.20`, multiplied by `authority_factor`,
+- exploration step `FF3_DELTA_U = 0.05`,
+- local quadratic scoring with tracking cost, terminal cost, overshoot cost, and movement cost.
 
 FF3 is disabled if any of the following conditions is not met:
 
@@ -203,8 +205,9 @@ FF3 is disabled if any of the following conditions is not met:
 - heating mode,
 - outdoor temperature available,
 - reliable `tau`,
-- thermal twin initialized and reliable,
+- thermal twin initialized and prediction usable,
 - thermal twin not warming up,
+- valid twin steady state,
 - no calibration,
 - no power shedding,
 - no recent setpoint change,
@@ -214,10 +217,14 @@ FF3 is disabled if any of the following conditions is not met:
 - no active `setpoint` trajectory,
 - a credible external-disturbance context is present.
 
-This disturbance context does not rely on `T_steady`.
+The disturbance context accepts a structurally usable model even when `model_reliable = False`.
+In that case, `prediction_quality = "degraded"` and authority is reduced through `FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR`.
+`warming_up = True` and `T_steady_valid = False` remain absolute blockers.
+
+This disturbance context does not use `T_steady` as an RMSE false negative.
 It relies on:
 
-- a persistent mismatch between the twin prediction and the observed behavior, interpreted as a credible residual when the model is reliable (`bias_warning` or `external_gain_detected` or `external_loss_detected`),
+- a persistent mismatch between the twin prediction and the observed behavior, interpreted as a credible residual (`bias_warning` or `external_gain_detected` or `external_loss_detected`),
 - then dynamic coherence through `perturbation_dTdt` and, when needed, the measured thermal slope.
 
 Under this contract, FF3 is no longer a generic near-band optimizer. It is reserved for disturbance recovery, and it no longer triggers a dedicated cycle restart on deadband entry.
@@ -405,7 +412,7 @@ The forced cycle is managed by `CalibrationManager`:
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | slow feed-forward bias                                      |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
-| `ff3.py`               | optional predictive correction                              |
+| `ff3.py`               | bounded FF3 predictive correction                           |
 | `governance.py`        | freeze decisions                                            |
 | `calibration.py`       | forced-calibration FSM                                      |
 | `autocalib.py`         | supervision and automatic triggering                        |
@@ -537,7 +544,13 @@ When the thermal twin is usable, a `pred` sub-block is added to debug diagnostic
 | `AB_BAD_PERSIST_CYCLES`           | `3`    |
 | `FF3_DELTA_U`                     | `0.05` |
 | `FF3_MAX_AUTHORITY`               | `0.20` |
-| `FF3_PREDICTION_HORIZON_MIN`      | `30.0` |
+| `FF3_NEARBAND_GAIN`               | `0.50` |
+| `FF3_MIN_HORIZON_CYCLES`          | `2`    |
+| `FF3_RESPONSE_LOOKAHEAD_CYCLES`   | `2`    |
+| `FF3_MAX_HORIZON_CYCLES`          | `8`    |
+| `FF3_ACTION_SENSITIVITY_EPS_C`    | `1e-4` |
+| `FF3_SCORE_EPS_COST`              | `1e-4` |
+| `FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR` | `0.5` |
 
 ---
 

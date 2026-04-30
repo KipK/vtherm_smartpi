@@ -46,7 +46,7 @@ avec :
 
 - `u_ff1` : feed-forward structurel dérivé de $b/a$,
 - `u_ff2` : biais lent `FFTrim`,
-- `u_ff3` : correction prédictive optionnelle de court horizon,
+- `u_ff3` : correction prédictive bornée de court horizon, activée par défaut et nulle hors contexte éligible,
 - `u_pi` : terme PI discret.
 
 La sortie réellement injectée dans le calcul est `u_ff_eff + u_pi`, puis elle passe par :
@@ -191,11 +191,13 @@ Le `warmup_scale` n'est pas un simple interrupteur. Il dépend :
 
 ### 4.3 FF3
 
-`ff3.py` ajoute une correction prédictive optionnelle :
+`ff3.py` ajoute une correction prédictive activée par défaut et désactivable par configuration :
 
-- horizon dérivé de `FF3_PREDICTION_HORIZON_MIN = 30`,
-- autorité max `FF3_MAX_AUTHORITY = 0.20`,
-- pas d'exploration `FF3_DELTA_U = 0.05`.
+- horizon calculé par `ff3_predictor.compute_ff3_horizon()` : `deadtime_cycles + FF3_RESPONSE_LOOKAHEAD_CYCLES`, borné entre `FF3_MIN_HORIZON_CYCLES` et `FF3_MAX_HORIZON_CYCLES`,
+- prédiction ouverte locale avec le modèle discret exact 1R1C ZOH, sans appel à `ThermalTwin1R1C.step()` et sans mise à jour de l'observateur du jumeau,
+- autorité max `FF3_MAX_AUTHORITY = 0.20`, multipliée par `authority_factor`,
+- pas d'exploration `FF3_DELTA_U = 0.05`,
+- scoring local quadratique avec coût de suivi, coût terminal, coût d'overshoot et coût de mouvement.
 
 FF3 est désactivé si l'une des conditions suivantes n'est pas satisfaite :
 
@@ -203,8 +205,9 @@ FF3 est désactivé si l'une des conditions suivantes n'est pas satisfaite :
 - mode chauffage,
 - température extérieure disponible,
 - `tau` fiable,
-- jumeau thermique initialisé et fiable,
+- jumeau thermique initialisé et prédiction utilisable,
 - pas de warm-up du jumeau,
+- état stationnaire du jumeau valide,
 - pas de calibration,
 - pas de power shedding,
 - pas de changement récent de consigne,
@@ -214,10 +217,14 @@ FF3 est désactivé si l'une des conditions suivantes n'est pas satisfaite :
 - pas de trajectoire active de source `setpoint`,
 - présence d'un contexte crédible de perturbation externe.
 
-Le contexte de perturbation retenu ne repose pas sur `T_steady`.
+Le contexte de perturbation accepte un modèle structurellement utilisable même si `model_reliable = False`.
+Dans ce cas, `prediction_quality = "degraded"` et l'autorité est réduite via `FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR`.
+`warming_up = True` et `T_steady_valid = False` restent des blocages absolus.
+
+Le contexte de perturbation retenu ne repose pas sur `T_steady` comme faux négatif RMSE.
 Il repose sur :
 
-- un écart persistant entre la prédiction du jumeau et le comportement observé, interprété comme un résidu crédible lorsque le modèle est fiable (`bias_warning` ou `external_gain_detected` ou `external_loss_detected`),
+- un écart persistant entre la prédiction du jumeau et le comportement observé, interprété comme un résidu crédible (`bias_warning` ou `external_gain_detected` ou `external_loss_detected`),
 - puis une cohérence dynamique via `perturbation_dTdt` et, si nécessaire, la pente thermique mesurée.
 
 Dans ce contrat, FF3 n'est plus un optimiseur générique near-band. Il est réservé à la récupération de perturbation, et il ne provoque plus de restart de cycle dédié à l'entrée en deadband.
@@ -413,7 +420,7 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
 | `ff_trim.py`           | biais lent feed-forward                                  |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |
-| `ff3.py`               | correction prédictive optionnelle                        |
+| `ff3.py`               | correction prédictive bornée FF3                         |
 | `governance.py`        | décisions de gel                                         |
 | `calibration.py`       | FSM de calibration forcée                                |
 | `autocalib.py`         | supervision et déclenchement automatique                 |
@@ -546,7 +553,13 @@ Quand le jumeau thermique est exploitable, un sous-bloc `pred` est ajouté au de
 | `AB_BAD_PERSIST_CYCLES`           | `3`    |
 | `FF3_DELTA_U`                     | `0.05` |
 | `FF3_MAX_AUTHORITY`               | `0.20` |
-| `FF3_PREDICTION_HORIZON_MIN`      | `30.0` |
+| `FF3_NEARBAND_GAIN`               | `0.50` |
+| `FF3_MIN_HORIZON_CYCLES`          | `2`    |
+| `FF3_RESPONSE_LOOKAHEAD_CYCLES`   | `2`    |
+| `FF3_MAX_HORIZON_CYCLES`          | `8`    |
+| `FF3_ACTION_SENSITIVITY_EPS_C`    | `1e-4` |
+| `FF3_SCORE_EPS_COST`              | `1e-4` |
+| `FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR` | `0.5` |
 
 ---
 

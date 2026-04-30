@@ -9,6 +9,11 @@ from custom_components.vtherm_smartpi.smartpi.ff3 import (
     _compute_near_band_ff3_scale,
     compute_ff3,
 )
+from custom_components.vtherm_smartpi.smartpi.ff3_predictor import (
+    compute_ff3_action_sensitivity,
+    compute_ff3_horizon,
+    predict_ff3_open_loop,
+)
 from custom_components.vtherm_smartpi.smartpi.ff3_eligibility import (
     build_ff3_disturbance_context,
 )
@@ -16,11 +21,17 @@ from custom_components.vtherm_smartpi.smartpi.ff_trim import FFTrim
 from custom_components.vtherm_smartpi.smartpi.const import (
     GovernanceRegime,
     FF3_DELTA_U,
+    FF3_MAX_HORIZON_CYCLES,
     FF3_MAX_AUTHORITY,
     FF3_NEARBAND_GAIN,
     FF_TRIM_LAMBDA,
 )
 from custom_components.vtherm_smartpi.smartpi.thermal_twin_1r1c import ThermalTwin1R1C
+from custom_components.vtherm_smartpi.const import (
+    CONF_SMART_PI_USE_FF3,
+    DEFAULT_OPTIONS,
+    DEFAULT_SMART_PI_USE_FF3,
+)
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 
 
@@ -52,6 +63,85 @@ def _call(
         near_band_above_deg=near_band_above_deg,
         ab_fallback=ab_fallback,
     )
+
+
+def test_smartpi_ff3_default_is_enabled():
+    assert DEFAULT_SMART_PI_USE_FF3 is True
+    assert DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3] is True
+
+
+def test_smartpi_ff3_missing_entry_uses_default_options():
+    entry = {}
+    use_ff3 = entry.get(
+        CONF_SMART_PI_USE_FF3,
+        DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3],
+    )
+    assert use_ff3 is True
+
+
+def test_smartpi_ff3_explicit_false_stays_disabled():
+    entry = {CONF_SMART_PI_USE_FF3: False}
+    use_ff3 = entry.get(
+        CONF_SMART_PI_USE_FF3,
+        DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3],
+    )
+    assert use_ff3 is False
+
+
+def test_ff3_horizon_covers_heat_deadtime():
+    horizon = compute_ff3_horizon(cycle_min=10.0, deadtime_heat_s=1800.0)
+    assert horizon.deadtime_cycles == 3
+    assert horizon.horizon_cycles == 5
+    assert horizon.horizon_capped is False
+
+
+def test_ff3_horizon_caps_long_deadtime():
+    horizon = compute_ff3_horizon(cycle_min=10.0, deadtime_heat_s=7200.0)
+    assert horizon.deadtime_cycles == 12
+    assert horizon.horizon_cycles == FF3_MAX_HORIZON_CYCLES
+    assert horizon.horizon_capped is True
+
+
+def test_ff3_open_loop_candidate_effect_appears_after_deadtime():
+    twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
+    twin.reset(tin_init=20.7, text_init=5.0, u_init=0.6)
+
+    base_prediction = predict_ff3_open_loop(
+        twin=twin,
+        current_temp=20.7,
+        ext_temp=5.0,
+        a=0.08,
+        b=0.004,
+        u_first_cycle=0.6,
+        u_base=0.6,
+        cycle_min=10.0,
+        deadtime_heat_s=1800.0,
+        horizon_cycles=5,
+    )
+    candidate_prediction = predict_ff3_open_loop(
+        twin=twin,
+        current_temp=20.7,
+        ext_temp=5.0,
+        a=0.08,
+        b=0.004,
+        u_first_cycle=0.8,
+        u_base=0.6,
+        cycle_min=10.0,
+        deadtime_heat_s=1800.0,
+        horizon_cycles=5,
+    )
+
+    assert base_prediction.temperatures[:3] == pytest.approx(
+        candidate_prediction.temperatures[:3],
+        abs=1e-9,
+    )
+    assert (
+        base_prediction.temperatures[3]
+        != pytest.approx(candidate_prediction.temperatures[3])
+        or base_prediction.temperatures[4]
+        != pytest.approx(candidate_prediction.temperatures[4])
+    )
+    assert compute_ff3_action_sensitivity([base_prediction, candidate_prediction]) > 0.0
 
 
 # ================================================================
@@ -269,7 +359,7 @@ class TestFF3:
         assert result.enabled is False
         assert result.u_ff3_applied == pytest.approx(0.0)
         assert result.reason_disabled == "recent_setpoint_change"
-        assert result.horizon_cycles == 3
+        assert result.horizon_cycles == 2
 
     def test_ff3_disabled_outside_near_band(self):
         """FF3 must remain off outside the near-band."""
@@ -306,7 +396,7 @@ class TestFF3:
         assert result.u_ff3_applied == pytest.approx(0.0)
         assert result.reason_disabled == "not_near_band"
         assert result.candidate_scores == []
-        assert result.horizon_cycles == 3
+        assert result.horizon_cycles == 2
 
     def test_ff3_disabled_without_disturbance_context(self):
         """FF3 must remain off when no disturbance-recovery context is active."""
@@ -345,7 +435,7 @@ class TestFF3:
         assert result.u_ff3_applied == pytest.approx(0.0)
         assert result.reason_disabled == "trajectory_setpoint_active"
         assert result.candidate_scores == []
-        assert result.horizon_cycles == 3
+        assert result.horizon_cycles == 2
 
     def test_ff3_disabled_when_twin_is_warming_up(self):
         """FF3 must expose the warm-up reason instead of a generic reliability failure."""
@@ -427,7 +517,7 @@ class TestFF3:
         candidate_u = [item["u"] for item in result.candidate_scores]
         assert len(candidate_u) == 9
         assert candidate_u == pytest.approx([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6])
-        assert result.horizon_cycles == 3
+        assert result.horizon_cycles == 2
 
     def test_ff3_uses_two_cycle_horizon_when_deadtime_exceeds_cycle(self):
         """FF3 must keep the configured multi-cycle horizon in near-band."""
@@ -460,7 +550,7 @@ class TestFF3:
             deadtime_heat_s=900.0,
             deadtime_cool_s=0.0,
         )
-        assert result.horizon_cycles == 3
+        assert result.horizon_cycles == 4
         assert len(result.candidate_scores) == 9
 
     def test_ff3_near_band_applies_gain(self):
@@ -497,6 +587,150 @@ class TestFF3:
         assert abs(result.u_ff3_raw) <= FF3_MAX_AUTHORITY + 1e-9
         assert result.u_ff3_applied == pytest.approx(result.u_ff3_raw * FF3_NEARBAND_GAIN)
         assert abs(result.u_ff3_applied) <= (FF3_MAX_AUTHORITY * FF3_NEARBAND_GAIN) + 1e-9
+
+    def test_ff3_deadtime_aware_horizon_can_select_candidate(self):
+        twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
+        twin.reset(tin_init=20.7, text_init=5.0, u_init=0.6)
+        result = compute_ff3(
+            enabled=True,
+            twin=twin,
+            twin_reliable=True,
+            twin_initialized=True,
+            tau_reliable=True,
+            ext_temp=5.0,
+            hvac_mode=VThermHvacMode_HEAT,
+            regime=GovernanceRegime.NEAR_BAND,
+            in_deadband=False,
+            in_near_band=True,
+            disturbance_context_active=True,
+            current_temp=20.7,
+            setpoint=21.0,
+            deadband_c=0.05,
+            near_band_below_deg=0.4,
+            near_band_above_deg=0.3,
+            cycle_min=10.0,
+            a=0.08,
+            b=0.004,
+            u_base=0.6,
+            deadtime_heat_s=1800.0,
+            deadtime_cool_s=0.0,
+            is_calibrating=False,
+            power_shedding=False,
+            setpoint_changed=False,
+            startup_first_run=False,
+            last_sat="NO_SAT",
+        )
+
+        assert result.horizon_cycles == 5
+        assert result.deadtime_cycles == 3
+        assert result.action_sensitivity > 0.0
+        assert len(result.candidate_scores) > 0
+        assert result.reason_disabled in (
+            "none",
+            "score_not_better",
+            "authority_tapered_to_zero",
+        )
+
+    def test_ff3_reports_no_candidate_effect_when_horizon_cannot_see_action(self):
+        twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
+        twin.reset(tin_init=20.7, text_init=5.0, u_init=0.6)
+        base_prediction = predict_ff3_open_loop(
+            twin=twin,
+            current_temp=20.7,
+            ext_temp=5.0,
+            a=0.08,
+            b=0.004,
+            u_first_cycle=0.6,
+            u_base=0.6,
+            cycle_min=10.0,
+            deadtime_heat_s=1800.0,
+            horizon_cycles=3,
+        )
+        candidate_prediction = predict_ff3_open_loop(
+            twin=twin,
+            current_temp=20.7,
+            ext_temp=5.0,
+            a=0.08,
+            b=0.004,
+            u_first_cycle=0.8,
+            u_base=0.6,
+            cycle_min=10.0,
+            deadtime_heat_s=1800.0,
+            horizon_cycles=3,
+        )
+
+        assert compute_ff3_action_sensitivity([base_prediction, candidate_prediction]) == 0.0
+
+    def test_ff3_selects_closest_candidate_on_equal_cost(self):
+        twin = self._make_initialized_twin()
+        u_base = 0.4
+        result = compute_ff3(
+            enabled=True,
+            twin=twin,
+            twin_reliable=True,
+            twin_initialized=True,
+            tau_reliable=True,
+            ext_temp=5.0,
+            hvac_mode=VThermHvacMode_HEAT,
+            regime=GovernanceRegime.NEAR_BAND,
+            in_deadband=False,
+            in_near_band=True,
+            is_calibrating=False,
+            power_shedding=False,
+            setpoint_changed=False,
+            startup_first_run=False,
+            last_sat="NO_SAT",
+            u_base=u_base,
+            current_temp=19.0,
+            setpoint=19.0,
+            deadband_c=0.05,
+            near_band_below_deg=0.4,
+            near_band_above_deg=0.3,
+            cycle_min=10.0,
+            a=0.0,
+            b=0.002,
+            deadtime_heat_s=0.0,
+            deadtime_cool_s=0.0,
+        )
+
+        assert result.selected_candidate == pytest.approx(u_base)
+        assert result.enabled is False
+
+    def test_ff3_authority_factor_limits_output(self):
+        twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
+        twin.reset(tin_init=20.7, text_init=5.0, u_init=0.6)
+        result = compute_ff3(
+            enabled=True,
+            twin=twin,
+            twin_reliable=True,
+            twin_initialized=True,
+            tau_reliable=True,
+            ext_temp=5.0,
+            hvac_mode=VThermHvacMode_HEAT,
+            regime=GovernanceRegime.NEAR_BAND,
+            in_deadband=False,
+            in_near_band=True,
+            is_calibrating=False,
+            power_shedding=False,
+            setpoint_changed=False,
+            startup_first_run=False,
+            last_sat="NO_SAT",
+            u_base=0.6,
+            current_temp=20.7,
+            setpoint=21.0,
+            deadband_c=0.05,
+            near_band_below_deg=0.4,
+            near_band_above_deg=0.3,
+            cycle_min=10.0,
+            a=0.08,
+            b=0.004,
+            deadtime_heat_s=1800.0,
+            deadtime_cool_s=0.0,
+            authority_factor=0.5,
+        )
+
+        assert abs(result.u_ff3_raw) <= FF3_MAX_AUTHORITY * 0.5 + 1e-9
+        assert abs(result.u_ff3_applied) <= FF3_MAX_AUTHORITY * 0.5 + 1e-9
 
     def test_ff3_authority_tapers_near_deadband(self):
         """Near the deadband boundary, FF3 authority must taper continuously."""

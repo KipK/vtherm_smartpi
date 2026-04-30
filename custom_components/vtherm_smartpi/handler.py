@@ -102,7 +102,10 @@ class SmartPIHandler:
         # SmartPI specific
         deadband = entry.get(CONF_SMART_PI_DEADBAND, 0.05)
         use_setpoint_filter = entry.get(CONF_SMART_PI_USE_SETPOINT_FILTER, True)
-        use_ff3 = entry.get(CONF_SMART_PI_USE_FF3, False)
+        use_ff3 = entry.get(
+            CONF_SMART_PI_USE_FF3,
+            DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3],
+        )
         hyst_on = entry.get(CONF_SMART_PI_HYSTERESIS_ON, 0.3)
         hyst_off = entry.get(CONF_SMART_PI_HYSTERESIS_OFF, 0.5)
         release_tau_factor = entry.get(CONF_SMART_PI_RELEASE_TAU_FACTOR, 0.5)
