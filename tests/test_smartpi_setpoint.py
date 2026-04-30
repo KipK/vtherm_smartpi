@@ -921,6 +921,109 @@ class TestSetpointLanding:
         assert rearmed.active is True
         assert rearmed.reason == "cap"
 
+    def test_landing_release_blocked_when_time_to_target_shorter_than_deadtime(self):
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=28.0,
+            target_setpoint=28.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+        manager._trajectory.set_target(28.0, phase=TrajectoryPhase.RELEASE)
+
+        decision = _decision(
+            manager,
+            target_temp=28.0,
+            current_temp=27.942,
+            signed_error=0.058,
+            temperature_slope_h=2.4,
+            deadtime_cool_s=765.0,
+        )
+
+        assert decision.active is True
+        assert decision.reason in ("cap", "coast")
+        assert decision.reason != "residual_release"
+        assert manager.landing_release_blocked_by_slope is True
+        assert manager.landing_time_to_target_min == pytest.approx(1.45)
+
+    def test_landing_release_allowed_when_time_to_target_longer_than_deadtime(self):
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=23.5,
+            target_setpoint=23.5,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+        manager._trajectory.set_target(23.5, phase=TrajectoryPhase.RELEASE)
+
+        decision = _decision(
+            manager,
+            target_temp=23.5,
+            current_temp=23.44,
+            signed_error=0.06,
+            temperature_slope_h=0.44,
+            deadtime_cool_s=252.0,
+        )
+
+        assert decision.active is True
+        assert decision.reason in ("cap", "coast")
+        assert manager.landing_release_allowed is True
+        assert manager.landing_release_blocked_by_slope is False
+        assert manager.landing_time_to_target_min == pytest.approx(8.1818, rel=1e-3)
+
+    def test_landing_release_still_allowed_when_slope_missing(self):
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=25.0,
+            target_setpoint=25.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+        manager._trajectory.set_target(25.0, phase=TrajectoryPhase.RELEASE)
+
+        decision = _decision(
+            manager,
+            target_temp=25.0,
+            current_temp=24.92,
+            signed_error=0.08,
+            temperature_slope_h=None,
+        )
+
+        assert decision.active is False
+        assert decision.reason == "residual_release"
+        assert manager.landing_release_blocked_by_slope is False
+        assert manager.landing_time_to_target_min is None
+
+    def test_landing_diagnostics_reset_outside_landing_band(self):
+        manager = _make_manager()
+        manager._trajectory_source = "setpoint"
+        manager._trajectory.start(
+            start_setpoint=28.0,
+            target_setpoint=28.0,
+            tau_ref_min=10.0,
+            now_monotonic=0.0,
+        )
+        manager._trajectory.set_target(28.0, phase=TrajectoryPhase.RELEASE)
+
+        _decision(
+            manager,
+            target_temp=28.0,
+            current_temp=27.942,
+            signed_error=0.058,
+            temperature_slope_h=2.4,
+            deadtime_cool_s=765.0,
+        )
+        assert manager.landing_time_to_target_min is not None
+
+        decision = _decision(manager, signed_error=0.80)
+
+        assert decision.reason == "outside_landing_band"
+        assert manager.landing_time_to_target_min is None
+        assert manager.landing_release_blocked_by_slope is False
+
     def test_landing_noop_for_cool(self):
         manager = _make_manager()
         # First seed the manager with a COOL passthrough state.
@@ -998,6 +1101,8 @@ class TestLandingDiagnostics:
             "landing_target_margin",
             "landing_release_allowed",
             "landing_coast_required",
+            "landing_time_to_target_min",
+            "landing_release_blocked_by_slope",
             "landing_u_cmd_before_cap",
             "landing_u_cmd_after_cap",
         ):
@@ -1038,16 +1143,31 @@ class TestLandingNonConstraining:
         manager = self._make_manager_in_release()
 
         for i in range(LANDING_NON_CONSTRAINING_PERSISTENCE - 1):
-            d = _decision(manager, signed_error=0.08, sp_for_p=24.9)
+            d = _decision(
+                manager,
+                signed_error=0.08,
+                temperature_slope_h=0.3,
+                sp_for_p=24.9,
+            )
             assert d.active is True, f"should still be active at step {i}"
             assert d.reason == "cap"
 
-        d = _decision(manager, signed_error=0.08, sp_for_p=24.9)
+        d = _decision(
+            manager,
+            signed_error=0.08,
+            temperature_slope_h=0.3,
+            sp_for_p=24.9,
+        )
         assert d.active is False
         assert d.reason == "non_constraining_release"
 
         # Sticky: next call should be residual_release (not re-engaging cap)
-        d = _decision(manager, signed_error=0.08, sp_for_p=24.9)
+        d = _decision(
+            manager,
+            signed_error=0.08,
+            temperature_slope_h=0.3,
+            sp_for_p=24.9,
+        )
         assert d.active is False
         assert d.reason == "residual_release"
 
@@ -1055,7 +1175,12 @@ class TestLandingNonConstraining:
         manager = self._make_manager_in_release()
 
         for _ in range(LANDING_NON_CONSTRAINING_PERSISTENCE):
-            _decision(manager, signed_error=0.08, sp_for_p=24.9)
+            _decision(
+                manager,
+                signed_error=0.08,
+                temperature_slope_h=0.3,
+                sp_for_p=24.9,
+            )
 
         assert manager._landing_residual_released is True
 
@@ -1083,15 +1208,41 @@ class TestLandingNonConstraining:
     def test_landing_non_constraining_count_resets_outside_landing_band(self):
         manager = self._make_manager_in_release()
 
-        d = _decision(manager, signed_error=0.08, sp_for_p=24.9)
+        d = _decision(
+            manager,
+            signed_error=0.08,
+            temperature_slope_h=0.3,
+            sp_for_p=24.9,
+        )
         assert d.active is True
         assert manager.landing_non_constraining_count == 1
 
-        d = _decision(manager, signed_error=0.8, sp_for_p=24.9)
+        d = _decision(
+            manager,
+            signed_error=0.8,
+            temperature_slope_h=0.3,
+            sp_for_p=24.9,
+        )
 
         assert d.active is False
         assert d.reason == "outside_landing_band"
         assert manager.landing_non_constraining_count == 0
+
+    def test_landing_non_constraining_release_blocked_by_fast_slope(self):
+        manager = self._make_manager_in_release()
+
+        for _ in range(LANDING_NON_CONSTRAINING_PERSISTENCE + 1):
+            d = _decision(
+                manager,
+                signed_error=0.08,
+                temperature_slope_h=2.4,
+                deadtime_cool_s=765.0,
+                sp_for_p=24.9,
+            )
+            assert d.active is True
+            assert d.reason == "cap"
+            assert manager.landing_release_blocked_by_slope is True
+            assert manager.landing_non_constraining_count == 0
 
 
 # Reference the imported symbol so static analyzers do not flag it as unused.

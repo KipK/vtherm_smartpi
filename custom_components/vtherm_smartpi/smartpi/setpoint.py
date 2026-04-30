@@ -12,6 +12,8 @@ from .const import (
     LANDING_MIN_HORIZON_MIN,
     LANDING_NON_CONSTRAINING_PERSISTENCE,
     LANDING_RELEASE_SLOPE_H,
+    LANDING_RELEASE_TIME_TO_DEADTIME_RATIO,
+    LANDING_RELEASE_TIME_TO_TARGET_EPS_MIN,
     LANDING_SAFETY_MARGIN_C,
     LANDING_U_EPS,
     SETPOINT_BOOST_THRESHOLD,
@@ -98,6 +100,8 @@ class SmartPISetpointManager:
         self._landing_decision = SetpointLandingDecision()
         self._landing_residual_released: bool = False
         self._landing_non_constraining_count: int = 0
+        self._landing_time_to_target_min: float | None = None
+        self._landing_release_blocked_by_slope: bool = False
 
     @property
     def trajectory_active(self) -> bool:
@@ -211,6 +215,14 @@ class SmartPISetpointManager:
         return self._landing_non_constraining_count
 
     @property
+    def landing_time_to_target_min(self) -> float | None:
+        return self._landing_time_to_target_min
+
+    @property
+    def landing_release_blocked_by_slope(self) -> bool:
+        return self._landing_release_blocked_by_slope
+
+    @property
     def landing_u_cmd_before_cap(self) -> float | None:
         return self._landing_decision.u_cmd_before_cap
 
@@ -248,6 +260,7 @@ class SmartPISetpointManager:
         self._landing_decision = SetpointLandingDecision()
         self._landing_residual_released = False
         self._landing_non_constraining_count = 0
+        self._reset_landing_release_safety()
 
     def _clear_pending_target_change_braking(self) -> None:
         """Forget any delayed braking request inherited from a setpoint increase."""
@@ -511,6 +524,36 @@ class SmartPISetpointManager:
         predicted = passive + gain_u * max(float(u_ref), 0.0)
         return predicted, passive, gain_u
 
+    def _reset_landing_release_safety(self) -> None:
+        self._landing_time_to_target_min = None
+        self._landing_release_blocked_by_slope = False
+
+    def _compute_landing_release_slope_safety(
+        self,
+        signed_error: float,
+        temperature_slope_h: float | None,
+        deadtime_cool_s: float | None,
+        deadtime_cool_reliable: bool,
+    ) -> tuple[bool, float | None]:
+        if signed_error <= 0.0:
+            return True, None
+        if temperature_slope_h is None or temperature_slope_h <= 0.0:
+            return True, None
+        if (
+            not deadtime_cool_reliable
+            or deadtime_cool_s is None
+            or deadtime_cool_s <= 0.0
+        ):
+            return True, None
+
+        time_to_target_min = signed_error / temperature_slope_h * 60.0
+        deadtime_cool_min = deadtime_cool_s / 60.0
+        safe_threshold_min = max(
+            deadtime_cool_min * LANDING_RELEASE_TIME_TO_DEADTIME_RATIO,
+            LANDING_RELEASE_TIME_TO_TARGET_EPS_MIN,
+        )
+        return time_to_target_min >= safe_threshold_min, time_to_target_min
+
     def _compute_landing_decision(
         self,
         *,
@@ -535,55 +578,71 @@ class SmartPISetpointManager:
         sp_for_p: float | None = None,
     ) -> SetpointLandingDecision:
         """Compute the HEAT-only setpoint landing decision."""
+        def _inactive(reason: str) -> SetpointLandingDecision:
+            self._reset_landing_release_safety()
+            return SetpointLandingDecision(reason=reason)
+
         if hvac_mode == VThermHvacMode_COOL:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="cool_unsupported")
+            return _inactive("cool_unsupported")
         if signed_error <= 0.0:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="target_reached")
+            return _inactive("target_reached")
         if signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD:
             self._landing_residual_released = False
             self._landing_non_constraining_count = 0
         if signed_error > LANDING_ENABLE_ERROR_THRESHOLD_C:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="outside_landing_band")
+            return _inactive("outside_landing_band")
         if not tau_reliable:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="tau_unreliable")
+            return _inactive("tau_unreliable")
         if (
             not deadtime_cool_reliable
             or deadtime_cool_s is None
             or deadtime_cool_s <= 0.0
         ):
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="deadtime_unreliable")
+            return _inactive("deadtime_unreliable")
         if ext_current_temp is None:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="missing_ext_temp")
+            return _inactive("missing_ext_temp")
         if a <= 0.0 or b <= 0.0:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="invalid_model")
+            return _inactive("invalid_model")
         if kp is None or kp <= 0.0:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="invalid_kp")
+            return _inactive("invalid_kp")
         if ki is None:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="invalid_ki")
+            return _inactive("invalid_ki")
         if self._trajectory_source != "setpoint":
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="not_setpoint_trajectory")
+            return _inactive("not_setpoint_trajectory")
         if not self.trajectory_active:
             self._landing_non_constraining_count = 0
-            return SetpointLandingDecision(reason="trajectory_inactive")
+            return _inactive("trajectory_inactive")
         if self._landing_residual_released:
-            return SetpointLandingDecision(reason="residual_release")
+            return _inactive("residual_release")
+
+        slope_release_safe, time_to_target_min = self._compute_landing_release_slope_safety(
+            signed_error=signed_error,
+            temperature_slope_h=temperature_slope_h,
+            deadtime_cool_s=deadtime_cool_s,
+            deadtime_cool_reliable=deadtime_cool_reliable,
+        )
+        self._landing_time_to_target_min = time_to_target_min
+        self._landing_release_blocked_by_slope = not slope_release_safe
+        flat_enough = (
+            temperature_slope_h is None
+            or temperature_slope_h <= LANDING_RELEASE_SLOPE_H
+        )
+        time_safe = slope_release_safe and time_to_target_min is not None
+
         if (
             self.trajectory_phase == TrajectoryPhase.RELEASE
             and signed_error <= LANDING_SAFETY_MARGIN_C + TRAJECTORY_COMPLETE_EPS_C
-            and (
-                temperature_slope_h is None
-                or temperature_slope_h <= LANDING_RELEASE_SLOPE_H
-            )
+            and flat_enough
         ):
             self._landing_residual_released = True
             return SetpointLandingDecision(reason="residual_release")
@@ -612,7 +671,8 @@ class SmartPISetpointManager:
         )
 
         if gain_u <= 0.0:
-            return SetpointLandingDecision(reason="invalid_gain")
+            self._landing_non_constraining_count = 0
+            return _inactive("invalid_gain")
 
         raw_cap = (target_margin - passive) / gain_u
         u_cap = clamp(raw_cap, 0.0, 1.0)
@@ -633,16 +693,21 @@ class SmartPISetpointManager:
             temperature_slope_h is not None
             and temperature_slope_h <= LANDING_RELEASE_SLOPE_H
         )
-        release_allowed = (not coast_required) and slope_ok
 
         reason = "coast" if coast_required else "cap"
 
         residual_zone = signed_error <= LANDING_SAFETY_MARGIN_C + TRAJECTORY_COMPLETE_EPS_C
+        release_allowed = (
+            not coast_required
+            and residual_zone
+            and (slope_ok or time_safe)
+        )
         if sp_for_p is not None:
             if (
                 reason == "cap"
                 and residual_zone
                 and self.trajectory_phase == TrajectoryPhase.RELEASE
+                and (flat_enough or time_safe)
                 and sp_for_p <= sp_for_p_cap
             ):
                 self._landing_non_constraining_count += 1
@@ -722,6 +787,7 @@ class SmartPISetpointManager:
         self._last_bumpless_ready = None
         # Landing decision is recomputed every cycle; default is inactive.
         self._landing_decision = SetpointLandingDecision()
+        self._reset_landing_release_safety()
 
         if self.filtered_setpoint is None:
             self.filtered_setpoint = target_temp

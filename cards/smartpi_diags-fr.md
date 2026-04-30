@@ -195,6 +195,9 @@
 {% set landing_target_margin = debug.get('landing_target_margin') %}
 {% set landing_release_allowed = debug.get('landing_release_allowed', true) %}
 {% set landing_coast_required = debug.get('landing_coast_required', landing_coast) %}
+{% set landing_time_to_target_min = debug.get('landing_time_to_target_min') %}
+{% set landing_release_blocked_by_slope = debug.get('landing_release_blocked_by_slope', false) %}
+{% set temperature_slope_h = debug.get('temperature_slope_h') %}
 {% set landing_u_cmd_before_cap = debug.get('landing_u_cmd_before_cap') %}
 {% set landing_u_cmd_after_cap = debug.get('landing_u_cmd_after_cap') %}
 {% set learn_progress = debug.get('learn_progress_percent') %}
@@ -448,6 +451,9 @@
 | Marge cible | {% if landing_target_margin is not none %}{{ landing_target_margin | float | round(3) }}°C{% else %}—{% endif %} |
 | Roue libre requise | {% if landing_coast_required %}oui{% else %}non{% endif %} |
 | Sortie autorisée | {% if landing_release_allowed %}oui{% else %}non{% endif %} |
+| Pente température | {% if temperature_slope_h is not none %}{{ temperature_slope_h | float | round(3) }}°C/h{% else %}—{% endif %} |
+| Temps avant consigne | {% if landing_time_to_target_min is not none %}{{ landing_time_to_target_min | float | round(2) }} min{% else %}—{% endif %} |
+| Sortie bloquée par pente | {% if landing_release_blocked_by_slope %}oui{% else %}non{% endif %} |
 | `u_cmd` avant cap | {% if landing_u_cmd_before_cap is not none %}{{ (landing_u_cmd_before_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
 | `u_cmd` après cap | {% if landing_u_cmd_after_cap is not none %}{{ (landing_u_cmd_after_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
 
