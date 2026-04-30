@@ -28,6 +28,18 @@ def _schema_keys(schema) -> set[str]:
     return {getattr(key, "schema", key) for key in schema.schema}
 
 
+def _mock_config_entry_lookup(hass, monkeypatch, config_entry: MockConfigEntry) -> None:
+    """Expose a config entry to the registry lookup without setting up its domain."""
+    original_async_get_entry = hass.config_entries.async_get_entry
+
+    def async_get_entry(entry_id: str):
+        if entry_id == config_entry.entry_id:
+            return config_entry
+        return original_async_get_entry(entry_id)
+
+    monkeypatch.setattr(hass.config_entries, "async_get_entry", async_get_entry)
+
+
 @pytest.mark.asyncio
 async def test_first_user_step_creates_default_entry(hass) -> None:
     """The first flow run must create the default global entry immediately."""
@@ -110,6 +122,7 @@ async def test_thermostat_flow_hides_valve_linearization_for_non_valve(hass) -> 
 @pytest.mark.asyncio
 async def test_thermostat_flow_shows_valve_linearization_from_vtherm_config_entry(
     hass,
+    monkeypatch,
 ) -> None:
     """Valve targets must be detected from the VT config entry when state is not ready."""
     entry = MockConfigEntry(
@@ -125,7 +138,7 @@ async def test_thermostat_flow_shows_valve_linearization_from_vtherm_config_entr
         unique_id="valve-config-target",
         data={"thermostat_type": "thermostat_over_valve"},
     )
-    vt_entry.add_to_hass(hass)
+    _mock_config_entry_lookup(hass, monkeypatch, vt_entry)
 
     registry = er.async_get(hass)
     climate_entry = registry.async_get_or_create(
@@ -221,6 +234,7 @@ async def test_thermostat_flow_shows_valve_curve_step_for_valve(hass) -> None:
 @pytest.mark.asyncio
 async def test_options_flow_shows_valve_linearization_from_dedicated_target_config(
     hass,
+    monkeypatch,
 ) -> None:
     """Dedicated valve options must expose the linearization switch."""
     plugin_entry = MockConfigEntry(
@@ -239,7 +253,7 @@ async def test_options_flow_shows_valve_linearization_from_dedicated_target_conf
             "auto_regulation_mode": "auto_regulation_valve",
         },
     )
-    vt_entry.add_to_hass(hass)
+    _mock_config_entry_lookup(hass, monkeypatch, vt_entry)
 
     registry = er.async_get(hass)
     registry.async_get_or_create(
