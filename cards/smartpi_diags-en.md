@@ -143,7 +143,6 @@
 
 {% if has_debug %}
 {% set cycle_min = debug.get('cycle_min', '—') %}
-{% set i_mode = debug.get('i_mode', '—') %}
 {% set sat = debug.get('sat', 'NO_SAT') %}
 {% set filt_sp = debug.get('filtered_setpoint', published_filtered_sp) %}
 {% set error_f = debug.get('error_filtered') %}
@@ -211,10 +210,7 @@
 {% set deadtime_cool_start_time = debug.get('deadtime_cool_start_time') %}
 {% set t_freeze = debug.get('last_freeze_reason_thermal', debug.get('freeze_reason_thermal', 'none')) %}
 {% set g_freeze = debug.get('last_freeze_reason_gains', debug.get('freeze_reason_gains', 'none')) %}
-{% set g_dec_t = debug.get('last_decision_thermal', debug.get('governance_decision_thermal', 'unknown')) %}
 {% set g_dec_g = debug.get('last_decision_gains', debug.get('governance_decision_gains', 'unknown')) %}
-{% set kp_debug = debug.get('Kp', 0) | float %}
-{% set ki_debug = debug.get('Ki', 0) | float %}
 {% set kp_src = debug.get('kp_source', 'heuristic') %}
 {% set ff_raw = debug.get('ff_raw', 0) | float %}
 {% set ff_reason = debug.get('ff_reason', '—') %}
@@ -416,7 +412,6 @@
 | Mode I | `{{ integral_mode }}` |
 | Guard I | `{{ integral_guard_label }}` |
 {%- if has_debug %}
-| Hysteresis | `{{ hyst_state }}`{% if hyst_guard %} · guard active{% endif %} |
 | Near-band | {{ nb_status }} · `{{ nb_src }}` |
 {%- endif %}
 
@@ -490,8 +485,10 @@
 | Feed-forward | {{ (ff_pct * 100) | round(1) }}% |
 | PI | {{ (pi_pct * 100) | round(1) }}% |
 | Hold | {{ (hold_pct * 100) | round(1) }}% |
-| Hysteresis | `{{ hyst_state }}` |
+| Hysteresis | `{{ hyst_state }}`{% if has_debug and hyst_guard %} · guard active{% endif %} |
+{% if not has_debug %}
 | Restart | `{{ restart_reason }}` |
+{% endif %}
 {%- if landing_u_cap is not none %}
 | Landing cap | {{ (landing_u_cap | float * 100) | round(1) }}% |
 {%- endif %}
@@ -507,8 +504,6 @@
 | `u_applied` | {{ (u_applied * 100) | round(1) }}% |
 | `aw_du` | {{ (aw_du * 100) | round(2) }}%{% if db_active and aw_du != 0 %} ⚠️{% endif %} |
 | `forced_by_timing` | {% if forced_tm %}yes{% else %}no{% endif %} |
-| Detailed integral | `{{ i_mode }}` |
-| Detailed I guard | `{{ integral_guard_mode }}` |
 {%- endif %}
 
 ---
@@ -521,8 +516,10 @@
 | `b` | {% if b is not none %}{{ b | float | round(6) }}{% else %}—{% endif %} |
 | AB Confidence | {{ ab_label }} |
 | `tau_reliable` | {% if tau_reliable %}✅{% else %}⏳{% endif %} |
+{% if not has_debug %}
 | `deadtime_heat_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} |
 | `deadtime_cool_s` | {% if dt_cool is not none %}{{ dt_cool }} s{% else %}—{% endif %} |
+{% endif %}
 | `Kp` | {% if kp is not none %}{{ kp | float | round(4) }}{% else %}—{% endif %} |
 | `Ki` | {% if ki is not none %}{{ ki | float | round(5) }}{% else %}—{% endif %} |
 {%- if has_debug %}
@@ -559,7 +556,9 @@
 | Thermal reason | `{{ thermal_reason }}` |
 | FF3 | `{{ ff3_status }}` |
 | Twin usable | {% if ff3_twin_usable %}yes{% else %}no{% endif %} |
+{% if not has_debug %}
 | Twin status | `{{ twin_status }}` |
+{% endif %}
 | Deadband source | `{{ deadband_source }}` |
 
 ---
@@ -642,13 +641,9 @@
 
 | Parameter | Value |
 |---|---:|
-| `Kp` | {{ kp_debug | round(4) }} |
-| `Ki` | {{ ki_debug | round(5) }} |
 | `ep` | {{ ep | round(4) }} |
-| `integral` | {{ integral_error | float(0) | round(4) }} |
 | Thermal | {{ '✅ active' if t_freeze == 'none' else '🔒 ' ~ (t_freeze | replace('_', ' ')) }} |
 | Gains | {{ '✅ active' if g_freeze == 'none' else '🔒 ' ~ (g_freeze | replace('_', ' ')) }} |
-| Thermal decision | `{{ g_dec_t }}` |
 | Gains decision | `{{ g_dec_g }}` |
 
 ---
