@@ -475,6 +475,8 @@ Loading can also read `ac_state`, but that block is not currently emitted again 
 - `build_published_diagnostics()`: structured summary for `specific_states.smart_pi`,
 - `build_debug_diagnostics()`: published summary plus the `debug` sub-block.
 
+In the debug diagnostics, `learn_ok_count` and `learn_skip_count` are runtime counters relative to the current Home Assistant process. Persisted model counters remain internal and are used for model quality and warm-up decisions.
+
 When the thermal twin is usable, a `pred` sub-block is added to debug diagnostics.
 
 ---

@@ -200,8 +200,6 @@
 {% set temperature_slope_h = debug.get('temperature_slope_h') %}
 {% set landing_u_cmd_before_cap = debug.get('landing_u_cmd_before_cap') %}
 {% set landing_u_cmd_after_cap = debug.get('landing_u_cmd_after_cap') %}
-{% set learn_progress = debug.get('learn_progress_percent') %}
-{% set learn_time_remaining = debug.get('learn_time_remaining') %}
 {% set learn_u_avg = debug.get('learn_u_avg') %}
 {% set learn_u_cv = debug.get('learn_u_cv') %}
 {% set learn_u_std = debug.get('learn_u_std') %}
@@ -547,8 +545,6 @@
 | Dernière raison | `{{ last_reason | truncate(80, true, '…') }}` |
 {%- if has_debug %}
 | Learn ok/skip | {{ learn_ok }} / {{ learn_skip }} |
-| Learn progress | {% if learn_progress is not none %}{{ learn_progress }}%{% else %}—{% endif %} |
-| Temps restant | {% if learn_time_remaining is not none %}{{ learn_time_remaining }} s{% else %}—{% endif %} |
 | `u_avg / cv / std` | {% if learn_u_avg is not none %}{{ learn_u_avg }}{% else %}—{% endif %} / {% if learn_u_cv is not none %}{{ learn_u_cv }}{% else %}—{% endif %} / {% if learn_u_std is not none %}{{ learn_u_std }}{% else %}—{% endif %} |
 {%- endif %}
 

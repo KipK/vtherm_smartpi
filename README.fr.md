@@ -25,7 +25,7 @@ SmartPI est un algorithme de contrôle thermique avancé basé sur un modèle de
 - **Gouvernance Safety-First** : Une matrice par régime gèle ou déverrouille l'apprentissage et l'adaptation des gains selon le contexte opérationnel
 - **Auto-calibration** : Surveille la qualité du modèle et déclenche une séquence de recalibration lorsque l'apprentissage stagne
 - **Linéarisation de courbe de vanne** : Traduit la demande SmartPI en position de vanne adaptée au comportement non linéaire des vannes thermostatiques (TRV)
-- **Diagnostics détaillés** : Publie la progression de l'apprentissage, l'état du modèle et les données de régulation — consultable via une carte Markdown Home Assistant dédiée
+- **Diagnostics détaillés** : Publie l'état de l'apprentissage, l'état du modèle et les données de régulation — consultable via une carte Markdown Home Assistant dédiée
 
 ## 🔗 Intégration avec Versatile Thermostat
 

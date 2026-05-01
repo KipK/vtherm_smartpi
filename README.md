@@ -25,7 +25,7 @@ SmartPI is an advanced PI-based thermal control algorithm built around a first-o
 - **Safety-First Governance**: A regime-based matrix freezes or unlocks learning and gain adaptation depending on the current operating context
 - **Auto-Calibration**: Monitors model quality over time and triggers a recalibration sequence when learning stagnates
 - **Valve Curve Linearization**: Translates SmartPI demand into a valve position adapted to the non-linear behavior of radiator TRVs
-- **Rich Diagnostics**: Publishes detailed learning progress, model state, and regulation data — viewable via a dedicated Home Assistant Markdown card
+- **Rich Diagnostics**: Publishes detailed learning status, model state, and regulation data — viewable via a dedicated Home Assistant Markdown card
 
 ## 🔗 Integration with Versatile Thermostat
 

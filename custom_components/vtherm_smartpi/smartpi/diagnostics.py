@@ -13,7 +13,6 @@ from typing import Any, Dict, TYPE_CHECKING
 from .const import (
     AB_A_SOFT_GATE_MIN_B,
     SmartPIPhase,
-    DT_MAX_MIN,
     U_ON_MIN,
     AB_HISTORY_SIZE,
     FF_TRIM_EPSILON,
@@ -134,6 +133,11 @@ def _build_ab_learning_stage(algo: SmartPI, diag: Dict[str, Any]) -> str:
         return "monitoring"
 
     return "degraded"
+
+
+def _session_counter(total: int, baseline: int) -> int:
+    """Return a runtime counter relative to the current process baseline."""
+    return max(0, int(total) - int(baseline))
 
 
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
@@ -257,10 +261,16 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "b": round(algo.est.b, 6),
         "tau_min": round(tau_info.tau_min, 1),
         "tau_reliable": tau_info.reliable,
-        "learn_ok_count": int(algo.est.learn_ok_count),
+        "learn_ok_count": _session_counter(
+            algo.est.learn_ok_count,
+            getattr(algo, "_session_learn_ok_count_base", 0),
+        ),
         "learn_ok_count_a": int(algo.est.learn_ok_count_a),
         "learn_ok_count_b": int(algo.est.learn_ok_count_b),
-        "learn_skip_count": int(algo.est.learn_skip_count),
+        "learn_skip_count": _session_counter(
+            algo.est.learn_skip_count,
+            getattr(algo, "_session_learn_skip_count_base", 0),
+        ),
         "learn_last_reason": str(algo.est.learn_last_reason),
         "learn_b_converged": algo.est.b_converged_for_a(),
         "learn_a_blocked_by_b": len(algo.est.b_meas_hist) < AB_A_SOFT_GATE_MIN_B,
@@ -279,19 +289,9 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "b_drift_last_reason": algo.est.b_drift.last_reason,
         # Learning metadata
         "learning_start_dt": algo._learning_start_date,
-        "learn_progress_percent": (
-            round((algo.learn_t_int_s / (DT_MAX_MIN * 60)) * 100, 1)
-            if algo.learn_win_active
-            else 0
-        ),
         "learn_u_avg": round(algo.learn_u_int / max(algo.learn_t_int_s, 1.0), 3) if algo.learn_win_active else None,
         "learn_u_cv": round(algo.learn_win._u_cv, 3) if algo.learn_win_active else None,
         "learn_u_std": round(algo.learn_win._u_std, 4) if algo.learn_win_active else None,
-        "learn_time_remaining": (
-            round(max(0, DT_MAX_MIN * 60 - algo.learn_t_int_s), 0)
-            if algo.learn_win_active
-            else None
-        ),
         # PI
         "Kp": round(algo.Kp, 6),
         "Ki": round(algo.Ki, 6),

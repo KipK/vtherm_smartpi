@@ -42,6 +42,40 @@ def test_save_and_load_state() -> None:
     assert smartpi2.u_prev == 0.0
 
 
+def test_debug_learning_counters_are_runtime_scoped_after_load() -> None:
+    """Published learning counters should restart from zero after restore."""
+    smartpi1 = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI1",
+    )
+    smartpi1.est.learn_ok_count = 10
+    smartpi1.est.learn_skip_count = 4
+
+    smartpi2 = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI2",
+        saved_state=smartpi1.save_state(),
+        debug_mode=True,
+    )
+
+    debug = smartpi2.get_debug_diagnostics()["debug"]
+    assert debug["learn_ok_count"] == 0
+    assert debug["learn_skip_count"] == 0
+
+    smartpi2.est.learn_ok_count += 2
+    smartpi2.est.learn_skip_count += 1
+
+    debug = smartpi2.get_debug_diagnostics()["debug"]
+    assert debug["learn_ok_count"] == 2
+    assert debug["learn_skip_count"] == 1
+
+
 def test_save_and_load_state_restores_autocalib_and_learning_start() -> None:
     """SmartPI persistence should restore AutoCalib and learning-start state."""
     smartpi1 = SmartPI(

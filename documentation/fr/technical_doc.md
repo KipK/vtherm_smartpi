@@ -484,6 +484,8 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
 - `build_published_diagnostics()` : résumé structuré destiné à `specific_states.smart_pi`,
 - `build_debug_diagnostics()` : résumé publié + sous-bloc `debug`.
 
+Dans les diagnostics debug, `learn_ok_count` et `learn_skip_count` sont des compteurs d'exécution relatifs au processus Home Assistant courant. Les compteurs persistés du modèle restent internes et servent aux décisions de qualité du modèle et de warm-up.
+
 Quand le jumeau thermique est exploitable, un sous-bloc `pred` est ajouté au debug.
 
 ---

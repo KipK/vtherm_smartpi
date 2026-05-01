@@ -299,6 +299,8 @@ class SmartPI:
 
         # Learning start timestamp
         self._learning_start_date: Optional[datetime] = datetime.now()
+        self._session_learn_ok_count_base: int = 0
+        self._session_learn_skip_count_base: int = 0
 
         # Helper to distinguish Startup (Init) from Resume (OFF->ON)
         # We want to pause learning on Resume, but NOT on Startup/Reboot
@@ -385,6 +387,8 @@ class SmartPI:
     def reset_learning(self) -> None:
         """Reset all learned parameters to defaults."""
         self.est.reset()
+        self._session_learn_ok_count_base = self.est.learn_ok_count
+        self._session_learn_skip_count_base = self.est.learn_skip_count
         if self.ctl:
             self.ctl.reset()
         if self.sp_mgr:
@@ -1553,6 +1557,8 @@ class SmartPI:
 
         # Load component states
         self.est.load_state(state.get("est_state", {}))
+        self._session_learn_ok_count_base = self.est.learn_ok_count
+        self._session_learn_skip_count_base = self.est.learn_skip_count
         self.dt_est.load_state(state.get("dt_est_state", {}))
         self.gov.load_state(state.get("gov_state", {}))
         self.ctl.load_state(state.get("ctl_state", {}))
