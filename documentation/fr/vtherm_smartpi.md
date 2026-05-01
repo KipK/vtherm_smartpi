@@ -4,8 +4,8 @@
   - [Ce que fait SmartPI](#ce-que-fait-smartpi)
   - [Avant de commencer](#avant-de-commencer)
   - [Installation et mise en place](#installation-et-mise-en-place)
+    - [Ajouter l'intégration SmartPI](#ajouter-lintégration-smartpi)
     - [Sélectionner SmartPI dans Versatile Thermostat](#sélectionner-smartpi-dans-versatile-thermostat)
-    - [Configurer SmartPI](#configurer-smartpi)
       - [Configuration par thermostat](#configuration-par-thermostat)
   - [Vannes de radiateur et linéarisation](#vannes-de-radiateur-et-linéarisation)
     - [Pourquoi une vanne peut être difficile à réguler](#pourquoi-une-vanne-peut-être-difficile-à-réguler)
@@ -14,12 +14,20 @@
     - [Choisir les valeurs](#choisir-les-valeurs)
   - [Phases de fonctionnement](#phases-de-fonctionnement)
     - [Phase d'apprentissage](#phase-dapprentissage)
+      - [Comment le bootstrap chauffe](#comment-le-bootstrap-chauffe)
+      - [Étape 1 — Mesure des temps morts](#étape-1--mesure-des-temps-morts)
+      - [Étape 2 — Apprentissage des déperditions (`b`)](#étape-2--apprentissage-des-déperditions-b)
+      - [Étape 3 — Apprentissage du gain de chauffe (`a`)](#étape-3--apprentissage-du-gain-de-chauffe-a)
+      - [Sortie du bootstrap](#sortie-du-bootstrap)
     - [Phase stable](#phase-stable)
     - [Recalibration automatique](#recalibration-automatique)
   - [Réglages conseillés](#réglages-conseillés)
   - [Configuration](#configuration)
   - [Diagnostics et carte Markdown](#diagnostics-et-carte-markdown)
   - [Services](#services)
+    - [`reset_smartpi_learning`](#reset_smartpi_learning)
+    - [`force_smartpi_calibration`](#force_smartpi_calibration)
+    - [`reset_smartpi_integral`](#reset_smartpi_integral)
 
 ## Ce que fait SmartPI
 
@@ -105,12 +113,12 @@ Sur certaines installations, une vanne peut déjà laisser passer la majorité d
 
 En pratique, cela peut donner ce type de sensation :
 
-| Commande envoyée à la vanne | Effet possible sur le radiateur |
-| --- | --- |
-| `0%` à quelques pourcents | pas de chaleur visible |
-| petite ouverture | le radiateur commence seulement à chauffer |
-| environ `15%` à `25%` | grande partie du débit déjà présente |
-| au-delà | changement plus faible, parfois surtout plus de bruit hydraulique |
+| Commande envoyée à la vanne | Effet possible sur le radiateur                                   |
+| --------------------------- | ----------------------------------------------------------------- |
+| `0%` à quelques pourcents   | pas de chaleur visible                                            |
+| petite ouverture            | le radiateur commence seulement à chauffer                        |
+| environ `15%` à `25%`       | grande partie du débit déjà présente                              |
+| au-delà                     | changement plus faible, parfois surtout plus de bruit hydraulique |
 
 Les valeurs exactes dépendent de la vanne, du corps de vanne, de l'équilibrage du radiateur et de l'installation hydraulique. Il faut donc éviter de chercher une valeur parfaite au premier essai.
 
@@ -128,12 +136,12 @@ La linéarisation transforme ensuite cette demande en ouverture de vanne plus ad
 
 Exemple simplifié :
 
-| Demande SmartPI | Ouverture envoyée à la vanne |
-| --- | --- |
-| `0%` | `0%` |
-| faible demande | autour de l'ouverture minimale utile |
-| `80%` | autour de l'ouverture au coude |
-| `100%` | ouverture maximale autorisée |
+| Demande SmartPI | Ouverture envoyée à la vanne         |
+| --------------- | ------------------------------------ |
+| `0%`            | `0%`                                 |
+| faible demande  | autour de l'ouverture minimale utile |
+| `80%`           | autour de l'ouverture au coude       |
+| `100%`          | ouverture maximale autorisée         |
 
 Cette correction ne remplace pas l'apprentissage SmartPI. Elle aide seulement SmartPI à parler plus naturellement à une vanne non linéaire.
 
@@ -152,12 +160,12 @@ L'option est proposée uniquement pour les thermostats qui exposent une commande
 
 Les valeurs par défaut donnent un point de départ raisonnable. Ajustez-les seulement si vous avez observé le comportement de votre radiateur.
 
-| Paramètre | À quoi il sert | Valeur de départ |
-| --- | --- | --- |
-| **Ouverture minimale de vanne** | Première ouverture où le radiateur commence réellement à chauffer. | `7%` |
-| **Demande au coude** | Demande SmartPI à partir de laquelle on considère que la vanne arrive dans sa zone de débit élevé. | `80%` |
-| **Ouverture de vanne au coude** | Position physique de la vanne à cette demande. | `15%` |
-| **Ouverture maximale de vanne** | Ouverture maximale autorisée. | `100%` |
+| Paramètre                       | À quoi il sert                                                                                     | Valeur de départ |
+| ------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------- |
+| **Ouverture minimale de vanne** | Première ouverture où le radiateur commence réellement à chauffer.                                 | `7%`             |
+| **Demande au coude**            | Demande SmartPI à partir de laquelle on considère que la vanne arrive dans sa zone de débit élevé. | `80%`            |
+| **Ouverture de vanne au coude** | Position physique de la vanne à cette demande.                                                     | `15%`            |
+| **Ouverture maximale de vanne** | Ouverture maximale autorisée.                                                                      | `100%`           |
 
 Pour trouver l'ouverture minimale, le plus simple est d'observer le radiateur :
 
@@ -268,23 +276,23 @@ Pour démarrer simplement :
 
 ## Configuration
 
-| Paramètre | Rôle | Valeur par défaut |
-| --- | --- | --- |
-| **Délai minimal d'activation** | Durée minimale pendant laquelle le chauffage reste allumé une fois activé. | `0 s` |
-| **Délai minimal de désactivation** | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé. | `0 s` |
-| **Deadband** | Zone de tolérance autour de la consigne. | `0.05°C` |
-| **Filtre de consigne** | Active le lissage de consigne proportionnel et l'atterrissage de chauffe près de la cible. | `activé` |
-| **FF3** | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé` |
-| **Autoriser P dans la deadband** | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband. | `désactivé` |
-| **Facteur release tau** | Échelle du délai de relâchement intégral par rapport à la constante de temps apprise. | `0.5` |
-| **Seuil bas d'hystérésis** | Seuil de redémarrage pendant le bootstrap. | `0.3°C` |
-| **Seuil haut d'hystérésis** | Seuil d'arrêt pendant le bootstrap. | `0.5°C` |
-| **Mode debug SmartPI** | Publie des diagnostics plus détaillés. | `désactivé` |
-| **Linéarisation de courbe de vanne** | Adapte la demande SmartPI aux vannes de radiateur non linéaires. | `désactivé` |
-| **Ouverture minimale de vanne** | Première ouverture utile lorsque la linéarisation est activée. | `7%` |
-| **Demande au coude** | Demande SmartPI correspondant au changement de pente de la vanne. | `80%` |
-| **Ouverture de vanne au coude** | Ouverture physique de la vanne au changement de pente. | `15%` |
-| **Ouverture maximale de vanne** | Ouverture maximale autorisée lorsque la linéarisation est activée. | `100%` |
+| Paramètre                            | Rôle                                                                                                   | Valeur par défaut |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------ | ----------------- |
+| **Délai minimal d'activation**       | Durée minimale pendant laquelle le chauffage reste allumé une fois activé.                             | `0 s`             |
+| **Délai minimal de désactivation**   | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé.                          | `0 s`             |
+| **Deadband**                         | Zone de tolérance autour de la consigne.                                                               | `0.05°C`          |
+| **Filtre de consigne**               | Active le lissage de consigne proportionnel et l'atterrissage de chauffe près de la cible.             | `activé`          |
+| **FF3**                              | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé`          |
+| **Autoriser P dans la deadband**     | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
+| **Facteur release tau**              | Échelle du délai de relâchement intégral par rapport à la constante de temps apprise.                  | `0.5`             |
+| **Seuil bas d'hystérésis**           | Seuil de redémarrage pendant le bootstrap.                                                             | `0.3°C`           |
+| **Seuil haut d'hystérésis**          | Seuil d'arrêt pendant le bootstrap.                                                                    | `0.5°C`           |
+| **Mode debug SmartPI**               | Publie des diagnostics plus détaillés.                                                                 | `désactivé`       |
+| **Linéarisation de courbe de vanne** | Adapte la demande SmartPI aux vannes de radiateur non linéaires.                                       | `désactivé`       |
+| **Ouverture minimale de vanne**      | Première ouverture utile lorsque la linéarisation est activée.                                         | `7%`              |
+| **Demande au coude**                 | Demande SmartPI correspondant au changement de pente de la vanne.                                      | `80%`             |
+| **Ouverture de vanne au coude**      | Ouverture physique de la vanne au changement de pente.                                                 | `15%`             |
+| **Ouverture maximale de vanne**      | Ouverture maximale autorisée lorsque la linéarisation est activée.                                     | `100%`            |
 
 ## Diagnostics et carte Markdown
 
@@ -332,6 +340,8 @@ En mode normal, le bloc `setpoint` peut contenir :
 Si le mode debug SmartPI est activé, le bloc `debug` ajoute des informations internes plus détaillées, notamment la prédiction d'atterrissage, la marge cible, la décision de relâchement et la commande avant/après le cap d'atterrissage.
 
 Une carte Markdown Home Assistant est aussi disponible pour afficher plus simplement les diagnostics SmartPI dans le tableau de bord.
+
+https://github.com/KipK/vtherm_smartpi/tree/master/cards
 
 ## Services
 

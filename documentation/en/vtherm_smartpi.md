@@ -4,8 +4,8 @@
   - [What SmartPI does](#what-smartpi-does)
   - [Before you start](#before-you-start)
   - [Setup](#setup)
+    - [Adding the SmartPI integration](#adding-the-smartpi-integration)
     - [Selecting SmartPI in Versatile Thermostat](#selecting-smartpi-in-versatile-thermostat)
-    - [Configuring SmartPI](#configuring-smartpi)
       - [Per-thermostat configuration](#per-thermostat-configuration)
   - [Radiator valves and curve linearization](#radiator-valves-and-curve-linearization)
     - [Why a valve can be hard to regulate](#why-a-valve-can-be-hard-to-regulate)
@@ -14,12 +14,20 @@
     - [Choosing the values](#choosing-the-values)
   - [Operating phases](#operating-phases)
     - [Learning phase](#learning-phase)
+      - [How bootstrap heats](#how-bootstrap-heats)
+      - [Step 1 — Measuring dead times](#step-1--measuring-dead-times)
+      - [Step 2 — Learning heat loss (`b`)](#step-2--learning-heat-loss-b)
+      - [Step 3 — Learning heating gain (`a`)](#step-3--learning-heating-gain-a)
+      - [Leaving bootstrap](#leaving-bootstrap)
     - [Stable phase](#stable-phase)
     - [Automatic recalibration](#automatic-recalibration)
   - [Recommended settings](#recommended-settings)
   - [Configuration](#configuration)
   - [Diagnostics and Markdown card](#diagnostics-and-markdown-card)
   - [Services](#services)
+    - [`reset_smartpi_learning`](#reset_smartpi_learning)
+    - [`force_smartpi_calibration`](#force_smartpi_calibration)
+    - [`reset_smartpi_integral`](#reset_smartpi_integral)
 
 ## What SmartPI does
 
@@ -105,12 +113,12 @@ On some installations, a valve can already pass most of the flow when it is only
 
 In practice, it may feel like this:
 
-| Command sent to the valve | Possible radiator effect |
-| --- | --- |
-| `0%` to a few percent | no visible heat |
-| small opening | the radiator just starts heating |
-| around `15%` to `25%` | most of the flow is already present |
-| above that | smaller change, sometimes mostly more hydraulic noise |
+| Command sent to the valve | Possible radiator effect                              |
+| ------------------------- | ----------------------------------------------------- |
+| `0%` to a few percent     | no visible heat                                       |
+| small opening             | the radiator just starts heating                      |
+| around `15%` to `25%`     | most of the flow is already present                   |
+| above that                | smaller change, sometimes mostly more hydraulic noise |
 
 The exact values depend on the valve, the valve body, radiator balancing and the hydraulic installation. Do not try to find a perfect value on the first attempt.
 
@@ -128,12 +136,12 @@ Linearization then transforms that demand into a valve opening better suited to 
 
 Simplified example:
 
-| SmartPI demand | Opening sent to the valve |
-| --- | --- |
-| `0%` | `0%` |
-| low demand | around the useful minimum opening |
-| `80%` | around the knee opening |
-| `100%` | allowed maximum opening |
+| SmartPI demand | Opening sent to the valve         |
+| -------------- | --------------------------------- |
+| `0%`           | `0%`                              |
+| low demand     | around the useful minimum opening |
+| `80%`          | around the knee opening           |
+| `100%`         | allowed maximum opening           |
 
 This correction does not replace SmartPI learning. It only helps SmartPI speak more naturally to a non-linear valve.
 
@@ -152,12 +160,12 @@ The option is offered only for thermostats that expose a valve command.
 
 Default values give a reasonable starting point. Adjust them only if you have observed the behavior of your radiator.
 
-| Parameter | What it means | Starting value |
-| --- | --- | --- |
-| **Minimum valve opening** | First opening where the radiator really starts heating. | `7%` |
-| **Demand at knee** | SmartPI demand where the valve is considered to reach its high-flow area. | `80%` |
-| **Valve opening at knee** | Physical valve position at that demand. | `15%` |
-| **Maximum valve opening** | Maximum allowed opening. | `100%` |
+| Parameter                 | What it means                                                             | Starting value |
+| ------------------------- | ------------------------------------------------------------------------- | -------------- |
+| **Minimum valve opening** | First opening where the radiator really starts heating.                   | `7%`           |
+| **Demand at knee**        | SmartPI demand where the valve is considered to reach its high-flow area. | `80%`          |
+| **Valve opening at knee** | Physical valve position at that demand.                                   | `15%`          |
+| **Maximum valve opening** | Maximum allowed opening.                                                  | `100%`         |
 
 To find the minimum opening, the simplest method is to observe the radiator:
 
@@ -268,23 +276,23 @@ Do not try to tune several parameters at once during the first learning period. 
 
 ## Configuration
 
-| Parameter | Role | Default value |
-| --- | --- | --- |
-| **Minimal activation delay** | Minimum time the heater stays on once activated. | `0 s` |
-| **Minimal deactivation delay** | Minimum time the heater stays off once deactivated. | `0 s` |
-| **Deadband** | Tolerance zone around the setpoint. | `0.05°C` |
-| **Setpoint filter** | Enables proportional setpoint shaping and heating landing control near the target. | `enabled` |
-| **FF3** | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled` |
-| **Allow P inside deadband** | Allows the proportional branch to remain active inside the deadband. | `disabled` |
-| **Release tau factor** | Scales the integral release delay relative to the learned time constant. | `0.5` |
-| **Lower hysteresis threshold** | Restart threshold during bootstrap learning. | `0.3°C` |
-| **Upper hysteresis threshold** | Stop threshold during bootstrap learning. | `0.5°C` |
-| **SmartPI debug mode** | Publishes more detailed diagnostics. | `disabled` |
-| **Valve curve linearization** | Adapts SmartPI demand to non-linear radiator valves. | `disabled` |
-| **Minimum valve opening** | First useful opening when linearization is enabled. | `7%` |
-| **Demand at knee** | SmartPI demand corresponding to the valve slope change. | `80%` |
-| **Valve opening at knee** | Physical valve opening at the slope change. | `15%` |
-| **Maximum valve opening** | Maximum allowed opening when linearization is enabled. | `100%` |
+| Parameter                      | Role                                                                                              | Default value |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- | ------------- |
+| **Minimal activation delay**   | Minimum time the heater stays on once activated.                                                  | `0 s`         |
+| **Minimal deactivation delay** | Minimum time the heater stays off once deactivated.                                               | `0 s`         |
+| **Deadband**                   | Tolerance zone around the setpoint.                                                               | `0.05°C`      |
+| **Setpoint filter**            | Enables proportional setpoint shaping and heating landing control near the target.                | `enabled`     |
+| **FF3**                        | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled`     |
+| **Allow P inside deadband**    | Allows the proportional branch to remain active inside the deadband.                              | `disabled`    |
+| **Release tau factor**         | Scales the integral release delay relative to the learned time constant.                          | `0.5`         |
+| **Lower hysteresis threshold** | Restart threshold during bootstrap learning.                                                      | `0.3°C`       |
+| **Upper hysteresis threshold** | Stop threshold during bootstrap learning.                                                         | `0.5°C`       |
+| **SmartPI debug mode**         | Publishes more detailed diagnostics.                                                              | `disabled`    |
+| **Valve curve linearization**  | Adapts SmartPI demand to non-linear radiator valves.                                              | `disabled`    |
+| **Minimum valve opening**      | First useful opening when linearization is enabled.                                               | `7%`          |
+| **Demand at knee**             | SmartPI demand corresponding to the valve slope change.                                           | `80%`         |
+| **Valve opening at knee**      | Physical valve opening at the slope change.                                                       | `15%`         |
+| **Maximum valve opening**      | Maximum allowed opening when linearization is enabled.                                            | `100%`        |
 
 ## Diagnostics and Markdown card
 
@@ -332,6 +340,8 @@ In normal mode, the `setpoint` block can show:
 If SmartPI debug mode is enabled, the `debug` block adds more detailed internal data, including the landing prediction, target margin, release decision, and command before/after the landing cap.
 
 A Home Assistant Markdown card is also available to display SmartPI diagnostics in a simpler way in the dashboard.
+
+https://github.com/KipK/vtherm_smartpi/tree/master/cards
 
 ## Services
 
