@@ -411,9 +411,9 @@
 | Integral | {% if integral_error is not none %}{{ integral_error | float | round(4) }}{% else %}—{% endif %} |
 | Mode I | `{{ integral_mode }}` |
 | Guard I | `{{ integral_guard_label }}` |
-{%- if has_debug %}
+{% if has_debug -%}
 | Near-band | {{ nb_status }} · `{{ nb_src }}` |
-{%- endif %}
+{% endif %}
 
 {% if has_debug %}
 `{{ bar_line }}`
@@ -429,7 +429,7 @@
 | Active | {% if trajectory_active %}yes{% else %}no{% endif %} |
 | Source | `{{ trajectory_source_label }}` |
 | Filtered setpoint | {% if published_filtered_sp is not none %}{{ published_filtered_sp | float | round(2) }}°C{% else %}—{% endif %} |
-{%- if has_debug %}
+{% if has_debug -%}
 | Debug source | `{{ debug_trajectory_source_label }}` |
 | Start | {% if traj_start_sp is not none %}{{ traj_start_sp | float | round(3) }}°C{% else %}—{% endif %} |
 | Target | {% if traj_target_sp is not none %}{{ traj_target_sp | float | round(3) }}°C{% else %}—{% endif %} |
@@ -443,7 +443,7 @@
 | `u_ref` cycle+1 | {% if traj_next_cycle_u_ref is not none %}{{ (traj_next_cycle_u_ref | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | `u_delta` bumpless | {% if traj_bumpless_u_delta is not none %}{{ (traj_bumpless_u_delta | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | Bumpless ready | {% if traj_bumpless_ready is sameas true %}yes{% elif traj_bumpless_ready is sameas false %}no{% else %}—{% endif %} |
-{%- endif %}
+{% endif %}
 
 {% if has_debug %}
 ### 🛬 Setpoint landing
@@ -486,25 +486,25 @@
 | PI | {{ (pi_pct * 100) | round(1) }}% |
 | Hold | {{ (hold_pct * 100) | round(1) }}% |
 | Hysteresis | `{{ hyst_state }}`{% if has_debug and hyst_guard %} · guard active{% endif %} |
-{% if not has_debug %}
+{% if not has_debug -%}
 | Restart | `{{ restart_reason }}` |
-{% endif %}
-{%- if landing_u_cap is not none %}
+{% endif -%}
+{% if landing_u_cap is not none -%}
 | Landing cap | {{ (landing_u_cap | float * 100) | round(1) }}% |
-{%- endif %}
-{%- if valve_linearization_enabled %}
+{% endif -%}
+{% if valve_linearization_enabled -%}
 | SmartPI demand | {{ (linear_next_cycle * 100) | round(1) }}% |
 | Adjusted valve command | {{ (next_cycle * 100) | round(1) }}% |
 | Current cycle demand | {{ (linear_current_cycle * 100) | round(1) }}% |
 | Current cycle adjusted | {{ (current_cycle * 100) | round(1) }}% |
-{%- endif %}
-{%- if has_debug %}
+{% endif -%}
+{% if has_debug -%}
 | `u_cmd` | {{ (u_cmd * 100) | round(1) }}% |
 | `u_limited` | {{ (u_limited * 100) | round(1) }}% |
 | `u_applied` | {{ (u_applied * 100) | round(1) }}% |
 | `aw_du` | {{ (aw_du * 100) | round(2) }}%{% if db_active and aw_du != 0 %} ⚠️{% endif %} |
 | `forced_by_timing` | {% if forced_tm %}yes{% else %}no{% endif %} |
-{%- endif %}
+{% endif %}
 
 ---
 
@@ -516,16 +516,16 @@
 | `b` | {% if b is not none %}{{ b | float | round(6) }}{% else %}—{% endif %} |
 | AB Confidence | {{ ab_label }} |
 | `tau_reliable` | {% if tau_reliable %}✅{% else %}⏳{% endif %} |
-{% if not has_debug %}
+{% if not has_debug -%}
 | `deadtime_heat_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} |
 | `deadtime_cool_s` | {% if dt_cool is not none %}{{ dt_cool }} s{% else %}—{% endif %} |
-{% endif %}
+{% endif -%}
 | `Kp` | {% if kp is not none %}{{ kp | float | round(4) }}{% else %}—{% endif %} |
 | `Ki` | {% if ki is not none %}{{ ki | float | round(5) }}{% else %}—{% endif %} |
-{%- if has_debug %}
+{% if has_debug -%}
 | `tau` | {% if tau_s is not none %}{{ tau_s | float | round(1) }} min{% else %}—{% endif %} |
 | `kp_source` | `{{ kp_src }}` |
-{%- endif %}
+{% endif %}
 
 ---
 
@@ -540,10 +540,10 @@
 | Drift A/B | `{{ a_drift }}` / `{{ b_drift }}` |
 | Bootstrap | {% if bootstrap_status %}`{{ bootstrap_status }}`{% else %}—{% endif %} |
 | Last reason | `{{ last_reason | truncate(80, true, '…') }}` |
-{%- if has_debug %}
+{% if has_debug -%}
 | Learn ok/skip | {{ learn_ok }} / {{ learn_skip }} |
 | `u_avg / cv / std` | {% if learn_u_avg is not none %}{{ learn_u_avg }}{% else %}—{% endif %} / {% if learn_u_cv is not none %}{{ learn_u_cv }}{% else %}—{% endif %} / {% if learn_u_std is not none %}{{ learn_u_std }}{% else %}—{% endif %} |
-{%- endif %}
+{% endif %}
 
 ---
 
@@ -556,9 +556,9 @@
 | Thermal reason | `{{ thermal_reason }}` |
 | FF3 | `{{ ff3_status }}` |
 | Twin usable | {% if ff3_twin_usable %}yes{% else %}no{% endif %} |
-{% if not has_debug %}
+{% if not has_debug -%}
 | Twin status | `{{ twin_status }}` |
-{% endif %}
+{% endif -%}
 | Deadband source | `{{ deadband_source }}` |
 
 ---
