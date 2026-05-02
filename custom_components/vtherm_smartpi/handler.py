@@ -115,9 +115,10 @@ class SmartPIHandler:
             CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
             False,
         )
+        valve_mode_enabled = bool(getattr(t.cycle_scheduler, "is_valve_mode", False))
         valve_linearization_enabled = (
             self._valve_linearization_configured
-            and bool(getattr(t.cycle_scheduler, "is_valve_mode", False))
+            and valve_mode_enabled
         )
         try:
             self._valve_curve_params = ValveCurveParams(
@@ -170,6 +171,11 @@ class SmartPIHandler:
             debug_mode=debug_mode,
             enable_valve_linearization=valve_linearization_enabled,
             valve_curve_params=self._valve_curve_params,
+        )
+        t.prop_algorithm.configure_valve_linearization(
+            valve_linearization_enabled,
+            self._valve_curve_params,
+            valve_mode=valve_mode_enabled,
         )
 
         _LOGGER.info("%s - SmartPI Algorithm initialized", t)
@@ -257,6 +263,7 @@ class SmartPIHandler:
                 self._valve_linearization_configured
                 and bool(getattr(scheduler, "is_valve_mode", False)),
                 self._valve_curve_params,
+                valve_mode=bool(getattr(scheduler, "is_valve_mode", False)),
             )
             scheduler.register_cycle_start_callback(algo.on_cycle_started)
             scheduler.register_cycle_end_callback(algo.on_cycle_completed)

@@ -117,3 +117,27 @@ def build_valve_curve(
     if enabled:
         return TwoSlopeValveCurve(params or VALVE_CURVE_DEFAULTS)
     return IdentityValveCurve()
+
+
+def apply_valve_activation_floor(
+    curve: ValveCurveProtocol,
+    linear_demand: float,
+    cycle_min: float,
+    minimal_activation_delay: int,
+) -> tuple[float, bool]:
+    """Raise a valve demand when scheduler timing would otherwise close it."""
+    demand = clamp_unit(linear_demand)
+    if demand <= 0.0:
+        return demand, False
+
+    cycle_sec = max(float(cycle_min) * 60.0, 0.0)
+    min_on_sec = max(float(minimal_activation_delay), 0.0)
+    if min_on_sec <= 0.0 or cycle_sec <= 0.0 or min_on_sec >= cycle_sec:
+        return demand, False
+
+    actuator_demand = curve.apply(demand)
+    min_actuator_demand = min_on_sec / cycle_sec
+    if actuator_demand + 1e-9 >= min_actuator_demand:
+        return demand, False
+
+    return max(demand, curve.invert(min_actuator_demand)), True

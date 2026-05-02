@@ -108,3 +108,48 @@ async def test_valve_feedback_is_projected_to_linear_state() -> None:
     assert algo.linear_committed_on_percent == pytest.approx(0.8)
     assert algo.u_prev == pytest.approx(0.8)
     assert algo.linear_u_applied == pytest.approx(0.8)
+
+
+def test_non_valve_keeps_min_activation_zero_cut() -> None:
+    """Switch-like outputs keep the existing minimum activation behavior."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=5.0,
+        minimal_activation_delay=60,
+        minimal_deactivation_delay=0,
+        name="switch-min-on",
+    )
+
+    assert algo.update_timing_constraints(0.0, 0.1) == pytest.approx(0.0)
+    assert algo.forced_by_timing is True
+
+
+def test_valve_mode_raises_small_command_to_activation_floor() -> None:
+    """Valve commands stay positive when the scheduler timing floor is reachable."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=5.0,
+        minimal_activation_delay=60,
+        minimal_deactivation_delay=0,
+        name="valve-min-on",
+    )
+    algo.configure_valve_linearization(False, valve_mode=True)
+
+    assert algo.update_timing_constraints(0.0, 0.1) == pytest.approx(0.2)
+    assert algo.forced_by_timing is True
+
+
+def test_linearized_valve_uses_actuator_activation_floor() -> None:
+    """Valve linearization inverts the actuator floor back to PI demand space."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=5.0,
+        minimal_activation_delay=30,
+        minimal_deactivation_delay=0,
+        name="linearized-valve-min-on",
+        enable_valve_linearization=True,
+    )
+    algo.configure_valve_linearization(True, valve_mode=True)
+
+    assert algo.update_timing_constraints(0.0, 0.1) == pytest.approx(0.3)
+    assert algo.forced_by_timing is True

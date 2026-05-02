@@ -112,7 +112,11 @@ from .smartpi.integral_guard import (
     SmartPIIntegralGuard,
     integral_guard_release_error_threshold,
 )
-from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
+from .smartpi.valve_curve import (
+    ValveCurveParams,
+    apply_valve_activation_floor,
+    build_valve_curve,
+)
 from .smartpi.const import (
     ABConfidenceState,
     FF_TRIM_REBOOT_FREEZE_CYCLES,
@@ -189,6 +193,7 @@ class SmartPI:
             enable_valve_linearization,
             valve_curve_params,
         )
+        self._valve_mode_enabled = bool(enable_valve_linearization)
 
         self.deadband_c = float(deadband_c)
 
@@ -897,9 +902,13 @@ class SmartPI:
         self,
         enabled: bool,
         params: ValveCurveParams | None = None,
+        valve_mode: bool | None = None,
     ) -> None:
         """Configure the actuator linearization curve."""
         self.valve_curve = build_valve_curve(enabled, params)
+        self._valve_mode_enabled = (
+            bool(valve_mode) if valve_mode is not None else bool(enabled)
+        )
         self._sync_actuator_on_percent()
         self._sync_actuator_committed_on_percent()
         self._last_actuator_applied = self._to_actuator_power(self._last_u_applied)
@@ -1239,6 +1248,20 @@ class SmartPI:
         u_final = u_cmd
         cycle_sec = self._cycle_min * 60
         on_time_sec = u_cmd * cycle_sec
+
+        if self._valve_mode_enabled:
+            u_floored, adjusted = apply_valve_activation_floor(
+                self.valve_curve,
+                u_cmd,
+                self._cycle_min,
+                self._minimal_activation_delay,
+            )
+            if adjusted:
+                self._last_forced_by_timing = True
+                return min(
+                    u_floored,
+                    self._max_on_percent if self._max_on_percent is not None else 1.0,
+                )
 
         # Case: Switching ON
         if u_prev <= 0.001 and u_cmd > 0.001:
