@@ -79,3 +79,10 @@ remove vtherm_api dependency ( use VT installed one )
 - Make SmartPI landing residual release sticky
   Prevent the landing cap from reactivating after residual release during the same trajectory, while allowing rearm when demand becomes significant again. Add focused landing coverage.
 - updated markdown cards
+
+
+  ## [0.3.1] - 2026-05-04
+
+- Fix SmartPI climate state publishing on sensor updates
+- Deadtime-aware open-loop prediction for FF3
+- Stabilize SmartPI valve output near minimum activation delay
