@@ -79,6 +79,7 @@ ESSENTIAL_KEYS = {
     "ff3_twin_usable",
     "ab_confidence_state",
     "deadband_power_source",
+    "deadband_p_mode",
     "ff2_trim_delta",
     "fftrim_last_reject_reason",
     "fftrim_last_update_reason",
@@ -201,6 +202,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "ff3_twin_usable": diag["ff3_twin_usable"],
             "twin_status": diag["twin_status"],
             "deadband_power_source": diag["deadband_power_source"],
+            "deadband_p_mode": diag["deadband_p_mode"],
         },
         "setpoint": {
             "filtered_setpoint": diag["filtered_setpoint"],
@@ -460,6 +462,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "in_core_deadband": algo._tau_reliable and abs(algo.error) < max(algo.deadband_c, 0.0),
         "in_near_band": algo.in_near_band,
         "deadband_power_source": algo.ctl.deadband_power_source,
+        "deadband_p_mode": algo.ctl.deadband_p_mode,
         # Setpoint boost state
         "setpoint_boost_active": algo.sp_mgr.boost_active,
         "hysteresis_thermal_guard": algo.ctl.hysteresis_thermal_guard,

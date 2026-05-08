@@ -3,14 +3,13 @@ from __future__ import annotations
 import logging
 
 from .const import (
-    ENABLE_PROPORTIONAL_DEADZONE,
     KI_MIN,
-    INTEGRAL_LEAK,
     OVERSHOOT_I_CLAMP_EPS_C,
     SETPOINT_MODE_DELTA_C,
     TRAJECTORY_I_RUN_SCALE,
     clamp
 )
+from .deadband_output import deadband_proportional_error
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,6 +47,7 @@ class SmartPIController:
         self.sat_p: bool = False
         self.sat_i: bool = False
         self.deadband_power_source: str = "none"
+        self.deadband_p_mode: str = "init"
         self.integral_hold_mode: str = "none"
 
         # Setpoint landing command cap (post-PI governor)
@@ -70,6 +70,7 @@ class SmartPIController:
         self.sat_p = False
         self.sat_i = False
         self.deadband_power_source = "none"
+        self.deadband_p_mode = "init"
         self.integral_hold_mode = "none"
         self.u_cmd_before_cap = None
         self.u_cmd_cap = None
@@ -286,19 +287,12 @@ class SmartPIController:
         if self.integral_hold_active and freeze_deadband:
             self.clear_integral_hold()
 
-        # Optional deadzone on the proportional path.
-        # When disabled, the controller uses the raw proportional error everywhere.
-        db_size = max(deadband_c, 0.0)
-
-        if freeze_deadband and not deadband_allow_p:
-            # Inside the configured core deadband, both P and I must be frozen.
-            error_p_db = 0.0
-        elif not ENABLE_PROPORTIONAL_DEADZONE:
-            error_p_db = error_p
-        elif abs(error_p) <= db_size:
-            error_p_db = 0.0
-        else:
-            error_p_db = error_p - (db_size if error_p >= 0.0 else -db_size)
+        error_p_db, self.deadband_p_mode = deadband_proportional_error(
+            error_p=error_p,
+            deadband_c=deadband_c,
+            freeze_deadband=freeze_deadband,
+            deadband_allow_p=deadband_allow_p,
+        )
         self.last_error_p_db = error_p_db
         
         i_max = 2.0 / max(ki, KI_MIN)
@@ -322,7 +316,7 @@ class SmartPIController:
         # ------------------------------------------------
         
         if freeze_deadband:
-            # Deadband mode: integral is frozen; P term is included only when deadband_allow_p is set.
+            # Deadband mode: integral is frozen; P term is damped near the edge when allowed.
             # No extra maintenance governor is applied on top of the PI state.
             self.last_i_mode = "I:FREEZE(deadband)"
 

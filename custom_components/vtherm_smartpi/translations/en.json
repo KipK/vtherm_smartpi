@@ -13,7 +13,7 @@
           "smart_pi_release_tau_factor": "Release tau factor",
           "smart_pi_use_setpoint_filter": "Use setpoint filter",
           "smart_pi_use_ff3": "Use FF3",
-          "smart_pi_deadband_allow_p": "Allow P inside deadband",
+          "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_debug": "Debug mode",
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
         }
@@ -35,7 +35,7 @@
           "smart_pi_release_tau_factor": "Release tau factor",
           "smart_pi_use_setpoint_filter": "Use setpoint filter",
           "smart_pi_use_ff3": "Use FF3",
-          "smart_pi_deadband_allow_p": "Allow P inside deadband",
+          "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_debug": "Debug mode",
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
         }
@@ -70,7 +70,7 @@
           "smart_pi_release_tau_factor": "Release tau factor",
           "smart_pi_use_setpoint_filter": "Use setpoint filter",
           "smart_pi_use_ff3": "Use FF3",
-          "smart_pi_deadband_allow_p": "Allow P inside deadband",
+          "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_debug": "Debug mode",
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
         }

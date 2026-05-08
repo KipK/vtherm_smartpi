@@ -124,6 +124,44 @@ def test_deadband_uses_u_db_nominal():
     assert ctl.deadband_power_source == "ff_plus_pi"
 
 
+def test_observed_valve_deadband_case_uses_frozen_integral_only():
+    """Observed 0.07 C valve error must not produce raw P in core deadband."""
+    ctl = SmartPIController("test_valve_deadband")
+    ctl.integral = -5.221122
+
+    ctl.compute_pwm(
+        error=0.07,
+        error_p=0.07,
+        kp=3.472215,
+        ki=0.001443,
+        u_ff=0.0,
+        dt_min=10.0,
+        cycle_min=10.0,
+        in_deadband=True,
+        in_near_band=True,
+        integrator_hold=False,
+        u_db_nominal=0.0,
+        hvac_mode=VThermHvacMode_HEAT,
+        current_temp=22.93,
+        target_temp=23.0,
+        hysteresis_thermal_guard=False,
+        is_tau_reliable=True,
+        learn_ok_count_a=15,
+        deadband_c=0.10,
+        deadband_allow_p=True,
+    )
+
+    expected_i_only = 0.001443 * -5.221122
+    raw_p_plus_i = 3.472215 * 0.07 + expected_i_only
+
+    assert ctl.integral == pytest.approx(-5.221122)
+    assert ctl.last_i_mode == "I:FREEZE(deadband)"
+    assert ctl.last_error_p_db == pytest.approx(0.0)
+    assert ctl.deadband_p_mode == "deadband_quiet"
+    assert ctl.u_pi == pytest.approx(expected_i_only)
+    assert ctl.u_pi != pytest.approx(raw_p_plus_i)
+
+
 def test_tracking_trajectory_reduces_free_integral_growth():
     """Free I-run must grow more slowly while the trajectory is still tracking."""
     ctl = SmartPIController("test_track_i_scale")

@@ -13,7 +13,7 @@
           "smart_pi_release_tau_factor": "Facteur tau de relâchement",
           "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
           "smart_pi_use_ff3": "Utiliser FF3",
-          "smart_pi_deadband_allow_p": "Autoriser P dans la bande morte",
+          "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_debug": "Mode debug",
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
@@ -35,7 +35,7 @@
           "smart_pi_release_tau_factor": "Facteur tau de relâchement",
           "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
           "smart_pi_use_ff3": "Utiliser FF3",
-          "smart_pi_deadband_allow_p": "Autoriser P dans la bande morte",
+          "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_debug": "Mode debug",
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
@@ -70,7 +70,7 @@
           "smart_pi_release_tau_factor": "Facteur tau de relâchement",
           "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
           "smart_pi_use_ff3": "Utiliser FF3",
-          "smart_pi_deadband_allow_p": "Autoriser P dans la bande morte",
+          "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_debug": "Mode debug",
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
