@@ -136,8 +136,8 @@
   'disturbance': 'disturbance'
 }.get(trajectory_source_pub, trajectory_source_pub) %}
 
-{% set current_ff_blk = (ff_pct * 18) | int %}
-{% set current_pi_blk = (pi_pct * 18) | int %}
+{% set current_ff_blk = ((ff_pct / 100) * 18) | int %}
+{% set current_pi_blk = ((pi_pct / 100) * 18) | int %}
 {% set current_off_blk = [18 - current_ff_blk - current_pi_blk, 0] | max %}
 {% set power_bar = '█' * current_ff_blk ~ '░' * current_pi_blk ~ '·' * current_off_blk %}
 
@@ -474,17 +474,17 @@
 `{{ pwr_bar }}` **{{ (on_pct * 100) | round(1) }}%**
 <small>█ Effective FF · ░ PI · · stop</small>
 {% else %}
-`{{ power_bar }}` **{{ (next_cycle * 100) | round(1) }}%**
+`{{ power_bar }}` **{{ next_cycle | round(1) }}%**
 <small>█ FF · ░ PI · · stop</small>
 {% endif %}
 
 | Signal | Value |
 |---|---:|
-| Current cycle | {{ (current_cycle * 100) | round(1) }}% |
-| Next cycle | {{ (next_cycle * 100) | round(1) }}% |
-| Feed-forward | {{ (ff_pct * 100) | round(1) }}% |
-| PI | {{ (pi_pct * 100) | round(1) }}% |
-| Hold | {{ (hold_pct * 100) | round(1) }}% |
+| Current cycle | {{ current_cycle | round(1) }}% |
+| Next cycle | {{ next_cycle | round(1) }}% |
+| Feed-forward | {{ ff_pct | round(1) }}% |
+| PI | {{ pi_pct | round(1) }}% |
+| Hold | {{ hold_pct | round(1) }}% |
 | Hysteresis | `{{ hyst_state }}`{% if has_debug and hyst_guard %} · guard active{% endif %} |
 {% if not has_debug -%}
 | Restart | `{{ restart_reason }}` |
@@ -493,10 +493,10 @@
 | Landing cap | {{ (landing_u_cap | float * 100) | round(1) }}% |
 {% endif -%}
 {% if valve_linearization_enabled -%}
-| SmartPI demand | {{ (linear_next_cycle * 100) | round(1) }}% |
-| Adjusted valve command | {{ (next_cycle * 100) | round(1) }}% |
-| Current cycle demand | {{ (linear_current_cycle * 100) | round(1) }}% |
-| Current cycle adjusted | {{ (current_cycle * 100) | round(1) }}% |
+| SmartPI demand | {{ linear_next_cycle | round(1) }}% |
+| Adjusted valve command | {{ next_cycle | round(1) }}% |
+| Current cycle demand | {{ linear_current_cycle | round(1) }}% |
+| Current cycle adjusted | {{ current_cycle | round(1) }}% |
 {% endif -%}
 {% if has_debug -%}
 | `u_cmd` | {{ (u_cmd * 100) | round(1) }}% |

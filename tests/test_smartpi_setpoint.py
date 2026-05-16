@@ -6,6 +6,9 @@ import pytest
 
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import (
+    AB_HISTORY_SIZE,
+    AB_MIN_SAMPLES_A,
+    AB_MIN_SAMPLES_B,
     LANDING_NON_CONSTRAINING_PERSISTENCE,
     LANDING_SAFETY_MARGIN_C,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
@@ -1120,6 +1123,63 @@ class TestLandingDiagnostics:
             "landing_u_cap",
             "landing_coast_required",
         }
+
+    def test_published_diagnostics_expose_dashboard_fields(self):
+        algo = self._make_algo()
+        algo._committed_on_percent = 0.25
+        algo._on_percent = 0.5
+        algo._last_u_pi = 0.125
+        algo._last_u_ff = 0.375
+        algo.ctl.u_hold = 0.0625
+        algo._last_u_cmd = 0.8
+        algo._last_u_limited = 0.7
+        algo._last_u_applied = 0.6
+        algo.ctl.last_sat = "NO_SAT"
+        algo.in_deadband = True
+        algo.in_near_band = True
+        algo.dt_est.deadtime_heat_reliable = True
+        algo.dt_est.deadtime_cool_reliable = False
+        algo.est.diag_a_mad_over_med = 0.123
+        algo.est.diag_b_mad_over_med = 0.456
+        algo.est.learn_ok_count_a = 9
+        algo.est.learn_ok_count_b = 11
+        algo.est.a_meas_hist.extend([1.0] * 3)
+        algo.est.b_meas_hist.extend([1.0] * 4)
+
+        published = build_published_diagnostics(algo)
+
+        assert published["power"]["current_cycle_percent"] == pytest.approx(25.0)
+        assert published["power"]["next_cycle_percent"] == pytest.approx(50.0)
+        assert published["power"]["linear_current_cycle_percent"] == pytest.approx(25.0)
+        assert published["power"]["linear_next_cycle_percent"] == pytest.approx(50.0)
+        assert published["power"]["pi_percent"] == pytest.approx(12.5)
+        assert published["power"]["ff_percent"] == pytest.approx(37.5)
+        assert published["power"]["hold_percent"] == pytest.approx(6.2)
+        assert published["power"]["command_percent"] == pytest.approx(80.0)
+        assert published["power"]["limited_percent"] == pytest.approx(70.0)
+        assert published["power"]["applied_percent"] == pytest.approx(60.0)
+
+        assert published["control"]["saturation_state"] == "NO_SAT"
+        assert published["control"]["in_deadband"] is True
+        assert published["control"]["in_near_band"] is True
+        assert published["control"]["in_deadtime_window"] is False
+
+        assert published["model"]["tau_min"] is not None
+        assert published["model"]["deadtime_heat_reliable"] is True
+        assert published["model"]["deadtime_cool_reliable"] is False
+        assert published["model"]["a_stability_ratio"] == pytest.approx(0.123)
+        assert published["model"]["b_stability_ratio"] == pytest.approx(0.456)
+
+        assert published["ab_learning"]["emea_samples_a"] == 3
+        assert published["ab_learning"]["emea_samples_b"] == 4
+        assert published["ab_learning"]["bootstrap_target_a"] == AB_MIN_SAMPLES_A
+        assert published["ab_learning"]["bootstrap_target_b"] == AB_MIN_SAMPLES_B
+        assert published["ab_learning"]["history_target"] == AB_HISTORY_SIZE
+        assert published["ab_learning"]["accepted_updates_a"] == 9
+        assert published["ab_learning"]["accepted_updates_b"] == 11
+        assert published["ab_learning"]["accepted_samples_a"] == 9
+        assert published["ab_learning"]["accepted_samples_b"] == 11
+        assert published["ab_learning"]["bootstrap_progress_percent"] == 50
 
 
 class TestLandingNonConstraining:

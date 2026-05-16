@@ -15,6 +15,8 @@ from .const import (
     SmartPIPhase,
     U_ON_MIN,
     AB_HISTORY_SIZE,
+    AB_MIN_SAMPLES_A,
+    AB_MIN_SAMPLES_B,
     FF_TRIM_EPSILON,
     FF_TRIM_RHO,
 )
@@ -141,6 +143,13 @@ def _session_counter(total: int, baseline: int) -> int:
     return max(0, int(total) - int(baseline))
 
 
+def _ratio_to_percent(value: Any, digits: int = 1) -> float | None:
+    """Return a public percent value from an internal ratio."""
+    if value is None:
+        return None
+    return round(float(value) * 100.0, digits)
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the compact SmartPI summary published in Home Assistant."""
     diag = _build_full_diagnostics(algo)
@@ -153,16 +162,23 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "kp": diag["Kp"],
             "ki": diag["Ki"],
             "restart_reason": diag["restart_reason"],
+            "saturation_state": diag["sat"],
+            "in_deadband": diag["in_deadband"],
+            "in_near_band": diag["in_near_band"],
+            "in_deadtime_window": diag["in_deadtime_window"],
         },
         "power": {
-            "current_cycle_percent": diag["committed_on_percent"],
-            "next_cycle_percent": diag["on_percent"],
-            "linear_current_cycle_percent": diag["linear_committed_on_percent"],
-            "linear_next_cycle_percent": diag["linear_on_percent"],
+            "current_cycle_percent": _ratio_to_percent(diag["committed_on_percent"]),
+            "next_cycle_percent": _ratio_to_percent(diag["on_percent"]),
+            "linear_current_cycle_percent": _ratio_to_percent(diag["linear_committed_on_percent"]),
+            "linear_next_cycle_percent": _ratio_to_percent(diag["linear_on_percent"]),
             "valve_linearization_enabled": diag["valve_linearization_enabled"],
-            "pi_percent": diag["u_pi"],
-            "ff_percent": diag["u_ff"],
-            "hold_percent": diag["u_hold"],
+            "pi_percent": _ratio_to_percent(diag["u_pi"]),
+            "ff_percent": _ratio_to_percent(diag["u_ff"]),
+            "hold_percent": _ratio_to_percent(diag["u_hold"]),
+            "command_percent": _ratio_to_percent(diag["u_cmd"]),
+            "limited_percent": _ratio_to_percent(diag["u_limited"]),
+            "applied_percent": _ratio_to_percent(diag["u_applied"]),
         },
         "temperature": {
             "sensor": diag["sensor_temperature"],
@@ -178,13 +194,26 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "b": diag["b"],
             "confidence": diag["ab_confidence_state"],
             "tau_reliable": diag["tau_reliable"],
+            "tau_min": diag["tau_min"],
             "deadtime_heat_s": diag["deadtime_heat_s"],
             "deadtime_cool_s": diag["deadtime_cool_s"],
+            "deadtime_heat_reliable": diag["deadtime_heat_reliable"],
+            "deadtime_cool_reliable": diag["deadtime_cool_reliable"],
+            "a_stability_ratio": diag["diag_a_mad_over_med"],
+            "b_stability_ratio": diag["diag_b_mad_over_med"],
         },
         "ab_learning": {
             "stage": _build_ab_learning_stage(algo, diag),
             "bootstrap_progress_percent": diag.get("bootstrap_progress"),
             "bootstrap_status": diag.get("bootstrap_state"),
+            "emea_samples_a": algo.meas_count_a,
+            "emea_samples_b": algo.meas_count_b,
+            "bootstrap_target_a": AB_MIN_SAMPLES_A,
+            "bootstrap_target_b": AB_MIN_SAMPLES_B,
+            "history_target": AB_HISTORY_SIZE,
+            "accepted_updates_a": diag["learn_ok_count_a"],
+            "accepted_updates_b": diag["learn_ok_count_b"],
+            "learn_b_converged": diag["learn_b_converged"],
             "accepted_samples_a": diag["learn_ok_count_a"],
             "accepted_samples_b": diag["learn_ok_count_b"],
             "target_samples": AB_HISTORY_SIZE,
