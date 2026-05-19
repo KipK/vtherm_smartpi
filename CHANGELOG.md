@@ -86,3 +86,9 @@ remove vtherm_api dependency ( use VT installed one )
 - Fix SmartPI climate state publishing on sensor updates
 - Deadtime-aware open-loop prediction for FF3
 - Stabilize SmartPI valve output near minimum activation delay
+
+  ## [0.3.2] - 2026-05-06
+
+- Dampen proportional output inside SmartPI deadband ( when enable P in deadband is activated )
+- some attributes changes
+- updated markdown cards
