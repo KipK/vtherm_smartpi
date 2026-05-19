@@ -303,6 +303,8 @@ Activez cette option uniquement sur les systèmes thermiques à très forte iner
 
 ## Diagnostics et carte Markdown
 
+Pour obtenir la liste complète de tous les attributs de diagnostic en modes normal et debug, consultez le [Guide des Diagnostics SmartPI](./diagnostics.md).
+
 SmartPI publie ses diagnostics directement à la racine des attributs de l'entité capteur de diagnostic SmartPI.
 
 C'est l'endroit principal à consulter pour savoir :

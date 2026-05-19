@@ -303,6 +303,8 @@ Enable it only on very slow thermal systems with long PWM cycles, where waiting 
 
 ## Diagnostics and Markdown card
 
+For a complete list of all diagnostic attributes in normal and debug modes, see the [SmartPI Diagnostics Guide](./diagnostics.md).
+
 SmartPI publishes its diagnostics directly at the root of the attributes of the SmartPI diagnostic sensor entity.
 
 This is the main place to check:
