@@ -52,10 +52,19 @@
 {% set tau_reliable = model.get('tau_reliable', false) %}
 {% set dt_heat = model.get('deadtime_heat_s') %}
 {% set dt_cool = model.get('deadtime_cool_s') %}
+{% set deadtime_heat_reliable = model.get('deadtime_heat_reliable', debug.get('deadtime_heat_reliable', false)) %}
+{% set deadtime_cool_reliable = model.get('deadtime_cool_reliable', debug.get('deadtime_cool_reliable', false)) %}
 
 {% set stage = learning.get('stage', 'unknown') %}
 {% set bootstrap_progress = learning.get('bootstrap_progress_percent') %}
 {% set bootstrap_status = learning.get('bootstrap_status') %}
+{% set emea_samples_a = learning.get('emea_samples_a', 0) | int(0) %}
+{% set emea_samples_b = learning.get('emea_samples_b', 0) | int(0) %}
+{% set bootstrap_target_a = learning.get('bootstrap_target_a', 0) | int(0) %}
+{% set bootstrap_target_b = learning.get('bootstrap_target_b', 0) | int(0) %}
+{% set history_target = learning.get('history_target', 0) | int(0) %}
+{% set accepted_updates_a = learning.get('accepted_updates_a', 0) | int(0) %}
+{% set accepted_updates_b = learning.get('accepted_updates_b', 0) | int(0) %}
 {% set samples_a = learning.get('accepted_samples_a', 0) | int(0) %}
 {% set samples_b = learning.get('accepted_samples_b', 0) | int(0) %}
 {% set target_samples = learning.get('target_samples', 0) | int(0) %}
@@ -517,8 +526,8 @@
 | AB Confidence | {{ ab_label }} |
 | `tau_reliable` | {% if tau_reliable %}✅{% else %}⏳{% endif %} |
 {% if not has_debug -%}
-| `deadtime_heat_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} |
-| `deadtime_cool_s` | {% if dt_cool is not none %}{{ dt_cool }} s{% else %}—{% endif %} |
+| `deadtime_heat_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} · {% if deadtime_heat_reliable %}✅ reliable{% else %}⏳ learning{% endif %} |
+| `deadtime_cool_s` | {% if dt_cool is not none %}{{ dt_cool }} s{% else %}—{% endif %} · {% if deadtime_cool_reliable %}✅ reliable{% else %}⏳ learning{% endif %} |
 {% endif -%}
 | `Kp` | {% if kp is not none %}{{ kp | float | round(4) }}{% else %}—{% endif %} |
 | `Ki` | {% if ki is not none %}{{ ki | float | round(5) }}{% else %}—{% endif %} |
@@ -536,7 +545,8 @@
 
 | Parameter | Value |
 |---|---|
-| Samples A/B | **{{ samples_a }} / {{ samples_b }}**{% if target_samples %} out of {{ target_samples }}{% endif %} |
+| EMEA Samples A/B | **{{ emea_samples_a }} / {{ emea_samples_b }}** (targets: {{ bootstrap_target_a }}/{{ bootstrap_target_b }} bootstrap, {{ history_target }} history) |
+| Accepted updates A/B | **{{ accepted_updates_a }} / {{ accepted_updates_b }}** |
 | Drift A/B | `{{ a_drift }}` / `{{ b_drift }}` |
 | Bootstrap | {% if bootstrap_status %}`{{ bootstrap_status }}`{% else %}—{% endif %} |
 | Last reason | `{{ last_reason | truncate(80, true, '…') }}` |
