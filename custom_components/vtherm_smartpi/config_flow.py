@@ -15,6 +15,7 @@ from .const import (
     CONF_MINIMAL_DEACTIVATION_DELAY,
     CONF_SMART_PI_DEADBAND,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
+    CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
     CONF_SMART_PI_DEBUG,
     CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
     CONF_SMART_PI_HYSTERESIS_OFF,
@@ -125,6 +126,10 @@ def build_main_options_schema(
         vol.Optional(
             CONF_SMART_PI_DEADBAND_ALLOW_P,
             default=defaults[CONF_SMART_PI_DEADBAND_ALLOW_P],
+        ): bool,
+        vol.Optional(
+            CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
+            default=defaults[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE],
         ): bool,
         vol.Optional(
             CONF_SMART_PI_DEBUG,

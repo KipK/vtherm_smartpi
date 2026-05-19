@@ -30,6 +30,7 @@ from .const import (
     CONF_SMART_PI_HYSTERESIS_OFF,
     CONF_SMART_PI_RELEASE_TAU_FACTOR,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
+    CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
     CONF_SMART_PI_DEBUG,
     CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
     CONF_SMART_PI_MIN_VALVE,
@@ -73,6 +74,7 @@ class SmartPIHandler:
         self._pending_publish_signature = None
         # Track calibration state for completion detection
         self._prev_is_calibrating: bool = False
+        self._allow_pwm_cycle_force: bool = False
         self._valve_linearization_configured: bool = False
         self._valve_curve_params: ValveCurveParams | None = None
 
@@ -110,6 +112,10 @@ class SmartPIHandler:
         hyst_off = entry.get(CONF_SMART_PI_HYSTERESIS_OFF, 0.5)
         release_tau_factor = entry.get(CONF_SMART_PI_RELEASE_TAU_FACTOR, 0.5)
         deadband_allow_p = entry.get(CONF_SMART_PI_DEADBAND_ALLOW_P, False)
+        self._allow_pwm_cycle_force = entry.get(
+            CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
+            DEFAULT_OPTIONS[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE],
+        )
         debug_mode = entry.get(CONF_SMART_PI_DEBUG, False)
         self._valve_linearization_configured = entry.get(
             CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
@@ -366,7 +372,10 @@ class SmartPIHandler:
 
             # Force cycle restart on deadband and near-band transitions so the
             # physically engaged PWM follows the zone change quickly.
-            if getattr(algo.deadband_mgr, "deadband_changed", False) is True:
+            if (
+                self._allow_pwm_cycle_force
+                and getattr(algo.deadband_mgr, "deadband_changed", False) is True
+            ):
                 _LOGGER.debug(
                     "%s - Deadband state transition detected, forcing cycle restart",
                     t,
@@ -374,7 +383,10 @@ class SmartPIHandler:
                 algo._last_restart_reason = "deadband_transition"
                 force = True
 
-            if getattr(algo.deadband_mgr, "near_band_changed", False) is True:
+            if (
+                self._allow_pwm_cycle_force
+                and getattr(algo.deadband_mgr, "near_band_changed", False) is True
+            ):
                 _LOGGER.debug(
                     "%s - Near-band state transition detected, forcing cycle restart",
                     t,

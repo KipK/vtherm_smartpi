@@ -9,6 +9,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.vtherm_smartpi.const import (
+    CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
     CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
     CONF_SMART_PI_KNEE_DEMAND,
     CONF_SMART_PI_KNEE_VALVE,
@@ -78,6 +79,14 @@ def test_global_options_schema_hides_valve_linearization() -> None:
     schema_keys = _schema_keys(build_options_schema(DEFAULT_OPTIONS))
 
     assert CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION not in schema_keys
+
+
+def test_global_options_schema_exposes_pwm_cycle_force_option() -> None:
+    """Global defaults must expose the PWM cycle force setting."""
+    schema_keys = _schema_keys(build_options_schema(DEFAULT_OPTIONS))
+
+    assert CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE in schema_keys
+    assert DEFAULT_OPTIONS[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE] is False
 
 
 @pytest.mark.asyncio

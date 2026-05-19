@@ -32,6 +32,7 @@ def _make_algo(guard_cut=GuardAction.NONE, guard_kick=GuardAction.NONE, on_perce
     algo.autocalib = MagicMock()
     algo.calibration_mgr = MagicMock()
     algo.deadband_mgr = MagicMock()
+    algo.deadband_mgr.deadband_changed = False
     algo.deadband_mgr.near_band_changed = False
     algo.guards.check_guard_cut.return_value = guard_cut
     algo.guards.check_guard_kick.return_value = guard_kick
@@ -188,3 +189,97 @@ async def test_smartpi_deadband_entry_without_ff3_does_not_force_cycle():
     thermostat.cycle_scheduler.start_cycle.assert_called_once()
     _, _, force = thermostat.cycle_scheduler.start_cycle.call_args[0]
     assert force is False
+
+
+@pytest.mark.asyncio
+async def test_smartpi_deadband_transition_does_not_force_cycle_by_default():
+    """Deadband transitions must not restart PWM cycles unless enabled."""
+    thermostat = _make_thermostat()
+    thermostat.current_temperature = 20.0
+    thermostat.current_outdoor_temperature = 10.0
+    thermostat.last_temperature_slope = 0.0
+    thermostat.power_manager = None
+    thermostat.cycle_scheduler.is_cycle_running = True
+
+    handler = SmartPIHandler(thermostat)
+    algo = _make_algo(on_percent=0.15)
+    algo.calculate = MagicMock()
+    algo.deadband_mgr.deadband_changed = True
+    thermostat.prop_algorithm = algo
+
+    await handler.control_heating(timestamp=datetime.now())
+
+    thermostat.cycle_scheduler.start_cycle.assert_called_once()
+    _, _, force = thermostat.cycle_scheduler.start_cycle.call_args[0]
+    assert force is False
+
+
+@pytest.mark.asyncio
+async def test_smartpi_deadband_transition_can_force_cycle_when_enabled():
+    """Deadband transitions may restart PWM cycles when the option is enabled."""
+    thermostat = _make_thermostat()
+    thermostat.current_temperature = 20.0
+    thermostat.current_outdoor_temperature = 10.0
+    thermostat.last_temperature_slope = 0.0
+    thermostat.power_manager = None
+    thermostat.cycle_scheduler.is_cycle_running = True
+
+    handler = SmartPIHandler(thermostat)
+    handler._allow_pwm_cycle_force = True
+    algo = _make_algo(on_percent=0.15)
+    algo.calculate = MagicMock()
+    algo.deadband_mgr.deadband_changed = True
+    thermostat.prop_algorithm = algo
+
+    await handler.control_heating(timestamp=datetime.now())
+
+    thermostat.cycle_scheduler.start_cycle.assert_called_once()
+    _, _, force = thermostat.cycle_scheduler.start_cycle.call_args[0]
+    assert force is True
+
+
+@pytest.mark.asyncio
+async def test_smartpi_near_band_transition_does_not_force_cycle_by_default():
+    """Near-band transitions must not restart PWM cycles unless enabled."""
+    thermostat = _make_thermostat()
+    thermostat.current_temperature = 20.0
+    thermostat.current_outdoor_temperature = 10.0
+    thermostat.last_temperature_slope = 0.0
+    thermostat.power_manager = None
+    thermostat.cycle_scheduler.is_cycle_running = True
+
+    handler = SmartPIHandler(thermostat)
+    algo = _make_algo(on_percent=0.15)
+    algo.calculate = MagicMock()
+    algo.deadband_mgr.near_band_changed = True
+    thermostat.prop_algorithm = algo
+
+    await handler.control_heating(timestamp=datetime.now())
+
+    thermostat.cycle_scheduler.start_cycle.assert_called_once()
+    _, _, force = thermostat.cycle_scheduler.start_cycle.call_args[0]
+    assert force is False
+
+
+@pytest.mark.asyncio
+async def test_smartpi_near_band_transition_can_force_cycle_when_enabled():
+    """Near-band transitions may restart PWM cycles when the option is enabled."""
+    thermostat = _make_thermostat()
+    thermostat.current_temperature = 20.0
+    thermostat.current_outdoor_temperature = 10.0
+    thermostat.last_temperature_slope = 0.0
+    thermostat.power_manager = None
+    thermostat.cycle_scheduler.is_cycle_running = True
+
+    handler = SmartPIHandler(thermostat)
+    handler._allow_pwm_cycle_force = True
+    algo = _make_algo(on_percent=0.15)
+    algo.calculate = MagicMock()
+    algo.deadband_mgr.near_band_changed = True
+    thermostat.prop_algorithm = algo
+
+    await handler.control_heating(timestamp=datetime.now())
+
+    thermostat.cycle_scheduler.start_cycle.assert_called_once()
+    _, _, force = thermostat.cycle_scheduler.start_cycle.call_args[0]
+    assert force is True

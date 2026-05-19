@@ -284,6 +284,7 @@ Pour démarrer simplement :
 | **Filtre de consigne**               | Active le lissage de consigne proportionnel et l'atterrissage de chauffe près de la cible.             | `activé`          |
 | **FF3**                              | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé`          |
 | **Autoriser P dans la deadband**     | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
+| **Autoriser le redémarrage PWM aux transitions de bande** | Permet à SmartPI de redémarrer le cycle PWM courant lors d'une entrée ou sortie de deadband ou de near-band. | `désactivé` |
 | **Facteur release tau**              | Échelle du délai de relâchement intégral par rapport à la constante de temps apprise.                  | `0.5`             |
 | **Seuil bas d'hystérésis**           | Seuil de redémarrage pendant le bootstrap.                                                             | `0.3°C`           |
 | **Seuil haut d'hystérésis**          | Seuil d'arrêt pendant le bootstrap.                                                                    | `0.5°C`           |
@@ -293,6 +294,12 @@ Pour démarrer simplement :
 | **Demande au coude**                 | Demande SmartPI correspondant au changement de pente de la vanne.                                      | `80%`             |
 | **Ouverture de vanne au coude**      | Ouverture physique de la vanne au changement de pente.                                                 | `15%`             |
 | **Ouverture maximale de vanne**      | Ouverture maximale autorisée lorsque la linéarisation est activée.                                     | `100%`            |
+
+### Redémarrage PWM aux transitions de bande
+
+Lorsque cette option est désactivée, une transition de deadband ou de near-band met à jour la prochaine commande SmartPI mais n'interrompt pas le cycle PWM déjà en cours. C'est le comportement conseillé avec des cycles courts, car redémarrer trop souvent les cycles peut créer des commutations inutiles.
+
+Activez cette option uniquement sur les systèmes thermiques à très forte inertie avec des cycles PWM longs, lorsque attendre la prochaine frontière de cycle retarde trop la réponse physique après une entrée ou une sortie de deadband ou de near-band.
 
 ## Diagnostics et carte Markdown
 

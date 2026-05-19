@@ -284,6 +284,7 @@ Do not try to tune several parameters at once during the first learning period. 
 | **Setpoint filter**            | Enables proportional setpoint shaping and heating landing control near the target.                | `enabled`     |
 | **FF3**                        | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled`     |
 | **Allow P inside deadband**    | Allows the proportional branch to remain active inside the deadband.                              | `disabled`    |
+| **Allow PWM cycle restart on band transitions** | Allows SmartPI to restart the current PWM cycle when entering or leaving deadband or near-band. | `disabled` |
 | **Release tau factor**         | Scales the integral release delay relative to the learned time constant.                          | `0.5`         |
 | **Lower hysteresis threshold** | Restart threshold during bootstrap learning.                                                      | `0.3°C`       |
 | **Upper hysteresis threshold** | Stop threshold during bootstrap learning.                                                         | `0.5°C`       |
@@ -293,6 +294,12 @@ Do not try to tune several parameters at once during the first learning period. 
 | **Demand at knee**             | SmartPI demand corresponding to the valve slope change.                                           | `80%`         |
 | **Valve opening at knee**      | Physical valve opening at the slope change.                                                       | `15%`         |
 | **Maximum valve opening**      | Maximum allowed opening when linearization is enabled.                                            | `100%`        |
+
+### PWM cycle restart on band transitions
+
+When this option is disabled, a deadband or near-band transition updates the next SmartPI command but does not interrupt the PWM cycle already in progress. This is the recommended behavior for short cycles, because restarting cycles too often can create unnecessary switching.
+
+Enable it only on very slow thermal systems with long PWM cycles, where waiting for the next cycle boundary can delay the physical response too much after entering or leaving deadband or near-band.
 
 ## Diagnostics and Markdown card
 
