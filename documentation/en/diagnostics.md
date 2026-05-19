@@ -4,6 +4,8 @@
 
 These diagnostics are published at the root of the attributes of the SmartPI diagnostic sensor entity in Home Assistant.
 
+See also: [SmartPI user documentation](./vtherm_smartpi.md).
+
 ---
 
 ## 1. Diagnostics Modes

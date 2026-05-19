@@ -4,6 +4,8 @@
 
 Ces diagnostics sont publiés directement à la racine des attributs de l'entité capteur de diagnostic SmartPI dans Home Assistant.
 
+Voir aussi : [documentation utilisateur SmartPI](./vtherm_smartpi.md).
+
 ---
 
 ## 1. Modes de Diagnostic
