@@ -71,7 +71,7 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `ff3_authority_factor` | `float` | FF3 | Facteur de sécurité limitant l'autorité maximale autorisée pour les corrections FF3. |
 | `twin_status` | `string` | Jumeau | Statut du jumeau thermique 1R1C (`ok` ou `unavailable`). |
 | `ff3_twin_usable` | `boolean` | Jumeau | Indique si le jumeau thermique est stabilisé et exploitable pour la correction prédictive. |
-| `ab_confidence_state` | `string` | Modèle | État de confiance global de l'identification de $a$ et $b$ (ex. `AB_OK`, `AB_BAD`). |
+| `ab_confidence_state` | `string` | Modèle | État de confiance global de l'identification de $a$ et $b$ (ex. `AB_BOOTSTRAP`, `AB_OK`, `AB_BAD`). |
 | `deadband_power_source` | `string` | Deadband | Source de puissance utilisée pendant l'état de deadband (zone morte). |
 | `deadband_p_mode` | `string` | Deadband | Mode de calcul de la branche proportionnelle appliqué dans le deadband. |
 | `ff2_trim_delta` | `float` | Commande | Correction de trim feed-forward lent (`FFTrim`). |

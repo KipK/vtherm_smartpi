@@ -71,7 +71,7 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `ff3_authority_factor` | `float` | FF3 | Safety factor reducing the maximum permitted authority of FF3 corrections. |
 | `twin_status` | `string` | Twin | Status of the 1R1C thermal twin model (`ok` or `unavailable`). |
 | `ff3_twin_usable` | `boolean` | Twin | Indicates if the thermal twin has warmed up and is reliable for predictive correction. |
-| `ab_confidence_state` | `string` | Model | Overall confidence state of $a$ and $b$ identification (e.g. `AB_OK`, `AB_BAD`). |
+| `ab_confidence_state` | `string` | Model | Overall confidence state of $a$ and $b$ identification (e.g. `AB_BOOTSTRAP`, `AB_OK`, `AB_BAD`). |
 | `deadband_power_source` | `string` | Deadband | Power source used during the deadband state. |
 | `deadband_p_mode` | `string` | Deadband | Proportional branch calculation mode applied in the deadband. |
 | `ff2_trim_delta` | `float` | Command | Slow feed-forward trim delta correction (`FFTrim`). |

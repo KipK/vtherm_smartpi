@@ -118,6 +118,7 @@
 }.get(stage, '⬜') %}
 
 {% set ab_label = {
+  'ab_bootstrap': '🔵 AB_BOOTSTRAP',
   'ab_ok': '🟢 AB_OK',
   'ab_degraded': '🟡 AB_DEGRADED',
   'ab_bad': '🔴 AB_BAD'

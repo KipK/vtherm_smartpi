@@ -355,6 +355,7 @@ AUTOCALIB_EXIT_NEW_OBS_MIN = 1            # Minimum new observations (a/b) for p
 
 class ABConfidenceState(str, Enum):
     """Confidence state for a,b model parameters."""
+    AB_BOOTSTRAP = "ab_bootstrap"
     AB_OK = "ab_ok"
     AB_DEGRADED = "ab_degraded"
     AB_BAD = "ab_bad"

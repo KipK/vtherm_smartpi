@@ -230,6 +230,7 @@ What to expect during bootstrap:
 - temperature swings are normal and expected,
 - regulation is intentionally simple at this stage,
 - diagnostics are especially useful to follow progress,
+- `model.confidence` reports `ab_bootstrap` until the first thermal model is available,
 - speed depends on the quality of real observations, not only on elapsed time.
 
 ### Stable phase

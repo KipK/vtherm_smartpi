@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, TYPE_CHECKING
 from .const import (
     AB_A_SOFT_GATE_MIN_B,
+    ABConfidenceState,
     SmartPIPhase,
     U_ON_MIN,
     AB_HISTORY_SIZE,
@@ -136,6 +137,14 @@ def _build_ab_learning_stage(algo: SmartPI, diag: Dict[str, Any]) -> str:
         return "monitoring"
 
     return "degraded"
+
+
+def _build_ab_confidence_state(algo: SmartPI) -> str:
+    """Return the public A/B confidence state for the current phase."""
+    if algo.phase == SmartPIPhase.HYSTERESIS:
+        return ABConfidenceState.AB_BOOTSTRAP.value
+
+    return algo._ab_confidence.state.value
 
 
 def _session_counter(total: int, baseline: int) -> int:
@@ -397,7 +406,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "integral_hold_reason": algo.ctl.integral_hold_mode,
         "restart_reason": algo._last_restart_reason,
         "signed_error_mode": "positive_means_hvac_demand",
-        "ab_confidence_state": algo._ab_confidence.state.value,
+        "ab_confidence_state": _build_ab_confidence_state(algo),
         # FFv2 freeze reasons
         "trim_freeze_reason": algo._ff_trim.freeze_reason,
         # FFv2 regime tracking

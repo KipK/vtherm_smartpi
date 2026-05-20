@@ -1165,11 +1165,13 @@ class TestLandingDiagnostics:
         assert published["control"]["in_deadtime_window"] is False
 
         assert published["model"]["tau_min"] is not None
+        assert published["model"]["confidence"] == "ab_bootstrap"
         assert published["model"]["deadtime_heat_reliable"] is True
         assert published["model"]["deadtime_cool_reliable"] is False
         assert published["model"]["a_stability_ratio"] == pytest.approx(0.123)
         assert published["model"]["b_stability_ratio"] == pytest.approx(0.456)
 
+        assert published["ab_learning"]["stage"] == "bootstrap"
         assert published["ab_learning"]["emea_samples_a"] == 3
         assert published["ab_learning"]["emea_samples_b"] == 4
         assert published["ab_learning"]["bootstrap_target_a"] == AB_MIN_SAMPLES_A

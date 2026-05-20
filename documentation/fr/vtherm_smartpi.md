@@ -230,6 +230,7 @@ Ce qu'il faut retenir pendant le bootstrap :
 - les oscillations de température sont normales et attendues,
 - la régulation est volontairement simple à ce stade,
 - les diagnostics sont particulièrement utiles pour suivre la progression,
+- `model.confidence` indique `ab_bootstrap` jusqu'à ce que le premier modèle thermique soit disponible,
 - la vitesse dépend de la qualité des observations réelles, pas seulement du temps écoulé.
 
 ### Phase stable

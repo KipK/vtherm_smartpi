@@ -26,7 +26,7 @@ class ABConfidence:
     """Tracks a,b model confidence and manages fallback policy."""
 
     def __init__(self) -> None:
-        self.state: ABConfidenceState = ABConfidenceState.AB_OK
+        self.state: ABConfidenceState = ABConfidenceState.AB_BOOTSTRAP
         self._bad_cycle_count: int = 0
 
     def evaluate(
@@ -91,5 +91,5 @@ class ABConfidence:
         return 0.0
 
     def reset(self) -> None:
-        self.state = ABConfidenceState.AB_OK
+        self.state = ABConfidenceState.AB_BOOTSTRAP
         self._bad_cycle_count = 0
