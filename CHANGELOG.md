@@ -87,8 +87,14 @@ remove vtherm_api dependency ( use VT installed one )
 - Deadtime-aware open-loop prediction for FF3
 - Stabilize SmartPI valve output near minimum activation delay
 
-  ## [0.3.2] - 2026-05-06
+  ## [0.3.2] - 2026-05-19
 
 - Dampen proportional output inside SmartPI deadband ( when enable P in deadband is activated )
 - some attributes changes
 - updated markdown cards
+
+  ## [0.3.3] - 2026-05-20
+
+- Add SmartPI PWM cycle force option for band transitions ( disabled by default )
+- publish ab_bootstrap to confidence attribute in bootstrap mode
+- publish specific_states.regulation_diagnostics attribute in vtherm to point diagnostic entitiy path
