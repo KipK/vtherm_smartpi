@@ -15,6 +15,7 @@ from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from .const import (
     CONF_PROP_FUNCTION,
     CONF_TARGET_VTHERM,
+    DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
     PROP_FUNCTION_SMART_PI,
     SIGNAL_SMARTPI_TARGET_UPDATED,
@@ -188,7 +189,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
         self.hass = hass
         self._climate_entity_id = climate_entity_id
         self._unique_id_base = unique_id_base
-        self._attr_unique_id = f"smartpi_diag_{unique_id_base}"
+        self._attr_unique_id = f"{DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX}_{unique_id_base}"
         self._attr_name = "SmartPI Diagnostics"
         self._attr_native_value = "unknown"
         self._attr_extra_state_attributes = {}

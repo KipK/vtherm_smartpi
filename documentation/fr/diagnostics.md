@@ -306,6 +306,8 @@ Lorsque le **Jumeau Thermique 1R1C** est actif et jugé exploitable, le bloc imb
 
 Home Assistant utilise un résumé structuré sous l'attribut **`specific_states.smart_pi`** de l'entité thermostat. Cette structure est directement dérivée des diagnostics pour alimenter les cartes Lovelace (comme le tableau de bord Equinox).
 
+Le thermostat publie aussi **`specific_states.regulation_diagnostics`** avec l'entity id du capteur de diagnostics SmartPI.
+
 ```json
 {
   "control": {

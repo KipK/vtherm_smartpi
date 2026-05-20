@@ -5,6 +5,8 @@ import logging
 import time
 from typing import TYPE_CHECKING
 from homeassistant.util import slugify
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -38,6 +40,7 @@ from .const import (
     CONF_SMART_PI_KNEE_VALVE,
     CONF_SMART_PI_MAX_VALVE,
     DEFAULT_OPTIONS,
+    DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
     EventType,
     SIGNAL_SMARTPI_TARGET_UPDATED,
@@ -566,6 +569,17 @@ class SmartPIHandler:
 
     def update_attributes(self):
         """Keep climate attributes generic for SmartPI."""
+        t = self._thermostat
+        specific_states = t._attr_extra_state_attributes["specific_states"]
+        diagnostic_entity_id = self._resolve_diagnostic_entity_id()
+        specific_states["regulation_diagnostics"] = diagnostic_entity_id
+
+    def _resolve_diagnostic_entity_id(self) -> str | None:
+        """Resolve the SmartPI diagnostic sensor entity id from the registry."""
+        t = self._thermostat
+        registry = er.async_get(t.hass)
+        diagnostic_unique_id = f"{DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX}_{t.unique_id}"
+        return registry.async_get_entity_id(SENSOR_DOMAIN, DOMAIN, diagnostic_unique_id)
 
     async def service_reset_smart_pi_learning(self):
         """Reset learning data."""

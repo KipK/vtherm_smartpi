@@ -306,6 +306,8 @@ When the **1R1C Thermal Twin** is active and usable, a nested **`pred`** block i
 
 Home Assistant uses a structured summary under the attribute **`specific_states.smart_pi`** of the thermostat entity. This structure is mapped directly from the raw diagnostics to provide cards (such as the Equinox dashboard) with high-level parameters.
 
+The thermostat also publishes **`specific_states.regulation_diagnostics`** with the entity id of the SmartPI diagnostic sensor.
+
 ```json
 {
   "control": {
