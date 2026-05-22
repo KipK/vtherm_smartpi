@@ -14,15 +14,15 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
-            - name: Create ZIP
-              run: |
-                  cd custom_components/vtherm_smartpi
-                  zip -r ../../vtherm_smartpi.zip .
-
             - name: "Set version number from trigger's tag"
               run: |
                   yq -i -o json '.version="${{ github.ref_name }}"' \
                   "${{ github.workspace }}/custom_components/vtherm_smartpi/manifest.json"
+
+            - name: Create ZIP
+              run: |
+                  cd custom_components/vtherm_smartpi
+                  zip -r ../../vtherm_smartpi.zip .
 
             - name: Create Release
               uses: softprops/action-gh-release@v1
