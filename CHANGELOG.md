@@ -98,3 +98,8 @@ remove vtherm_api dependency ( use VT installed one )
 - Add SmartPI PWM cycle force option for band transitions ( disabled by default )
 - publish ab_bootstrap to confidence attribute in bootstrap mode
 - publish specific_states.regulation_diagnostics attribute in vtherm to point diagnostic entitiy path
+
+  ## [0.3.4] - 2026-05-22
+
+- Clean up SmartPI diagnostic entity when target algo changes
+- Unlink registered device to config entry when not active
