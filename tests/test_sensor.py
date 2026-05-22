@@ -144,6 +144,53 @@ async def test_dedicated_entry_adds_diagnostic_sensor_when_target_becomes_smartp
 
 
 @pytest.mark.asyncio
+async def test_dedicated_entry_removes_diagnostic_sensor_when_target_is_not_smartpi(
+    hass,
+) -> None:
+    """A dedicated entry must not keep diagnostics for another algorithm."""
+    dedicated_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dedicated SmartPI",
+        unique_id=f"{DOMAIN}-vt-migrated",
+        data={CONF_TARGET_VTHERM: "vt-migrated"},
+    )
+    dedicated_entry.add_to_hass(hass)
+
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="vt-migrated",
+        data={CONF_PROP_FUNCTION: "hysteresis"},
+    )
+    vt_entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "climate",
+        VT_DOMAIN,
+        "vt-migrated",
+        suggested_object_id="vt_migrated",
+        config_entry=vt_entry,
+    )
+    registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "smartpi_diag_vt-migrated",
+        suggested_object_id="smartpi_diag_vt_migrated",
+        config_entry=dedicated_entry,
+    )
+
+    async_add_entities = Mock()
+
+    await async_setup_entry(hass, dedicated_entry, async_add_entities)
+
+    async_add_entities.assert_not_called()
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "smartpi_diag_vt-migrated")
+        is None
+    )
+
+
+@pytest.mark.asyncio
 async def test_global_entry_adds_default_bound_diagnostic_sensor_when_vtherm_becomes_smartpi(
     hass,
 ) -> None:
@@ -259,3 +306,46 @@ async def test_diagnostic_sensor_state_reflects_smartpi_phase(
     sensor._update_from_climate()
 
     assert sensor.native_value == expected_state
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_sensor_removes_registry_entry_when_climate_uses_another_algorithm(
+    hass,
+) -> None:
+    """The diagnostic entity must disappear when the target stops using SmartPI."""
+    plugin_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dedicated SmartPI",
+        unique_id=f"{DOMAIN}-test-vtherm",
+        data={CONF_TARGET_VTHERM: "test-vtherm"},
+    )
+    plugin_entry.add_to_hass(hass)
+
+    climate_entity_id = "climate.test_vtherm"
+    hass.states.async_set(climate_entity_id, "heat")
+    hass.data["climate"] = SimpleNamespace(
+        entities=[
+            SimpleNamespace(
+                entity_id=climate_entity_id,
+                prop_algorithm=object(),
+            )
+        ]
+    )
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "smartpi_diag_test-vtherm",
+        suggested_object_id="smartpi_diag_test_vtherm",
+        config_entry=plugin_entry,
+    )
+
+    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm", None)
+
+    sensor._update_from_climate()
+
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "smartpi_diag_test-vtherm")
+        is None
+    )

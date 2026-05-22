@@ -2,7 +2,7 @@
 
 import logging
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
@@ -21,6 +21,7 @@ from .const import (
     SIGNAL_SMARTPI_TARGET_UPDATED,
 )
 from .algo import SmartPI
+from .smartpi.device_link import target_uses_smartpi
 from .smartpi.const import SmartPIPhase
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,6 +53,29 @@ def _get_climate_entry(
 
     climate_entry = registry.async_get(climate_entity_id)
     return climate_entity_id, climate_entry
+
+
+def _get_diagnostic_entity_id(
+    hass: HomeAssistant,
+    target_unique_id: str,
+) -> str | None:
+    """Return the diagnostic entity id for a thermostat target."""
+    registry = er.async_get(hass)
+    diagnostic_unique_id = f"{DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX}_{target_unique_id}"
+    return registry.async_get_entity_id(SENSOR_DOMAIN, DOMAIN, diagnostic_unique_id)
+
+
+def _is_smartpi_target(hass: HomeAssistant, target_unique_id: str) -> bool:
+    """Return whether the thermostat target currently uses SmartPI."""
+    return target_uses_smartpi(hass, target_unique_id)
+
+
+def _remove_stale_diagnostic_entity(hass: HomeAssistant, target_unique_id: str) -> None:
+    """Remove the diagnostic entity when its target no longer uses SmartPI."""
+    entity_id = _get_diagnostic_entity_id(hass, target_unique_id)
+    if entity_id is None:
+        return
+    er.async_get(hass).async_remove(entity_id)
 
 
 def _is_global_entry(entry: ConfigEntry) -> bool:
@@ -108,6 +132,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         new_entities: list[SmartPIDiagnosticSensor] = []
         for target_unique_id in target_unique_ids:
             if target_unique_id in tracked_unique_ids:
+                continue
+            if not _is_smartpi_target(hass, target_unique_id):
+                _remove_stale_diagnostic_entity(hass, target_unique_id)
                 continue
             climate_entity_id, climate_entry = _get_climate_entry(
                 hass, target_unique_id
@@ -184,7 +211,13 @@ class SmartPIDiagnosticSensor(SensorEntity):
     _attr_force_update = True
     _attr_icon = "mdi:chart-timeline"
 
-    def __init__(self, hass: HomeAssistant, climate_entity_id: str, unique_id_base: str, climate_entry):
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        climate_entity_id: str,
+        unique_id_base: str,
+        climate_entry,
+    ):
         """Initialize the sensor."""
         self.hass = hass
         self._climate_entity_id = climate_entity_id
@@ -194,7 +227,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
         self._attr_native_value = "unknown"
         self._attr_extra_state_attributes = {}
         self._unsub = None
-        
+
         # Link to the underlying device if possible
         if climate_entry and climate_entry.device_id:
             device_registry = dr.async_get(hass)
@@ -229,40 +262,50 @@ class SmartPIDiagnosticSensor(SensorEntity):
     @callback
     def _async_climate_changed(self, event):
         """Handle climate state change."""
-        self._update_from_climate()
-        self.async_write_ha_state()
+        if self._update_from_climate():
+            self.async_write_ha_state()
 
     @callback
     def _async_force_update(self):
         """Handle forced diagnostic update from SmartPI handler."""
-        self._update_from_climate()
-        self.async_write_ha_state()
+        if self._update_from_climate():
+            self.async_write_ha_state()
 
     @callback
-    def _update_from_climate(self):
+    def _update_from_climate(self) -> bool:
         """Extract SmartPI attributes from the running climate entity."""
         state = self.hass.states.get(self._climate_entity_id)
         if not state:
-            return
-        
+            return True
+
         # We can grab the actual algorithm instance from the climate object directly
         # since it's instantiated there.
         component = self.hass.data.get(CLIMATE_DOMAIN)
         if not component:
-            return
-            
-        vtherm_entity = next((e for e in component.entities if e.entity_id == self._climate_entity_id), None)
-        
+            return True
+
+        vtherm_entity = next(
+            (
+                entity
+                for entity in component.entities
+                if entity.entity_id == self._climate_entity_id
+            ),
+            None,
+        )
+
         if not vtherm_entity:
-            return
-            
+            return True
+
         algo = getattr(vtherm_entity, "prop_algorithm", None)
         if not algo or not isinstance(algo, SmartPI):
-            self._attr_native_value = "inactive"
-            return
+            _remove_stale_diagnostic_entity(self.hass, self._unique_id_base)
+            return False
 
         self._attr_native_value = _get_diagnostic_state(algo)
         if getattr(algo, "_debug_mode", False):
-            self._attr_extra_state_attributes = algo.get_debug_diagnostics() or algo.get_published_diagnostics()
+            self._attr_extra_state_attributes = (
+                algo.get_debug_diagnostics() or algo.get_published_diagnostics()
+            )
         else:
             self._attr_extra_state_attributes = algo.get_published_diagnostics()
+        return True

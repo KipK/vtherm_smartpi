@@ -26,6 +26,10 @@ from .const import (
     SERVICE_RESET_SMARTPI_LEARNING,
 )
 from .factory import SmartPIHandlerFactory
+from .smartpi.device_link import (
+    target_uses_smartpi,
+    unbind_config_entry_from_target_device,
+)
 
 VT_DOMAIN = "versatile_thermostat"
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -37,6 +41,20 @@ DATA_SKIP_FULL_RELOAD = "skip_full_reload"
 def _ensure_domain_data(hass: HomeAssistant) -> dict[str, Any]:
     """Return the plugin data storage in hass."""
     return hass.data.setdefault(DOMAIN, {})
+
+
+def _unlink_inactive_target_device(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Unlink dedicated entries from devices that do not currently use SmartPI."""
+    target_unique_id = entry.data.get(CONF_TARGET_VTHERM)
+    if not target_unique_id:
+        return
+    if target_uses_smartpi(hass, target_unique_id):
+        return
+    unbind_config_entry_from_target_device(
+        hass,
+        entry.entry_id,
+        target_unique_id,
+    )
 
 
 def _register_factory(hass: HomeAssistant) -> bool:
@@ -257,6 +275,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up vtherm_smartpi from a config entry."""
     data = _ensure_domain_data(hass)
     data[entry.entry_id] = entry.entry_id
+    _unlink_inactive_target_device(hass, entry)
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
     _register_factory(hass)
     _register_services(hass)

@@ -48,6 +48,10 @@ from .const import (
 from .hvac_mode import VThermHvacMode_OFF, VThermHvacMode_HEAT, VThermHvacMode_COOL
 from .commons import write_event_log
 from .smartpi.valve_curve import ValveCurveParams
+from .smartpi.device_link import (
+    bind_config_entry_to_target_device,
+    unbind_config_entry_from_target_device,
+)
 
 if TYPE_CHECKING:
     from vtherm_api.interfaces import InterfaceThermostatRuntime
@@ -80,11 +84,15 @@ class SmartPIHandler:
         self._allow_pwm_cycle_force: bool = False
         self._valve_linearization_configured: bool = False
         self._valve_curve_params: ValveCurveParams | None = None
+        self._applied_config_entry_id: str | None = None
 
     def init_algorithm(self):
         """Initialize SmartPI algorithm."""
         t = self._thermostat
-        entry = self._get_effective_config()
+        entry, entry_to_apply = self._resolve_effective_config()
+        self._applied_config_entry_id = (
+            entry_to_apply.entry_id if entry_to_apply is not None else None
+        )
 
         # Initialize storage with slugified name to allow retrieval if re-created
         safe_name = slugify(t.name)
@@ -190,7 +198,7 @@ class SmartPIHandler:
         _LOGGER.info("%s - SmartPI Algorithm initialized", t)
         async_dispatcher_send(t.hass, SIGNAL_SMARTPI_TARGET_UPDATED, t.unique_id)
 
-    def _get_effective_config(self) -> dict:
+    def _resolve_effective_config(self) -> tuple[dict, object | None]:
         """Return the merged SmartPI configuration for the thermostat."""
         t = self._thermostat
         config = dict(DEFAULT_OPTIONS)
@@ -214,7 +222,32 @@ class SmartPIHandler:
             config.update(entry_to_apply.data)
             config.update(entry_to_apply.options)
 
+        return config, entry_to_apply
+
+    def _get_effective_config(self) -> dict:
+        """Return the merged SmartPI configuration for the thermostat."""
+        config, _ = self._resolve_effective_config()
         return config
+
+    def _bind_config_entry_to_device(self) -> None:
+        """Link the applied config entry to the target thermostat device."""
+        t = self._thermostat
+        bind_config_entry_to_target_device(
+            t.hass,
+            self._applied_config_entry_id,
+            t.unique_id,
+            getattr(t, "entity_id", None),
+        )
+
+    def _unbind_config_entry_from_device(self) -> None:
+        """Unlink the applied config entry from the target thermostat device."""
+        t = self._thermostat
+        unbind_config_entry_from_target_device(
+            t.hass,
+            self._applied_config_entry_id,
+            t.unique_id,
+            getattr(t, "entity_id", None),
+        )
 
     async def async_added_to_hass(self):
         """Load persistent data."""
@@ -231,6 +264,7 @@ class SmartPIHandler:
                     _LOGGER.debug("%s - SmartPI state loaded", t)
             except Exception as e:
                 _LOGGER.error("%s - Failed to load SmartPI state: %s", t, e)
+        self._bind_config_entry_to_device()
 
     async def async_startup(self):
         """Startup actions."""
@@ -258,6 +292,7 @@ class SmartPIHandler:
     def remove(self):
         """Cleanup and save state on removal."""
         t = self._thermostat
+        self._unbind_config_entry_from_device()
         if self._store and t.prop_algorithm:
             # We can't await here easily, but we schedule save
             t.hass.async_create_task(self._async_save())
