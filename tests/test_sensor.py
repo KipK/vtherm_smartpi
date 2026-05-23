@@ -191,6 +191,60 @@ async def test_dedicated_entry_removes_diagnostic_sensor_when_target_is_not_smar
 
 
 @pytest.mark.asyncio
+async def test_dedicated_entry_removes_tracked_diagnostic_when_target_stops_using_smartpi(
+    hass,
+) -> None:
+    """A tracked diagnostic entity must be removed when its target changes algorithm."""
+    dedicated_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dedicated SmartPI",
+        unique_id=f"{DOMAIN}-vt-tracked",
+        data={CONF_TARGET_VTHERM: "vt-tracked"},
+    )
+    dedicated_entry.add_to_hass(hass)
+
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="vt-tracked",
+        data={CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI},
+    )
+    vt_entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "climate",
+        VT_DOMAIN,
+        "vt-tracked",
+        suggested_object_id="vt_tracked",
+        config_entry=vt_entry,
+    )
+    registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "smartpi_diag_vt-tracked",
+        suggested_object_id="smartpi_diag_vt_tracked",
+        config_entry=dedicated_entry,
+    )
+
+    async_add_entities = Mock()
+
+    await async_setup_entry(hass, dedicated_entry, async_add_entities)
+
+    async_add_entities.assert_called_once()
+
+    hass.config_entries.async_update_entry(
+        vt_entry,
+        data={CONF_PROP_FUNCTION: "hysteresis"},
+    )
+    async_dispatcher_send(hass, SIGNAL_SMARTPI_TARGET_UPDATED, "vt-tracked")
+
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "smartpi_diag_vt-tracked")
+        is None
+    )
+
+
+@pytest.mark.asyncio
 async def test_global_entry_adds_default_bound_diagnostic_sensor_when_vtherm_becomes_smartpi(
     hass,
 ) -> None:
@@ -321,6 +375,13 @@ async def test_diagnostic_sensor_removes_registry_entry_when_climate_uses_anothe
     )
     plugin_entry.add_to_hass(hass)
 
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="test-vtherm",
+        data={CONF_PROP_FUNCTION: "hysteresis"},
+    )
+    vt_entry.add_to_hass(hass)
+
     climate_entity_id = "climate.test_vtherm"
     hass.states.async_set(climate_entity_id, "heat")
     hass.data["climate"] = SimpleNamespace(
@@ -348,4 +409,55 @@ async def test_diagnostic_sensor_removes_registry_entry_when_climate_uses_anothe
     assert (
         registry.async_get_entity_id("sensor", DOMAIN, "smartpi_diag_test-vtherm")
         is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_sensor_keeps_registry_entry_when_smartpi_runtime_is_not_ready(
+    hass,
+) -> None:
+    """The diagnostic entity must stay registered while the SmartPI runtime is pending."""
+    plugin_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dedicated SmartPI",
+        unique_id=f"{DOMAIN}-test-vtherm",
+        data={CONF_TARGET_VTHERM: "test-vtherm"},
+    )
+    plugin_entry.add_to_hass(hass)
+
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="test-vtherm",
+        data={CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI},
+    )
+    vt_entry.add_to_hass(hass)
+
+    climate_entity_id = "climate.test_vtherm"
+    hass.states.async_set(climate_entity_id, "off")
+    hass.data["climate"] = SimpleNamespace(
+        entities=[
+            SimpleNamespace(
+                entity_id=climate_entity_id,
+                prop_algorithm=None,
+            )
+        ]
+    )
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "smartpi_diag_test-vtherm",
+        suggested_object_id="smartpi_diag_test_vtherm",
+        config_entry=plugin_entry,
+    )
+
+    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm", None)
+
+    assert sensor._update_from_climate() is True
+
+    assert sensor.native_value == "inactive"
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "smartpi_diag_test-vtherm")
+        == "sensor.smartpi_diag_test_vtherm"
     )

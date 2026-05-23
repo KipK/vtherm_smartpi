@@ -131,10 +131,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         """Add diagnostics for resolved thermostat targets."""
         new_entities: list[SmartPIDiagnosticSensor] = []
         for target_unique_id in target_unique_ids:
-            if target_unique_id in tracked_unique_ids:
-                continue
             if not _is_smartpi_target(hass, target_unique_id):
                 _remove_stale_diagnostic_entity(hass, target_unique_id)
+                tracked_unique_ids.discard(target_unique_id)
+                continue
+            if target_unique_id in tracked_unique_ids:
                 continue
             climate_entity_id, climate_entry = _get_climate_entry(
                 hass, target_unique_id
@@ -298,8 +299,12 @@ class SmartPIDiagnosticSensor(SensorEntity):
 
         algo = getattr(vtherm_entity, "prop_algorithm", None)
         if not algo or not isinstance(algo, SmartPI):
-            _remove_stale_diagnostic_entity(self.hass, self._unique_id_base)
-            return False
+            if not _is_smartpi_target(self.hass, self._unique_id_base):
+                _remove_stale_diagnostic_entity(self.hass, self._unique_id_base)
+                return False
+            self._attr_native_value = "inactive"
+            self._attr_extra_state_attributes = {}
+            return True
 
         self._attr_native_value = _get_diagnostic_state(algo)
         if getattr(algo, "_debug_mode", False):
