@@ -103,3 +103,7 @@ remove vtherm_api dependency ( use VT installed one )
 
 - Clean up SmartPI diagnostic entity when target algo changes
 - Unlink registered device to config entry when not active
+
+  ## [0.3.5] - 2026-05-23
+
+- Fix SmartPI diagnostic entity persistence
