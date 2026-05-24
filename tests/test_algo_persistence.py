@@ -7,6 +7,7 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 from custom_components.vtherm_smartpi.algo import SmartPI
+from custom_components.vtherm_smartpi.smartpi.diagnostics import build_published_diagnostics
 
 
 def test_save_and_load_state() -> None:
@@ -74,6 +75,40 @@ def test_debug_learning_counters_are_runtime_scoped_after_load() -> None:
     debug = smartpi2.get_debug_diagnostics()["debug"]
     assert debug["learn_ok_count"] == 2
     assert debug["learn_skip_count"] == 1
+
+
+def test_restored_learned_model_publishes_confidence_before_active_cycle() -> None:
+    """Restored learned models should publish their A/B confidence immediately."""
+    smartpi1 = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI1",
+    )
+    smartpi1.est.a = 0.05899
+    smartpi1.est.b = 0.000459
+    smartpi1.est.learn_ok_count = 1929
+    smartpi1.est.learn_ok_count_a = 517
+    smartpi1.est.learn_ok_count_b = 1412
+    smartpi1.est.a_meas_hist.extend([0.05899] * 31)
+    smartpi1.est.b_meas_hist.extend([0.000459] * 31)
+    smartpi1.est._b_hat_hist.extend([0.000459] * 20)
+
+    smartpi2 = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI2",
+        saved_state=smartpi1.save_state(),
+    )
+
+    published = build_published_diagnostics(smartpi2)
+
+    assert published["control"]["phase"] == "Stable"
+    assert published["ab_learning"]["stage"] == "monitoring"
+    assert published["model"]["confidence"] == "ab_ok"
 
 
 def test_save_and_load_state_restores_autocalib_and_learning_start() -> None:

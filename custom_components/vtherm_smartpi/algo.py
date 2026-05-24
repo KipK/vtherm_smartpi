@@ -1641,6 +1641,11 @@ class SmartPI:
         # skip the time_scale ramp by pre-setting _cycles_since_reset.
         # Safety: cycle 1 skips bumpless (is_first_run), cycle 2+ has stable FF (d_uff≈0).
         tau_info = self.est.tau_reliability()
+        self._ab_confidence.evaluate(
+            tau_reliable=tau_info.reliable,
+            learn_ok_count_a=self.est.learn_ok_count_a,
+            learn_ok_count_b=self.est.learn_ok_count_b,
+        )
         if self.est.learn_ok_count_a >= 10 and tau_info.reliable:
             self._cycles_since_reset = self.ff_warmup_cycles
             _LOGGER.info(
