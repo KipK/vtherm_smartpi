@@ -307,6 +307,8 @@ U_OFF_MAX = 0.05
 U_ON_MIN = 0.20
 DELTA_MIN_OFF = 0.5        # °C
 DELTA_MIN_ON = 0.2         # °C
+AB_B_HEAT_MIN_LOSS_GRADIENT_C = 2.0
+AB_B_HEAT_OUTDOOR_BELOW_TARGET_MARGIN_C = 2.0
 
 # Power coefficient of variation gate (Welford-based)
 U_CV_MAX = 0.30            # Maximum accepted CV of power over the learning window

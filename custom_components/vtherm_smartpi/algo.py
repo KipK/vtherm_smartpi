@@ -740,7 +740,9 @@ class SmartPI:
         current_temp: float,
         ext_temp: float,
         u_active: float,
-        setpoint_changed: bool = False
+        setpoint_changed: bool = False,
+        hvac_mode: VThermHvacMode | None = None,
+        target_temp: float | None = None,
     ) -> None:
         """
         Feed learning data from the heartbeat tick.
@@ -753,6 +755,8 @@ class SmartPI:
             ext_temp: Current outdoor temperature
             u_active: Power applied during this interval (0..1)
             setpoint_changed: True if setpoint changed during this interval
+            hvac_mode: Current HVAC mode.
+            target_temp: Current target temperature.
         """
         now = time.monotonic()
 
@@ -777,6 +781,8 @@ class SmartPI:
             deadtime_skip_count_b=self._deadtime_skip_count_b,
             is_calibrating=self.calibration_mgr.is_calibrating,
             is_hysteresis=(self.phase == SmartPIPhase.HYSTERESIS),
+            hvac_mode=hvac_mode,
+            target_temp=target_temp,
         )
 
     async def on_cycle_started(self, on_time_sec: float, off_time_sec: float, on_percent: float, hvac_mode: str) -> None:
@@ -2382,7 +2388,9 @@ class SmartPI:
                 current_temp=t_int_clean,
                 ext_temp=ext_current_temp,
                 u_active=self._committed_on_percent,
-                setpoint_changed=setpoint_changed
+                setpoint_changed=setpoint_changed,
+                hvac_mode=hvac_mode,
+                target_temp=target_temp,
             )
 
         # Calibration state machine

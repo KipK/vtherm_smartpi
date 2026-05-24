@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Optional
 from .timestamp_utils import convert_monotonic_to_wall_ts
 
 from .const import (
+    AB_B_HEAT_MIN_LOSS_GRADIENT_C,
+    AB_B_HEAT_OUTDOOR_BELOW_TARGET_MARGIN_C,
     DELTA_MIN,
     DT_MAX_MIN,
     U_CV_MAX,
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
     from .ab_estimator import ABEstimator
     from .deadtime_estimator import DeadTimeEstimator
     from .governance import SmartPIGovernance
+    from ..hvac_mode import VThermHvacMode
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -246,6 +249,8 @@ class LearningWindowManager:
         deadtime_skip_count_b: int = 0,
         is_calibrating: bool = False,
         is_hysteresis: bool = False,
+        hvac_mode: "VThermHvacMode | None" = None,
+        target_temp: float | None = None,
     ) -> tuple[int, int]:
         """
         Update learning window and submit to estimator if conditions met.
@@ -268,6 +273,8 @@ class LearningWindowManager:
             ff3_active: True when FF3 was active for the current cycle.
             deadtime_skip_count_a: Counter for heating deadtime skips (returned).
             deadtime_skip_count_b: Counter for cooling deadtime skips (returned).
+            hvac_mode: Current HVAC mode.
+            target_temp: Current target temperature.
             
         Returns:
             Tuple of (deadtime_skip_count_a, deadtime_skip_count_b) for tracking.
@@ -275,6 +282,7 @@ class LearningWindowManager:
         # Import here to avoid circular imports at module level
         from .governance import GovernanceDecision
         from .ab_estimator import ABEstimator
+        from ..hvac_mode import VThermHvacMode_HEAT
         
         if dt_min <= 0:
             return deadtime_skip_count_a, deadtime_skip_count_b
@@ -569,6 +577,28 @@ class LearningWindowManager:
 
         if u_eff < U_OFF_MAX:
             # OFF Learning
+            if hvac_mode == VThermHvacMode_HEAT:
+                loss_gradient = self._T_int_start - self._T_ext_start
+                if loss_gradient < AB_B_HEAT_MIN_LOSS_GRADIENT_C:
+                    estimator.learn_skip_count += 1
+                    estimator.learn_last_reason = (
+                        "skip: b heat mode - insufficient heat-loss gradient"
+                    )
+                    self.reset()
+                    return deadtime_skip_count_a, deadtime_skip_count_b
+
+                if (
+                    target_temp is not None
+                    and self._T_ext_start
+                    > target_temp - AB_B_HEAT_OUTDOOR_BELOW_TARGET_MARGIN_C
+                ):
+                    estimator.learn_skip_count += 1
+                    estimator.learn_last_reason = (
+                        "skip: b heat mode - outdoor too close to target"
+                    )
+                    self.reset()
+                    return deadtime_skip_count_a, deadtime_skip_count_b
+
             relevant_samples = [
                 p for p in dt_est.tin_history 
                 if p[0] >= self._start_ts
