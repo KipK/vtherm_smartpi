@@ -638,9 +638,14 @@ class LearningWindowManager:
             if slope_val is not None:
                 final_slope = slope_val
                 estimator.diag_dTdt_method = method
-            else:
+            elif is_calibrating:
                 final_slope = dT_dt
                 estimator.diag_dTdt_method = "fallback_simple"
+            else:
+                estimator.learn_skip_count += 1
+                estimator.learn_last_reason = f"skip: ON slope not robust ({method})"
+                self.reset()
+                return deadtime_skip_count_a, deadtime_skip_count_b
 
             estimator.learn(
                 dT_int_per_min=final_slope,
