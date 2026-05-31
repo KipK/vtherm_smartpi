@@ -107,3 +107,10 @@ remove vtherm_api dependency ( use VT installed one )
   ## [0.3.5] - 2026-05-23
 
 - Fix SmartPI diagnostic entity persistence
+
+  ## [0.3.6] - 2026-05-31
+
+- Fix SmartPI diagnostic sensor recreation after VT reload
+- Restrict SmartPI A learning fallback to calibration. Require robust ON slope for SmartPI A learning
+- Fix restored SmartPI AB confidence state
+- Add HVAC and target context to SmartPI learning windows, and skip B learning in HEAT when the passive heat-loss gradient is too weak or outdoor temperature is too close to target.
