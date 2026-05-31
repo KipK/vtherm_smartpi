@@ -78,6 +78,14 @@ def _remove_stale_diagnostic_entity(hass: HomeAssistant, target_unique_id: str) 
     er.async_get(hass).async_remove(entity_id)
 
 
+def _is_tracked_diagnostic_present(
+    hass: HomeAssistant,
+    target_unique_id: str,
+) -> bool:
+    """Return whether a tracked diagnostic entity is still registered."""
+    return _get_diagnostic_entity_id(hass, target_unique_id) is not None
+
+
 def _is_global_entry(entry: ConfigEntry) -> bool:
     """Return whether the SmartPI entry carries global defaults."""
     return entry.unique_id == DOMAIN or entry.data.get(CONF_TARGET_VTHERM) is None
@@ -135,8 +143,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 _remove_stale_diagnostic_entity(hass, target_unique_id)
                 tracked_unique_ids.discard(target_unique_id)
                 continue
-            if target_unique_id in tracked_unique_ids:
+            if target_unique_id in tracked_unique_ids and _is_tracked_diagnostic_present(
+                hass,
+                target_unique_id,
+            ):
                 continue
+            tracked_unique_ids.discard(target_unique_id)
             climate_entity_id, climate_entry = _get_climate_entry(
                 hass, target_unique_id
             )
@@ -169,7 +181,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             )
             pending_unique_ids: list[str] = []
             for candidate_unique_id in candidates:
-                if candidate_unique_id in tracked_unique_ids:
+                if (
+                    candidate_unique_id in tracked_unique_ids
+                    and _is_tracked_diagnostic_present(hass, candidate_unique_id)
+                ):
                     continue
                 if candidate_unique_id not in default_target_unique_ids:
                     continue

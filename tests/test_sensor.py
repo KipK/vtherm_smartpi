@@ -245,6 +245,57 @@ async def test_dedicated_entry_removes_tracked_diagnostic_when_target_stops_usin
 
 
 @pytest.mark.asyncio
+async def test_dedicated_entry_recreates_tracked_diagnostic_when_registry_entry_disappears(
+    hass,
+) -> None:
+    """A tracked diagnostic entity must be recreated when its registry entry is missing."""
+    dedicated_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dedicated SmartPI",
+        unique_id=f"{DOMAIN}-vt-recreated",
+        data={CONF_TARGET_VTHERM: "vt-recreated"},
+    )
+    dedicated_entry.add_to_hass(hass)
+
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="vt-recreated",
+        data={CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI},
+    )
+    vt_entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "climate",
+        VT_DOMAIN,
+        "vt-recreated",
+        suggested_object_id="vt_recreated",
+        config_entry=vt_entry,
+    )
+    registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "smartpi_diag_vt-recreated",
+        suggested_object_id="smartpi_diag_vt_recreated",
+        config_entry=dedicated_entry,
+    )
+
+    async_add_entities = Mock()
+
+    await async_setup_entry(hass, dedicated_entry, async_add_entities)
+
+    async_add_entities.assert_called_once()
+
+    registry.async_remove("sensor.smartpi_diag_vt_recreated")
+    async_dispatcher_send(hass, SIGNAL_SMARTPI_TARGET_UPDATED, "vt-recreated")
+
+    assert async_add_entities.call_count == 2
+    recreated_entities = async_add_entities.call_args.args[0]
+    assert len(recreated_entities) == 1
+    assert recreated_entities[0].unique_id == "smartpi_diag_vt-recreated"
+
+
+@pytest.mark.asyncio
 async def test_global_entry_adds_default_bound_diagnostic_sensor_when_vtherm_becomes_smartpi(
     hass,
 ) -> None:
