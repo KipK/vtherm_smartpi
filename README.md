@@ -25,7 +25,7 @@ SmartPI is an advanced PI-based thermal control algorithm built around a first-o
 - **Safety-First Governance**: A regime-based matrix freezes or unlocks learning and gain adaptation depending on the current operating context
 - **Auto-Calibration**: Monitors model quality over time and triggers a recalibration sequence when learning stagnates
 - **Valve Curve Linearization**: Translates SmartPI demand into a valve position adapted to the non-linear behavior of radiator TRVs
-- **Rich Diagnostics**: Publishes detailed learning status, model state, and regulation data — viewable via a dedicated Home Assistant Markdown card
+- **Rich Diagnostics**: Publishes detailed learning status, model state, and regulation data — viewable via a dedicated Home Assistant Markdown card or the [Equinox](https://github.com/KipK/equinox) Regulation panel
 
 ## 🔗 Integration with Versatile Thermostat
 
@@ -35,6 +35,14 @@ This integration extends the popular [Versatile Thermostat](https://github.com/j
 - Seamless integration with existing VT configurations
 - Per-device customization options
 - Global defaults for easy setup
+
+## 📊 Regulation monitoring with Equinox
+
+SmartPI publishes a structured diagnostics summary that the [Equinox Lovelace card](https://github.com/KipK/equinox) can detect automatically. Once Equinox is installed and configured for your Versatile Thermostat entity, its **Regulation** panel gives direct access to SmartPI learning, model reliability, command breakdown, history graphs, and maintenance actions.
+
+![Equinox SmartPI Regulation dashboard overview](https://github.com/KipK/equinox/raw/master/assets/screens/regul-overview.png)
+
+![Equinox SmartPI Regulation learning section](https://github.com/KipK/equinox/raw/master/assets/screens/regul-learning.png)
 
 ## 📦 Installation
 

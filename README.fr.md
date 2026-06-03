@@ -25,7 +25,7 @@ SmartPI est un algorithme de contrôle thermique avancé basé sur un modèle de
 - **Gouvernance Safety-First** : Une matrice par régime gèle ou déverrouille l'apprentissage et l'adaptation des gains selon le contexte opérationnel
 - **Auto-calibration** : Surveille la qualité du modèle et déclenche une séquence de recalibration lorsque l'apprentissage stagne
 - **Linéarisation de courbe de vanne** : Traduit la demande SmartPI en position de vanne adaptée au comportement non linéaire des vannes thermostatiques (TRV)
-- **Diagnostics détaillés** : Publie l'état de l'apprentissage, l'état du modèle et les données de régulation — consultable via une carte Markdown Home Assistant dédiée
+- **Diagnostics détaillés** : Publie l'état de l'apprentissage, l'état du modèle et les données de régulation — consultable via une carte Markdown Home Assistant dédiée ou le panel de régulation [Equinox](https://github.com/KipK/equinox)
 
 ## 🔗 Intégration avec Versatile Thermostat
 
@@ -35,6 +35,14 @@ Cette intégration étend l'intégration populaire [Versatile Thermostat](https:
 - une intégration transparente avec les configurations VT existantes
 - des options de personnalisation par appareil
 - des valeurs par défaut globales pour une installation simplifiée
+
+## 📊 Suivi de régulation avec Equinox
+
+SmartPI publie un résumé structuré de diagnostics que la [carte Lovelace Equinox](https://github.com/KipK/equinox) détecte automatiquement. Une fois Equinox installé et configuré pour votre entité Versatile Thermostat, son panel **Régulation** donne accès au suivi d'apprentissage SmartPI, à la fiabilité du modèle, au détail des commandes, aux graphes d'historique et aux actions de maintenance.
+
+![Vue d'ensemble du panel de régulation SmartPI dans Equinox](https://github.com/KipK/equinox/raw/master/assets/screens/regul-overview.png)
+
+![Section apprentissage SmartPI dans Equinox](https://github.com/KipK/equinox/raw/master/assets/screens/regul-learning.png)
 
 ## 📦 Installation
 

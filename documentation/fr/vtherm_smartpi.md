@@ -24,6 +24,7 @@
   - [Réglages conseillés](#réglages-conseillés)
   - [Configuration](#configuration)
   - [Diagnostics et carte Markdown](#diagnostics-et-carte-markdown)
+  - [Panel de régulation avec Equinox](#panel-de-régulation-avec-equinox)
   - [Services](#services)
     - [`reset_smartpi_learning`](#reset_smartpi_learning)
     - [`force_smartpi_calibration`](#force_smartpi_calibration)
@@ -352,6 +353,18 @@ Si le mode debug SmartPI est activé, le bloc `debug` ajoute des informations in
 Une carte Markdown Home Assistant est aussi disponible pour afficher plus simplement les diagnostics SmartPI dans le tableau de bord.
 
 https://github.com/KipK/vtherm_smartpi/tree/master/cards
+
+## Panel de régulation avec Equinox
+
+SmartPI publie aussi le résumé `specific_states.smart_pi` et la référence d'entité `specific_states.regulation_diagnostics` sur l'entité thermostat. La [carte Lovelace Equinox](https://github.com/KipK/equinox) utilise ces attributs pour afficher un panel **Régulation** dédié depuis le menu de la carte climate.
+
+Avec Equinox, vous pouvez suivre la progression d'apprentissage SmartPI, la confiance du modèle, le détail de puissance, l'atterrissage de consigne, les graphes d'historique et les actions de maintenance disponibles sans copier la carte Markdown de diagnostics.
+
+![Vue d'ensemble du panel de régulation SmartPI dans Equinox](https://github.com/KipK/equinox/raw/master/assets/screens/regul-overview.png)
+
+![Section apprentissage SmartPI dans Equinox](https://github.com/KipK/equinox/raw/master/assets/screens/regul-learning.png)
+
+Installez Equinox depuis son dépôt ou HACS, configurez-le sur la même entité climate Versatile Thermostat et laissez `additional_dashboards` à sa valeur par défaut `auto`. Equinox détecte SmartPI automatiquement lorsque les diagnostics publiés sont disponibles.
 
 ## Services
 
