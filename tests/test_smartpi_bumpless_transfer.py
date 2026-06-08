@@ -198,31 +198,41 @@ def test_deadband_cool_overshoot_freezes_p_in_deadband():
 
 
 def test_deadband_allow_p_uses_damped_error_not_raw_error():
-    """Allowed P inside core deadband must be damped by the quiet zone."""
+    """Allowed P inside core deadband is persistent and damped by the quiet zone."""
     ctl = SmartPIController("test")
     ctl.integral = 0.0
 
-    ctl.compute_pwm(
-        error=0.10,
-        error_p=0.10,
-        kp=1.0,
-        ki=0.1,
-        u_ff=0.3,
-        dt_min=10.0,
-        cycle_min=10.0,
-        in_deadband=True,
-        in_near_band=False,
-        integrator_hold=False,
-        u_db_nominal=0.45,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=19.9,
-        target_temp=20.0,
-        hysteresis_thermal_guard=False,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
-        deadband_c=0.1,
-        deadband_allow_p=True,
-    )
+    kwargs = {
+        "error": 0.10,
+        "error_p": 0.10,
+        "kp": 1.0,
+        "ki": 0.1,
+        "u_ff": 0.3,
+        "dt_min": 10.0,
+        "cycle_min": 10.0,
+        "in_deadband": True,
+        "in_near_band": False,
+        "integrator_hold": False,
+        "u_db_nominal": 0.45,
+        "hvac_mode": VThermHvacMode_HEAT,
+        "current_temp": 19.9,
+        "target_temp": 20.0,
+        "hysteresis_thermal_guard": False,
+        "is_tau_reliable": True,
+        "learn_ok_count_a": 15,
+        "deadband_c": 0.1,
+        "deadband_allow_p": True,
+    }
+
+    ctl.compute_pwm(**kwargs)
+
+    assert ctl.integral == pytest.approx(0.0)
+    assert ctl.last_error_p_db == pytest.approx(0.0)
+    assert ctl.u_pi == pytest.approx(0.0)
+    assert ctl.u_cmd == pytest.approx(0.3)
+    assert ctl.deadband_p_mode == "deadband_edge_pending"
+
+    ctl.compute_pwm(**kwargs)
 
     assert ctl.integral == pytest.approx(0.0)
     assert ctl.last_error_p_db == pytest.approx(0.025)
