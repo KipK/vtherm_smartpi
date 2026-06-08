@@ -2115,6 +2115,8 @@ class SmartPI:
             kp_near_factor=self.kp_near_factor,
             ki_near_factor=self.ki_near_factor,
             governance_decision=gov_decision_g,
+            cycle_min=self._cycle_min,
+            valve_mode_enabled=self._valve_mode_enabled,
         )
         new_ki = self.gain_scheduler.ki
 

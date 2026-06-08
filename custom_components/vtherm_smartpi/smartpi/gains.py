@@ -6,12 +6,19 @@ Manages Kp/Ki gain calculation with IMC-based tuning and near-band adjustments.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .const import (
+    GAIN_LAMBDA_CYCLE_FACTOR,
+    GAIN_LAMBDA_DEADTIME_FACTOR,
+    GAIN_LAMBDA_MIN_MIN,
+    GAIN_LAMBDA_VALVE_DEADTIME_FACTOR,
+    KI_MAX,
+    KI_MIN,
     KI_SAFE,
+    KP_MAX,
+    KP_MIN,
     KP_SAFE,
     GovernanceDecision,
     clamp,
@@ -29,7 +36,7 @@ class GainResult:
     """Result of gain calculation."""
     kp: float
     ki: float
-    kp_source: str  # "heuristic", "imc", "frozen", etc.
+    kp_source: str
     ki_source: str
 
 
@@ -39,8 +46,8 @@ class GainScheduler:
     
     The gain scheduler calculates appropriate proportional (Kp) and integral (Ki)
     gains based on:
-    1. Heuristic calculation using time constant (tau)
-    2. IMC (Internal Model Control) tuning when dead time is available
+    1. Explicit IMC/SIMC tuning when the A/B model and dead time are reliable
+    2. Safe fallback gains when the complete model is unavailable
     3. Near-band gain reduction for stability near setpoint
     4. Governance freeze application for safe operation
     """
@@ -55,8 +62,8 @@ class GainScheduler:
         # Initialize with safe defaults
         self._kp = KP_SAFE
         self._ki = KI_SAFE
-        self._kp_source = "heuristic"
-        self._ki_source = "heuristic"
+        self._kp_source = "safe"
+        self._ki_source = "safe"
         
         # Previous values for freeze/soft-freeze logic
         self._prev_kp = KP_SAFE
@@ -66,8 +73,8 @@ class GainScheduler:
         """Reset gains to safe defaults."""
         self._kp = KP_SAFE
         self._ki = KI_SAFE
-        self._kp_source = "heuristic"
-        self._ki_source = "heuristic"
+        self._kp_source = "safe"
+        self._ki_source = "safe"
         self._prev_kp = KP_SAFE
         self._prev_ki = KI_SAFE
         _LOGGER.debug("%s: GainScheduler reset to safe defaults", self._name)
@@ -82,6 +89,8 @@ class GainScheduler:
         kp_near_factor: float,
         ki_near_factor: float,
         governance_decision: GovernanceDecision,
+        cycle_min: float = 10.0,
+        valve_mode_enabled: bool = False,
     ) -> GainResult:
         """Calculate Kp and Ki gains based on model and conditions.
         
@@ -94,44 +103,54 @@ class GainScheduler:
             kp_near_factor: Factor to reduce Kp in near-band (0-1).
             ki_near_factor: Factor to reduce Ki in near-band (0-1).
             governance_decision: Current governance decision for gain adaptation.
+            cycle_min: PWM cycle duration in minutes.
+            valve_mode_enabled: Whether valve-mode tuning should be applied.
             
         Returns:
             GainResult with calculated kp, ki, and their sources.
         """
-        if tau_reliable:
-            # Heuristic Kp based on time constant
-            kp_heuristic = 0.35 + 0.9 * math.sqrt(tau_min / 200.0)
-            
-            # Smart-PI v2 IMC (Internal Model Control) tuning
-            if dt_est.deadtime_heat_reliable and dt_est.deadtime_heat_s > 1.0:
-                L_s = dt_est.deadtime_heat_s
-                if estimator.a > 1e-6:
-                    kp_imc = 1.0 / (2.0 * estimator.a * (L_s / 60.0))
-                    kp_calc = min(kp_imc, kp_heuristic)
-                    kp_source = "imc_deadtime"
-                else:
-                    kp_calc = kp_heuristic
-                    kp_source = "heuristic"
-            else:
-                kp_calc = kp_heuristic
-                kp_source = "heuristic"
-            
-            # Clamp Kp and calculate Ki
-            kp = clamp(kp_calc, 0.05, 10.0)
-            ki = clamp(kp / max(tau_min, 10.0), 0.0001, 1.0)
-            ki_source = "heuristic"
-        else:
-            # Use safe defaults when tau is unreliable
+        has_complete_model = (
+            tau_reliable
+            and tau_min > 0.0
+            and estimator.a > 1e-6
+            and dt_est.deadtime_heat_reliable
+            and dt_est.deadtime_heat_s is not None
+            and dt_est.deadtime_heat_s > 1.0
+        )
+
+        if not has_complete_model:
             kp = KP_SAFE
             ki = KI_SAFE
             kp_source = "safe"
             ki_source = "safe"
+        else:
+            L_min = float(dt_est.deadtime_heat_s) / 60.0
+            cycle_min_eff = max(float(cycle_min), 0.0)
+            deadtime_factor = (
+                GAIN_LAMBDA_VALVE_DEADTIME_FACTOR
+                if valve_mode_enabled
+                else GAIN_LAMBDA_DEADTIME_FACTOR
+            )
+            lambda_min = max(
+                deadtime_factor * L_min,
+                GAIN_LAMBDA_CYCLE_FACTOR * cycle_min_eff,
+                GAIN_LAMBDA_MIN_MIN,
+            )
+            kp_calc = 1.0 / (float(estimator.a) * (lambda_min + L_min))
+            kp = clamp(kp_calc, KP_MIN, KP_MAX)
+            ti = float(tau_min)
+            ki = clamp(kp / ti, KI_MIN, KI_MAX)
+            if valve_mode_enabled:
+                kp_source = "imc_simc_valve"
+                ki_source = "imc_simc_valve"
+            else:
+                kp_source = "imc_simc"
+                ki_source = "imc_simc"
         
         # Apply Near Band factor for stability near setpoint
         if in_near_band:
-            kp = clamp(kp * kp_near_factor, 0.05, 10.0)
-            ki_near = ki * ki_near_factor
-            ki = clamp(min(ki_near, ki), 0.0001, 1.0)
+            kp = clamp(kp * kp_near_factor, KP_MIN, KP_MAX)
+            ki = clamp(min(ki * ki_near_factor, ki), KI_MIN, KI_MAX)
             # Mark source as near-band adjusted
             kp_source = f"{kp_source}_nearband"
             ki_source = f"{ki_source}_nearband"

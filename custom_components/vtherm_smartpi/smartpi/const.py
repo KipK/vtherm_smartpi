@@ -129,6 +129,12 @@ KP_MAX = 5.0
 KI_MIN = 0.001
 KI_MAX = 0.050
 
+# IMC/SIMC gain tuning constants
+GAIN_LAMBDA_DEADTIME_FACTOR = 3.0
+GAIN_LAMBDA_VALVE_DEADTIME_FACTOR = 4.0
+GAIN_LAMBDA_CYCLE_FACTOR = 2.0
+GAIN_LAMBDA_MIN_MIN = 5.0
+
 
 # Anti-windup / integrator behavior
 INTEGRAL_LEAK = 0.995  # leak factor per cycle when inside deadband

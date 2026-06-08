@@ -4,16 +4,57 @@ Tests are designed for the Theil-Sen robust regression algorithm which requires
 varying input values (delta for b, u for a) to compute slopes.
 """
 
-from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.ab_estimator import ABEstimator
 from custom_components.vtherm_smartpi.smartpi.const import (
     AB_MIN_SAMPLES_B,
     AB_B_CONVERGENCE_MIN_SAMPLES,
     GovernanceDecision,
+    KI_MAX,
+    KI_MIN,
+    KI_SAFE,
+    KP_MAX,
+    KP_MIN,
+    KP_SAFE,
 )
-from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.smartpi.gains import GainScheduler
 from unittest.mock import MagicMock
-from helpers import force_smartpi_stable_mode
+
+
+def _calculate_gains(
+    *,
+    scheduler=None,
+    a=0.02,
+    tau_min=200.0,
+    deadtime_s=120.0,
+    tau_reliable=True,
+    deadtime_reliable=True,
+    in_near_band=False,
+    kp_near_factor=1.0,
+    ki_near_factor=1.0,
+    governance_decision=GovernanceDecision.ADAPT_ON,
+    cycle_min=10.0,
+    valve_mode_enabled=False,
+):
+    """Build a complete gain calculation fixture."""
+    scheduler = scheduler or GainScheduler("test")
+    estimator = MagicMock()
+    estimator.a = a
+    dt_est = MagicMock()
+    dt_est.deadtime_heat_reliable = deadtime_reliable
+    dt_est.deadtime_heat_s = deadtime_s
+
+    return scheduler.calculate(
+        tau_reliable=tau_reliable,
+        tau_min=tau_min,
+        estimator=estimator,
+        dt_est=dt_est,
+        in_near_band=in_near_band,
+        kp_near_factor=kp_near_factor,
+        ki_near_factor=ki_near_factor,
+        governance_decision=governance_decision,
+        cycle_min=cycle_min,
+        valve_mode_enabled=valve_mode_enabled,
+    )
 
 
 def test_median_convergence_b():
@@ -81,50 +122,96 @@ def test_median_convergence_a():
 
 
 def test_smartpi_gain_adaptation():
-    """Test that heuristic gains adapt monotonically with the time constant."""
-    smartpi = SmartPI(
-        hass=MagicMock(),
-        cycle_min=10,
-        minimal_activation_delay=0,
-        minimal_deactivation_delay=0,
-        name="TestSmartPI"
+    """Test the nominal IMC/SIMC gain calculation from A/B and dead time."""
+    result = _calculate_gains()
+
+    assert result.kp == 1.0 / (0.02 * (20.0 + 2.0))
+    assert result.ki == result.kp / 200.0
+    assert result.kp_source == "imc_simc"
+    assert result.ki_source == "imc_simc"
+
+
+def test_smartpi_gain_kp_decreases_when_a_increases():
+    """Kp should decrease as the heating coefficient increases."""
+    weak_heater = _calculate_gains(a=0.01)
+    strong_heater = _calculate_gains(a=0.02)
+
+    assert strong_heater.kp < weak_heater.kp
+
+
+def test_smartpi_gain_kp_decreases_when_deadtime_increases():
+    """Kp should decrease as dead time increases."""
+    short_deadtime = _calculate_gains(a=0.02, deadtime_s=120.0, cycle_min=1.0)
+    long_deadtime = _calculate_gains(a=0.02, deadtime_s=300.0, cycle_min=1.0)
+
+    assert long_deadtime.kp < short_deadtime.kp
+
+
+def test_smartpi_gain_valve_mode_uses_more_conservative_lambda():
+    """Valve tuning should use the 4L lambda factor."""
+    normal = _calculate_gains(a=0.02, deadtime_s=300.0, cycle_min=1.0)
+    valve = _calculate_gains(
+        a=0.02,
+        deadtime_s=300.0,
+        cycle_min=1.0,
+        valve_mode_enabled=True,
     )
-    force_smartpi_stable_mode(smartpi)
 
-    estimator = MagicMock()
-    estimator.a = 0.01
-    dt_est = MagicMock()
-    dt_est.deadtime_heat_reliable = False
-    dt_est.deadtime_heat_s = 0.0
+    assert valve.kp < normal.kp
+    assert valve.kp_source == "imc_simc_valve"
+    assert valve.ki_source == "imc_simc_valve"
 
-    slow_result = smartpi.gain_scheduler.calculate(
-        tau_reliable=True,
-        tau_min=1000.0,
-        estimator=estimator,
-        dt_est=dt_est,
-        in_near_band=False,
-        kp_near_factor=smartpi.kp_near_factor,
-        ki_near_factor=smartpi.ki_near_factor,
-        governance_decision=GovernanceDecision.ADAPT_ON,
+
+def test_smartpi_gain_safe_without_reliable_deadtime():
+    """Incomplete dead-time information should force safe gains."""
+    result = _calculate_gains(deadtime_reliable=False)
+
+    assert result.kp == KP_SAFE
+    assert result.ki == KI_SAFE
+    assert result.kp_source == "safe"
+    assert result.ki_source == "safe"
+
+
+def test_smartpi_gain_uses_official_bounds():
+    """Calculated gains should be clamped to official bounds."""
+    high = _calculate_gains(a=1e-5, tau_min=1.0, deadtime_s=120.0, cycle_min=10.0)
+    low = _calculate_gains(a=100.0, tau_min=1_000_000.0, deadtime_s=120.0, cycle_min=10.0)
+
+    assert high.kp == KP_MAX
+    assert high.ki == KI_MAX
+    assert low.kp == KP_MIN
+    assert low.ki == KI_MIN
+
+
+def test_smartpi_gain_near_band_reduces_kp_and_ki():
+    """Near-band should reduce Kp and Ki after nominal tuning."""
+    nominal = _calculate_gains()
+    near_band = _calculate_gains(
+        in_near_band=True,
+        kp_near_factor=0.5,
+        ki_near_factor=0.5,
     )
 
-    fast_result = smartpi.gain_scheduler.calculate(
-        tau_reliable=True,
-        tau_min=100.0,
-        estimator=estimator,
-        dt_est=dt_est,
-        in_near_band=False,
-        kp_near_factor=smartpi.kp_near_factor,
-        ki_near_factor=smartpi.ki_near_factor,
-        governance_decision=GovernanceDecision.ADAPT_ON,
-    )
-    kp_slow = slow_result.kp
-    kp_fast = fast_result.kp
+    assert near_band.kp < nominal.kp
+    assert near_band.ki < nominal.ki
+    assert near_band.kp_source == "imc_simc_nearband"
+    assert near_band.ki_source == "imc_simc_nearband"
 
-    # The current scheduler increases the heuristic Kp with tau:
-    # Kp = 0.35 + 0.9 * sqrt(tau/200).
-    # A slower system (larger tau) must therefore receive the higher Kp.
-    assert kp_fast < kp_slow, f"Kp_fast ({kp_fast}) should be < Kp_slow ({kp_slow})"
+
+def test_smartpi_gain_governance_freeze_keeps_previous_gains():
+    """Governance freeze should preserve the previous scheduler gains."""
+    scheduler = GainScheduler("test")
+    previous = _calculate_gains(scheduler=scheduler, a=0.02)
+    frozen = _calculate_gains(
+        scheduler=scheduler,
+        a=0.01,
+        governance_decision=GovernanceDecision.FREEZE,
+    )
+
+    assert frozen.kp == previous.kp
+    assert frozen.ki == previous.ki
+    assert frozen.kp_source == "frozen"
+    assert frozen.ki_source == "frozen"
 
 
 def test_smartpi_outlier_rejection():
