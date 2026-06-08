@@ -16,15 +16,32 @@ The trim is frozen under several conditions (see freeze()).
 from __future__ import annotations
 
 import logging
+from collections import deque
+from dataclasses import dataclass
+from statistics import median
+from typing import Deque
 
 from .const import (
     clamp,
     FF_TRIM_RHO,
     FF_TRIM_LAMBDA,
     FF_TRIM_EPSILON,
+    FF_TRIM_PERSISTENCE,
+    FF_TRIM_BUFFER_SIZE,
+    FF_TRIM_DELTA_EPSILON,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FFTrimUpdateResult:
+    """Result of one persistent trim update attempt."""
+
+    updated: bool
+    reason: str
+    applied_delta: float
+    pending_count: int
 
 
 class FFTrim:
@@ -38,6 +55,7 @@ class FFTrim:
         self.u_ff_trim: float = 0.0
         self.frozen: bool = False
         self.freeze_reason: str = "none"
+        self._pending_deltas: Deque[float] = deque(maxlen=FF_TRIM_BUFFER_SIZE)
 
     # ------------------------------------------------------------------
     # Public API
@@ -73,6 +91,60 @@ class FFTrim:
             authority,
         )
 
+    def update_persistent(
+        self,
+        delta_power: float,
+        u_ff_ab: float,
+    ) -> FFTrimUpdateResult:
+        """Update trim only after same-direction thermal corrections persist."""
+        if self.frozen:
+            self.clear_pending()
+            return FFTrimUpdateResult(
+                False,
+                f"frozen_{self.freeze_reason}",
+                0.0,
+                0,
+            )
+
+        if abs(delta_power) <= FF_TRIM_DELTA_EPSILON:
+            self.clear_pending()
+            return FFTrimUpdateResult(False, "quiet_delta", 0.0, 0)
+
+        direction = 1.0 if delta_power > 0.0 else -1.0
+        previous_direction = self._pending_direction()
+        if previous_direction is not None and previous_direction != direction:
+            self.clear_pending()
+
+        self._pending_deltas.append(delta_power)
+        pending_count = len(self._pending_deltas)
+        if pending_count < FF_TRIM_PERSISTENCE:
+            return FFTrimUpdateResult(
+                False,
+                f"pending_{pending_count}/{FF_TRIM_PERSISTENCE}",
+                0.0,
+                pending_count,
+            )
+
+        applied_delta = float(median(self._pending_deltas))
+        self.update(applied_delta, u_ff_ab)
+        return FFTrimUpdateResult(
+            True,
+            "updated_persistent",
+            applied_delta,
+            pending_count,
+        )
+
+    def clear_pending(self) -> None:
+        """Discard pending trim samples that belong to an invalid context."""
+        self._pending_deltas.clear()
+
+    def _pending_direction(self) -> float | None:
+        """Return the direction shared by pending deltas, if any."""
+        for delta in reversed(self._pending_deltas):
+            if abs(delta) > FF_TRIM_DELTA_EPSILON:
+                return 1.0 if delta > 0.0 else -1.0
+        return None
+
     def compute_ff_base(self, u_ff_ab: float) -> float:
         """Return u_ff_base = clamp(u_ff_ab + u_ff_trim, 0, 1)."""
         return clamp(u_ff_ab + self.u_ff_trim, 0.0, 1.0)
@@ -83,6 +155,7 @@ class FFTrim:
             _LOGGER.debug("FFTrim: frozen (%s)", reason)
         self.frozen = True
         self.freeze_reason = reason
+        self.clear_pending()
 
     def unfreeze(self) -> None:
         """Unfreeze trim updates."""
@@ -96,6 +169,7 @@ class FFTrim:
         self.u_ff_trim = 0.0
         self.frozen = False
         self.freeze_reason = "none"
+        self.clear_pending()
 
     # ------------------------------------------------------------------
     # Persistence
@@ -106,3 +180,4 @@ class FFTrim:
 
     def load_state(self, state: dict) -> None:
         self.u_ff_trim = float(state.get("u_ff_trim", 0.0))
+        self.clear_pending()

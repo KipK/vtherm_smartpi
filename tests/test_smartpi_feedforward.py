@@ -25,6 +25,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     FF3_MAX_AUTHORITY,
     FF3_NEARBAND_GAIN,
     FF_TRIM_LAMBDA,
+    FF_TRIM_PERSISTENCE,
 )
 from custom_components.vtherm_smartpi.smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 from custom_components.vtherm_smartpi.const import (
@@ -301,6 +302,53 @@ class TestFFResult:
 
         expected = 0.10 + FF_TRIM_LAMBDA * 0.03
         assert trim.u_ff_trim == pytest.approx(expected)
+
+    def test_trim_persistent_update_waits_for_same_direction_samples(self):
+        """Persistent trim must wait before applying a thermal correction."""
+        trim = FFTrim()
+
+        for idx in range(FF_TRIM_PERSISTENCE - 1):
+            result = trim.update_persistent(delta_power=0.03, u_ff_ab=1.0)
+            assert result.updated is False
+            assert result.reason == f"pending_{idx + 1}/{FF_TRIM_PERSISTENCE}"
+            assert trim.u_ff_trim == pytest.approx(0.0)
+
+        result = trim.update_persistent(delta_power=0.03, u_ff_ab=1.0)
+
+        assert result.updated is True
+        assert result.reason == "updated_persistent"
+        assert result.applied_delta == pytest.approx(0.03)
+        assert trim.u_ff_trim == pytest.approx(FF_TRIM_LAMBDA * 0.03)
+
+    def test_trim_persistent_update_uses_rolling_median(self):
+        """Persistent trim must apply the robust median of pending corrections."""
+        trim = FFTrim()
+
+        trim.update_persistent(delta_power=0.02, u_ff_ab=1.0)
+        trim.update_persistent(delta_power=0.04, u_ff_ab=1.0)
+        result = trim.update_persistent(delta_power=0.03, u_ff_ab=1.0)
+
+        assert result.updated is True
+        assert result.applied_delta == pytest.approx(0.03)
+        assert trim.u_ff_trim == pytest.approx(FF_TRIM_LAMBDA * 0.03)
+
+    def test_trim_persistent_update_resets_on_sign_flip(self):
+        """Opposite correction signs belong to different thermal contexts."""
+        trim = FFTrim()
+
+        trim.update_persistent(delta_power=0.03, u_ff_ab=1.0)
+        result = trim.update_persistent(delta_power=-0.03, u_ff_ab=1.0)
+
+        assert result.updated is False
+        assert result.reason == f"pending_1/{FF_TRIM_PERSISTENCE}"
+        assert trim.u_ff_trim == pytest.approx(0.0)
+
+        trim.update_persistent(delta_power=-0.03, u_ff_ab=1.0)
+        result = trim.update_persistent(delta_power=-0.03, u_ff_ab=1.0)
+
+        assert result.updated is True
+        assert result.applied_delta == pytest.approx(-0.03)
+        assert trim.u_ff_trim == pytest.approx(-FF_TRIM_LAMBDA * 0.03)
 
 
 class TestFF3:

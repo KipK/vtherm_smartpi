@@ -377,6 +377,9 @@ FF_TRIM_K_ERROR = 0.1     # Error recentering gain for slope-based trim update
 FF_TRIM_REBOOT_FREEZE_CYCLES = 3  # Freeze trim learning for a few cycles after reboot
 FF_TRIM_MAX_ERROR_C = 0.3         # Max |error| (°C) for a cycle to be admissible for trim learning
 FF_TRIM_MAX_SLOPE_H = 0.6        # Max |slope| (°C/h) for a cycle to be admissible for trim learning
+FF_TRIM_PERSISTENCE = 3          # Same-direction samples required before applying trim
+FF_TRIM_BUFFER_SIZE = 5          # Rolling sample count used for median trim correction
+FF_TRIM_DELTA_EPSILON = 0.001    # Ignore power corrections below actuator precision scale
 
 # AB confidence & fallback
 AB_BAD_PERSIST_CYCLES = 3           # Cycles in AB_BAD before fallback activates

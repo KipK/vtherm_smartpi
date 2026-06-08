@@ -817,11 +817,18 @@ class SmartPI:
             delta_error = FF_TRIM_K_ERROR * error
             delta_power = delta_slope + delta_error
             self._last_ff_trim_delta = delta_power
-            self._ff_trim.update(delta_power, fftrim_cycle_sample["u_ff1"])
-            self._last_fftrim_update_reason = "updated"
+            trim_update = self._ff_trim.update_persistent(
+                delta_power,
+                fftrim_cycle_sample["u_ff1"],
+            )
+            self._last_fftrim_update_reason = trim_update.reason
             self._last_fftrim_reject_reason = "none"
-            self._cycles_since_fftrim_update = 0
+            if trim_update.updated:
+                self._cycles_since_fftrim_update = 0
+            else:
+                self._cycles_since_fftrim_update += 1
         else:
+            self._ff_trim.clear_pending()
             self._last_fftrim_reject_reason = reason
             self._last_fftrim_update_reason = "skipped"
             self._cycles_since_fftrim_update += 1
