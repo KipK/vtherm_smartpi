@@ -104,7 +104,7 @@ from .smartpi.ff3_eligibility import (
     build_ff3_disturbance_context,
     get_ff3_twin_unavailability_reason,
 )
-from .smartpi.ff_trim import FFTrim
+from .smartpi.ff_trim import FFTrim, evaluate_pi_eligibility_for_trim
 from .smartpi.ff_ab_confidence import ABConfidence
 from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.integral_guard import (
@@ -246,6 +246,7 @@ class SmartPI:
         self._actuator_committed_on_percent: float = 0.0
         self._last_actuator_applied: float = 0.0
         self._pending_fftrim_cycle_sample: dict[str, Any] | None = None
+        self._last_fftrim_cycle_u_pi: float | None = None
 
         # Diagnostics / status
         self._last_error: float = 0.0
@@ -437,6 +438,7 @@ class SmartPI:
         self._actuator_committed_on_percent = 0.0
         self._last_actuator_applied = 0.0
         self._pending_fftrim_cycle_sample = None
+        self._last_fftrim_cycle_u_pi = None
         self._last_aw_du = 0.0
         self._last_ff_trim_delta = 0.0
         self._last_fftrim_cycle_admissible = False
@@ -833,6 +835,9 @@ class SmartPI:
             self._last_fftrim_update_reason = "skipped"
             self._cycles_since_fftrim_update += 1
 
+        if fftrim_cycle_sample is not None:
+            self._last_fftrim_cycle_u_pi = fftrim_cycle_sample.get("u_pi")
+
         self._pending_fftrim_cycle_sample = None
 
         # Cycle accepted -> Count it
@@ -874,14 +879,14 @@ class SmartPI:
         if sample.get("sat_state") != "NO_SAT":
             return False, f"sat_{sample.get('sat_state')}"
 
-        regime = sample.get("regime")
-        if regime not in (
-            GovernanceRegime.EXCITED_STABLE,
-            GovernanceRegime.NEAR_BAND,
-            GovernanceRegime.DEAD_BAND,
-        ):
-            regime_value = regime.value if isinstance(regime, GovernanceRegime) else regime
-            return False, f"regime_{regime_value}"
+        pi_eligibility = evaluate_pi_eligibility_for_trim(
+            regime=sample.get("regime"),
+            i_mode=sample.get("i_mode"),
+            u_pi=sample.get("u_pi"),
+            previous_u_pi=sample.get("previous_u_pi"),
+        )
+        if not pi_eligibility.admissible:
+            return False, pi_eligibility.reason
 
         error = sample.get("error")
         if error is None or abs(error) > FF_TRIM_MAX_ERROR_C:
@@ -1612,6 +1617,7 @@ class SmartPI:
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
         self._pending_fftrim_cycle_sample = None
+        self._last_fftrim_cycle_u_pi = None
         self._last_u_applied = 0.0
         self._last_actuator_applied = 0.0
         self._recovery_hold_armed = False
@@ -1707,6 +1713,7 @@ class SmartPI:
             self._last_ff3_action_sensitivity = 0.0
             self._last_ff3_raw_reason_disabled = self._last_ff3_reason_disabled
             self._pending_fftrim_cycle_sample = None
+            self._last_fftrim_cycle_u_pi = None
             self._last_u_applied = 0.0
             self._last_actuator_applied = 0.0
             self.ctl.u_prev = 0.0
@@ -1753,6 +1760,7 @@ class SmartPI:
             self._last_ff3_action_sensitivity = 0.0
             self._last_ff3_raw_reason_disabled = self._last_ff3_reason_disabled
             self._pending_fftrim_cycle_sample = None
+            self._last_fftrim_cycle_u_pi = None
             self._last_u_applied = 0.0
             self._last_actuator_applied = 0.0
             self._t_heat_episode_start = None
@@ -2635,6 +2643,9 @@ class SmartPI:
                 "regime": self.gov.regime,
                 "sat_state": self.ctl.last_sat,
                 "u_ff1": self._last_ff_result.u_ff1,
+                "u_pi": self.ctl.u_pi,
+                "previous_u_pi": self._last_fftrim_cycle_u_pi,
+                "i_mode": self.ctl.last_i_mode,
                 "ff3_active": self._ff3_active_cycle,
                 "setpoint_changed": setpoint_changed,
             }

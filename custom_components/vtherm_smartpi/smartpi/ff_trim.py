@@ -22,6 +22,7 @@ from statistics import median
 from typing import Deque
 
 from .const import (
+    GovernanceRegime,
     clamp,
     FF_TRIM_RHO,
     FF_TRIM_LAMBDA,
@@ -29,6 +30,7 @@ from .const import (
     FF_TRIM_PERSISTENCE,
     FF_TRIM_BUFFER_SIZE,
     FF_TRIM_DELTA_EPSILON,
+    FF_TRIM_PI_STABILITY_EPSILON,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,6 +44,53 @@ class FFTrimUpdateResult:
     reason: str
     applied_delta: float
     pending_count: int
+
+
+@dataclass(frozen=True)
+class FFTrimPIEligibility:
+    """PI-state eligibility for trim learning."""
+
+    admissible: bool
+    reason: str
+
+
+def evaluate_pi_eligibility_for_trim(
+    regime: GovernanceRegime | str | None,
+    i_mode: str | None,
+    u_pi: float | None,
+    previous_u_pi: float | None,
+) -> FFTrimPIEligibility:
+    """Validate that PI is neutral enough for trim learning."""
+    if regime == GovernanceRegime.DEAD_BAND:
+        if i_mode == "I:FREEZE(deadband)":
+            return FFTrimPIEligibility(True, "pi_deadband_freeze")
+        return FFTrimPIEligibility(False, f"pi_mode_{i_mode}")
+
+    if regime != GovernanceRegime.NEAR_BAND:
+        regime_value = regime.value if isinstance(regime, GovernanceRegime) else regime
+        return FFTrimPIEligibility(False, f"regime_{regime_value}")
+
+    if i_mode is None:
+        return FFTrimPIEligibility(False, "pi_missing_mode")
+
+    blocked_prefixes = (
+        "I:GUARD",
+        "I:CLAMP",
+        "I:SKIP",
+        "I:RESET",
+        "I:BLEED",
+        "I:HOLD",
+    )
+    if i_mode.startswith(blocked_prefixes):
+        return FFTrimPIEligibility(False, f"pi_mode_{i_mode}")
+
+    if u_pi is None or previous_u_pi is None:
+        return FFTrimPIEligibility(False, "pi_pending_stability")
+
+    if abs(u_pi - previous_u_pi) > FF_TRIM_PI_STABILITY_EPSILON:
+        return FFTrimPIEligibility(False, "pi_unstable")
+
+    return FFTrimPIEligibility(True, "pi_near_band_stable")
 
 
 class FFTrim:

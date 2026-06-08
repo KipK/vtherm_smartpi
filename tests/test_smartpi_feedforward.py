@@ -17,7 +17,10 @@ from custom_components.vtherm_smartpi.smartpi.ff3_predictor import (
 from custom_components.vtherm_smartpi.smartpi.ff3_eligibility import (
     build_ff3_disturbance_context,
 )
-from custom_components.vtherm_smartpi.smartpi.ff_trim import FFTrim
+from custom_components.vtherm_smartpi.smartpi.ff_trim import (
+    FFTrim,
+    evaluate_pi_eligibility_for_trim,
+)
 from custom_components.vtherm_smartpi.smartpi.const import (
     GovernanceRegime,
     FF3_DELTA_U,
@@ -26,6 +29,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     FF3_NEARBAND_GAIN,
     FF_TRIM_LAMBDA,
     FF_TRIM_PERSISTENCE,
+    FF_TRIM_PI_STABILITY_EPSILON,
 )
 from custom_components.vtherm_smartpi.smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 from custom_components.vtherm_smartpi.const import (
@@ -349,6 +353,50 @@ class TestFFResult:
         assert result.updated is True
         assert result.applied_delta == pytest.approx(-0.03)
         assert trim.u_ff_trim == pytest.approx(-FF_TRIM_LAMBDA * 0.03)
+
+    def test_trim_pi_eligibility_accepts_frozen_deadband(self):
+        result = evaluate_pi_eligibility_for_trim(
+            regime=GovernanceRegime.DEAD_BAND,
+            i_mode="I:FREEZE(deadband)",
+            u_pi=0.08,
+            previous_u_pi=None,
+        )
+
+        assert result.admissible is True
+        assert result.reason == "pi_deadband_freeze"
+
+    def test_trim_pi_eligibility_accepts_stable_near_band(self):
+        result = evaluate_pi_eligibility_for_trim(
+            regime=GovernanceRegime.NEAR_BAND,
+            i_mode="I:RUN",
+            u_pi=0.205,
+            previous_u_pi=0.20,
+        )
+
+        assert result.admissible is True
+        assert result.reason == "pi_near_band_stable"
+
+    def test_trim_pi_eligibility_rejects_unstable_near_band(self):
+        result = evaluate_pi_eligibility_for_trim(
+            regime=GovernanceRegime.NEAR_BAND,
+            i_mode="I:RUN",
+            u_pi=0.20 + FF_TRIM_PI_STABILITY_EPSILON + 0.001,
+            previous_u_pi=0.20,
+        )
+
+        assert result.admissible is False
+        assert result.reason == "pi_unstable"
+
+    def test_trim_pi_eligibility_rejects_excited_stable(self):
+        result = evaluate_pi_eligibility_for_trim(
+            regime=GovernanceRegime.EXCITED_STABLE,
+            i_mode="I:RUN",
+            u_pi=0.20,
+            previous_u_pi=0.20,
+        )
+
+        assert result.admissible is False
+        assert result.reason == "regime_excited_stable"
 
 
 class TestFF3:

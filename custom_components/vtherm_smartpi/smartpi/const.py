@@ -386,6 +386,7 @@ FF_TRIM_MAX_SLOPE_H = 0.6        # Max |slope| (°C/h) for a cycle to be admissi
 FF_TRIM_PERSISTENCE = 3          # Same-direction samples required before applying trim
 FF_TRIM_BUFFER_SIZE = 5          # Rolling sample count used for median trim correction
 FF_TRIM_DELTA_EPSILON = 0.001    # Ignore power corrections below actuator precision scale
+FF_TRIM_PI_STABILITY_EPSILON = 0.01  # Max cycle-to-cycle PI output drift for near-band trim learning
 
 # AB confidence & fallback
 AB_BAD_PERSIST_CYCLES = 3           # Cycles in AB_BAD before fallback activates
