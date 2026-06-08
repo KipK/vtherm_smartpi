@@ -164,8 +164,8 @@ $$ K_i = \frac{K_p}{\max(\tau, 10)} $$
 
 Important :
 
-- les bornes effectivement appliquées dans `GainScheduler` sont actuellement larges (`Kp` borné dans `[0.05, 10.0]`, `Ki` dans `[0.0001, 1.0]`),
-- les facteurs near-band par défaut sont `DEFAULT_KP_NEAR_FACTOR = 1.0` et `DEFAULT_KI_NEAR_FACTOR = 1.0`.
+- l'amortissement near-band est appliqué continûment entre le bord de near-band configuré et la consigne,
+- `NEAR_BAND_TAPER_KI_MIN` réduit le gain intégral plus fortement que `NEAR_BAND_TAPER_KP_MIN` près de la consigne.
 
 ### 4.2 Feed-forward
 
@@ -533,8 +533,8 @@ Quand le jumeau thermique est exploitable, un sous-bloc `pred` est ajouté au de
 | `DEFAULT_DEADBAND_C`       | `0.05`  |
 | `DEADBAND_HYSTERESIS`      | `0.025` |
 | `DEFAULT_NEAR_BAND_DEG`    | `0.40`  |
-| `DEFAULT_KP_NEAR_FACTOR`   | `1.0`   |
-| `DEFAULT_KI_NEAR_FACTOR`   | `1.0`   |
+| `NEAR_BAND_TAPER_KP_MIN`   | `0.75`  |
+| `NEAR_BAND_TAPER_KI_MIN`   | `0.45`  |
 | `SETPOINT_BOOST_THRESHOLD` | `0.3`   |
 | `SETPOINT_BOOST_ERROR_MIN` | `0.3`   |
 

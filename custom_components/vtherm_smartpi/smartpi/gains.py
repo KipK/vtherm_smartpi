@@ -88,8 +88,6 @@ class GainScheduler:
         estimator: "ABEstimator",
         dt_est: "DeadTimeEstimator",
         in_near_band: bool,
-        kp_near_factor: float,
-        ki_near_factor: float,
         governance_decision: GovernanceDecision,
         near_band_ratio: float = 1.0,
         cycle_min: float = 10.0,
@@ -103,8 +101,6 @@ class GainScheduler:
             estimator: ABEstimator instance with 'a' attribute (gain coefficient).
             dt_est: DeadTimeEstimator with deadtime_heat_s and deadtime_heat_reliable.
             in_near_band: Whether currently in near-band region.
-            kp_near_factor: Factor to reduce Kp in near-band (0-1).
-            ki_near_factor: Factor to reduce Ki in near-band (0-1).
             near_band_ratio: |error| / near-band width, clamped to [0, 1].
             governance_decision: Current governance decision for gain adaptation.
             cycle_min: PWM cycle duration in minutes.
@@ -156,10 +152,8 @@ class GainScheduler:
             ratio = clamp(float(near_band_ratio), 0.0, 1.0)
             kp_taper = NEAR_BAND_TAPER_KP_MIN + (1.0 - NEAR_BAND_TAPER_KP_MIN) * ratio
             ki_taper = NEAR_BAND_TAPER_KI_MIN + (1.0 - NEAR_BAND_TAPER_KI_MIN) * ratio
-            kp_factor = min(kp_near_factor, kp_taper)
-            ki_factor = min(ki_near_factor, ki_taper)
-            kp = clamp(kp * kp_factor, KP_MIN, KP_MAX)
-            ki = clamp(min(ki * ki_factor, ki), KI_MIN, KI_MAX)
+            kp = clamp(kp * kp_taper, KP_MIN, KP_MAX)
+            ki = clamp(min(ki * ki_taper, ki), KI_MIN, KI_MAX)
             # Mark source as near-band adjusted
             kp_source = f"{kp_source}_nearband"
             ki_source = f"{ki_source}_nearband"

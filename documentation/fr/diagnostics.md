@@ -131,8 +131,6 @@ Lorsque le **Mode debug SmartPI** est activé, un bloc imbriqué nommé **`debug
 | `error_filtered` | `float` | Écart de température filtré passe-bas en °C. |
 | `temperature_slope_h` | `float` | Pente horaire estimée de la température de la pièce en °C/h. |
 | `near_band_deg` | `float` | Distance définissant la zone d'approche (near-band) en °C. |
-| `kp_near_factor` | `float` | Facteur multiplicatif appliqué à $K_p$ dans la zone d'approche. |
-| `ki_near_factor` | `float` | Facteur multiplicatif appliqué à $K_i$ dans la zone d'approche. |
 | `sign_flip_leak` | `float` | Coefficient de fuite appliqué pour amortir l'état intégral lors d'un changement de consigne. |
 | `sign_flip_active` | `boolean` | Indique si la logique d'amortissement de l'intégrale est active. |
 

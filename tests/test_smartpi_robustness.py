@@ -29,8 +29,6 @@ def _calculate_gains(
     tau_reliable=True,
     deadtime_reliable=True,
     in_near_band=False,
-    kp_near_factor=1.0,
-    ki_near_factor=1.0,
     near_band_ratio=1.0,
     governance_decision=GovernanceDecision.ADAPT_ON,
     cycle_min=10.0,
@@ -50,8 +48,6 @@ def _calculate_gains(
         estimator=estimator,
         dt_est=dt_est,
         in_near_band=in_near_band,
-        kp_near_factor=kp_near_factor,
-        ki_near_factor=ki_near_factor,
         governance_decision=governance_decision,
         near_band_ratio=near_band_ratio,
         cycle_min=cycle_min,
@@ -190,8 +186,7 @@ def test_smartpi_gain_near_band_reduces_kp_and_ki():
     nominal = _calculate_gains()
     near_band = _calculate_gains(
         in_near_band=True,
-        kp_near_factor=0.5,
-        ki_near_factor=0.5,
+        near_band_ratio=0.0,
     )
 
     assert near_band.kp < nominal.kp
@@ -201,12 +196,10 @@ def test_smartpi_gain_near_band_reduces_kp_and_ki():
 
 
 def test_smartpi_gain_near_band_default_taper_reduces_near_setpoint():
-    """Default near-band factors should still damp gains near the setpoint."""
+    """Near-band taper should damp gains near the setpoint."""
     nominal = _calculate_gains()
     near_center = _calculate_gains(
         in_near_band=True,
-        kp_near_factor=1.0,
-        ki_near_factor=1.0,
         near_band_ratio=0.0,
     )
 

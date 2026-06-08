@@ -351,8 +351,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ),
         # 2DOF/scheduling
         "near_band_deg": round(algo.near_band_deg, 3),
-        "kp_near_factor": round(algo.kp_near_factor, 3),
-        "ki_near_factor": round(algo.ki_near_factor, 3),
         "sign_flip_leak": round(algo.sign_flip_leak, 3),
         "sign_flip_active": algo.sign_flip_active,
         # Output

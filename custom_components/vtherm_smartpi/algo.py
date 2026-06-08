@@ -76,8 +76,6 @@ from .smartpi.const import (
     AB_MIN_SAMPLES_A_CONVERGED,
     AB_MIN_SAMPLES_B,
     DEFAULT_NEAR_BAND_DEG,
-    DEFAULT_KP_NEAR_FACTOR,
-    DEFAULT_KI_NEAR_FACTOR,
     CALIBRATION_TIMEOUT_MIN,
     AW_TRACK_TAU_S,
     AW_TRACK_MAX_DELTA_I,
@@ -168,8 +166,6 @@ class SmartPI:
         # --- Setpoint trajectory shaping knobs ---
         setpoint_weight_b: float = 0.3,
         near_band_deg: float = DEFAULT_NEAR_BAND_DEG,
-        kp_near_factor: float = DEFAULT_KP_NEAR_FACTOR,
-        ki_near_factor: float = DEFAULT_KI_NEAR_FACTOR,
         sign_flip_leak: float = 0.40,
         sign_flip_leak_cycles: int = 3,
         sign_flip_band_mult: float = 2.0,
@@ -211,8 +207,6 @@ class SmartPI:
         # 2DOF / scheduling parameters
         self.setpoint_weight_b = clamp(float(setpoint_weight_b), 0.0, 1.0)
         self.near_band_deg = max(float(near_band_deg), 0.0)
-        self.kp_near_factor = clamp(float(kp_near_factor), 0.1, 1.0)
-        self.ki_near_factor = clamp(float(ki_near_factor), 0.1, 1.0)
         self.sign_flip_leak = clamp(float(sign_flip_leak), 0.0, 1.0)
         self.sign_flip_leak_cycles = max(int(sign_flip_leak_cycles), 0)
         self.sign_flip_band_mult = max(float(sign_flip_band_mult), 0.0)
@@ -2169,8 +2163,6 @@ class SmartPI:
             estimator=self.est,
             dt_est=self.dt_est,
             in_near_band=self.deadband_mgr.in_near_band,
-            kp_near_factor=self.kp_near_factor,
-            ki_near_factor=self.ki_near_factor,
             governance_decision=gov_decision_g,
             near_band_ratio=near_band_ratio,
             cycle_min=self._cycle_min,

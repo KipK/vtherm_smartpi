@@ -164,8 +164,8 @@ $$ K_i = \frac{K_p}{\max(\tau, 10)} $$
 
 Important:
 
-- the bounds effectively applied in `GainScheduler` are currently wide (`Kp` clamped to `[0.05, 10.0]`, `Ki` to `[0.0001, 1.0]`),
-- current default near-band factors are `DEFAULT_KP_NEAR_FACTOR = 1.0` and `DEFAULT_KI_NEAR_FACTOR = 1.0`.
+- near-band damping is applied continuously between the configured near-band edge and the setpoint,
+- `NEAR_BAND_TAPER_KI_MIN` reduces the integral gain more strongly than `NEAR_BAND_TAPER_KP_MIN` near the setpoint.
 
 ### 4.2 Feed-forward
 
@@ -524,8 +524,8 @@ When the thermal twin is usable, a `pred` sub-block is added to debug diagnostic
 | `DEFAULT_DEADBAND_C`       | `0.05`  |
 | `DEADBAND_HYSTERESIS`      | `0.025` |
 | `DEFAULT_NEAR_BAND_DEG`    | `0.40`  |
-| `DEFAULT_KP_NEAR_FACTOR`   | `1.0`   |
-| `DEFAULT_KI_NEAR_FACTOR`   | `1.0`   |
+| `NEAR_BAND_TAPER_KP_MIN`   | `0.75`  |
+| `NEAR_BAND_TAPER_KI_MIN`   | `0.45`  |
 | `SETPOINT_BOOST_THRESHOLD` | `0.3`   |
 | `SETPOINT_BOOST_ERROR_MIN` | `0.3`   |
 

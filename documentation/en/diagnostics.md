@@ -131,8 +131,6 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `error_filtered` | `float` | Low-pass filtered temperature error in °C. |
 | `temperature_slope_h` | `float` | Estimated hourly room temperature slope in °C/h. |
 | `near_band_deg` | `float` | Offset boundary defining the near-band region in °C. |
-| `kp_near_factor` | `float` | Custom gain modifier applied to $K_p$ inside the near-band. |
-| `ki_near_factor` | `float` | Custom gain modifier applied to $K_i$ inside the near-band. |
 | `sign_flip_leak` | `float` | Leakage coefficient applied to damp the integral state on setpoint flip. |
 | `sign_flip_active` | `boolean` | Indicates if the damping logic on setpoint flips is currently active. |
 
