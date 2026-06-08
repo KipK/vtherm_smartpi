@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from .const import (
+    DEADBAND_EDGE_PERSISTENCE,
     KI_MIN,
     OVERSHOOT_I_CLAMP_EPS_C,
     SETPOINT_MODE_DELTA_C,
@@ -49,6 +50,8 @@ class SmartPIController:
         self.deadband_power_source: str = "none"
         self.deadband_p_mode: str = "init"
         self.integral_hold_mode: str = "none"
+        self._deadband_edge_count: int = 0
+        self._deadband_edge_sign: float | None = None
 
         # Setpoint landing command cap (post-PI governor)
         self.u_cmd_before_cap: float | None = None
@@ -72,6 +75,8 @@ class SmartPIController:
         self.deadband_power_source = "none"
         self.deadband_p_mode = "init"
         self.integral_hold_mode = "none"
+        self._deadband_edge_count = 0
+        self._deadband_edge_sign = None
         self.u_cmd_before_cap = None
         self.u_cmd_cap = None
         self.hysteresis_state = "off"
@@ -293,6 +298,19 @@ class SmartPIController:
             freeze_deadband=freeze_deadband,
             deadband_allow_p=deadband_allow_p,
         )
+        if self.deadband_p_mode == "deadband_edge":
+            edge_sign = 1.0 if error_p_db >= 0.0 else -1.0
+            if self._deadband_edge_sign == edge_sign:
+                self._deadband_edge_count += 1
+            else:
+                self._deadband_edge_sign = edge_sign
+                self._deadband_edge_count = 1
+            if self._deadband_edge_count < DEADBAND_EDGE_PERSISTENCE:
+                error_p_db = 0.0
+                self.deadband_p_mode = "deadband_edge_pending"
+        else:
+            self._deadband_edge_count = 0
+            self._deadband_edge_sign = None
         self.last_error_p_db = error_p_db
         
         i_max = 2.0 / max(ki, KI_MIN)

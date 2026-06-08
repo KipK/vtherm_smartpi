@@ -30,6 +30,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     FF_TRIM_LAMBDA,
     FF_TRIM_PERSISTENCE,
     FF_TRIM_PI_STABILITY_EPSILON,
+    FF_TRIM_PI_REBALANCE_MAX_STEP,
 )
 from custom_components.vtherm_smartpi.smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 from custom_components.vtherm_smartpi.const import (
@@ -353,6 +354,25 @@ class TestFFResult:
         assert result.updated is True
         assert result.applied_delta == pytest.approx(-0.03)
         assert trim.u_ff_trim == pytest.approx(-FF_TRIM_LAMBDA * 0.03)
+
+    def test_trim_pi_rebalance_is_persistent_and_bumpless(self):
+        """A persistent PI bias may be transferred to trim without changing output."""
+        trim = FFTrim()
+        trim.u_ff_trim = 0.06
+
+        for idx in range(FF_TRIM_PERSISTENCE - 1):
+            result = trim.rebalance_pi_bias(u_pi=-0.05, ki=0.01, u_ff_ab=0.5)
+            assert result.updated is False
+            assert result.reason == f"pi_pending_{idx + 1}/{FF_TRIM_PERSISTENCE}"
+
+        result = trim.rebalance_pi_bias(u_pi=-0.05, ki=0.01, u_ff_ab=0.5)
+
+        assert result.updated is True
+        assert result.reason == "pi_rebalanced"
+        assert result.applied_delta == pytest.approx(-FF_TRIM_PI_REBALANCE_MAX_STEP)
+        assert result.integral_delta == pytest.approx(0.5)
+        assert result.applied_delta + 0.01 * result.integral_delta == pytest.approx(0.0)
+        assert trim.u_ff_trim == pytest.approx(0.06 - FF_TRIM_PI_REBALANCE_MAX_STEP)
 
     def test_trim_pi_eligibility_accepts_frozen_deadband(self):
         result = evaluate_pi_eligibility_for_trim(

@@ -31,6 +31,7 @@ def _calculate_gains(
     in_near_band=False,
     kp_near_factor=1.0,
     ki_near_factor=1.0,
+    near_band_ratio=1.0,
     governance_decision=GovernanceDecision.ADAPT_ON,
     cycle_min=10.0,
     valve_mode_enabled=False,
@@ -52,6 +53,7 @@ def _calculate_gains(
         kp_near_factor=kp_near_factor,
         ki_near_factor=ki_near_factor,
         governance_decision=governance_decision,
+        near_band_ratio=near_band_ratio,
         cycle_min=cycle_min,
         valve_mode_enabled=valve_mode_enabled,
     )
@@ -196,6 +198,22 @@ def test_smartpi_gain_near_band_reduces_kp_and_ki():
     assert near_band.ki < nominal.ki
     assert near_band.kp_source == "imc_simc_nearband"
     assert near_band.ki_source == "imc_simc_nearband"
+
+
+def test_smartpi_gain_near_band_default_taper_reduces_near_setpoint():
+    """Default near-band factors should still damp gains near the setpoint."""
+    nominal = _calculate_gains()
+    near_center = _calculate_gains(
+        in_near_band=True,
+        kp_near_factor=1.0,
+        ki_near_factor=1.0,
+        near_band_ratio=0.0,
+    )
+
+    assert near_center.kp < nominal.kp
+    assert near_center.ki < nominal.ki
+    assert near_center.kp_source == "imc_simc_nearband"
+    assert near_center.ki_source == "imc_simc_nearband"
 
 
 def test_smartpi_gain_governance_freeze_keeps_previous_gains():

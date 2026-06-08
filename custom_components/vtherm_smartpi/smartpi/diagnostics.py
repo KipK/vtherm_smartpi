@@ -378,6 +378,13 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "fftrim_last_update_reason": algo._last_fftrim_update_reason,
         "fftrim_cycles_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_cycle_admissible": algo._last_fftrim_cycle_admissible,
+        "fftrim_pi_rebalance_reason": algo._last_fftrim_pi_rebalance_reason,
+        "fftrim_pi_rebalance_delta": round(algo._last_fftrim_pi_rebalance_delta, 6),
+        "fftrim_pi_rebalance_integral_delta": round(
+            algo._last_fftrim_pi_rebalance_integral_delta,
+            6,
+        ),
+        "fftrim_pi_rebalance_pending": int(algo._last_fftrim_pi_rebalance_pending),
         # FF compatibility aliases
         "u_ff_ab": round(ff_result.u_ff_ab, 6) if ff_result else 0.0,
         "u_ff_trim": round(algo._ff_trim.u_ff_trim, 6),
