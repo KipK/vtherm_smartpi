@@ -238,6 +238,10 @@
 {% set fftrim_last_update_reason = debug.get('fftrim_last_update_reason', '—') %}
 {% set fftrim_cycles_since_update = debug.get('fftrim_cycles_since_update', 0) | int %}
 {% set fftrim_cycle_admissible = debug.get('fftrim_cycle_admissible', false) %}
+{% set fftrim_pi_rebalance_reason = debug.get('fftrim_pi_rebalance_reason', '—') %}
+{% set fftrim_pi_rebalance_delta = debug.get('fftrim_pi_rebalance_delta', 0) | float %}
+{% set fftrim_pi_rebalance_integral_delta = debug.get('fftrim_pi_rebalance_integral_delta', 0) | float %}
+{% set fftrim_pi_rebalance_pending = debug.get('fftrim_pi_rebalance_pending', 0) | int %}
 {% set ff3_enabled = debug.get('ff3_enabled', false) %}
 {% set ff3_reason = debug.get('ff3_reason_disabled', '—') %}
 {% set ff3_raw_reason = debug.get('ff3_raw_reason_disabled', ff3_reason) %}
@@ -631,6 +635,7 @@
 | FFTrim update | `{{ fftrim_last_update_reason }}` |
 | FFTrim reject | `{{ fftrim_last_reject_reason }}` |
 | Cycles depuis update | {{ fftrim_cycles_since_update }} |
+| FFTrim rééquilibrage PI | `{{ fftrim_pi_rebalance_reason }}` · ΔFF `{{ '%+.3f' | format(fftrim_pi_rebalance_delta * 100) }}%` · ΔI `{{ '%+.3f' | format(fftrim_pi_rebalance_integral_delta) }}` · attente {{ fftrim_pi_rebalance_pending }} |
 | FF warmup | {{ ff_ok }}/{{ ff_cyc }} |
 | État FF3 | {% if ff3_enabled %}🔮 actif{% else %}⚪ inactif{% endif %} |
 | Raison FF3 | `{{ ff3_label }}` |
