@@ -387,10 +387,6 @@ FF_TRIM_PERSISTENCE = 3          # Same-direction samples required before applyi
 FF_TRIM_BUFFER_SIZE = 5          # Rolling sample count used for median trim correction
 FF_TRIM_DELTA_EPSILON = 0.001    # Ignore power corrections below actuator precision scale
 FF_TRIM_PI_STABILITY_EPSILON = 0.01  # Max cycle-to-cycle PI output drift for near-band trim learning
-FF_TRIM_PI_REBALANCE_MIN_ABS = 0.015  # Min persistent PI bias before trim/integral balancing
-FF_TRIM_PI_REBALANCE_GAIN = 0.20      # Fraction of median PI bias moved per balancing update
-FF_TRIM_PI_REBALANCE_MAX_STEP = 0.005 # Max trim transfer per balancing update
-FF_TRIM_PI_REBALANCE_MAX_SLOPE_H = 0.20 # Max |slope| for bias balancing near setpoint
 
 # Deadband output shaping
 DEADBAND_EDGE_PERSISTENCE = 2

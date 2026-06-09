@@ -78,10 +78,6 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `fftrim_last_reject_reason` | `string` | Command | Reason why the last slow trim update was rejected. |
 | `fftrim_last_update_reason` | `string` | Command | Reason why the last slow trim update was accepted. |
 | `fftrim_cycles_since_update` | `int` | Command | Number of control cycles elapsed since the last `FFTrim` update. |
-| `fftrim_pi_rebalance_reason` | `string` | Command | Reason or state for the last PI-to-FFTrim bias rebalance attempt. |
-| `fftrim_pi_rebalance_delta` | `float` | Command | Feed-forward trim delta applied by PI bias rebalancing. |
-| `fftrim_pi_rebalance_integral_delta` | `float` | PI State | Integral accumulator delta paired with the trim rebalance to keep the command bumpless. |
-| `fftrim_pi_rebalance_pending` | `int` | Command | Number of persistent PI-bias samples currently waiting before rebalance. |
 | `integral_hold_active` | `boolean` | PI State | Indicates if the integral branch accumulator is currently frozen/held. |
 | `integral_hold_mode` | `string` | PI State | Active mode or reason for the integral freeze (e.g. `window_hold`, `deadband_hold`). |
 | `restart_reason` | `string` | General | Cause of the last algorithm or integration restart. |
@@ -147,10 +143,6 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `ff2_frozen` | `boolean` | Indicates if slow trim adjustments are frozen. |
 | `ff2_freeze_reason` | `string` | Reason for freezing the slow trim update loop. |
 | `fftrim_cycle_admissible` | `boolean` | Indicates if the current cycle satisfies all stability criteria for `FFTrim` updates. |
-| `fftrim_pi_rebalance_reason` | `string` | State of the slow PI-to-FFTrim bias transfer. |
-| `fftrim_pi_rebalance_delta` | `float` | Last trim delta applied by PI bias transfer. |
-| `fftrim_pi_rebalance_integral_delta` | `float` | Matching integral delta used to preserve the current command. |
-| `fftrim_pi_rebalance_pending` | `int` | Pending same-direction PI bias samples before transfer. |
 | `u_ff_ab` | `float` | Pure feed-forward command component derived from learned $a$ and $b$. |
 | `u_ff_trim` | `float` | Slow bias contribution component calculated by the trim algorithm. |
 | `u_ff_base` | `float` | Base feed-forward command prior to trim. |

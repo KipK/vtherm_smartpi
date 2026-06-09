@@ -31,9 +31,6 @@ from .const import (
     FF_TRIM_BUFFER_SIZE,
     FF_TRIM_DELTA_EPSILON,
     FF_TRIM_PI_STABILITY_EPSILON,
-    FF_TRIM_PI_REBALANCE_MIN_ABS,
-    FF_TRIM_PI_REBALANCE_GAIN,
-    FF_TRIM_PI_REBALANCE_MAX_STEP,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,18 +52,6 @@ class FFTrimPIEligibility:
 
     admissible: bool
     reason: str
-
-
-@dataclass(frozen=True)
-class FFTrimPIRebalanceResult:
-    """Result of one PI-to-trim balancing attempt."""
-
-    updated: bool
-    reason: str
-    requested_delta: float
-    applied_delta: float
-    integral_delta: float
-    pending_count: int
 
 
 def evaluate_pi_eligibility_for_trim(
@@ -120,7 +105,6 @@ class FFTrim:
         self.frozen: bool = False
         self.freeze_reason: str = "none"
         self._pending_deltas: Deque[float] = deque(maxlen=FF_TRIM_BUFFER_SIZE)
-        self._pending_pi_biases: Deque[float] = deque(maxlen=FF_TRIM_BUFFER_SIZE)
 
     # ------------------------------------------------------------------
     # Public API
@@ -199,113 +183,15 @@ class FFTrim:
             pending_count,
         )
 
-    def rebalance_pi_bias(
-        self,
-        *,
-        u_pi: float,
-        ki: float,
-        u_ff_ab: float,
-    ) -> FFTrimPIRebalanceResult:
-        """Move a persistent PI bias into trim without changing the command."""
-        if self.frozen:
-            self.clear_pending()
-            return FFTrimPIRebalanceResult(
-                False,
-                f"frozen_{self.freeze_reason}",
-                0.0,
-                0.0,
-                0.0,
-                0,
-            )
-
-        if ki <= 0.0:
-            self.clear_pi_rebalance_pending()
-            return FFTrimPIRebalanceResult(False, "ki_invalid", 0.0, 0.0, 0.0, 0)
-
-        if abs(u_pi) < FF_TRIM_PI_REBALANCE_MIN_ABS:
-            self.clear_pi_rebalance_pending()
-            return FFTrimPIRebalanceResult(False, "pi_quiet", 0.0, 0.0, 0.0, 0)
-
-        direction = 1.0 if u_pi > 0.0 else -1.0
-        previous_direction = self._pending_pi_direction()
-        if previous_direction is not None and previous_direction != direction:
-            self.clear_pi_rebalance_pending()
-
-        self._pending_pi_biases.append(u_pi)
-        pending_count = len(self._pending_pi_biases)
-        if pending_count < FF_TRIM_PERSISTENCE:
-            return FFTrimPIRebalanceResult(
-                False,
-                f"pi_pending_{pending_count}/{FF_TRIM_PERSISTENCE}",
-                0.0,
-                0.0,
-                0.0,
-                pending_count,
-            )
-
-        median_bias = float(median(self._pending_pi_biases))
-        requested_delta = clamp(
-            FF_TRIM_PI_REBALANCE_GAIN * median_bias,
-            -FF_TRIM_PI_REBALANCE_MAX_STEP,
-            FF_TRIM_PI_REBALANCE_MAX_STEP,
-        )
-        if abs(requested_delta) <= FF_TRIM_DELTA_EPSILON:
-            self.clear_pi_rebalance_pending()
-            return FFTrimPIRebalanceResult(
-                False,
-                "pi_delta_quiet",
-                requested_delta,
-                0.0,
-                0.0,
-                0,
-            )
-
-        authority = FF_TRIM_RHO * max(u_ff_ab, FF_TRIM_EPSILON)
-        old_trim = self.u_ff_trim
-        self.u_ff_trim = clamp(old_trim + requested_delta, -authority, authority)
-        applied_delta = self.u_ff_trim - old_trim
-        if abs(applied_delta) <= FF_TRIM_DELTA_EPSILON:
-            self.clear_pi_rebalance_pending()
-            return FFTrimPIRebalanceResult(
-                False,
-                "pi_rebalance_clamped",
-                requested_delta,
-                applied_delta,
-                0.0,
-                0,
-            )
-
-        integral_delta = -applied_delta / ki
-        return FFTrimPIRebalanceResult(
-            True,
-            "pi_rebalanced",
-            requested_delta,
-            applied_delta,
-            integral_delta,
-            pending_count,
-        )
-
     def clear_pending(self) -> None:
         """Discard pending trim samples that belong to an invalid context."""
         self._pending_deltas.clear()
-        self.clear_pi_rebalance_pending()
-
-    def clear_pi_rebalance_pending(self) -> None:
-        """Discard pending PI bias samples."""
-        self._pending_pi_biases.clear()
 
     def _pending_direction(self) -> float | None:
         """Return the direction shared by pending deltas, if any."""
         for delta in reversed(self._pending_deltas):
             if abs(delta) > FF_TRIM_DELTA_EPSILON:
                 return 1.0 if delta > 0.0 else -1.0
-        return None
-
-    def _pending_pi_direction(self) -> float | None:
-        """Return the direction shared by pending PI bias samples, if any."""
-        for bias in reversed(self._pending_pi_biases):
-            if abs(bias) >= FF_TRIM_PI_REBALANCE_MIN_ABS:
-                return 1.0 if bias > 0.0 else -1.0
         return None
 
     def compute_ff_base(self, u_ff_ab: float) -> float:

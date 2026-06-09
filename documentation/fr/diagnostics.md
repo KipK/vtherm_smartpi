@@ -78,10 +78,6 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `fftrim_last_reject_reason` | `string` | Commande | Raison du rejet de la dernière mise à jour de trim lent. |
 | `fftrim_last_update_reason` | `string` | Commande | Raison de l'acceptation de la dernière mise à jour de trim lent. |
 | `fftrim_cycles_since_update` | `int` | Commande | Nombre de cycles écoulés depuis la dernière mise à jour de `FFTrim`. |
-| `fftrim_pi_rebalance_reason` | `string` | Commande | Raison ou état de la dernière tentative de rééquilibrage du biais PI vers `FFTrim`. |
-| `fftrim_pi_rebalance_delta` | `float` | Commande | Delta de trim feed-forward appliqué par le rééquilibrage du biais PI. |
-| `fftrim_pi_rebalance_integral_delta` | `float` | État PI | Delta d'accumulateur intégral associé au rééquilibrage pour garder la commande bumpless. |
-| `fftrim_pi_rebalance_pending` | `int` | Commande | Nombre d'échantillons de biais PI persistants en attente avant rééquilibrage. |
 | `integral_hold_active` | `boolean` | État PI | Indique si l'accumulateur de la branche intégrale est actuellement gelé. |
 | `integral_hold_mode` | `string` | État PI | Mode actif ou raison du gel de l'intégrale (ex. `window_hold`, `deadband_hold`). |
 | `restart_reason` | `string` | Général | Raison du dernier redémarrage de l'algorithme ou de l'intégration. |
@@ -147,10 +143,6 @@ Lorsque le **Mode debug SmartPI** est activé, un bloc imbriqué nommé **`debug
 | `ff2_frozen` | `boolean` | Indique si les ajustements du trim lent sont gelés. |
 | `ff2_freeze_reason` | `string` | Raison du gel de la boucle d'adaptation du trim lent. |
 | `fftrim_cycle_admissible` | `boolean` | Indique si le cycle actuel remplit les critères de stabilité pour mettre à jour `FFTrim`. |
-| `fftrim_pi_rebalance_reason` | `string` | État du transfert lent du biais PI vers `FFTrim`. |
-| `fftrim_pi_rebalance_delta` | `float` | Dernier delta de trim appliqué par le transfert du biais PI. |
-| `fftrim_pi_rebalance_integral_delta` | `float` | Delta intégral associé pour préserver la commande courante. |
-| `fftrim_pi_rebalance_pending` | `int` | Échantillons de biais PI de même signe en attente avant transfert. |
 | `u_ff_ab` | `float` | Composante de feed-forward issue strictement du modèle appris $a$ et $b$. |
 | `u_ff_trim` | `float` | Composante de biais calculée par la boucle de trim lent. |
 | `u_ff_base` | `float` | Commande de feed-forward de base avant application du trim. |

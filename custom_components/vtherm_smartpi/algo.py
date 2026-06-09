@@ -121,7 +121,6 @@ from .smartpi.const import (
     FF_TRIM_K_ERROR,
     FF_TRIM_MAX_ERROR_C,
     FF_TRIM_MAX_SLOPE_H,
-    FF_TRIM_PI_REBALANCE_MAX_SLOPE_H,
     ENABLE_ADAPTIVE_TINT_FILTER,
 )
 from .smartpi.timestamp_utils import convert_monotonic_to_wall_ts
@@ -321,10 +320,6 @@ class SmartPI:
         self._last_fftrim_reject_reason: str = "none"
         self._last_fftrim_update_reason: str = "none"
         self._cycles_since_fftrim_update: int = 0
-        self._last_fftrim_pi_rebalance_reason: str = "none"
-        self._last_fftrim_pi_rebalance_delta: float = 0.0
-        self._last_fftrim_pi_rebalance_integral_delta: float = 0.0
-        self._last_fftrim_pi_rebalance_pending: int = 0
         self._last_forced_by_timing: bool = False  # True when timing forced 0%/100%
         self._output_initialized: bool = False # True once calculate() runs successfully
 
@@ -444,10 +439,6 @@ class SmartPI:
         self._last_fftrim_reject_reason = "none"
         self._last_fftrim_update_reason = "none"
         self._cycles_since_fftrim_update = 0
-        self._last_fftrim_pi_rebalance_reason = "none"
-        self._last_fftrim_pi_rebalance_delta = 0.0
-        self._last_fftrim_pi_rebalance_integral_delta = 0.0
-        self._last_fftrim_pi_rebalance_pending = 0
         self._e_filt = None
         self._cycles_since_reset = 0
         self._accumulated_dt = 0.0
@@ -832,16 +823,11 @@ class SmartPI:
                 self._cycles_since_fftrim_update = 0
             else:
                 self._cycles_since_fftrim_update += 1
-            self._apply_fftrim_pi_rebalance(fftrim_cycle_sample)
         else:
             self._ff_trim.clear_pending()
             self._last_fftrim_reject_reason = reason
             self._last_fftrim_update_reason = "skipped"
             self._cycles_since_fftrim_update += 1
-            self._last_fftrim_pi_rebalance_reason = f"skipped_{reason}"
-            self._last_fftrim_pi_rebalance_delta = 0.0
-            self._last_fftrim_pi_rebalance_integral_delta = 0.0
-            self._last_fftrim_pi_rebalance_pending = 0
 
         if fftrim_cycle_sample is not None:
             self._last_fftrim_cycle_u_pi = fftrim_cycle_sample.get("u_pi")
@@ -852,40 +838,6 @@ class SmartPI:
         self._cycles_since_reset += 1
         self._current_cycle_start_monotonic = None
         self._cycle_boundary_pending = True
-
-    def _apply_fftrim_pi_rebalance(self, sample: dict[str, Any]) -> None:
-        """Move persistent PI bias into trim while preserving command output."""
-        slope_h = sample.get("slope_h")
-        if slope_h is None or abs(slope_h) > FF_TRIM_PI_REBALANCE_MAX_SLOPE_H:
-            self._ff_trim.clear_pi_rebalance_pending()
-            self._last_fftrim_pi_rebalance_reason = (
-                "pi_rebalance_missing_slope"
-                if slope_h is None else f"pi_rebalance_slope_{slope_h:.3f}"
-            )
-            self._last_fftrim_pi_rebalance_delta = 0.0
-            self._last_fftrim_pi_rebalance_integral_delta = 0.0
-            self._last_fftrim_pi_rebalance_pending = 0
-            return
-
-        result = self._ff_trim.rebalance_pi_bias(
-            u_pi=float(sample.get("u_pi") or 0.0),
-            ki=float(sample.get("ki") or 0.0),
-            u_ff_ab=float(sample.get("u_ff1") or 0.0),
-        )
-        self._last_fftrim_pi_rebalance_reason = result.reason
-        self._last_fftrim_pi_rebalance_delta = result.applied_delta
-        self._last_fftrim_pi_rebalance_integral_delta = result.integral_delta
-        self._last_fftrim_pi_rebalance_pending = result.pending_count
-        if not result.updated:
-            return
-
-        ki = float(sample.get("ki") or 0.0)
-        i_max = 2.0 / max(ki, KI_MIN)
-        self.ctl.integral = clamp(
-            self.ctl.integral + result.integral_delta,
-            -i_max,
-            i_max,
-        )
 
     def _remaining_cycle_min(
         self,
