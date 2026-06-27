@@ -29,3 +29,73 @@ def test_drop_missing():
     rls.drop_missing({"A"})
     assert rls.edge_ids() == ["A"]
     assert math.isinf(rls.variance("B"))
+
+
+def test_single_edge_recovers_true_coefficient():
+    """One always-open edge with varying x converges to the true theta."""
+    rls = _rls()
+    true_k = 0.08
+    # y = true_k * x, with x = -(Ti - Tj) varying each cycle.
+    for x in [-3.0, -2.0, -4.0, -2.5, -3.5] * 8:
+        rls.update({"A": x}, true_k * x)
+    assert abs(rls.value("A") - true_k) < 5e-3
+    assert rls.variance("A") < 0.05  # excited -> identifiable
+
+
+def test_two_edges_separable_when_patterns_vary():
+    """Two edges with time-varying open patterns are jointly identified."""
+    rls = _rls()
+    ka, kb = 0.06, 0.10
+    # Alternate which edges are open so the regressors are not collinear.
+    patterns = [
+        {"A": -3.0},
+        {"B": -2.0},
+        {"A": -2.5, "B": -3.0},
+        {"A": -4.0},
+        {"B": -1.5},
+        {"A": -1.0, "B": -2.5},
+    ]
+    for _ in range(15):
+        for p in patterns:
+            y = sum({"A": ka, "B": kb}[e] * x for e, x in p.items())
+            rls.update(p, y)
+    assert abs(rls.value("A") - ka) < 8e-3
+    assert abs(rls.value("B") - kb) < 8e-3
+
+
+def test_collinear_always_together_stays_unidentified():
+    """Two edges ALWAYS open together with equal x: only the sum is learnable;
+    individual variances stay high (unidentifiable)."""
+    rls = _rls()
+    ka, kb = 0.05, 0.09
+    for x in [-3.0, -2.0, -4.0, -2.5] * 20:
+        # Both edges share the same regressor every cycle -> collinear.
+        y = ka * x + kb * x
+        rls.update({"A": x, "B": x}, y)
+    # Sum is pinned...
+    assert abs((rls.value("A") + rls.value("B")) - (ka + kb)) < 0.02
+    # ...but neither individual edge is confidently identified.
+    assert rls.variance("A") > 0.05
+    assert rls.variance("B") > 0.05
+
+
+def test_non_negativity_projection():
+    """A negative true coefficient is clamped at theta_min (=0)."""
+    rls = _rls()
+    for x in [-3.0, -2.0, -4.0] * 10:
+        rls.update({"A": x}, -0.05 * x)  # true theta = -0.05
+    assert rls.value("A") == 0.0
+
+
+def test_closed_edge_is_held():
+    """An edge absent from regressors keeps its theta and variance."""
+    rls = _rls()
+    for x in [-3.0, -2.0, -4.0] * 8:
+        rls.update({"A": x}, 0.08 * x)
+    held_theta = rls.value("A")
+    held_var = rls.variance("A")
+    rls.ensure_edge("B")
+    for x in [-2.0, -3.0] * 8:
+        rls.update({"B": x}, 0.05 * x)  # A is closed here
+    assert rls.value("A") == held_theta
+    assert rls.variance("A") == held_var

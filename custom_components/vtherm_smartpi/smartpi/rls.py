@@ -85,3 +85,55 @@ class MultiEdgeRLS:
 
     def edge_ids(self) -> list[str]:
         return list(self._edges)
+
+    # -- update ------------------------------------------------------------
+
+    def _huber_weight(self, e: float) -> float:
+        """Return the IRLS weight for innovation e (1 inside the band, c/|e| out)."""
+        ae = abs(e)
+        if ae <= self._huber_c or ae == 0.0:
+            return 1.0
+        return self._huber_c / ae
+
+    def update(self, regressors: dict[str, float], y: float) -> None:
+        active = [e for e, x in regressors.items() if x != 0.0]
+        if not active:
+            return
+        for edge_id in active:
+            self.ensure_edge(edge_id)
+
+        # Build the regressor over ALL edges (0 for closed). The measurement
+        # update runs over the full covariance so cross-edge information is
+        # carried correctly. Forgetting is then applied ONLY to the active
+        # (excited) directions (directional forgetting), so a closed/structural
+        # edge is held — never forgotten — and moves only through real
+        # cross-covariance with an active edge. (Forgetting the whole matrix
+        # would inflate closed edges every cycle; updating only the active
+        # sub-block loses cross terms and can drive P non-PSD — negative
+        # variance — and biases multi-edge separation.)
+        idx = self.edge_ids()
+        x = {i: float(regressors.get(i, 0.0)) for i in idx}
+        Px = {i: sum(self._P[i][j] * x[j] for j in idx) for i in idx}
+        denom = self._lam + sum(x[i] * Px[i] for i in idx)
+        if denom <= 0.0:
+            return
+        g = {i: Px[i] / denom for i in idx}            # Kalman gain over all edges
+        pred = sum(x[i] * self._edges[i].theta for i in idx)
+        e = y - pred                                   # innovation
+        e_eff = self._huber_weight(e) * e              # Huber-robust
+        for i in idx:
+            self._edges[i].theta = _clamp(
+                self._edges[i].theta + g[i] * e_eff, self._theta_min, self._theta_max
+            )
+        for i in active:
+            self._edges[i].n += 1
+        # Measurement update over the full matrix: P = P - g ⊗ Px.
+        for i in idx:
+            for j in idx:
+                self._P[i][j] = self._P[i][j] - g[i] * Px[j]
+        # Directional forgetting + anti-windup cap: only the active block ages.
+        for i in active:
+            for j in active:
+                self._P[i][j] = self._P[i][j] / self._lam
+            if self._P[i][i] > self._p_max:
+                self._P[i][i] = self._p_max
