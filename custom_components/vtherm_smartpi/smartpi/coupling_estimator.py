@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from math import isfinite
+from math import isfinite, sqrt
 from typing import TYPE_CHECKING, Deque
 
 from .ab_drift import robust_mad, robust_median
@@ -40,11 +40,27 @@ from .const import (
     COUPLING_DT_MIN_C,
     clamp,
 )
+from .room_coupling import TARGET_OUTSIDE
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .room_coupling import ResolvedEdge
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def edge_regressor(target_kind: str, t_i: float, t_j: float) -> float:
+    """Per-cycle regressor x_j for one open edge (linear, or √|Δ|-law outside)."""
+    delta = t_i - t_j
+    if target_kind == TARGET_OUTSIDE:
+        return -(delta) * sqrt(abs(delta)) if delta != 0.0 else 0.0
+    return -delta
+
+
+def edge_k_instant(target_kind: str, coeff: float, t_i: float, t_j: float) -> float:
+    """Instantaneous conductance k handed to the fold (κ·√|Δ| for outside)."""
+    if target_kind == TARGET_OUTSIDE:
+        return coeff * sqrt(abs(t_i - t_j))
+    return coeff
 
 
 @dataclass

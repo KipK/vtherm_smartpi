@@ -127,3 +127,31 @@ def test_prune_drops_unknown_neighbors():
     _drive_single(est, 0.02)
     est.prune(set())  # no neighbours configured anymore
     assert est.k("N") == 0.0
+
+
+from custom_components.vtherm_smartpi.smartpi.coupling_estimator import (
+    edge_regressor,
+    edge_k_instant,
+)
+from custom_components.vtherm_smartpi.smartpi.room_coupling import (
+    TARGET_ROOM,
+    TARGET_OUTSIDE,
+)
+import math
+
+
+def test_regressor_linear_for_room():
+    assert edge_regressor(TARGET_ROOM, 22.0, 19.0) == -3.0
+
+
+def test_regressor_sqrt_law_for_outside():
+    # Δ = 22 - 7 = 15 ; x = -sign(Δ)|Δ|^1.5
+    assert abs(edge_regressor(TARGET_OUTSIDE, 22.0, 7.0) - (-(15.0 ** 1.5))) < 1e-9
+    # Sign follows Δ.
+    assert edge_regressor(TARGET_OUTSIDE, 5.0, 10.0) > 0.0
+
+
+def test_k_instant_room_vs_outside():
+    assert edge_k_instant(TARGET_ROOM, 0.08, 22.0, 19.0) == 0.08
+    assert abs(edge_k_instant(TARGET_OUTSIDE, 0.02, 22.0, 7.0)
+               - 0.02 * math.sqrt(15.0)) < 1e-9
