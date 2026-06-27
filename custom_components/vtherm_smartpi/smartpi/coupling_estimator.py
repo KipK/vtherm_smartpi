@@ -146,6 +146,17 @@ class CouplingEstimator:
             COUPLING_K_MAX,
         )
 
+    def room_edge_k_map(self) -> dict:
+        """Per-room-neighbour coefficient + reliability, for consensus exposure."""
+        return {
+            edge_id: {
+                "k": round(self._rls.value(edge_id), 6),
+                "reliable": self.reliable(edge_id),
+            }
+            for edge_id, kind in self._kind.items()
+            if kind == "room"
+        }
+
     def edges_diag(self) -> dict:
         return {
             edge_id: {

@@ -148,3 +148,23 @@ def test_no_edges_save_state_regression():
     algo = make_smartpi()
     state = algo.save_state()
     assert state["coupling_state"] == {"edges": {}}
+
+
+def test_snapshot_includes_room_edge_k_map():
+    algo = make_smartpi()
+    captured = {}
+
+    class _View:
+        uid = "A"
+        def publish(self, snap): captured.update(snap)
+        def any_open(self): return False
+        def open_edges(self): return []
+        def component_power_w(self): return 0.0
+
+    algo.attach_coupling_view(_View())
+    algo.coupling_est._rls.ensure_edge("B")
+    algo.coupling_est._rls.set_value("B", 0.07)
+    algo.coupling_est._kind["B"] = "room"
+    algo._publish_coupling_snapshot(20.0, 5.0)
+    assert "coupling_k_by_neighbor" in captured
+    assert abs(captured["coupling_k_by_neighbor"]["B"]["k"] - 0.07) < 1e-9

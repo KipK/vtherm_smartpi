@@ -2775,6 +2775,7 @@ class SmartPI:
                 "on_percent": self._committed_on_percent,
                 "power_w": self._measured_power_w,
                 "available": current_temp is not None,
+                "coupling_k_by_neighbor": self.coupling_est.room_edge_k_map(),
             }
         )
 
