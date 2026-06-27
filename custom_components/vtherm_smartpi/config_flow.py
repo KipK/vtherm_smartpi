@@ -11,8 +11,13 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 
 from .const import (
+    CONF_CONN_APERTURE_SENSOR,
+    CONF_CONN_APERTURE_TYPE,
     CONF_CONN_DOOR_SENSOR,
+    CONF_CONN_NEIGHBOR_TEMP_SENSOR,
     CONF_CONN_NEIGHBOR_VTHERM,
+    CONF_CONN_OPEN_POLICY,
+    CONF_CONN_TARGET_KIND,
     CONF_MINIMAL_ACTIVATION_DELAY,
     CONF_MINIMAL_DEACTIVATION_DELAY,
     CONF_SMART_PI_CONNECTIONS,
@@ -32,6 +37,9 @@ from .const import (
     CONF_SMART_PI_USE_FF3,
     CONF_SMART_PI_USE_SETPOINT_FILTER,
     CONF_TARGET_VTHERM,
+    CONN_TARGET_OUTSIDE,
+    CONN_TARGET_ROOM,
+    CONN_TARGET_SENSOR,
     DEFAULT_OPTIONS,
     DOMAIN,
 )
@@ -250,15 +258,53 @@ def build_connections_schema(
                     device_class="power",
                 )
             ),
+            vol.Optional(CONF_CONN_TARGET_KIND, default=CONN_TARGET_ROOM): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[CONN_TARGET_ROOM, CONN_TARGET_SENSOR, CONN_TARGET_OUTSIDE],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Optional(CONF_CONN_NEIGHBOR_VTHERM): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=CLIMATE_DOMAIN)
             ),
-            vol.Optional(CONF_CONN_DOOR_SENSOR): selector.EntitySelector(
+            vol.Optional(CONF_CONN_NEIGHBOR_TEMP_SENSOR): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=SENSOR_DOMAIN)
+            ),
+            vol.Optional(CONF_CONN_APERTURE_SENSOR): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=BINARY_SENSOR_DOMAIN)
+            ),
+            vol.Optional(CONF_CONN_APERTURE_TYPE, default="door"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["door", "window"],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(CONF_CONN_OPEN_POLICY, default="model"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["model", "trip_off"],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
             ),
             vol.Optional(CONF_ADD_ANOTHER_CONNECTION, default=False): bool,
         }
     )
+
+
+def validate_connection_entry(entry: dict) -> str | None:
+    """Return an error key if a single connection entry is structurally invalid."""
+    target = entry.get(CONF_CONN_TARGET_KIND)
+    aperture = entry.get(CONF_CONN_APERTURE_SENSOR) or entry.get(CONF_CONN_DOOR_SENSOR)
+    if target is None:  # legacy shape
+        target = CONN_TARGET_ROOM if entry.get(CONF_CONN_NEIGHBOR_VTHERM) else None
+    if target == CONN_TARGET_OUTSIDE:
+        return None if aperture else ERROR_CONNECTION_INCOMPLETE
+    if target == CONN_TARGET_SENSOR:
+        ok = aperture and entry.get(CONF_CONN_NEIGHBOR_TEMP_SENSOR)
+        return None if ok else ERROR_CONNECTION_INCOMPLETE
+    if target == CONN_TARGET_ROOM:
+        ok = aperture and entry.get(CONF_CONN_NEIGHBOR_VTHERM)
+        return None if ok else ERROR_CONNECTION_INCOMPLETE
+    return ERROR_CONNECTION_INCOMPLETE
 
 
 def _resolve_neighbor_unique_id(hass: Any, entity_id: str | None) -> str | None:
@@ -306,13 +352,35 @@ def _apply_connection_submission(
     errors: dict[str, str] = {}
     power = user_input.get(CONF_SMART_PI_POWER_SENSOR)
     neighbor_entity = user_input.get(CONF_CONN_NEIGHBOR_VTHERM)
-    door = user_input.get(CONF_CONN_DOOR_SENSOR)
+    # Support new aperture_sensor key with legacy door_sensor fallback
+    aperture = user_input.get(CONF_CONN_APERTURE_SENSOR) or user_input.get(CONF_CONN_DOOR_SENSOR)
+    target_kind = user_input.get(CONF_CONN_TARGET_KIND)
     add_another = bool(user_input.get(CONF_ADD_ANOTHER_CONNECTION))
 
-    if neighbor_entity or door:
-        if not (neighbor_entity and door):
-            errors["base"] = ERROR_CONNECTION_INCOMPLETE
-        else:
+    has_any_connection_field = (
+        neighbor_entity
+        or aperture
+        or user_input.get(CONF_CONN_NEIGHBOR_TEMP_SENSOR)
+        or target_kind not in (None, CONN_TARGET_ROOM)
+    )
+
+    if has_any_connection_field:
+        # Build a normalized entry dict for structural validation
+        entry_for_validation: dict[str, Any] = {}
+        if target_kind:
+            entry_for_validation[CONF_CONN_TARGET_KIND] = target_kind
+        if neighbor_entity:
+            entry_for_validation[CONF_CONN_NEIGHBOR_VTHERM] = neighbor_entity
+        if user_input.get(CONF_CONN_NEIGHBOR_TEMP_SENSOR):
+            entry_for_validation[CONF_CONN_NEIGHBOR_TEMP_SENSOR] = user_input[CONF_CONN_NEIGHBOR_TEMP_SENSOR]
+        if aperture:
+            entry_for_validation[CONF_CONN_APERTURE_SENSOR] = aperture
+
+        struct_err = validate_connection_entry(entry_for_validation)
+        if struct_err:
+            errors["base"] = struct_err
+        elif target_kind in (None, CONN_TARGET_ROOM):
+            # Legacy room connection path — also validate HA-level constraints
             neighbor_uid = _resolve_neighbor_unique_id(hass, neighbor_entity)
             err = _validate_connection(
                 hass, self_unique_id, neighbor_uid, pending_connections
@@ -320,12 +388,30 @@ def _apply_connection_submission(
             if err:
                 errors["base"] = err
             else:
-                pending_connections.append(
-                    {
-                        CONF_CONN_NEIGHBOR_VTHERM: neighbor_uid,
-                        CONF_CONN_DOOR_SENSOR: door,
-                    }
-                )
+                conn: dict[str, Any] = {
+                    CONF_CONN_NEIGHBOR_VTHERM: neighbor_uid,
+                    CONF_CONN_APERTURE_SENSOR: aperture,
+                }
+                if target_kind:
+                    conn[CONF_CONN_TARGET_KIND] = target_kind
+                if user_input.get(CONF_CONN_APERTURE_TYPE):
+                    conn[CONF_CONN_APERTURE_TYPE] = user_input[CONF_CONN_APERTURE_TYPE]
+                if user_input.get(CONF_CONN_OPEN_POLICY):
+                    conn[CONF_CONN_OPEN_POLICY] = user_input[CONF_CONN_OPEN_POLICY]
+                pending_connections.append(conn)
+        else:
+            # sensor or outside targets — no HA-level vtherm resolution needed
+            conn = {
+                CONF_CONN_TARGET_KIND: target_kind,
+                CONF_CONN_APERTURE_SENSOR: aperture,
+            }
+            if user_input.get(CONF_CONN_NEIGHBOR_TEMP_SENSOR):
+                conn[CONF_CONN_NEIGHBOR_TEMP_SENSOR] = user_input[CONF_CONN_NEIGHBOR_TEMP_SENSOR]
+            if user_input.get(CONF_CONN_APERTURE_TYPE):
+                conn[CONF_CONN_APERTURE_TYPE] = user_input[CONF_CONN_APERTURE_TYPE]
+            if user_input.get(CONF_CONN_OPEN_POLICY):
+                conn[CONF_CONN_OPEN_POLICY] = user_input[CONF_CONN_OPEN_POLICY]
+            pending_connections.append(conn)
     return errors, power, add_another
 
 
