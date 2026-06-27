@@ -2779,6 +2779,18 @@ class SmartPI:
             }
         )
 
+    def _coupling_learn_allowed(self, ext_temp, hvac_mode) -> bool:
+        base_reliable = (
+            self.est.tau_reliability().reliable
+            and self.est.learn_ok_count_a >= AB_MIN_SAMPLES_A
+        )
+        return bool(
+            base_reliable
+            and hvac_mode == VThermHvacMode_HEAT
+            and ext_temp is not None
+            and not self.calibration_mgr.is_calibrating
+        )
+
     def _update_coupling_learning(
         self,
         dt_min: float,
@@ -2786,21 +2798,10 @@ class SmartPI:
         ext_temp: float | None,
         hvac_mode: VThermHvacMode | None,
     ) -> None:
-        """Learn per-edge coupling k_ij from the base-model residual."""
+        """Learn per-edge coupling from the base-model residual (joint RLS)."""
         view = self._coupling_view
         if view is None:
             return
-        open_edges = view.open_edges()
-        base_reliable = (
-            self.est.tau_reliability().reliable
-            and self.est.learn_ok_count_a >= AB_MIN_SAMPLES_A
-        )
-        allow_learn = (
-            base_reliable
-            and hvac_mode == VThermHvacMode_HEAT
-            and ext_temp is not None
-            and not self.calibration_mgr.is_calibrating
-        )
         self.coupling_est.update(
             dt_min=dt_min,
             tin=current_temp,
@@ -2808,8 +2809,8 @@ class SmartPI:
             u=self._committed_on_percent,
             a=self.est.a,
             b=self.est.b,
-            open_edges=open_edges,
-            allow_learn=allow_learn,
+            open_edges=view.open_edges(),
+            allow_learn=self._coupling_learn_allowed(ext_temp, hvac_mode),
         )
 
     def _refresh_coupling_context(

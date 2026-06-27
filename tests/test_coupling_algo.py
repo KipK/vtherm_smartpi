@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.room_coupling import ResolvedEdge
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 
 
 def make_smartpi(**kwargs):
@@ -120,6 +121,35 @@ def test_no_edges_save_state_regression():
     state = algo.save_state()
     assert state["coupling_state"]["rls"]["edges"] == {}
     assert state["coupling_state"]["kind"] == {}
+
+
+def test_learning_accepts_multiple_open_edges():
+    algo = make_smartpi()
+    e1 = ResolvedEdge(edge_id="B", target_kind="room", aperture_type="door",
+                      open_policy="model", neighbor_temp=24.0, neighbor_power_w=None,
+                      neighbor_uid="B")
+    e2 = ResolvedEdge(edge_id="C", target_kind="room", aperture_type="door",
+                      open_policy="model", neighbor_temp=18.0, neighbor_power_w=None,
+                      neighbor_uid="C")
+
+    class _View:
+        uid = "A"
+        def publish(self, snap): pass
+        def any_open(self): return True
+        def open_edges(self): return [e1, e2]
+        def component_power_w(self): return 0.0
+
+    algo.attach_coupling_view(_View())
+    # Make the base model "reliable enough" for learning to proceed.
+    algo.est.a = 0.01
+    algo.est.b = 0.008
+    # Prime + drive a few cycles (allow_learn is gated internally on base reliability;
+    # force the gate open by monkeypatching the precondition).
+    algo._coupling_learn_allowed = lambda *a, **k: True  # see Step 3
+    for i in range(20):
+        algo._update_coupling_learning(1.0, 20.0 + 0.05 * i, 5.0, VThermHvacMode_HEAT)
+    assert algo.coupling_est._rls.samples("B") > 0
+    assert algo.coupling_est._rls.samples("C") > 0
 
 
 def test_snapshot_includes_room_edge_k_map():
