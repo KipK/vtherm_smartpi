@@ -121,11 +121,17 @@ def test_reliable_helper():
     assert rls.reliable("A", var_max=0.05, min_samples=8) is True
 
 
+def test_load_state_ignores_malformed_input():
+    rls = _rls()
+    for bad in (None, {}, [1, 2, 3], "corrupt", 42):
+        rls.load_state(bad)        # must not raise
+    assert rls.edge_ids() == []    # nothing loaded from garbage
+
+
 def test_save_load_roundtrip():
     rls = _rls()
     for x in [-3.0, -2.0, -4.0] * 8:
-        rls.update({"A": x}, 0.08 * x)
-    rls.ensure_edge("B")
+        rls.update({"A": x, "B": x * 0.5}, 0.08 * x)  # A and B co-active -> cross-term
     state = rls.save_state()
     restored = _rls()
     restored.load_state(state)
@@ -133,3 +139,5 @@ def test_save_load_roundtrip():
     assert abs(restored.variance("A") - rls.variance("A")) < 1e-12
     assert restored.samples("A") == rls.samples("A")
     assert set(restored.edge_ids()) == {"A", "B"}
+    # Off-diagonal cross-covariance is faithfully restored.
+    assert abs(restored._P["A"]["B"] - rls._P["A"]["B"]) < 1e-12

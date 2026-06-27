@@ -100,8 +100,8 @@ class MultiEdgeRLS:
         }
 
     def load_state(self, state: dict) -> None:
-        if not state:
-            return
+        if not isinstance(state, dict) or not state:
+            return  # best-effort: a corrupt/truncated persisted blob must not crash
         edges = state.get("edges", {})
         P = state.get("P", {})
         if not isinstance(edges, dict) or not isinstance(P, dict):
