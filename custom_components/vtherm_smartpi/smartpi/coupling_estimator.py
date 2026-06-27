@@ -32,7 +32,7 @@ from .const import (
     COUPLING_RLS_VAR_RELIABLE,
     clamp,
 )
-from .room_coupling import TARGET_OUTSIDE
+from .room_coupling import TARGET_OUTSIDE, TARGET_ROOM
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -114,8 +114,20 @@ class CouplingEstimator:
         # rescue an edge that has no local excitation from the neighbour's data.
         self._apply_consensus(open_edges)
 
-    def _apply_consensus(self, open_edges) -> None:  # filled in Task 11
-        return
+    def _apply_consensus(self, open_edges) -> None:
+        from .const import COUPLING_CONSENSUS_GAIN
+
+        for edge in open_edges:
+            if edge.target_kind != TARGET_ROOM:
+                continue
+            if edge.neighbor_k is None or not edge.neighbor_reliable:
+                continue
+            if self.reliable(edge.edge_id):
+                continue  # well-excited locally -> keep room-local value
+            current = self._rls.value(edge.edge_id)
+            target = float(edge.neighbor_k)
+            nudged = current + COUPLING_CONSENSUS_GAIN * (target - current)
+            self._rls.set_value(edge.edge_id, clamp(nudged, 0.0, COUPLING_K_MAX))
 
     # -- accessors ---------------------------------------------------------
 

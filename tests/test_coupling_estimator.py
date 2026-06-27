@@ -136,3 +136,47 @@ def test_coeff_held_when_no_edge_open():
         est.update(dt_min=1.0, tin=21.0 + 0.05 * i, text=5.0, u=0.5, a=0.01, b=0.008,
                    open_edges=[], allow_learn=True)
     assert est.coeff("B") == learned
+
+
+# ---------------------------------------------------------------------------
+# Consensus shrinkage tests
+# ---------------------------------------------------------------------------
+
+
+def _consensus_edge(neighbor_k, neighbor_reliable):
+    return ResolvedEdge(edge_id="B", target_kind=TARGET_ROOM, aperture_type="door",
+                        open_policy="model", neighbor_temp=24.0, neighbor_power_w=None,
+                        neighbor_uid="B", neighbor_k=neighbor_k,
+                        neighbor_reliable=neighbor_reliable)
+
+
+def test_consensus_pulls_unreliable_local_toward_reliable_neighbor():
+    """Call _apply_consensus directly to isolate it from RLS dynamics."""
+    est = CouplingEstimator("R")
+    est._rls.ensure_edge("B")  # local edge exists but is unreliable (no data)
+    edge = _consensus_edge(neighbor_k=0.10, neighbor_reliable=True)
+    for _ in range(30):
+        est._apply_consensus([edge])
+    assert est.coeff("B") > 0.0
+    assert est.coeff("B") <= 0.10 + 1e-9       # shrinks toward, never past, 0.10
+
+
+def test_consensus_no_pull_when_neighbor_unreliable():
+    est = CouplingEstimator("R")
+    est._rls.ensure_edge("B")
+    edge = _consensus_edge(neighbor_k=0.10, neighbor_reliable=False)
+    for _ in range(30):
+        est._apply_consensus([edge])
+    assert est.coeff("B") == 0.0               # unreliable neighbour exerts no pull
+
+
+def test_consensus_skips_reliable_local():
+    """A well-excited (reliable) local edge keeps its room-local value."""
+    est = CouplingEstimator("R")
+    est._rls.seed_confidence("B", n=50, var=0.001)  # reliable locally
+    est._rls.set_value("B", 0.04)
+    est._kind["B"] = "room"
+    edge = _consensus_edge(neighbor_k=0.10, neighbor_reliable=True)
+    for _ in range(30):
+        est._apply_consensus([edge])
+    assert abs(est.coeff("B") - 0.04) < 1e-9   # local reliability dominates
