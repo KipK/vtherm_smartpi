@@ -1755,7 +1755,8 @@ class SmartPI:
             return True
 
         # Handle explicit force off (shedding, windows)
-        if power_shedding:
+        window_open = off_reason == HVAC_OFF_REASON_WINDOW_DETECTION
+        if power_shedding or window_open:
             self._set_linear_output(0.0)
             self._committed_on_percent = 0.0
             self._actuator_committed_on_percent = 0.0
@@ -1795,7 +1796,7 @@ class SmartPI:
             self._recovery_hold_armed = False
             self._resume_deadtime_hold_source = IntegralGuardSource.NONE
             self._resume_deadtime_hold_started = False
-            self._last_restart_reason = "power_shedding"
+            self._last_restart_reason = "window" if window_open else "power_shedding"
             return True
 
         return False
@@ -2361,6 +2362,9 @@ class SmartPI:
                 )
             self._last_hvac_mode = hvac_mode
 
+        if off_reason is None and self._coupling_trip_off_active():
+            off_reason = HVAC_OFF_REASON_WINDOW_DETECTION
+
         # --- 1. Validation & Handle OFF ---
         if self._validate_and_handle_off(target_temp, current_temp, hvac_mode, power_shedding, off_reason):
             return
@@ -2760,6 +2764,15 @@ class SmartPI:
         """Return True when a connected door is open with an available neighbour."""
         view = self._coupling_view
         return bool(view.any_open()) if view is not None else False
+
+    def _coupling_trip_off_active(self) -> bool:
+        """True if any open modelled aperture has the trip-off policy."""
+        view = self._coupling_view
+        if view is None:
+            return False
+        return any(
+            getattr(e, "open_policy", "model") == "trip_off" for e in view.open_edges()
+        )
 
     def _publish_coupling_snapshot(
         self, current_temp: float | None, ext_temp: float | None

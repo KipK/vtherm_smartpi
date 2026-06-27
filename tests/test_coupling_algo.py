@@ -217,3 +217,22 @@ def test_closed_is_identity():
     b_eff, text_eff = algo._refresh_coupling_context(22.0, 7.0)
     assert b_eff == 0.008
     assert text_eff == 7.0
+
+
+def test_trip_off_aperture_forces_off():
+    algo = make_smartpi()
+    e = ResolvedEdge(edge_id="patio", target_kind="outside", aperture_type="door",
+                     open_policy="trip_off", neighbor_temp=None, neighbor_power_w=None)
+
+    class _View:
+        uid = "A"
+        def publish(self, snap): pass
+        def any_open(self): return True
+        def open_edges(self): return [e]
+        def component_power_w(self): return 0.0
+
+    algo.attach_coupling_view(_View())
+    assert algo._coupling_trip_off_active() is True
+    algo.calculate(target_temp=21.0, current_temp=20.0, ext_current_temp=5.0,
+                   hvac_mode=VThermHvacMode_HEAT)
+    assert algo.linear_on_percent == 0.0
