@@ -174,3 +174,53 @@ def test_build_edge_configs_new_shapes():
     assert edges[1].target_kind == TARGET_SENSOR
     assert edges[1].neighbor_temp_sensor == "sensor.hall_temp"
     assert ids == {"binary_sensor.window_1", "binary_sensor.door_hall"}
+
+
+def test_outside_and_sensor_edges_resolve():
+    hass = _FakeHass()
+    hass.states.set("binary_sensor.window_1", "on")     # open
+    hass.states.set("binary_sensor.door_hall", "on")    # open
+    hass.states.set("sensor.hall_temp", "19.5")
+    coord = RoomCouplingCoordinator(hass)
+    edges = [
+        EdgeConfig(target_kind=TARGET_OUTSIDE,
+                   aperture_entity_id="binary_sensor.window_1",
+                   aperture_type="window"),
+        EdgeConfig(target_kind=TARGET_SENSOR,
+                   aperture_entity_id="binary_sensor.door_hall",
+                   neighbor_temp_sensor="sensor.hall_temp"),
+    ]
+    coord.register_room("A", edges)
+    resolved = {e.edge_id: e for e in coord.open_edges("A")}
+    assert resolved["binary_sensor.window_1"].target_kind == TARGET_OUTSIDE
+    assert resolved["binary_sensor.window_1"].neighbor_temp is None
+    assert resolved["binary_sensor.door_hall"].neighbor_temp == 19.5
+    assert coord.any_open("A") is True
+
+
+def test_controlled_edge_exposes_neighbor_k_for_consensus():
+    hass = _FakeHass()
+    hass.states.set("binary_sensor.door_ab", "on")
+    coord = RoomCouplingCoordinator(hass)
+    coord.register_room("A", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B",
+                                         aperture_entity_id="binary_sensor.door_ab")])
+    coord.register_room("B", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="A",
+                                         aperture_entity_id="binary_sensor.door_ab")])
+    coord.publish("B", {"t_int": 21.0, "available": True, "power_w": 50.0,
+                        "coupling_k_by_neighbor": {"A": {"k": 0.07, "reliable": True}}})
+    coord.publish("A", {"t_int": 20.0, "available": True})
+    edge = coord.open_edges("A")[0]
+    assert edge.neighbor_uid == "B"
+    assert edge.neighbor_temp == 21.0
+    assert edge.neighbor_k == 0.07
+    assert edge.neighbor_reliable is True
+
+
+def test_closed_aperture_not_returned():
+    hass = _FakeHass()
+    hass.states.set("binary_sensor.window_1", "off")
+    coord = RoomCouplingCoordinator(hass)
+    coord.register_room("A", [EdgeConfig(target_kind=TARGET_OUTSIDE,
+                                         aperture_entity_id="binary_sensor.window_1")])
+    assert coord.open_edges("A") == []
+    assert coord.any_open("A") is False

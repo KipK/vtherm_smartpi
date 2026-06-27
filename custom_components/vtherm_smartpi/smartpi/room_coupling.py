@@ -93,10 +93,11 @@ class _Edge:
 
 @dataclass
 class _RoomNode:
-    """Registered room: its snapshot plus the edges it participates in."""
+    """Registered room: snapshot + its directed typed (sensor/outside) edges."""
 
     uid: str
     snapshot: dict | None = None
+    typed_edges: list = field(default_factory=list)  # list[EdgeConfig]
 
 
 @dataclass(frozen=True)
@@ -257,16 +258,20 @@ class RoomCouplingCoordinator:
             key: edge for key, edge in self._edges.items() if edge.door_by
         }
 
-        # Apply the new declarations.
+        # Apply the new declarations, splitting controlled vs typed.
+        node.typed_edges = []
         for cfg in edges:
-            if not cfg.neighbor_uid or cfg.neighbor_uid == uid:
-                continue
-            key = frozenset({uid, cfg.neighbor_uid})
-            edge = self._edges.get(key)
-            if edge is None:
-                edge = _Edge(key=key)
-                self._edges[key] = edge
-            edge.door_by[uid] = cfg.aperture_entity_id
+            if cfg.target_kind == TARGET_ROOM:
+                if not cfg.neighbor_uid or cfg.neighbor_uid == uid:
+                    continue
+                key = frozenset({uid, cfg.neighbor_uid})
+                edge = self._edges.get(key)
+                if edge is None:
+                    edge = _Edge(key=key)
+                    self._edges[key] = edge
+                edge.door_by[uid] = cfg.aperture_entity_id
+            else:
+                node.typed_edges.append(cfg)
 
         return RoomView(self, uid)
 
@@ -295,8 +300,8 @@ class RoomCouplingCoordinator:
         available = bool(snap.get("available")) and snap.get("t_int") is not None
         return available, snap
 
-    def _is_door_open(self, door_entity_id: str | None) -> bool:
-        """Read the door sensor: open iff state == 'on' (fail-safe to closed)."""
+    def _is_aperture_open(self, door_entity_id: str | None) -> bool:
+        """Read the aperture sensor: open iff state == 'on' (fail-safe to closed)."""
         if not door_entity_id:
             return False
         state = self._hass.states.get(door_entity_id)
@@ -304,22 +309,34 @@ class RoomCouplingCoordinator:
             return False
         return str(state.state).lower() == "on"
 
+    def _read_temp(self, entity_id: str | None) -> float | None:
+        if not entity_id:
+            return None
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
+
     # -- queries -----------------------------------------------------------
 
     def _edges_for(self, uid: str) -> list[_Edge]:
         return [edge for edge in self._edges.values() if uid in edge.key]
 
     def open_edges(self, uid: str) -> list[ResolvedEdge]:
-        """Return resolved open edges (door open + neighbour available)."""
+        """Return resolved open edges (controlled bidirectional + typed)."""
         resolved: list[ResolvedEdge] = []
+        # Controlled (bidirectional) edges.
         for edge in self._edges_for(uid):
-            neighbor_uid = edge.other(uid)
-            door_open = self._is_door_open(edge.door_entity())
-            if not door_open:
+            if not self._is_aperture_open(edge.door_entity()):
                 continue
+            neighbor_uid = edge.other(uid)
             available, snap = self._neighbor_available(neighbor_uid)
             if not available or snap is None:
                 continue
+            ck = (snap.get("coupling_k_by_neighbor") or {}).get(uid) or {}
             resolved.append(
                 ResolvedEdge(
                     edge_id=neighbor_uid,
@@ -329,18 +346,51 @@ class RoomCouplingCoordinator:
                     neighbor_temp=snap.get("t_int"),
                     neighbor_power_w=snap.get("power_w"),
                     neighbor_uid=neighbor_uid,
+                    neighbor_k=ck.get("k"),
+                    neighbor_reliable=bool(ck.get("reliable", False)),
                 )
             )
+        # Typed (sensor / outside) edges.
+        node = self._nodes.get(uid)
+        if node is not None:
+            for cfg in node.typed_edges:
+                if not self._is_aperture_open(cfg.aperture_entity_id):
+                    continue
+                if cfg.target_kind == TARGET_OUTSIDE:
+                    neighbor_temp = None  # algo fills with T_ext
+                else:  # TARGET_SENSOR
+                    neighbor_temp = self._read_temp(cfg.neighbor_temp_sensor)
+                    if neighbor_temp is None:
+                        continue
+                resolved.append(
+                    ResolvedEdge(
+                        edge_id=cfg.edge_id,
+                        target_kind=cfg.target_kind,
+                        aperture_type=cfg.aperture_type,
+                        open_policy=cfg.open_policy,
+                        neighbor_temp=neighbor_temp,
+                        neighbor_power_w=None,
+                    )
+                )
         return resolved
 
     def any_open(self, uid: str) -> bool:
-        """Return True if this room has at least one open, available edge."""
+        """True if any modelled aperture (controlled or typed) is open + usable."""
         for edge in self._edges_for(uid):
-            if not self._is_door_open(edge.door_entity()):
+            if not self._is_aperture_open(edge.door_entity()):
                 continue
             available, _ = self._neighbor_available(edge.other(uid))
             if available:
                 return True
+        node = self._nodes.get(uid)
+        if node is not None:
+            for cfg in node.typed_edges:
+                if not self._is_aperture_open(cfg.aperture_entity_id):
+                    continue
+                if cfg.target_kind == TARGET_OUTSIDE:
+                    return True
+                if self._read_temp(cfg.neighbor_temp_sensor) is not None:
+                    return True
         return False
 
     def component_power_w(self, uid: str) -> float:
@@ -365,7 +415,7 @@ class RoomCouplingCoordinator:
                 if isinstance(power, (int, float)):
                     total += float(power)
             for edge in self._edges_for(current):
-                if not self._is_door_open(edge.door_entity()):
+                if not self._is_aperture_open(edge.door_entity()):
                     continue
                 neighbor_uid = edge.other(current)
                 if neighbor_uid in seen:
