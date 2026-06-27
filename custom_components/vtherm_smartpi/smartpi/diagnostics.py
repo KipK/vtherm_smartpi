@@ -271,7 +271,7 @@ def _build_coupling_block(algo: SmartPI) -> Dict[str, Any]:
     """Return the room-coupling diagnostics block (empty-safe)."""
     cpl = getattr(algo, "_last_coupling_diag", None) or {}
     return {
-        "any_door_open": cpl.get("any_door_open", False),
+        "any_aperture_open": cpl.get("any_door_open", False),
         "b_base": cpl.get("b_base"),
         "b_eff": cpl.get("b_eff"),
         "text_eff": cpl.get("text_eff"),
