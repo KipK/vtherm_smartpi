@@ -2,7 +2,21 @@
 
 from custom_components.vtherm_smartpi.smartpi.room_coupling import (
     EdgeConfig,
+    ResolvedEdge,
     RoomCouplingCoordinator,
+    TARGET_ROOM,
+    TARGET_OUTSIDE,
+    TARGET_SENSOR,
+    build_edge_configs,
+)
+from custom_components.vtherm_smartpi.const import (
+    CONF_CONN_NEIGHBOR_VTHERM,
+    CONF_CONN_DOOR_SENSOR,
+    CONF_CONN_TARGET_KIND,
+    CONF_CONN_APERTURE_SENSOR,
+    CONF_CONN_APERTURE_TYPE,
+    CONF_CONN_OPEN_POLICY,
+    CONF_CONN_NEIGHBOR_TEMP_SENSOR,
 )
 
 
@@ -40,7 +54,7 @@ def _snap(t_int, power, available=True):
 def test_edge_dedup_one_sided_declaration():
     hass = _FakeHass()
     coord = RoomCouplingCoordinator(hass)
-    coord.register_room("A", [EdgeConfig("B", "binary_sensor.door")])
+    coord.register_room("A", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B", aperture_entity_id="binary_sensor.door")])
     coord.register_room("B", [])  # neighbour declares nothing
     assert len(coord._edges) == 1
 
@@ -48,7 +62,7 @@ def test_edge_dedup_one_sided_declaration():
 def test_door_gate_and_power_aggregation():
     hass = _FakeHass()
     coord = RoomCouplingCoordinator(hass)
-    va = coord.register_room("A", [EdgeConfig("B", "binary_sensor.door")])
+    va = coord.register_room("A", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B", aperture_entity_id="binary_sensor.door")])
     vb = coord.register_room("B", [])
     va.publish(_snap(21.0, 100.0))
     vb.publish(_snap(23.0, 150.0))
@@ -68,7 +82,7 @@ def test_door_gate_and_power_aggregation():
 def test_unknown_door_state_fails_closed():
     hass = _FakeHass()
     coord = RoomCouplingCoordinator(hass)
-    va = coord.register_room("A", [EdgeConfig("B", "binary_sensor.door")])
+    va = coord.register_room("A", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B", aperture_entity_id="binary_sensor.door")])
     coord.register_room("B", []).publish(_snap(23.0, 150.0))
     va.publish(_snap(21.0, 100.0))
     # No state set for the door -> treated as closed.
@@ -78,7 +92,7 @@ def test_unknown_door_state_fails_closed():
 def test_unavailable_neighbor_is_isolated():
     hass = _FakeHass()
     coord = RoomCouplingCoordinator(hass)
-    va = coord.register_room("A", [EdgeConfig("B", "binary_sensor.door")])
+    va = coord.register_room("A", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B", aperture_entity_id="binary_sensor.door")])
     vb = coord.register_room("B", [])
     va.publish(_snap(21.0, 100.0))
     vb.publish(_snap(None, 150.0, available=False))
@@ -90,7 +104,7 @@ def test_unavailable_neighbor_is_isolated():
 def test_late_neighbor_resolution():
     hass = _FakeHass()
     coord = RoomCouplingCoordinator(hass)
-    va = coord.register_room("A", [EdgeConfig("B", "binary_sensor.door")])
+    va = coord.register_room("A", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B", aperture_entity_id="binary_sensor.door")])
     hass.states.set("binary_sensor.door", "on")
     va.publish(_snap(21.0, 100.0))
     # B not registered yet -> edge open but no available neighbour.
@@ -103,7 +117,7 @@ def test_late_neighbor_resolution():
 def test_unregister_drops_edges():
     hass = _FakeHass()
     coord = RoomCouplingCoordinator(hass)
-    coord.register_room("A", [EdgeConfig("B", "binary_sensor.door")])
+    coord.register_room("A", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B", aperture_entity_id="binary_sensor.door")])
     coord.register_room("B", [])
     coord.unregister_room("A")
     assert coord._edges == {}
@@ -113,8 +127,50 @@ def test_unregister_drops_edges():
 def test_reregister_replaces_own_edges_keeps_neighbor_declared():
     hass = _FakeHass()
     coord = RoomCouplingCoordinator(hass)
-    coord.register_room("A", [EdgeConfig("B", "binary_sensor.door")])
-    coord.register_room("B", [EdgeConfig("A", "binary_sensor.door")])
+    coord.register_room("A", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B", aperture_entity_id="binary_sensor.door")])
+    coord.register_room("B", [EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="A", aperture_entity_id="binary_sensor.door")])
     # A drops its declaration; B still declares the edge -> it survives.
     coord.register_room("A", [])
     assert len(coord._edges) == 1
+
+
+def test_edge_id_room_vs_aperture():
+    room = EdgeConfig(target_kind=TARGET_ROOM, neighbor_uid="B",
+                      aperture_entity_id="binary_sensor.door_ab")
+    out = EdgeConfig(target_kind=TARGET_OUTSIDE,
+                     aperture_entity_id="binary_sensor.window_1")
+    assert room.edge_id == "B"
+    assert out.edge_id == "binary_sensor.window_1"
+
+
+def test_build_edge_configs_legacy_shape():
+    """Legacy {neighbor_vtherm, door_sensor} -> room/door/model."""
+    raw = [{CONF_CONN_NEIGHBOR_VTHERM: "B",
+            CONF_CONN_DOOR_SENSOR: "binary_sensor.door_ab"}]
+    edges, ids = build_edge_configs(raw)
+    assert len(edges) == 1
+    e = edges[0]
+    assert e.target_kind == TARGET_ROOM
+    assert e.neighbor_uid == "B"
+    assert e.aperture_entity_id == "binary_sensor.door_ab"
+    assert e.aperture_type == "door"
+    assert e.open_policy == "model"
+    assert ids == {"B"}
+
+
+def test_build_edge_configs_new_shapes():
+    raw = [
+        {CONF_CONN_TARGET_KIND: TARGET_OUTSIDE,
+         CONF_CONN_APERTURE_SENSOR: "binary_sensor.window_1",
+         CONF_CONN_APERTURE_TYPE: "window",
+         CONF_CONN_OPEN_POLICY: "trip_off"},
+        {CONF_CONN_TARGET_KIND: TARGET_SENSOR,
+         CONF_CONN_NEIGHBOR_TEMP_SENSOR: "sensor.hall_temp",
+         CONF_CONN_APERTURE_SENSOR: "binary_sensor.door_hall"},
+    ]
+    edges, ids = build_edge_configs(raw)
+    assert edges[0].target_kind == TARGET_OUTSIDE
+    assert edges[0].open_policy == "trip_off"
+    assert edges[1].target_kind == TARGET_SENSOR
+    assert edges[1].neighbor_temp_sensor == "sensor.hall_temp"
+    assert ids == {"binary_sensor.window_1", "binary_sensor.door_hall"}

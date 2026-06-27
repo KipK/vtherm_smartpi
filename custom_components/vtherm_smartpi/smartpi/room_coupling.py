@@ -33,6 +33,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 COORDINATOR_DATA_KEY = "room_coupling_coordinator"
 
+TARGET_ROOM = "room"
+TARGET_SENSOR = "sensor"
+TARGET_OUTSIDE = "outside"
+
 
 # ---------------------------------------------------------------------------
 # Lightweight data records
@@ -41,10 +45,20 @@ COORDINATOR_DATA_KEY = "room_coupling_coordinator"
 
 @dataclass(frozen=True)
 class EdgeConfig:
-    """A connection declared by a room: a neighbour + the door sensor."""
+    """A connection declared by a room: a typed neighbour + the aperture sensor."""
 
-    neighbor_uid: str
-    door_entity_id: str
+    target_kind: str
+    aperture_entity_id: str
+    neighbor_uid: str | None = None
+    neighbor_temp_sensor: str | None = None
+    aperture_type: str = "door"
+    open_policy: str = "model"
+
+    @property
+    def edge_id(self) -> str:
+        if self.target_kind == TARGET_ROOM and self.neighbor_uid:
+            return self.neighbor_uid
+        return self.aperture_entity_id
 
 
 @dataclass
@@ -89,11 +103,64 @@ class _RoomNode:
 class ResolvedEdge:
     """A room's open-edge view of one neighbour for this cycle."""
 
-    neighbor_uid: str
-    door_open: bool
-    neighbor_available: bool
+    edge_id: str
+    target_kind: str
+    aperture_type: str
+    open_policy: str
     neighbor_temp: float | None
     neighbor_power_w: float | None
+    neighbor_uid: str | None = None
+    neighbor_k: float | None = None
+    neighbor_reliable: bool = False
+
+
+def build_edge_configs(connections):
+    """Parse raw connection dicts (new or legacy shape) into EdgeConfigs.
+
+    Returns (edges, edge_ids). Legacy entries — ``{neighbor_vtherm_entity,
+    connection_door_sensor}`` — map to a room/door/model edge.
+    """
+    from ..const import (
+        CONF_CONN_NEIGHBOR_VTHERM,
+        CONF_CONN_DOOR_SENSOR,
+        CONF_CONN_TARGET_KIND,
+        CONF_CONN_NEIGHBOR_TEMP_SENSOR,
+        CONF_CONN_APERTURE_SENSOR,
+        CONF_CONN_APERTURE_TYPE,
+        CONF_CONN_OPEN_POLICY,
+    )
+
+    edges: list[EdgeConfig] = []
+    ids: set[str] = set()
+    for conn in connections or []:
+        target_kind = conn.get(CONF_CONN_TARGET_KIND)
+        aperture = conn.get(CONF_CONN_APERTURE_SENSOR) or conn.get(
+            CONF_CONN_DOOR_SENSOR
+        )
+        if target_kind is None:
+            # Legacy shape: a room neighbour + door sensor.
+            neighbor_uid = conn.get(CONF_CONN_NEIGHBOR_VTHERM)
+            if not (neighbor_uid and aperture):
+                continue
+            edge = EdgeConfig(
+                target_kind=TARGET_ROOM,
+                aperture_entity_id=aperture,
+                neighbor_uid=neighbor_uid,
+            )
+        else:
+            if not aperture:
+                continue
+            edge = EdgeConfig(
+                target_kind=target_kind,
+                aperture_entity_id=aperture,
+                neighbor_uid=conn.get(CONF_CONN_NEIGHBOR_VTHERM),
+                neighbor_temp_sensor=conn.get(CONF_CONN_NEIGHBOR_TEMP_SENSOR),
+                aperture_type=conn.get(CONF_CONN_APERTURE_TYPE, "door"),
+                open_policy=conn.get(CONF_CONN_OPEN_POLICY, "model"),
+            )
+        edges.append(edge)
+        ids.add(edge.edge_id)
+    return edges, ids
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +266,7 @@ class RoomCouplingCoordinator:
             if edge is None:
                 edge = _Edge(key=key)
                 self._edges[key] = edge
-            edge.door_by[uid] = cfg.door_entity_id
+            edge.door_by[uid] = cfg.aperture_entity_id
 
         return RoomView(self, uid)
 
@@ -255,11 +322,13 @@ class RoomCouplingCoordinator:
                 continue
             resolved.append(
                 ResolvedEdge(
-                    neighbor_uid=neighbor_uid,
-                    door_open=True,
-                    neighbor_available=True,
+                    edge_id=neighbor_uid,
+                    target_kind=TARGET_ROOM,
+                    aperture_type="door",
+                    open_policy="model",
                     neighbor_temp=snap.get("t_int"),
                     neighbor_power_w=snap.get("power_w"),
+                    neighbor_uid=neighbor_uid,
                 )
             )
         return resolved
