@@ -97,3 +97,42 @@ def test_k_instant_room_vs_outside():
     assert edge_k_instant(TARGET_ROOM, 0.08, 22.0, 19.0) == 0.08
     assert abs(edge_k_instant(TARGET_OUTSIDE, 0.02, 22.0, 7.0)
                - 0.02 * math.sqrt(15.0)) < 1e-9
+
+
+def test_holds_when_gradient_too_small():
+    """An open edge with |tin - T_j| below COUPLING_DT_MIN_C yields no sample."""
+    est = CouplingEstimator("R")
+    edge = _redge("B", t_j=20.2)  # tin ~20.0 -> |Delta| ~0.2 < 0.5 threshold
+    est.update(dt_min=1.0, tin=20.0, text=5.0, u=0.5, a=0.01, b=0.008,
+               open_edges=[edge], allow_learn=True)
+    for _ in range(10):
+        est.update(dt_min=1.0, tin=20.05, text=5.0, u=0.5, a=0.01, b=0.008,
+                   open_edges=[edge], allow_learn=True)
+    assert est._rls.samples("B") == 0
+
+
+def test_prune_drops_unknown_edges():
+    est = CouplingEstimator("R")
+    e1 = _redge("B", t_j=24.0)
+    e2 = _redge("C", t_j=18.0)
+    for i in range(10):
+        est.update(dt_min=1.0, tin=20.0 + 0.05 * i, text=5.0, u=0.5, a=0.01, b=0.008,
+                   open_edges=[e1, e2], allow_learn=True)
+    assert "B" in est._rls.edge_ids() and "C" in est._rls.edge_ids()
+    est.prune({"B"})
+    assert est._rls.edge_ids() == ["B"]
+
+
+def test_coeff_held_when_no_edge_open():
+    """A learned edge keeps its coefficient across cycles with nothing open."""
+    est = CouplingEstimator("R")
+    edge = _redge("B", t_j=24.0)
+    for i in range(20):
+        est.update(dt_min=1.0, tin=20.0 + 0.05 * i, text=5.0, u=0.5, a=0.01, b=0.008,
+                   open_edges=[edge], allow_learn=True)
+    learned = est.coeff("B")
+    assert learned != 0.0
+    for i in range(10):  # nothing open -> learning held
+        est.update(dt_min=1.0, tin=21.0 + 0.05 * i, text=5.0, u=0.5, a=0.01, b=0.008,
+                   open_edges=[], allow_learn=True)
+    assert est.coeff("B") == learned
