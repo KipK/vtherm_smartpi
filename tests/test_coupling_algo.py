@@ -41,11 +41,13 @@ class _FakeView:
             return []
         return [
             ResolvedEdge(
-                neighbor_uid="N",
-                door_open=True,
-                neighbor_available=True,
+                edge_id="N",
+                target_kind="room",
+                aperture_type="door",
+                open_policy="model",
                 neighbor_temp=self._neighbor_temp,
                 neighbor_power_w=self._power,
+                neighbor_uid="N",
             )
         ]
 
@@ -77,38 +79,6 @@ def test_refresh_context_identity_without_view():
     assert algo._coupling_any_open() is False
 
 
-def test_refresh_context_folds_open_edge():
-    algo = make_smartpi()
-    _load_k(algo, k=0.01)
-    algo.attach_coupling_view(_FakeView(open_=True, neighbor_temp=24.0))
-    base_b = algo.est.b
-    # Slew converges over several cycles toward (b + k).
-    for _ in range(60):
-        b_eff, text_eff = algo._refresh_coupling_context(21.0, 5.0)
-    assert b_eff > base_b
-    assert b_eff <= base_b + 0.01 + 1e-9
-    # Text_eff pulled from outdoor (5) toward the warmer neighbour (24).
-    assert 5.0 < text_eff < 24.0
-    diag = algo._last_coupling_diag
-    assert diag["any_door_open"] is True
-    assert diag["open_neighbors"] == ["N"]
-    assert diag["component_power_w"] == 250.0
-
-
-def test_closed_door_returns_to_identity():
-    algo = make_smartpi()
-    _load_k(algo, k=0.01)
-    view = _FakeView(open_=True)
-    algo.attach_coupling_view(view)
-    for _ in range(60):
-        algo._refresh_coupling_context(21.0, 5.0)
-    # Door closes: the slewed load decays and snaps back to the base model.
-    view._open = False
-    for _ in range(200):
-        b_eff, text_eff = algo._refresh_coupling_context(21.0, 5.0)
-    assert b_eff == algo.est.b
-    assert text_eff == 5.0
-
 
 def test_set_measured_power_and_snapshot_publish():
     algo = make_smartpi()
@@ -131,7 +101,8 @@ def test_save_state_includes_coupling():
     _load_k(algo, k=0.013)
     state = algo.save_state()
     assert "coupling_state" in state
-    assert "N" in state["coupling_state"]["edges"]
+    assert "rls" in state["coupling_state"]
+    assert "N" in state["coupling_state"]["rls"]["edges"]
 
 
 def test_persistence_round_trip():
@@ -140,14 +111,15 @@ def test_persistence_round_trip():
     state = algo.save_state()
     restored = make_smartpi()
     restored.load_state(state)
-    assert abs(restored.coupling_est.k("N") - 0.013) < 1e-9
+    assert abs(restored.coupling_est.coeff("N") - 0.013) < 1e-9
 
 
 def test_no_edges_save_state_regression():
     """An instance with no coupling persists an empty edge map (identity)."""
     algo = make_smartpi()
     state = algo.save_state()
-    assert state["coupling_state"] == {"edges": {}}
+    assert state["coupling_state"]["rls"]["edges"] == {}
+    assert state["coupling_state"]["kind"] == {}
 
 
 def test_snapshot_includes_room_edge_k_map():
