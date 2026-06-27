@@ -167,16 +167,40 @@ class CouplingEstimator:
     # -- persistence -------------------------------------------------------
 
     def save_state(self) -> dict:
-        """Serialise coupling state via the RLS filter."""
+        """Serialise coupling state via the RLS filter and edge kinds."""
         return {"rls": self._rls.save_state(), "kind": dict(self._kind)}
 
     def load_state(self, state: dict) -> None:
-        """Restore coupling state (best-effort, NaN-safe)."""
-        if not state:
+        """Restore coupling state (best-effort, NaN-safe).
+
+        Handles new format {"rls": ..., "kind": ...} and migrates legacy format
+        {"edges": {uid: {"k": ..., "n_ok": ...}}} by seeding RLS edges with
+        learned coefficients and low variance.
+        """
+        if not isinstance(state, dict) or not state:
+            return  # best-effort: a corrupt/truncated persisted blob must not crash
+        if "rls" in state:
+            # New format: restore RLS state and edge kinds
+            self._rls.load_state(state.get("rls") or {})
+            kind = state.get("kind", {})
+            if isinstance(kind, dict):
+                self._kind.update({str(k): str(v) for k, v in kind.items()})
             return
-        rls_state = state.get("rls")
-        if rls_state:
-            self._rls.load_state(rls_state)
-        kind = state.get("kind")
-        if isinstance(kind, dict):
-            self._kind.update({str(k): str(v) for k, v in kind.items()})
+        # Legacy migration: per-edge k keyed by neighbour uid.
+        edges = state.get("edges")
+        if not isinstance(edges, dict):
+            return
+        for uid, raw in edges.items():
+            if not isinstance(raw, dict):
+                continue
+            try:
+                k = float(raw.get("k", 0.0))
+                n_ok = int(raw.get("n_ok", 0))
+            except (TypeError, ValueError):
+                continue
+            edge_id = str(uid)
+            self._rls.ensure_edge(edge_id)
+            self._rls.set_value(edge_id, clamp(k, 0.0, COUPLING_K_MAX))
+            # Seed a low variance + sample count so a learned edge stays usable.
+            self._rls.seed_confidence(edge_id, n=n_ok, var=COUPLING_RLS_VAR_RELIABLE / 2.0)
+            self._kind[edge_id] = "room"  # legacy edges were all room↔room

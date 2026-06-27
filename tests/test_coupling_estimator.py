@@ -180,3 +180,29 @@ def test_consensus_skips_reliable_local():
     for _ in range(30):
         est._apply_consensus([edge])
     assert abs(est.coeff("B") - 0.04) < 1e-9   # local reliability dominates
+
+
+# ---------------------------------------------------------------------------
+# Persistence tests
+# ---------------------------------------------------------------------------
+
+
+def test_save_load_roundtrip_new_format():
+    est = CouplingEstimator("R")
+    edge = _redge("B", t_j=24.0)
+    for i in range(20):
+        est.update(dt_min=1.0, tin=20.0 + 0.05 * i, text=5.0, u=0.5,
+                   a=0.01, b=0.008, open_edges=[edge], allow_learn=True)
+    state = est.save_state()
+    est2 = CouplingEstimator("R")
+    est2.load_state(state)
+    assert abs(est2.coeff("B") - est.coeff("B")) < 1e-9
+    assert est2.edges_diag()["B"]["kind"] == "room"
+
+
+def test_load_legacy_format_migrates():
+    legacy = {"edges": {"B": {"k": 0.07, "reliable": True, "n_ok": 30, "hist": []}}}
+    est = CouplingEstimator("R")
+    est.load_state(legacy)
+    assert abs(est.coeff("B") - 0.07) < 1e-9
+    assert est.reliable("B") is True  # low seeded variance + n_ok >= MIN_SAMPLES
