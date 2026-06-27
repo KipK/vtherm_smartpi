@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-27
 **Branch:** `feat/room-coupling-model`
-**Status:** Approved design, pending implementation plan
+**Status:** Approved design, literature-benchmarked (§13), pending implementation plan
 **Component:** `custom_components/vtherm_smartpi` (SmartPI adaptive PI controller for Versatile Thermostat)
 
 ---
@@ -96,8 +96,8 @@ b_eff = b + Σ_j k_j·open_j
 T_eff = (b·T_ext + Σ_j k_j·T_j·open_j) / b_eff
 ```
 
-- An **OUTSIDE** edge has `T_j = T_ext`, so an open window adds `k_window` to `b_eff` and leaves `T_eff = T_ext` — physically exact ("more conductance to outside, same reference").
-- A **room/sensor** edge pulls `T_eff` toward `T_j`.
+- An **OUTSIDE** edge has `T_j = T_ext`, so an open window adds `k_window` to `b_eff` and leaves `T_eff = T_ext` — instantaneously exact ("more conductance to outside, same reference"). **Note (benchmark revision §13):** open-aperture exchange is buoyancy-driven, so `k_window` is *not* constant — it grows ~`√|ΔT|`. Outside/window edges therefore use a `√|ΔT|` conductance law (see §5.1); the fold consumes the *instantaneous* `k`, so this changes only the learned parameter and the regressor, not the fold.
+- A **room/sensor** edge pulls `T_eff` toward `T_j`. Interior-door edges keep the constant-`k` (linear-in-ΔT) form — inter-room ΔT is small, so the linearization is fine.
 - `b` remains the **closed-envelope** loss. Base-`b` learning is frozen whenever **any modelled aperture is open** (existing `COUPLED` regime, extended from doors → all modelled apertures), so open-aperture loss is attributed to `k`, never absorbed into `b`.
 
 ### 4.4 Whole-network behaviour
@@ -117,7 +117,9 @@ r   = m − p = Σ_j k_j·x_j + noise
 x_j = −(T_i − T_j)·open_j                     (0 for closed edges)
 ```
 
-`r = xᵀk` is **linear in k** → solve with **recursive least squares** (covariance `P`, forgetting factor `λ ≈ 0.99–0.999` since `k` is structural and slow):
+**Per-node-kind regressor (benchmark revision §13).** For interior **room/sensor** edges the conductance is constant: `x_j = −(T_i − T_j)·open_j`, learned parameter `k_j`. For **outside/window** edges the physical conductance grows with buoyancy as `√|ΔT|`, so we parameterize by an orifice-like coefficient `κ_j` and use the regressor `x_j = −sign(ΔT)·|T_i − T_ext|^{1.5}·open_j` (still **linear in `κ_j`**, so the same RLS applies). The instantaneous conductance handed to the fold is then `k_j = κ_j·√|T_i − T_ext|`. (Second-order discharge-coefficient drift `K ≈ 0.40 + 0.0045·ΔT` and wind terms are left as future refinements.)
+
+`r = xᵀθ` is **linear in the coefficient vector θ** (`k_j` for room/sensor edges, `κ_j` for outside/window edges) → solve with **recursive least squares** (covariance `P`, forgetting since the coefficients are structural and slow):
 
 ```
 e = r − xᵀk                       innovation
@@ -133,10 +135,11 @@ P = (P − g xᵀ P) / λ              covariance update (diagonal capped)
 ### 5.2 Identifiability safeguards (the crux of "many apertures")
 
 - **Per-edge excitation gate:** only adapt edge *j* when `|T_i − T_j| ≥ COUPLING_DT_MIN_C` while open (generalizes today's gradient gate). Cap the `P` diagonal so unexcited directions don't wind up.
-- **Conditioning gate:** when the open-set's regressors are collinear (apertures *always* open together with near-equal ΔT), the split is unidentifiable — detect from `P`'s conditioning, mark those edges `reliable=False`, and hold their individual split (optionally adapt only their aggregate conductance). A solo-open cycle is a rank-1 update that pins that edge exactly, so **RLS reduces to today's single-aperture estimator** where solo opens happen — no regression, full coverage where they don't.
+- **Per-edge / directional forgetting (benchmark revision §13):** a *single* global `λ` is a known weak point — it cannot track edges that drift at different rates and is prone to covariance windup under low excitation. Use **per-edge forgetting** (each edge keeps its own effective memory) with `λ` near unity (`≈0.99–0.999`), and apply forgetting only in *excited* directions (variable-direction-forgetting style), or equivalently **reset/inflate an edge's covariance** when it has been closed/stale for a long time rather than letting exponential forgetting blow it up. This makes the excitation gate a *belt-and-braces* guard, not the sole defence.
+- **Conditioning gate:** when the open-set's regressors are collinear (apertures *always* open together with near-equal ΔT), the split is unidentifiable — detect from the regressor **condition number / Fisher information** (not just `|ΔT|`), mark those edges `reliable=False`, and **expose "sum identifiable, split unidentifiable"** to the consumer rather than silently splitting (only the aggregate conductance is learnable). A solo-open cycle is a rank-1 update that pins that edge exactly, so **RLS reduces to today's single-aperture estimator** where solo opens happen — no regression, full coverage where they don't.
 - **Per-edge reliability:** from the covariance diagonal (estimate variance) plus a minimum excited-sample count, mirroring the AB median/MAD gate.
 
-RLS is chosen over batch least-squares: O(E²) per cycle (E = edges, small), no growing buffers, recency-weighted, and graceful degradation to the exact single-edge solution.
+RLS is chosen over batch least-squares: O(E²) per cycle (E = edges, small), no growing buffers, recency-weighted, and graceful degradation to the exact single-edge solution. A Kalman/UKF with per-parameter process noise is the recognized heavier alternative that handles the multi-rate/forgetting problem natively; RLS-with-per-edge-forgetting is the lighter, defensible choice for this footprint (see §13).
 
 ### 5.3 Consensus for shared controlled↔controlled edges
 
@@ -147,6 +150,8 @@ Instead, **soft, reliability-weighted shrinkage**:
 - The coordinator owns the **canonical graph edge** (topology/identity) and exposes each endpoint's current `k` and reliability to the other.
 - Each room's RLS adds a regularization pull toward the cross-endpoint value with strength ∝ neighbour reliability and ∝ 1/own-excitation. It is a **shared prior (shrinkage), not a constraint**: a well-excited endpoint keeps its room-local value; an under-excited endpoint is rescued by the neighbour's evidence.
 - Edges to `SENSED`/`OUTSIDE` nodes have a single controlled observer → no reconciliation.
+
+**Robustness note (benchmark §13):** in the distributed-estimation literature *diffusion* strategies are shown to converge faster and more stably than *consensus* averaging (consensus networks can even go mean-square unstable when nodes are individually stable). Our reconciliation is a deliberately weak, reliability-weighted *shrinkage prior* (not iterated averaging), so the instability regime doesn't apply; but if it ever misbehaves, a diffusion-style update (combine then adapt) is the recognized stronger form.
 
 **Future path (out of scope here):** separate physical conductance `G` from room capacity `C` so the coordinator can own a true single physical-edge estimate; this design deliberately keeps room-local coefficients and per-room persistence.
 
@@ -222,4 +227,26 @@ Existing `tests/test_coupling_*.py`, `test_effective_params.py`, `test_room_coup
 | `b_eff`, `T_eff` | folded effective loss / reference | min⁻¹, °C |
 | `open_j` | aperture *j* open indicator | {0,1} |
 | `λ` | RLS forgetting factor | — |
+| `κ_j` | orifice-like coefficient for an outside/window edge (`k_j = κ_j·√|ΔT|`) | min⁻¹·°C⁻⁰·⁵ |
 | `P` | RLS covariance | — |
+
+---
+
+## 13. Benchmark findings & revisions (2026-06-27)
+
+A deep, adversarially-verified literature benchmark (run `wf_5730c22f-8b6`; 24 primary sources, 25 claims verified 3-0/2-1, 0 refuted) assessed every design choice. Verdict per choice and the revisions adopted above:
+
+| Design choice | Verdict | Source anchor |
+|---------------|---------|---------------|
+| Per-zone RC grey-box + learned inter-zone conductances | **Sound / standard** — mainstream multi-zone approach. (1R1C base is low-order vs ISO 13790's 5R1C / 1–4 states/zone — a deliberate identifiability-over-fidelity trade.) | arXiv:1810.07400; LBL Modelica ISO13790 Zone5R1C; Arroyo & Spiessens 2020 |
+| Effective-parameter fold | **Sound** — it is the thermal analogue of **Kron / star-mesh (Schur-complement)** reduction, exact at the instantaneous loss level. Folding *observed* neighbour temps sidesteps the dynamic-node-elimination error; residual error is only one-cycle staleness. | Dörfler & Bullo (arXiv:1102.2950); Time-domain Kron generalization |
+| Identifiability gates (excitation, non-negativity, hold-collinear) | **Sound / well-motivated** — matches the documented collinearity & persistent-excitation failure modes; topology is reconstructable from temperature-only data. **Revised:** gate on condition number / Fisher info, expose "sum-identifiable, split-unidentifiable." | Agbi/Song/Krogh CDC 2012; Vahidi 2004; E&B 2022 (S037877882200617X) |
+| Single global forgetting factor | **Weak** → **revised** to per-edge / directional forgetting + covariance reset; excitation gate demoted to belt-and-braces. Kalman/UKF noted as heavier native alternative. | VDF (Wan/JAS 2021); Vahidi 2004; PMC4962952 / PMC11798724 |
+| Constant-`k` open window (loss linear in ΔT) | **Weakest assumption** → **revised** to `k_window = κ·√|ΔT|` (loss ∝ `ΔT·√|ΔT|`); buoyancy counterflow ∝ `√(g'H)` and discharge coeff `K ≈ 0.40+0.0045·ΔT`. | AIVC airbase_4535 (Brown–Solvason); ASHRAE/EN 16798 single-sided ventilation |
+| Distributed snapshot-mesh + consensus reconciliation | **Partially supported** — decentralized *identifiability* and neighbour-local distributed RLS (diffusion RLS) are recognized and can match/beat centralized; but snapshot-mesh *dynamics* vs joint EKF were **not** head-to-head benchmarked. Diffusion ≥ consensus noted. | Diffusion RLS (IEEE TSP 2008); Tu & Sayed (arXiv:1205.3993); distributed MPC (arXiv:1902.10259) |
+| Prior art in real thermostats | **No prior art found** for learned inter-room coupling / open-window-loss modelling — Versatile Thermostat does window→OFF only. The room-network model is genuinely novel; novelty cuts both ways (no reference implementation to lean on). | github.com/jmcollin78/versatile_thermostat; better_thermostat |
+
+**Residual risks to carry into implementation / validation:**
+1. **Snapshot-mesh vs joint-EKF dynamics** are unbenchmarked here. Guardrail: keep the SmartPI recalc interval short relative to room thermal time constants (bounds the one-cycle-per-hop staleness error), and validate multi-hop convergence in the Scenario-2 integration sim. Literature also advises **decoupling weakly-interacting zones** — our open/closed gate does this naturally (closed = decoupled).
+2. **`√|ΔT|` window law** should be validated against the constant-`k` baseline on real open-window data before being made the default for outside edges; keep it behind the same reliability gating so a poor fit degrades to "unreliable, no fold" rather than mis-controlling.
+3. **Consensus** is intentionally a weak shrinkage prior; if it ever destabilizes, switch to a diffusion-style combine-then-adapt update.
