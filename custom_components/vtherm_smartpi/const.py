@@ -37,6 +37,23 @@ CONF_SMART_PI_CONNECTIONS = "smart_pi_connections"
 CONF_CONN_NEIGHBOR_VTHERM = "neighbor_vtherm_entity"
 CONF_CONN_DOOR_SENSOR = "connection_door_sensor"
 
+# New per-aperture connection keys (superset of the legacy two keys above).
+CONF_CONN_TARGET_KIND = "target_kind"            # room | sensor | outside
+CONF_CONN_NEIGHBOR_TEMP_SENSOR = "neighbor_temp_sensor"  # when target_kind == sensor
+CONF_CONN_APERTURE_SENSOR = "aperture_sensor"    # binary open/closed; supersedes door_sensor
+CONF_CONN_APERTURE_TYPE = "aperture_type"        # door | window
+CONF_CONN_OPEN_POLICY = "open_policy"            # model | trip_off
+
+# Node kinds and aperture policies (string values are stored verbatim in config
+# and used directly as EdgeConfig.target_kind / open_policy).
+CONN_TARGET_ROOM = "room"
+CONN_TARGET_SENSOR = "sensor"
+CONN_TARGET_OUTSIDE = "outside"
+CONN_APERTURE_DOOR = "door"
+CONN_APERTURE_WINDOW = "window"
+CONN_POLICY_MODEL = "model"
+CONN_POLICY_TRIP_OFF = "trip_off"
+
 DEFAULT_MINIMAL_ACTIVATION_DELAY = 0
 DEFAULT_MINIMAL_DEACTIVATION_DELAY = 0
 DEFAULT_SMART_PI_DEADBAND = 0.05
