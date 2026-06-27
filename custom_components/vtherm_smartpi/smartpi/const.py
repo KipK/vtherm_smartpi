@@ -432,6 +432,21 @@ COUPLING_SLEW_ALPHA = 0.15     # Per-cycle slew of the effective coupling load
                                 # (smooths b_eff/Text_eff across door transitions)
 COUPLING_RESIDUAL_MAX_C_MIN = 0.5  # Clamp on |base-model residual| (°C/min)
 
+# --- Multi-edge coupling RLS (joint room-network identification) ---
+# The per-cycle residual r = Σ θ_j·x_j is linear in the open edges' coefficients
+# (k_j for room/sensor edges, κ_j for outside/window edges). A joint RLS with
+# per-edge forgetting solves all open edges at once. Closed edges are HELD.
+COUPLING_RLS_P0 = 10.0             # Initial per-edge covariance (uninformed prior)
+COUPLING_RLS_P_MAX = 50.0          # Covariance cap (anti-windup under low excitation)
+COUPLING_RLS_LAMBDA = 0.995        # Forgetting for EXCITED edges (~200-sample memory)
+COUPLING_RLS_HUBER_C = 0.2         # Huber threshold on innovation (°C/min)
+COUPLING_RLS_VAR_RELIABLE = 0.05   # Max covariance diagonal for an edge to be reliable
+COUPLING_RESET_AFTER_CLOSED = 200  # Closed cycles before covariance is reset on reopen
+COUPLING_CONSENSUS_GAIN = 0.05     # Per-cycle shrinkage toward neighbour's coefficient
+# Outside/window edges use a buoyancy sqrt-law: k = κ·√|ΔT| (benchmark §13). κ is the
+# orifice-like coefficient learned in place of a constant k for those edges.
+COUPLING_KAPPA_MAX = 0.2           # Max orifice-like coeff (min^-1 · °C^-0.5)
+
 # --- Adaptive T_int Filter ---
 ENABLE_ADAPTIVE_TINT_FILTER = True
 TINT_LP_ALPHA = 0.2              # EMA smoothing factor (0..1)
