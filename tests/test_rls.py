@@ -99,3 +99,37 @@ def test_closed_edge_is_held():
         rls.update({"B": x}, 0.05 * x)  # A is closed here
     assert rls.value("A") == held_theta
     assert rls.variance("A") == held_var
+
+
+def test_reset_edge_inflates_variance_keeps_theta():
+    rls = _rls()
+    for x in [-3.0, -2.0, -4.0] * 8:
+        rls.update({"A": x}, 0.08 * x)
+    theta = rls.value("A")
+    assert rls.variance("A") < 10.0
+    rls.reset_edge("A")
+    assert rls.variance("A") == 10.0
+    assert rls.value("A") == theta
+
+
+def test_reliable_helper():
+    rls = _rls()
+    rls.ensure_edge("A")
+    assert rls.reliable("A", var_max=0.05, min_samples=8) is False
+    for x in [-3.0, -2.0, -4.0, -2.5] * 6:
+        rls.update({"A": x}, 0.08 * x)
+    assert rls.reliable("A", var_max=0.05, min_samples=8) is True
+
+
+def test_save_load_roundtrip():
+    rls = _rls()
+    for x in [-3.0, -2.0, -4.0] * 8:
+        rls.update({"A": x}, 0.08 * x)
+    rls.ensure_edge("B")
+    state = rls.save_state()
+    restored = _rls()
+    restored.load_state(state)
+    assert abs(restored.value("A") - rls.value("A")) < 1e-12
+    assert abs(restored.variance("A") - rls.variance("A")) < 1e-12
+    assert restored.samples("A") == rls.samples("A")
+    assert set(restored.edge_ids()) == {"A", "B"}

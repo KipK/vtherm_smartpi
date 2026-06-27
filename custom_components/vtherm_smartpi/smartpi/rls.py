@@ -69,6 +69,61 @@ class MultiEdgeRLS:
                 for row in self._P.values():
                     row.pop(edge_id, None)
 
+    def reset_edge(self, edge_id: str) -> None:
+        if edge_id not in self._edges:
+            return
+        for other in self._P[edge_id]:
+            self._P[edge_id][other] = 0.0
+            self._P[other][edge_id] = 0.0
+        self._P[edge_id][edge_id] = self._p0
+
+    def set_value(self, edge_id: str, theta: float) -> None:
+        self.ensure_edge(edge_id)
+        self._edges[edge_id].theta = float(theta)
+
+    def seed_confidence(self, edge_id: str, *, n: int, var: float) -> None:
+        """Seed an edge with a sample count and low variance (migration/tests)."""
+        self.ensure_edge(edge_id)
+        self._edges[edge_id].n = int(n)
+        self._P[edge_id][edge_id] = float(var)
+
+    def reliable(self, edge_id: str, *, var_max: float, min_samples: int) -> bool:
+        edge = self._edges.get(edge_id)
+        if edge is None:
+            return False
+        return self.variance(edge_id) <= var_max and edge.n >= min_samples
+
+    def save_state(self) -> dict:
+        return {
+            "edges": {e: {"theta": s.theta, "n": s.n} for e, s in self._edges.items()},
+            "P": {i: dict(row) for i, row in self._P.items()},
+        }
+
+    def load_state(self, state: dict) -> None:
+        if not state:
+            return
+        edges = state.get("edges", {})
+        P = state.get("P", {})
+        if not isinstance(edges, dict) or not isinstance(P, dict):
+            return
+        for edge_id, raw in edges.items():
+            if not isinstance(raw, dict):
+                continue
+            self.ensure_edge(str(edge_id))
+            try:
+                self._edges[edge_id].theta = float(raw.get("theta", 0.0))
+                self._edges[edge_id].n = int(raw.get("n", 0))
+            except (TypeError, ValueError):
+                continue
+        for i, row in P.items():
+            if i in self._P and isinstance(row, dict):
+                for j, v in row.items():
+                    if j in self._P[i]:
+                        try:
+                            self._P[i][j] = float(v)
+                        except (TypeError, ValueError):
+                            pass
+
     # -- accessors ---------------------------------------------------------
 
     def value(self, edge_id: str) -> float:
