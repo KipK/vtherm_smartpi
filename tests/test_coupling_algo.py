@@ -170,3 +170,50 @@ def test_snapshot_includes_room_edge_k_map():
     algo._publish_coupling_snapshot(20.0, 5.0)
     assert "coupling_k_by_neighbor" in captured
     assert abs(captured["coupling_k_by_neighbor"]["B"]["k"] - 0.07) < 1e-9
+
+
+def _outside_view(edge_id="win"):
+    e = ResolvedEdge(edge_id=edge_id, target_kind="outside", aperture_type="window",
+                     open_policy="model", neighbor_temp=None, neighbor_power_w=None)
+
+    class _View:
+        uid = "A"
+        def publish(self, snap): pass
+        def any_open(self): return True
+        def open_edges(self): return [e]
+        def component_power_w(self): return 0.0
+    return _View()
+
+
+def test_outside_window_raises_b_eff_keeps_reference():
+    algo = make_smartpi()
+    algo.attach_coupling_view(_outside_view())
+    algo.est.b = 0.008
+    algo.coupling_est._rls.ensure_edge("win")
+    algo.coupling_est._rls.set_value("win", 0.02)   # κ
+    algo.coupling_est._kind["win"] = "outside"
+    # Converge the EMA slew.
+    for _ in range(60):
+        b_eff, text_eff = algo._refresh_coupling_context(22.0, 7.0)
+    import math
+    k_inst = 0.02 * math.sqrt(15.0)
+    assert b_eff > 0.008
+    assert abs(b_eff - (0.008 + k_inst)) < 5e-3
+    assert abs(text_eff - 7.0) < 0.2   # outside edge does not move the reference
+
+
+def test_closed_is_identity():
+    algo = make_smartpi()
+
+    class _Empty:
+        uid = "A"
+        def publish(self, snap): pass
+        def any_open(self): return False
+        def open_edges(self): return []
+        def component_power_w(self): return 0.0
+
+    algo.attach_coupling_view(_Empty())
+    algo.est.b = 0.008
+    b_eff, text_eff = algo._refresh_coupling_context(22.0, 7.0)
+    assert b_eff == 0.008
+    assert text_eff == 7.0

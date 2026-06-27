@@ -87,7 +87,7 @@ from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
 from .smartpi.deadtime_estimator import DeadTimeEstimator
 from .smartpi.ab_estimator import ABEstimator
 from .smartpi.coupling_estimator import CouplingEstimator
-from .smartpi.room_coupling import compute_effective_params
+from .smartpi.room_coupling import compute_effective_params, TARGET_OUTSIDE
 from .smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 from .smartpi.diagnostics import build_diagnostics, build_published_diagnostics, build_debug_diagnostics
 from .smartpi.governance import SmartPIGovernance
@@ -2828,12 +2828,13 @@ class SmartPI:
         target_skt = 0.0
         if view is not None and current_temp is not None:
             for edge in view.open_edges():
-                if edge.neighbor_temp is None:
+                t_j = ext_temp if edge.target_kind == TARGET_OUTSIDE else edge.neighbor_temp
+                if t_j is None:
                     continue
-                open_neighbors.append(edge.neighbor_uid)
-                k = self.coupling_est.k(edge.neighbor_uid)
+                open_neighbors.append(edge.edge_id)
+                k = self.coupling_est.k(edge.edge_id, current_temp, t_j, edge.target_kind)
                 target_sk += k
-                target_skt += k * edge.neighbor_temp
+                target_skt += k * t_j
 
         # EMA slew toward the door-gated target load.
         self._cpl_sk_eff += COUPLING_SLEW_ALPHA * (target_sk - self._cpl_sk_eff)
