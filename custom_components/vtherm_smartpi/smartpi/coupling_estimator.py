@@ -1,49 +1,38 @@
 """Inter-room coupling estimator for SmartPI.
 
-Estimates the open-door coupling coefficient ``k_ij`` (min^-1) between a room and
-each declared neighbour, from the *base-model residual*:
+Estimates the per-edge coupling coefficient for each declared neighbour from
+the base-model residual, using a joint multi-edge Recursive Least Squares
+(RLS) filter:
 
     m = (T_i - T_i_prev) / dt_min                 measured slope (°C/min)
-    p = a_i·u - b_i·(T_i - Text)                   base 1R1C prediction (no coupling)
-    r = m - p = -Σ_j k_ij·(T_i - T_j)·open + noise
+    p = a_i·u - b_i·(T_i - Text)                   base 1R1C prediction
+    r = m - p = Σ_j θ_j·x_j + noise
 
-For a single open edge with a sufficient gradient:  k_ij = -r / (T_i - T_j).
-With several doors open at once a single residual cannot separate the edges
-(one equation, many unknowns), so learning is HELD whenever more than one door
-is open — each edge is learned opportunistically while it is the sole open door.
-
-``k_ij`` is a *structural* property of the doorway. It is learned only while the
-door is open AND the base model is reliable ("seed from base model"), and is
-otherwise HELD (never decayed) so it is remembered for the next time the door
-opens. The door-state gate (``open_ij``) — not a decay — turns the contribution
-on and off. Robustness mirrors :mod:`ab_estimator` (median/MAD reliability gate)
-and the values are clamped to ``[COUPLING_K_MIN, COUPLING_K_MAX]``.
+where x_j is the per-edge regressor (Task 9) and θ_j is the per-edge
+coefficient estimated by the joint RLS. Multiple open edges are handled
+simultaneously (no longer held to single-aperture case).
 """
 
 from __future__ import annotations
 
 import logging
-from collections import deque
-from dataclasses import dataclass, field
 from math import isfinite, sqrt
-from typing import TYPE_CHECKING, Deque
 
-from .ab_drift import robust_mad, robust_median
+from .rls import MultiEdgeRLS
 from .const import (
-    COUPLING_EMA_ALPHA,
-    COUPLING_HIST_MAX,
+    COUPLING_DT_MIN_C,
     COUPLING_K_MAX,
-    COUPLING_K_MIN,
-    COUPLING_MAD_RATIO_MAX,
+    COUPLING_KAPPA_MAX,
     COUPLING_MIN_SAMPLES,
     COUPLING_RESIDUAL_MAX_C_MIN,
-    COUPLING_DT_MIN_C,
+    COUPLING_RLS_HUBER_C,
+    COUPLING_RLS_LAMBDA,
+    COUPLING_RLS_P0,
+    COUPLING_RLS_P_MAX,
+    COUPLING_RLS_VAR_RELIABLE,
     clamp,
 )
 from .room_coupling import TARGET_OUTSIDE
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .room_coupling import ResolvedEdge
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,48 +52,23 @@ def edge_k_instant(target_kind: str, coeff: float, t_i: float, t_j: float) -> fl
     return coeff
 
 
-@dataclass
-class _EdgeState:
-    """Per-neighbour coupling state."""
-
-    k: float = 0.0
-    reliable: bool = False
-    n_ok: int = 0
-    hist: Deque[float] = field(default_factory=lambda: deque(maxlen=COUPLING_HIST_MAX))
-
-
 class CouplingEstimator:
-    """Learns per-edge coupling ``k_ij`` for one room."""
+    """Learns per-edge coupling for one room via a joint multi-edge RLS."""
 
     def __init__(self, name: str) -> None:
         self._name = name
-        self._edges: dict[str, _EdgeState] = {}
+        # κ for outside edges can exceed K_MAX before ×√|Δ|; use the larger cap
+        # as the RLS theta ceiling and re-clamp the instantaneous k at use.
+        self._rls = MultiEdgeRLS(
+            p0=COUPLING_RLS_P0,
+            lam=COUPLING_RLS_LAMBDA,
+            p_max=COUPLING_RLS_P_MAX,
+            huber_c=COUPLING_RLS_HUBER_C,
+            theta_min=0.0,
+            theta_max=max(COUPLING_K_MAX, COUPLING_KAPPA_MAX),
+        )
+        self._kind: dict[str, str] = {}      # edge_id -> target_kind
         self._last_tin: float | None = None
-
-    # -- accessors ---------------------------------------------------------
-
-    def k(self, neighbor_uid: str) -> float:
-        """Return the live coupling estimate for an edge (0 if unknown)."""
-        edge = self._edges.get(neighbor_uid)
-        return edge.k if edge is not None else 0.0
-
-    def reliable(self, neighbor_uid: str) -> bool:
-        """Return whether an edge's coupling estimate is reliable."""
-        edge = self._edges.get(neighbor_uid)
-        return bool(edge.reliable) if edge is not None else False
-
-    def edges_diag(self) -> dict[str, dict]:
-        """Return a per-edge diagnostic snapshot."""
-        return {
-            uid: {"k": round(e.k, 5), "reliable": e.reliable, "n": e.n_ok}
-            for uid, e in self._edges.items()
-        }
-
-    def prune(self, valid_neighbor_uids: set[str]) -> None:
-        """Drop persisted edges no longer present in the configuration."""
-        for uid in list(self._edges):
-            if uid not in valid_neighbor_uids:
-                del self._edges[uid]
 
     # -- learning ----------------------------------------------------------
 
@@ -117,114 +81,90 @@ class CouplingEstimator:
         u: float,
         a: float,
         b: float,
-        open_edges: "list[ResolvedEdge]",
+        open_edges,
         allow_learn: bool,
     ) -> None:
-        """Update coupling estimates for one control cycle.
-
-        ``open_edges`` are the door-open, neighbour-available edges resolved by
-        the coordinator. ``allow_learn`` must be True only when the base model is
-        reliable and the regime is not perturbed/degraded.
-
-        Learning is restricted to the single-open-door case: with two or more
-        doors open the residual is not separable, so all edges are held.
-        """
-        # Only advance the slope reference on real (dt>0) cycles so the measured
-        # slope always pairs with the matching dt.
         if dt_min <= 0.0 or tin is None or not isfinite(tin):
             return
         prev_tin = self._last_tin
         self._last_tin = float(tin)
-
         if not allow_learn or text is None or prev_tin is None:
             return
         if not (isfinite(text) and isfinite(a) and isfinite(b)):
             return
 
-        # Identifiability: only learn when exactly one door is open.
-        if len(open_edges) != 1:
-            return
-        edge = open_edges[0]
-        if edge.neighbor_temp is None or not isfinite(edge.neighbor_temp):
-            return
-        delta_t = tin - edge.neighbor_temp
-        if abs(delta_t) < COUPLING_DT_MIN_C:
-            return
-
-        # Measured slope vs base-model prediction (no coupling, no d_hat).
+        # Base-model residual (no coupling): r = m - p.
         m = (tin - prev_tin) / dt_min
         p = a * u - b * (tin - text)
         r = clamp(m - p, -COUPLING_RESIDUAL_MAX_C_MIN, COUPLING_RESIDUAL_MAX_C_MIN)
 
-        k_sample = clamp(-r / delta_t, COUPLING_K_MIN, COUPLING_K_MAX)
-        self._accept_sample(edge.neighbor_uid, k_sample)
+        regressors: dict[str, float] = {}
+        for edge in open_edges:
+            t_j = text if edge.target_kind == TARGET_OUTSIDE else edge.neighbor_temp
+            if t_j is None or not isfinite(t_j):
+                continue
+            if abs(tin - t_j) < COUPLING_DT_MIN_C:
+                continue
+            self._kind[edge.edge_id] = edge.target_kind
+            regressors[edge.edge_id] = edge_regressor(edge.target_kind, tin, t_j)
 
-    def _accept_sample(self, neighbor_uid: str, k_sample: float) -> None:
-        edge = self._edges.get(neighbor_uid)
-        if edge is None:
-            edge = _EdgeState()
-            self._edges[neighbor_uid] = edge
+        if regressors:
+            self._rls.update(regressors, r)
+        # Consensus runs even for open-but-unexcited edges — its job is to
+        # rescue an edge that has no local excitation from the neighbour's data.
+        self._apply_consensus(open_edges)
 
-        edge.hist.append(k_sample)
-        # EMA toward the new sample for a smooth live value.
-        edge.k = clamp(
-            (1.0 - COUPLING_EMA_ALPHA) * edge.k + COUPLING_EMA_ALPHA * k_sample,
-            COUPLING_K_MIN,
+    def _apply_consensus(self, open_edges) -> None:  # filled in Task 11
+        return
+
+    # -- accessors ---------------------------------------------------------
+
+    def coeff(self, edge_id: str) -> float:
+        return self._rls.value(edge_id)
+
+    def reliable(self, edge_id: str) -> bool:
+        return self._rls.reliable(
+            edge_id, var_max=COUPLING_RLS_VAR_RELIABLE, min_samples=COUPLING_MIN_SAMPLES
+        )
+
+    def k(self, edge_id: str, t_i: float, t_j: float, target_kind: str) -> float:
+        return clamp(
+            edge_k_instant(target_kind, self._rls.value(edge_id), t_i, t_j),
+            0.0,
             COUPLING_K_MAX,
         )
-        edge.n_ok += 1
 
-        # Reliability via median/MAD (mirrors ABEstimator gating).
-        if edge.n_ok >= COUPLING_MIN_SAMPLES and len(edge.hist) >= COUPLING_MIN_SAMPLES:
-            values = list(edge.hist)
-            median = robust_median(values)
-            mad = robust_mad(values, median)
-            if median is not None and median > 1e-9 and mad is not None:
-                edge.reliable = (mad / median) <= COUPLING_MAD_RATIO_MAX
-            else:
-                # Near-zero coupling with tight spread is a reliable "no coupling".
-                edge.reliable = mad is not None and mad <= 1e-3
-        else:
-            edge.reliable = False
+    def edges_diag(self) -> dict:
+        return {
+            edge_id: {
+                "coeff": round(self._rls.value(edge_id), 5),
+                "var": round(self._rls.variance(edge_id), 4),
+                "reliable": self.reliable(edge_id),
+                "n": self._rls.samples(edge_id),
+                "kind": self._kind.get(edge_id, "room"),
+            }
+            for edge_id in self._rls.edge_ids()
+        }
+
+    def prune(self, valid_edge_ids: set) -> None:
+        self._rls.drop_missing(set(valid_edge_ids))
+        for edge_id in list(self._kind):
+            if edge_id not in valid_edge_ids:
+                del self._kind[edge_id]
 
     # -- persistence -------------------------------------------------------
 
     def save_state(self) -> dict:
-        """Serialise per-edge coupling state keyed by neighbour uid."""
-        return {
-            "edges": {
-                uid: {
-                    "k": e.k,
-                    "reliable": e.reliable,
-                    "n_ok": e.n_ok,
-                    "hist": list(e.hist),
-                }
-                for uid, e in self._edges.items()
-            }
-        }
+        """Serialise coupling state via the RLS filter."""
+        return {"rls": self._rls.save_state(), "kind": dict(self._kind)}
 
     def load_state(self, state: dict) -> None:
-        """Restore per-edge coupling state (best-effort, NaN-safe)."""
+        """Restore coupling state (best-effort, NaN-safe)."""
         if not state:
             return
-        edges = state.get("edges")
-        if not isinstance(edges, dict):
-            return
-        for uid, raw in edges.items():
-            if not isinstance(raw, dict):
-                continue
-            edge = _EdgeState()
-            try:
-                k = float(raw.get("k", 0.0))
-                edge.k = clamp(k, COUPLING_K_MIN, COUPLING_K_MAX) if isfinite(k) else 0.0
-                edge.reliable = bool(raw.get("reliable", False))
-                edge.n_ok = int(raw.get("n_ok", 0))
-                hist = raw.get("hist", [])
-                if isinstance(hist, list):
-                    edge.hist = deque(
-                        (float(v) for v in hist if isinstance(v, (int, float)) and isfinite(float(v))),
-                        maxlen=COUPLING_HIST_MAX,
-                    )
-            except (TypeError, ValueError):
-                continue
-            self._edges[str(uid)] = edge
+        rls_state = state.get("rls")
+        if rls_state:
+            self._rls.load_state(rls_state)
+        kind = state.get("kind")
+        if isinstance(kind, dict):
+            self._kind.update({str(k): str(v) for k, v in kind.items()})
