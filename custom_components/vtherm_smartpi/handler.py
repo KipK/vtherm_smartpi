@@ -21,7 +21,7 @@ from .smartpi.const import (
     SmartPICalibrationResult,
     NEAR_BAND_HYSTERESIS_C,
 )
-from .smartpi.room_coupling import EdgeConfig, get_coordinator
+from .smartpi.room_coupling import build_edge_configs, get_coordinator
 from .const import (
     CONF_TARGET_VTHERM,
     CONF_MINIMAL_ACTIVATION_DELAY,
@@ -42,8 +42,6 @@ from .const import (
     CONF_SMART_PI_MAX_VALVE,
     CONF_SMART_PI_POWER_SENSOR,
     CONF_SMART_PI_CONNECTIONS,
-    CONF_CONN_NEIGHBOR_VTHERM,
-    CONF_CONN_DOOR_SENSOR,
     DEFAULT_OPTIONS,
     DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
@@ -92,7 +90,7 @@ class SmartPIHandler:
         self._applied_config_entry_id: str | None = None
         # Room coupling
         self._power_sensor_entity_id: str | None = None
-        self._coupling_neighbor_uids: set[str] = set()
+        self._coupling_edge_ids: set[str] = set()
 
     def init_algorithm(self):
         """Initialize SmartPI algorithm."""
@@ -205,17 +203,8 @@ class SmartPIHandler:
 
         # --- Room coupling: power sensor + connection topology ---
         self._power_sensor_entity_id = entry.get(CONF_SMART_PI_POWER_SENSOR) or None
-        edges: list[EdgeConfig] = []
-        neighbor_uids: set[str] = set()
-        for conn in entry.get(CONF_SMART_PI_CONNECTIONS, []) or []:
-            neighbor_uid = conn.get(CONF_CONN_NEIGHBOR_VTHERM)
-            door = conn.get(CONF_CONN_DOOR_SENSOR)
-            if neighbor_uid and door:
-                edges.append(
-                    EdgeConfig(neighbor_uid=neighbor_uid, door_entity_id=door)
-                )
-                neighbor_uids.add(neighbor_uid)
-        self._coupling_neighbor_uids = neighbor_uids
+        edges, edge_ids = build_edge_configs(entry.get(CONF_SMART_PI_CONNECTIONS, []))
+        self._coupling_edge_ids = edge_ids
         coordinator = get_coordinator(t.hass, t.hass.data.setdefault(DOMAIN, {}))
         view = coordinator.register_room(t.unique_id, edges)
         t.prop_algorithm.attach_coupling_view(view)
@@ -291,7 +280,7 @@ class SmartPIHandler:
                 _LOGGER.error("%s - Failed to load SmartPI state: %s", t, e)
         # Drop any persisted coupling edges no longer present in the config.
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
-            t.prop_algorithm.coupling_est.prune(self._coupling_neighbor_uids)
+            t.prop_algorithm.coupling_est.prune(self._coupling_edge_ids)
         self._bind_config_entry_to_device()
 
     async def async_startup(self):
