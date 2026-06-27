@@ -224,3 +224,14 @@ def test_closed_aperture_not_returned():
                                          aperture_entity_id="binary_sensor.window_1")])
     assert coord.open_edges("A") == []
     assert coord.any_open("A") is False
+
+
+def test_component_power_excludes_typed_nodes():
+    hass = _FakeHass()
+    hass.states.set("binary_sensor.window_1", "on")
+    coord = RoomCouplingCoordinator(hass)
+    coord.register_room("A", [EdgeConfig(target_kind=TARGET_OUTSIDE,
+                                         aperture_entity_id="binary_sensor.window_1")])
+    coord.publish("A", {"t_int": 20.0, "available": True, "power_w": 800.0})
+    # Outside is not a registered powered node -> only A's own power counts.
+    assert coord.component_power_w("A") == 800.0
