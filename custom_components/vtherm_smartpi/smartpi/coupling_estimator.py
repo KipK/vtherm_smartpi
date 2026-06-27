@@ -24,11 +24,12 @@ from .const import (
     COUPLING_K_MAX,
     COUPLING_KAPPA_MAX,
     COUPLING_MIN_SAMPLES,
+    COUPLING_RESET_AFTER_CLOSED,
     COUPLING_RESIDUAL_MAX_C_MIN,
     COUPLING_RLS_HUBER_C,
-    COUPLING_RLS_LAMBDA,
     COUPLING_RLS_P0,
     COUPLING_RLS_P_MAX,
+    COUPLING_RLS_Q,
     COUPLING_RLS_VAR_RELIABLE,
     clamp,
 )
@@ -61,7 +62,7 @@ class CouplingEstimator:
         # as the RLS theta ceiling and re-clamp the instantaneous k at use.
         self._rls = MultiEdgeRLS(
             p0=COUPLING_RLS_P0,
-            lam=COUPLING_RLS_LAMBDA,
+            q=COUPLING_RLS_Q,
             p_max=COUPLING_RLS_P_MAX,
             huber_c=COUPLING_RLS_HUBER_C,
             theta_min=0.0,
@@ -69,6 +70,7 @@ class CouplingEstimator:
         )
         self._kind: dict[str, str] = {}      # edge_id -> target_kind
         self._last_tin: float | None = None
+        self._closed_cycles: dict[str, int] = {}
 
     # -- learning ----------------------------------------------------------
 
@@ -107,6 +109,18 @@ class CouplingEstimator:
                 continue
             self._kind[edge.edge_id] = edge.target_kind
             regressors[edge.edge_id] = edge_regressor(edge.target_kind, tin, t_j)
+
+        # Covariance reset on reopen-after-long-closure (spec §5.2): a known edge
+        # idle for many learning cycles has stale covariance; inflate it on
+        # re-excitation so it re-learns responsively.
+        active_ids = set(regressors)
+        for edge_id in self._rls.edge_ids():
+            if edge_id in active_ids:
+                if self._closed_cycles.get(edge_id, 0) >= COUPLING_RESET_AFTER_CLOSED:
+                    self._rls.reset_edge(edge_id)
+                self._closed_cycles[edge_id] = 0
+            else:
+                self._closed_cycles[edge_id] = self._closed_cycles.get(edge_id, 0) + 1
 
         if regressors:
             self._rls.update(regressors, r)
@@ -208,6 +222,8 @@ class CouplingEstimator:
                 k = float(raw.get("k", 0.0))
                 n_ok = int(raw.get("n_ok", 0))
             except (TypeError, ValueError):
+                continue
+            if not isfinite(k):
                 continue
             edge_id = str(uid)
             self._rls.ensure_edge(edge_id)

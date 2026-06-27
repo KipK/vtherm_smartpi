@@ -6,7 +6,7 @@ from custom_components.vtherm_smartpi.smartpi.rls import MultiEdgeRLS
 
 
 def _rls(**kw):
-    defaults = dict(p0=10.0, lam=0.995, p_max=50.0, huber_c=0.2,
+    defaults = dict(p0=10.0, q=3e-5, p_max=50.0, huber_c=0.2,
                     theta_min=0.0, theta_max=0.5)
     defaults.update(kw)
     return MultiEdgeRLS(**defaults)
@@ -119,6 +119,21 @@ def test_reliable_helper():
     for x in [-3.0, -2.0, -4.0, -2.5] * 6:
         rls.update({"A": x}, 0.08 * x)
     assert rls.reliable("A", var_max=0.05, min_samples=8) is True
+
+
+def test_long_horizon_stays_psd():
+    """Two persistently-open edges over a long horizon keep variance > 0 and
+    theta bounded (regression for the non-PSD divergence)."""
+    rls = _rls()
+    ka, kb = 0.06, 0.10
+    for c in range(30000):
+        da = -(1.0 + (c % 5) * 0.4)
+        db = -(1.5 + (c % 3) * 0.5)
+        rls.update({"A": da, "B": db}, ka * da + kb * db)
+    assert rls.variance("A") > 0.0
+    assert rls.variance("B") > 0.0
+    assert abs(rls.value("A") - ka) < 0.02
+    assert abs(rls.value("B") - kb) < 0.02
 
 
 def test_load_state_ignores_malformed_input():

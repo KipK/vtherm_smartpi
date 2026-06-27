@@ -11,8 +11,8 @@ edges) and is surfaced via ``variance``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from math import inf
+from dataclasses import dataclass
+from math import inf, isfinite
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -32,14 +32,14 @@ class MultiEdgeRLS:
         self,
         *,
         p0: float,
-        lam: float,
+        q: float,
         p_max: float,
         huber_c: float,
         theta_min: float,
         theta_max: float,
     ) -> None:
         self._p0 = float(p0)
-        self._lam = float(lam)
+        self._q = float(q)
         self._p_max = float(p_max)
         self._huber_c = float(huber_c)
         self._theta_min = float(theta_min)
@@ -91,7 +91,7 @@ class MultiEdgeRLS:
         edge = self._edges.get(edge_id)
         if edge is None:
             return False
-        return self.variance(edge_id) <= var_max and edge.n >= min_samples
+        return 0.0 <= self.variance(edge_id) <= var_max and edge.n >= min_samples
 
     def save_state(self) -> dict:
         return {
@@ -111,7 +111,8 @@ class MultiEdgeRLS:
                 continue
             self.ensure_edge(str(edge_id))
             try:
-                self._edges[edge_id].theta = float(raw.get("theta", 0.0))
+                tv = float(raw.get("theta", 0.0))
+                self._edges[edge_id].theta = tv if isfinite(tv) else 0.0
                 self._edges[edge_id].n = int(raw.get("n", 0))
             except (TypeError, ValueError):
                 continue
@@ -120,7 +121,9 @@ class MultiEdgeRLS:
                 for j, v in row.items():
                     if j in self._P[i]:
                         try:
-                            self._P[i][j] = float(v)
+                            fv = float(v)
+                            if isfinite(fv):
+                                self._P[i][j] = fv
                         except (TypeError, ValueError):
                             pass
 
@@ -146,7 +149,7 @@ class MultiEdgeRLS:
     def _huber_weight(self, e: float) -> float:
         """Return the IRLS weight for innovation e (1 inside the band, c/|e| out)."""
         ae = abs(e)
-        if ae <= self._huber_c or ae == 0.0:
+        if ae <= self._huber_c:
             return 1.0
         return self._huber_c / ae
 
@@ -169,7 +172,7 @@ class MultiEdgeRLS:
         idx = self.edge_ids()
         x = {i: float(regressors.get(i, 0.0)) for i in idx}
         Px = {i: sum(self._P[i][j] * x[j] for j in idx) for i in idx}
-        denom = self._lam + sum(x[i] * Px[i] for i in idx)
+        denom = 1.0 + sum(x[i] * Px[i] for i in idx)
         if denom <= 0.0:
             return
         g = {i: Px[i] / denom for i in idx}            # Kalman gain over all edges
@@ -186,9 +189,12 @@ class MultiEdgeRLS:
         for i in idx:
             for j in idx:
                 self._P[i][j] = self._P[i][j] - g[i] * Px[j]
-        # Directional forgetting + anti-windup cap: only the active block ages.
+        # Forgetting as additive process noise on the active (excited) diagonal.
+        # This is PSD-preserving (the measurement update keeps P PSD; adding a
+        # non-negative diagonal keeps it PSD), unlike multiplicative block
+        # forgetting which drove the covariance non-PSD over long horizons.
+        # Closed edges receive no process noise (held).
         for i in active:
-            for j in active:
-                self._P[i][j] = self._P[i][j] / self._lam
+            self._P[i][i] += self._q
             if self._P[i][i] > self._p_max:
                 self._P[i][i] = self._p_max

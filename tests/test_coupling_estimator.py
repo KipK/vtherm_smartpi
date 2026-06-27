@@ -206,3 +206,23 @@ def test_load_legacy_format_migrates():
     est.load_state(legacy)
     assert abs(est.coeff("B") - 0.07) < 1e-9
     assert est.reliable("B") is True  # low seeded variance + n_ok >= MIN_SAMPLES
+
+
+def test_covariance_reset_on_reopen_after_long_closure():
+    from custom_components.vtherm_smartpi.smartpi.const import COUPLING_RESET_AFTER_CLOSED
+    est = CouplingEstimator("R")
+    edge = _redge("B", t_j=24.0)
+    # Learn the edge to a confident (low-variance) state.
+    for i in range(30):
+        est.update(dt_min=1.0, tin=20.0 + 0.05 * i, text=5.0, u=0.5, a=0.01, b=0.008,
+                   open_edges=[edge], allow_learn=True)
+    var_before = est._rls.variance("B")
+    assert var_before < 1.0
+    # Keep it closed for longer than the reset threshold (nothing open).
+    for _ in range(COUPLING_RESET_AFTER_CLOSED + 1):
+        est.update(dt_min=1.0, tin=20.0, text=5.0, u=0.5, a=0.01, b=0.008,
+                   open_edges=[], allow_learn=True)
+    # Reopen with a gradient: covariance should have been inflated (reset).
+    est.update(dt_min=1.0, tin=20.0, text=5.0, u=0.5, a=0.01, b=0.008,
+               open_edges=[edge], allow_learn=True)
+    assert est._rls.variance("B") > var_before

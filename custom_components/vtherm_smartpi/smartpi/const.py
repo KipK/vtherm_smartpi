@@ -438,7 +438,7 @@ COUPLING_RESIDUAL_MAX_C_MIN = 0.5  # Clamp on |base-model residual| (°C/min)
 # per-edge forgetting solves all open edges at once. Closed edges are HELD.
 COUPLING_RLS_P0 = 10.0             # Initial per-edge covariance (uninformed prior)
 COUPLING_RLS_P_MAX = 50.0          # Covariance cap (anti-windup under low excitation)
-COUPLING_RLS_LAMBDA = 0.995        # Forgetting for EXCITED edges (~200-sample memory)
+COUPLING_RLS_Q = 3e-5              # Additive process-noise forgetting (PSD-safe) on excited edges
 COUPLING_RLS_HUBER_C = 0.2         # Huber threshold on innovation (°C/min)
 COUPLING_RLS_VAR_RELIABLE = 0.05   # Max covariance diagonal for an edge to be reliable
 COUPLING_RESET_AFTER_CLOSED = 200  # Closed cycles before covariance is reset on reopen
