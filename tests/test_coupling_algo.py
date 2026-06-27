@@ -236,3 +236,20 @@ def test_trip_off_aperture_forces_off():
     algo.calculate(target_temp=21.0, current_temp=20.0, ext_current_temp=5.0,
                    hvac_mode=VThermHvacMode_HEAT)
     assert algo.linear_on_percent == 0.0
+
+
+def test_model_aperture_does_not_trip_off():
+    """A MODEL-policy aperture must NOT trigger the trip-off path."""
+    algo = make_smartpi()
+    e = ResolvedEdge(edge_id="win", target_kind="outside", aperture_type="window",
+                     open_policy="model", neighbor_temp=None, neighbor_power_w=None)
+
+    class _View:
+        uid = "A"
+        def publish(self, snap): pass
+        def any_open(self): return True
+        def open_edges(self): return [e]
+        def component_power_w(self): return 0.0
+
+    algo.attach_coupling_view(_View())
+    assert algo._coupling_trip_off_active() is False

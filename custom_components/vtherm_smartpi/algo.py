@@ -1765,7 +1765,7 @@ class SmartPI:
             self._ff3_active_cycle = False
             self._ff3_pending_active = False
             self._last_ff3_enabled = False
-            self._last_ff3_reason_disabled = "power_shedding"
+            self._last_ff3_reason_disabled = "window" if window_open else "power_shedding"
             self._last_ff3_candidate_scores = []
             self._last_ff3_selected_candidate = 0.0
             self._last_ff3_horizon_cycles = 1
