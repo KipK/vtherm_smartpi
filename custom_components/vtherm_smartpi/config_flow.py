@@ -11,8 +11,12 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 
 from .const import (
+    CONF_CONN_DOOR_SENSOR,
+    CONF_CONN_NEIGHBOR_VTHERM,
     CONF_MINIMAL_ACTIVATION_DELAY,
     CONF_MINIMAL_DEACTIVATION_DELAY,
+    CONF_SMART_PI_CONNECTIONS,
+    CONF_SMART_PI_POWER_SENSOR,
     CONF_SMART_PI_DEADBAND,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
     CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
@@ -31,8 +35,16 @@ from .const import (
     DEFAULT_OPTIONS,
     DOMAIN,
 )
+from .smartpi.device_link import target_uses_smartpi
 
 ERROR_INVALID_VALVE_CURVE = "invalid_valve_curve"
+ERROR_CONNECTION_INCOMPLETE = "connection_incomplete"
+ERROR_CONNECTION_SELF = "connection_self"
+ERROR_CONNECTION_DUPLICATE = "connection_duplicate"
+ERROR_CONNECTION_NOT_SMARTPI = "connection_not_smartpi"
+CONF_ADD_ANOTHER_CONNECTION = "add_another_connection"
+BINARY_SENSOR_DOMAIN = "binary_sensor"
+SENSOR_DOMAIN = "sensor"
 THERMOSTAT_TYPE_VALVE = "thermostat_over_valve"
 THERMOSTAT_TYPE_CLIMATE = "thermostat_over_climate"
 AUTO_REGULATION_VALVE = "auto_regulation_valve"
@@ -214,6 +226,109 @@ def build_user_target_schema() -> vol.Schema:
     )
 
 
+def build_connections_schema(
+    *,
+    power_sensor_default: str | None = None,
+) -> vol.Schema:
+    """Build the room-coupling step schema (power sensor + one connection).
+
+    Connections are added one at a time: fill a neighbour + door and tick
+    "add another" to declare more. The power sensor value is preserved across
+    iterations via its suggested value.
+    """
+    power_field = vol.Optional(CONF_SMART_PI_POWER_SENSOR)
+    if power_sensor_default:
+        power_field = vol.Optional(
+            CONF_SMART_PI_POWER_SENSOR,
+            description={"suggested_value": power_sensor_default},
+        )
+    return vol.Schema(
+        {
+            power_field: selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=SENSOR_DOMAIN,
+                    device_class="power",
+                )
+            ),
+            vol.Optional(CONF_CONN_NEIGHBOR_VTHERM): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=CLIMATE_DOMAIN)
+            ),
+            vol.Optional(CONF_CONN_DOOR_SENSOR): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=BINARY_SENSOR_DOMAIN)
+            ),
+            vol.Optional(CONF_ADD_ANOTHER_CONNECTION, default=False): bool,
+        }
+    )
+
+
+def _resolve_neighbor_unique_id(hass: Any, entity_id: str | None) -> str | None:
+    """Resolve a climate entity_id to its VTherm unique id."""
+    if not entity_id:
+        return None
+    registry = er.async_get(hass)
+    reg_entry = registry.async_get(entity_id)
+    if reg_entry is None:
+        return None
+    return reg_entry.unique_id
+
+
+def _validate_connection(
+    hass: Any,
+    self_unique_id: str | None,
+    neighbor_unique_id: str | None,
+    existing: list[dict[str, Any]],
+) -> str | None:
+    """Return an error key if the connection is invalid, else None."""
+    if not neighbor_unique_id:
+        return ERROR_CONNECTION_INCOMPLETE
+    if self_unique_id is not None and neighbor_unique_id == self_unique_id:
+        return ERROR_CONNECTION_SELF
+    if any(
+        conn.get(CONF_CONN_NEIGHBOR_VTHERM) == neighbor_unique_id for conn in existing
+    ):
+        return ERROR_CONNECTION_DUPLICATE
+    if not target_uses_smartpi(hass, neighbor_unique_id):
+        return ERROR_CONNECTION_NOT_SMARTPI
+    return None
+
+
+def _apply_connection_submission(
+    hass: Any,
+    user_input: dict[str, Any],
+    self_unique_id: str | None,
+    pending_connections: list[dict[str, Any]],
+) -> tuple[dict[str, str], str | None, bool]:
+    """Process a connections-step submission.
+
+    Appends a valid connection to *pending_connections* in place. Returns
+    ``(errors, power_sensor, add_another)``.
+    """
+    errors: dict[str, str] = {}
+    power = user_input.get(CONF_SMART_PI_POWER_SENSOR)
+    neighbor_entity = user_input.get(CONF_CONN_NEIGHBOR_VTHERM)
+    door = user_input.get(CONF_CONN_DOOR_SENSOR)
+    add_another = bool(user_input.get(CONF_ADD_ANOTHER_CONNECTION))
+
+    if neighbor_entity or door:
+        if not (neighbor_entity and door):
+            errors["base"] = ERROR_CONNECTION_INCOMPLETE
+        else:
+            neighbor_uid = _resolve_neighbor_unique_id(hass, neighbor_entity)
+            err = _validate_connection(
+                hass, self_unique_id, neighbor_uid, pending_connections
+            )
+            if err:
+                errors["base"] = err
+            else:
+                pending_connections.append(
+                    {
+                        CONF_CONN_NEIGHBOR_VTHERM: neighbor_uid,
+                        CONF_CONN_DOOR_SENSOR: door,
+                    }
+                )
+    return errors, power, add_another
+
+
 def build_user_settings_schema(defaults: dict[str, Any], is_valve: bool) -> vol.Schema:
     """Build the SmartPI per-thermostat settings schema."""
     schema = dict(
@@ -306,6 +421,8 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
     _pending_thermostat_entity_id: str | None = None
     _pending_thermostat_is_valve: bool = False
     _pending_thermostat_title: str | None = None
+    _pending_connections: list[dict[str, Any]] | None = None
+    _pending_power_sensor: str | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Create default plugin settings on first install."""
@@ -383,13 +500,7 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
                     data_schema=build_valve_curve_schema(_schema_defaults(user_input)),
                 )
 
-            return self.async_create_entry(
-                title=(
-                    self._pending_thermostat_title
-                    or self._pending_thermostat_entity_id
-                ),
-                data=data,
-            )
+            return await self.async_step_connections()
 
         return self.async_show_form(
             step_id="thermostat_settings",
@@ -414,6 +525,49 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
                     data_schema=build_valve_curve_schema(_schema_defaults(data)),
                     errors=errors,
                 )
+            self._pending_thermostat_data = data
+            return await self.async_step_connections()
+
+        return self.async_show_form(
+            step_id="thermostat_valve_curve",
+            data_schema=build_valve_curve_schema(_schema_defaults(data)),
+        )
+
+    async def async_step_connections(self, user_input: dict[str, Any] | None = None):
+        """Declare this room's power sensor and inter-room connections."""
+        data = dict(self._pending_thermostat_data or {})
+        if self._pending_connections is None:
+            self._pending_connections = list(
+                data.get(CONF_SMART_PI_CONNECTIONS, []) or []
+            )
+            self._pending_power_sensor = data.get(CONF_SMART_PI_POWER_SENSOR)
+
+        if user_input is not None:
+            errors, power, add_another = _apply_connection_submission(
+                self.hass,
+                user_input,
+                data.get(CONF_TARGET_VTHERM),
+                self._pending_connections,
+            )
+            if power is not None:
+                self._pending_power_sensor = power
+            if errors:
+                return self.async_show_form(
+                    step_id="connections",
+                    data_schema=build_connections_schema(
+                        power_sensor_default=self._pending_power_sensor
+                    ),
+                    errors=errors,
+                )
+            if add_another:
+                return self.async_show_form(
+                    step_id="connections",
+                    data_schema=build_connections_schema(
+                        power_sensor_default=self._pending_power_sensor
+                    ),
+                )
+            data[CONF_SMART_PI_POWER_SENSOR] = self._pending_power_sensor
+            data[CONF_SMART_PI_CONNECTIONS] = self._pending_connections
             return self.async_create_entry(
                 title=(
                     self._pending_thermostat_title
@@ -423,8 +577,10 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
             )
 
         return self.async_show_form(
-            step_id="thermostat_valve_curve",
-            data_schema=build_valve_curve_schema(_schema_defaults(data)),
+            step_id="connections",
+            data_schema=build_connections_schema(
+                power_sensor_default=self._pending_power_sensor
+            ),
         )
 
     @staticmethod
@@ -440,6 +596,57 @@ class SmartPIOptionsFlow(OptionsFlow):
         """Store the config entry being edited."""
         self._config_entry = config_entry
         self._pending_options_data: dict[str, Any] | None = None
+        self._pending_connections: list[dict[str, Any]] | None = None
+        self._pending_power_sensor: str | None = None
+
+    async def _finish_or_connections(self, data: dict[str, Any]):
+        """Route to the connections step for per-thermostat entries, else finish."""
+        self._pending_options_data = data
+        if self._config_entry.data.get(CONF_TARGET_VTHERM):
+            return await self.async_step_connections()
+        return self.async_create_entry(title="", data=data)
+
+    async def async_step_connections(self, user_input: dict[str, Any] | None = None):
+        """Edit this room's power sensor and inter-room connections."""
+        data = dict(self._pending_options_data or {})
+        self_uid = self._config_entry.data.get(CONF_TARGET_VTHERM)
+        if self._pending_connections is None:
+            self._pending_connections = list(
+                data.get(CONF_SMART_PI_CONNECTIONS, []) or []
+            )
+            self._pending_power_sensor = data.get(CONF_SMART_PI_POWER_SENSOR)
+
+        if user_input is not None:
+            errors, power, add_another = _apply_connection_submission(
+                self.hass, user_input, self_uid, self._pending_connections
+            )
+            if power is not None:
+                self._pending_power_sensor = power
+            if errors:
+                return self.async_show_form(
+                    step_id="connections",
+                    data_schema=build_connections_schema(
+                        power_sensor_default=self._pending_power_sensor
+                    ),
+                    errors=errors,
+                )
+            if add_another:
+                return self.async_show_form(
+                    step_id="connections",
+                    data_schema=build_connections_schema(
+                        power_sensor_default=self._pending_power_sensor
+                    ),
+                )
+            data[CONF_SMART_PI_POWER_SENSOR] = self._pending_power_sensor
+            data[CONF_SMART_PI_CONNECTIONS] = self._pending_connections
+            return self.async_create_entry(title="", data=data)
+
+        return self.async_show_form(
+            step_id="connections",
+            data_schema=build_connections_schema(
+                power_sensor_default=self._pending_power_sensor
+            ),
+        )
 
     def _is_valve_target_entry(self) -> bool:
         """Return whether the edited entry targets a valve thermostat."""
@@ -476,7 +683,7 @@ class SmartPIOptionsFlow(OptionsFlow):
                     step_id="valve_curve",
                     data_schema=build_valve_curve_schema(data),
                 )
-            return self.async_create_entry(title="", data=data)
+            return await self._finish_or_connections(data)
 
         return self.async_show_form(
             step_id="init",
@@ -501,7 +708,7 @@ class SmartPIOptionsFlow(OptionsFlow):
                     data_schema=build_valve_curve_schema(_schema_defaults(data)),
                     errors=errors,
                 )
-            return self.async_create_entry(title="", data=data)
+            return await self._finish_or_connections(data)
 
         return self.async_show_form(
             step_id="valve_curve",

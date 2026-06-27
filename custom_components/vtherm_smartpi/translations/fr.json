@@ -50,10 +50,24 @@
           "smart_pi_knee_valve": "Ouverture de vanne au coude",
           "smart_pi_max_valve": "Ouverture maximale de vanne"
         }
+      },
+      "connections": {
+        "title": "Connexions entre pièces",
+        "description": "Optionnel. Indiquez le capteur de puissance de cette pièce et déclarez une porte la reliant à une autre pièce SmartPI. Cochez « Ajouter une autre connexion » pour en déclarer plusieurs. Déclarer une connexion d'un seul côté suffit — elle devient bidirectionnelle automatiquement.",
+        "data": {
+          "smart_pi_power_sensor": "Capteur de puissance (watts)",
+          "neighbor_vtherm_entity": "Pièce connectée (thermostat)",
+          "connection_door_sensor": "Capteur de porte / ouverture",
+          "add_another_connection": "Ajouter une autre connexion"
+        }
       }
     },
     "error": {
-      "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale."
+      "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale.",
+      "connection_incomplete": "Sélectionnez à la fois une pièce connectée et un capteur de porte.",
+      "connection_self": "Une pièce ne peut pas être connectée à elle-même.",
+      "connection_duplicate": "Cette pièce est déjà déclarée comme connexion.",
+      "connection_not_smartpi": "La pièce connectée doit être un thermostat utilisant l'algorithme SmartPI."
     },
     "abort": {
       "single_instance_allowed": "Une seule configuration du plugin SmartPI est autorisée."
@@ -86,10 +100,24 @@
           "smart_pi_knee_valve": "Ouverture de vanne au coude",
           "smart_pi_max_valve": "Ouverture maximale de vanne"
         }
+      },
+      "connections": {
+        "title": "Connexions entre pièces",
+        "description": "Optionnel. Indiquez le capteur de puissance de cette pièce et déclarez une porte la reliant à une autre pièce SmartPI. Cochez « Ajouter une autre connexion » pour en déclarer plusieurs. Les connexions existantes sont conservées ; déclarer une connexion d'un côté la rend bidirectionnelle.",
+        "data": {
+          "smart_pi_power_sensor": "Capteur de puissance (watts)",
+          "neighbor_vtherm_entity": "Pièce connectée (thermostat)",
+          "connection_door_sensor": "Capteur de porte / ouverture",
+          "add_another_connection": "Ajouter une autre connexion"
+        }
       }
     },
     "error": {
-      "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale."
+      "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale.",
+      "connection_incomplete": "Sélectionnez à la fois une pièce connectée et un capteur de porte.",
+      "connection_self": "Une pièce ne peut pas être connectée à elle-même.",
+      "connection_duplicate": "Cette pièce est déjà déclarée comme connexion.",
+      "connection_not_smartpi": "La pièce connectée doit être un thermostat utilisant l'algorithme SmartPI."
     }
   }
 }

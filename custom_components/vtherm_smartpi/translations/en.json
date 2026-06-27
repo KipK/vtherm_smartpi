@@ -50,10 +50,24 @@
           "smart_pi_knee_valve": "Valve opening at knee",
           "smart_pi_max_valve": "Maximum valve opening"
         }
+      },
+      "connections": {
+        "title": "Room connections",
+        "description": "Optional. Point at this room's power sensor and declare a door connecting it to another SmartPI room. Tick 'Add another connection' to declare more. Adding a connection on one room is enough — it is made bidirectional automatically.",
+        "data": {
+          "smart_pi_power_sensor": "Power sensor (watts)",
+          "neighbor_vtherm_entity": "Connected room (thermostat)",
+          "connection_door_sensor": "Door / opening sensor",
+          "add_another_connection": "Add another connection"
+        }
       }
     },
     "error": {
-      "invalid_valve_curve": "The valve curve must satisfy minimum opening < knee opening < maximum opening."
+      "invalid_valve_curve": "The valve curve must satisfy minimum opening < knee opening < maximum opening.",
+      "connection_incomplete": "Select both a connected room and a door sensor.",
+      "connection_self": "A room cannot be connected to itself.",
+      "connection_duplicate": "This room is already declared as a connection.",
+      "connection_not_smartpi": "The connected room must be a thermostat using the SmartPI algorithm."
     },
     "abort": {
       "single_instance_allowed": "Only one SmartPI plugin configuration is allowed."
@@ -86,10 +100,24 @@
           "smart_pi_knee_valve": "Valve opening at knee",
           "smart_pi_max_valve": "Maximum valve opening"
         }
+      },
+      "connections": {
+        "title": "Room connections",
+        "description": "Optional. Point at this room's power sensor and declare a door connecting it to another SmartPI room. Tick 'Add another connection' to declare more. Existing connections are kept; adding a connection on one room makes it bidirectional.",
+        "data": {
+          "smart_pi_power_sensor": "Power sensor (watts)",
+          "neighbor_vtherm_entity": "Connected room (thermostat)",
+          "connection_door_sensor": "Door / opening sensor",
+          "add_another_connection": "Add another connection"
+        }
       }
     },
     "error": {
-      "invalid_valve_curve": "The valve curve must satisfy minimum opening < knee opening < maximum opening."
+      "invalid_valve_curve": "The valve curve must satisfy minimum opening < knee opening < maximum opening.",
+      "connection_incomplete": "Select both a connected room and a door sensor.",
+      "connection_self": "A room cannot be connected to itself.",
+      "connection_duplicate": "This room is already declared as a connection.",
+      "connection_not_smartpi": "The connected room must be a thermostat using the SmartPI algorithm."
     }
   }
 }

@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
-from math import exp
+from math import exp, isfinite
 from typing import Any, Dict, Optional
 
 from .hvac_mode import (
@@ -86,6 +86,8 @@ from .smartpi.const import (
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
 from .smartpi.deadtime_estimator import DeadTimeEstimator
 from .smartpi.ab_estimator import ABEstimator
+from .smartpi.coupling_estimator import CouplingEstimator
+from .smartpi.room_coupling import compute_effective_params
 from .smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 from .smartpi.diagnostics import build_diagnostics, build_published_diagnostics, build_debug_diagnostics
 from .smartpi.governance import SmartPIGovernance
@@ -122,6 +124,7 @@ from .smartpi.const import (
     FF_TRIM_MAX_ERROR_C,
     FF_TRIM_MAX_SLOPE_H,
     ENABLE_ADAPTIVE_TINT_FILTER,
+    COUPLING_SLEW_ALPHA,
 )
 from .smartpi.timestamp_utils import convert_monotonic_to_wall_ts
 from .const import HVAC_OFF_REASON_WINDOW_DETECTION
@@ -330,6 +333,16 @@ class SmartPI:
             dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1
         )
         self._last_twin_diag: dict = {}
+        # --- Room coupling (connected rooms) ---
+        self.coupling_est = CouplingEstimator(name)
+        self._coupling_view = None  # RoomView, attached by the handler
+        self._measured_power_w: float | None = None  # watts from this room's power sensor
+        self._last_coupling_diag: dict = {}
+        # EMA-slewed effective coupling load (smooths b_eff/Text_eff transitions)
+        self._cpl_sk_eff: float = 0.0    # Σ k_ij·open (slewed)
+        self._cpl_skt_eff: float = 0.0   # Σ k_ij·T_j·open (slewed)
+        self._coupling_b_eff: float | None = None
+        self._coupling_text_eff: float | None = None
         self._heat_request_prev: bool = False
         self._t_heat_episode_start: float | None = None
         self._t_cool_episode_start: float | None = None
@@ -1575,6 +1588,7 @@ class SmartPI:
             "ff_v2_trim": self._ff_trim.save_state(),
             "ff_trim_delta": self._last_ff_trim_delta,
             "tint_filter_state": self.tint_filter.save_state(),
+            "coupling_state": self.coupling_est.save_state(),
         }
         return state
 
@@ -1640,6 +1654,13 @@ class SmartPI:
         self._ff_trim.load_state(state.get("ff_v2_trim", {}))
         self._last_ff_trim_delta = float(state.get("ff_trim_delta", 0.0))
         self.tint_filter.load_state(state.get("tint_filter_state", {}))
+        # Room coupling: restore learned per-edge k_ij. Slew state is transient
+        # and rebuilds from zero over the first few cycles after a restart.
+        self.coupling_est.load_state(state.get("coupling_state", {}))
+        self._cpl_sk_eff = 0.0
+        self._cpl_skt_eff = 0.0
+        self._coupling_b_eff = None
+        self._coupling_text_eff = None
         # Freeze trim learning briefly after reboot.
         self._ff_trim.freeze("reboot")
         self._ff_v2_reboot_freeze_remaining = FF_TRIM_REBOOT_FREEZE_CYCLES
@@ -2097,21 +2118,39 @@ class SmartPI:
         cycle_boundary: bool = False,
         power_shedding: bool = False,
         startup_first_run: bool = False,
+        coupling_b_eff: float | None = None,
+        coupling_text_eff: float | None = None,
     ) -> tuple[float, bool]:
         """Calculate gains and feedforward, and handles integrator hold.
+
+        When a connected door is open the coupling-effective loss/external
+        reference are folded in: ``tau_eff = 1/b_eff`` for gain tuning and
+        ``Text_eff`` / ``b_eff`` for feed-forward. Substitutions are no-ops
+        (byte-identical to the uncoupled path) unless ``b_eff > b``.
 
         Returns:
             Tuple of (runtime_ff, integrator_hold).
         """
+        # Coupling fold: only diverge from the base model when a door is open.
+        coupling_active = (
+            coupling_b_eff is not None and coupling_b_eff > self.est.b + 1e-9
+        )
+        ff_ext_temp = ext_current_temp
+        if coupling_active and coupling_text_eff is not None:
+            ff_ext_temp = coupling_text_eff
+
         # Capture old Ki for bumpless integral rescaling
         old_ki = self.gain_scheduler.ki
         near_band_ratio = self._near_band_gain_ratio(error, hvac_mode)
 
         # Delegate gain calculation to GainScheduler component
         tau_info = self.est.tau_reliability()
+        tau_min_eff = tau_info.tau_min
+        if coupling_active:
+            tau_min_eff = 1.0 / coupling_b_eff
         self.gain_scheduler.calculate(
             tau_reliable=self._tau_reliable,
-            tau_min=tau_info.tau_min,
+            tau_min=tau_min_eff,
             estimator=self.est,
             dt_est=self.dt_est,
             in_near_band=self.deadband_mgr.in_near_band,
@@ -2148,7 +2187,8 @@ class SmartPI:
                 and len(self.est.b_meas_hist) >= AB_MIN_SAMPLES_B
             )
             if model_ready and self._tau_reliable:
-                k_ff = clamp(self.est.b / max(self.est.a, 1e-6), 0.0, 3.0)
+                b_for_kff = coupling_b_eff if coupling_active else self.est.b
+                k_ff = clamp(b_for_kff / max(self.est.a, 1e-6), 0.0, 3.0)
             else:
                 k_ff = 0.0
             learn_scale = clamp(self.est.learn_ok_count / float(self.ff_warmup_ok_count), 0.0, 1.0)
@@ -2163,7 +2203,7 @@ class SmartPI:
         nominal_ff_result = compute_ff(
             k_ff=k_ff,
             target_temp_ff=target_temp_ff,
-            ext_temp=ext_current_temp,
+            ext_temp=ff_ext_temp,
             warmup_scale=warmup_scale,
             trim=self._ff_trim,
             regime=self.gov.regime,
@@ -2178,7 +2218,7 @@ class SmartPI:
             cycle_boundary=cycle_boundary,
             target_temp=target_temp_ff,
             current_temp=current_temp,
-            ext_current_temp=ext_current_temp,
+            ext_current_temp=ff_ext_temp,
             hvac_mode=hvac_mode,
             slope_h=slope_h,
             setpoint_changed=setpoint_changed,
@@ -2191,7 +2231,7 @@ class SmartPI:
         ff_result = compute_ff(
             k_ff=k_ff,
             target_temp_ff=target_temp_ff,
-            ext_temp=ext_current_temp,
+            ext_temp=ff_ext_temp,
             warmup_scale=warmup_scale,
             trim=self._ff_trim,
             regime=self.gov.regime,
@@ -2303,6 +2343,10 @@ class SmartPI:
 
         now = time.monotonic()
         self._pending_fftrim_cycle_sample = None
+
+        # Publish this room's snapshot every cycle (even when OFF) so neighbours
+        # always see a fresh temperature; the read is one cycle lagged by design.
+        self._publish_coupling_snapshot(current_temp, ext_current_temp)
 
         # --- 0. HVAC mode transition (HEAT↔COOL) → reset integral ---
         # Track active modes BEFORE validation so that missing presets in COOL
@@ -2420,6 +2464,12 @@ class SmartPI:
                 target_temp=target_temp,
             )
 
+        # --- 4b. Room coupling: learn k_ij, then refresh effective (b_eff,Text_eff) ---
+        # Runs before the calibration/hysteresis branches so the thermal twin in
+        # every path sees coupling-aware parameters (identity when no door open).
+        self._update_coupling_learning(dt_min, t_int_clean, ext_current_temp, hvac_mode)
+        self._refresh_coupling_context(current_temp, ext_current_temp)
+
         # Calibration state machine
         if self.calibration_mgr.is_calibrating and self.calibration_mgr.calibration_start_time is not None:
             elapsed = (now - self.calibration_mgr.calibration_start_time) / 60.0
@@ -2529,7 +2579,8 @@ class SmartPI:
             self._output_initialized,
             self.ctl.u_cmd,
             self.deadband_mgr.in_deadband,
-            self.deadband_mgr.in_near_band
+            self.deadband_mgr.in_near_band,
+            any_door_open=self._coupling_any_open(),
         )
         self.gov.update_regime(regime)
         gov_decision_g, _ = self.gov.decide_update('gains')
@@ -2550,6 +2601,8 @@ class SmartPI:
             cycle_boundary=cycle_boundary,
             power_shedding=power_shedding,
             startup_first_run=startup_first_run,
+            coupling_b_eff=self._coupling_b_eff,
+            coupling_text_eff=self._coupling_text_eff,
         )
         # Apply explicit hold (parameter) or governance hold
         integrator_hold = integrator_hold or gov_hold
@@ -2688,6 +2741,125 @@ class SmartPI:
         # --- 15. Thermal Twin & ETA (diagnostics-only) ---
         self._update_twin_diagnostics(current_temp, ext_current_temp, target_temp, hvac_mode, dt_s=dt_min * 60.0)
 
+    # ------------------------------------------------------------------
+    # Room coupling (connected rooms)
+    # ------------------------------------------------------------------
+
+    def attach_coupling_view(self, view) -> None:
+        """Attach the RoomView facade used to read/publish neighbour state."""
+        self._coupling_view = view
+
+    def set_measured_power(self, power_w: float | None) -> None:
+        """Set this room's measured heating power (watts) for aggregation."""
+        if power_w is not None and isfinite(power_w):
+            self._measured_power_w = float(power_w)
+        else:
+            self._measured_power_w = None
+
+    def _coupling_any_open(self) -> bool:
+        """Return True when a connected door is open with an available neighbour."""
+        view = self._coupling_view
+        return bool(view.any_open()) if view is not None else False
+
+    def _publish_coupling_snapshot(
+        self, current_temp: float | None, ext_temp: float | None
+    ) -> None:
+        """Publish this room's snapshot so neighbours can read it next cycle."""
+        view = self._coupling_view
+        if view is None:
+            return
+        view.publish(
+            {
+                "t_int": current_temp,
+                "text": ext_temp,
+                "on_percent": self._committed_on_percent,
+                "power_w": self._measured_power_w,
+                "available": current_temp is not None,
+            }
+        )
+
+    def _update_coupling_learning(
+        self,
+        dt_min: float,
+        current_temp: float | None,
+        ext_temp: float | None,
+        hvac_mode: VThermHvacMode | None,
+    ) -> None:
+        """Learn per-edge coupling k_ij from the base-model residual."""
+        view = self._coupling_view
+        if view is None:
+            return
+        open_edges = view.open_edges()
+        base_reliable = (
+            self.est.tau_reliability().reliable
+            and self.est.learn_ok_count_a >= AB_MIN_SAMPLES_A
+        )
+        allow_learn = (
+            base_reliable
+            and hvac_mode == VThermHvacMode_HEAT
+            and ext_temp is not None
+            and not self.calibration_mgr.is_calibrating
+        )
+        self.coupling_est.update(
+            dt_min=dt_min,
+            tin=current_temp,
+            text=ext_temp,
+            u=self._committed_on_percent,
+            a=self.est.a,
+            b=self.est.b,
+            open_edges=open_edges,
+            allow_learn=allow_learn,
+        )
+
+    def _refresh_coupling_context(
+        self, current_temp: float | None, ext_temp: float | None
+    ) -> tuple[float, float | None]:
+        """Recompute slewed effective (b_eff, Text_eff) from open edges + k.
+
+        Identity when no door is open (b_eff == b, Text_eff == ext). The EMA
+        slew on the coupling load smooths b_eff/Text_eff across door transitions.
+        """
+        b_base = self.est.b
+        view = self._coupling_view
+        open_neighbors: list[str] = []
+        target_sk = 0.0
+        target_skt = 0.0
+        if view is not None and current_temp is not None:
+            for edge in view.open_edges():
+                if edge.neighbor_temp is None:
+                    continue
+                open_neighbors.append(edge.neighbor_uid)
+                k = self.coupling_est.k(edge.neighbor_uid)
+                target_sk += k
+                target_skt += k * edge.neighbor_temp
+
+        # EMA slew toward the door-gated target load.
+        self._cpl_sk_eff += COUPLING_SLEW_ALPHA * (target_sk - self._cpl_sk_eff)
+        self._cpl_skt_eff += COUPLING_SLEW_ALPHA * (target_skt - self._cpl_skt_eff)
+        if self._cpl_sk_eff < 1e-9:
+            # Snap to exact identity when fully closed (regression safety).
+            self._cpl_sk_eff = 0.0
+            self._cpl_skt_eff = 0.0
+
+        b_eff, text_eff = compute_effective_params(
+            b_base, ext_temp, self._cpl_sk_eff, self._cpl_skt_eff
+        )
+        self._coupling_b_eff = b_eff
+        self._coupling_text_eff = text_eff
+        self._last_coupling_diag = {
+            "any_door_open": self._coupling_any_open(),
+            "b_base": round(b_base, 6),
+            "b_eff": round(b_eff, 6),
+            "text_eff": round(text_eff, 3) if text_eff is not None else None,
+            "sum_k": round(self._cpl_sk_eff, 5),
+            "open_neighbors": open_neighbors,
+            "component_power_w": (
+                round(view.component_power_w(), 1) if view is not None else None
+            ),
+            "edges": self.coupling_est.edges_diag(),
+        }
+        return b_eff, text_eff
+
     def _update_twin_diagnostics(
         self,
         current_temp: float,
@@ -2698,14 +2870,22 @@ class SmartPI:
     ) -> None:
         """Update thermal twin and compute ETA best-case (diagnostics-only)."""
         mode = "heat" if hvac_mode == VThermHvacMode_HEAT else "cool"
+        # Use coupling-effective params so d_hat does not absorb inter-room
+        # exchange. Identity (b_eff == b, text_eff == ext) when no door is open.
+        b_use = self._coupling_b_eff if self._coupling_b_eff is not None else self.est.b
+        text_use = (
+            self._coupling_text_eff
+            if self._coupling_text_eff is not None
+            else ext_current_temp
+        )
         self._last_twin_diag = self.twin.update_with_eta(
             tin=current_temp,
-            text=ext_current_temp,
+            text=text_use,
             target=target_temp,
             on_percent=self._on_percent,
             tau_reliable=self._tau_reliable,
             a=self.est.a,
-            b=self.est.b,
+            b=b_use,
             mode=mode,
             deadtime_heat_s=self.dt_est.deadtime_heat_s,
             deadtime_cool_s=self.dt_est.deadtime_cool_s,

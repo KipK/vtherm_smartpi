@@ -235,6 +235,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "thermal_update_decision": diag["last_decision_thermal"],
             "thermal_update_reason": diag["last_freeze_reason_thermal"],
         },
+        "coupling": _build_coupling_block(algo),
         "feedforward": {
             "ff3_status": _build_ff3_status(diag),
             "ff3_twin_usable": diag["ff3_twin_usable"],
@@ -263,6 +264,21 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "retry_count": diag["calibration_retry_count"],
             "last_time": diag["last_calibration_time"],
         },
+    }
+
+
+def _build_coupling_block(algo: SmartPI) -> Dict[str, Any]:
+    """Return the room-coupling diagnostics block (empty-safe)."""
+    cpl = getattr(algo, "_last_coupling_diag", None) or {}
+    return {
+        "any_door_open": cpl.get("any_door_open", False),
+        "b_base": cpl.get("b_base"),
+        "b_eff": cpl.get("b_eff"),
+        "text_eff": cpl.get("text_eff"),
+        "sum_k": cpl.get("sum_k", 0.0),
+        "open_neighbors": cpl.get("open_neighbors", []),
+        "component_power_w": cpl.get("component_power_w"),
+        "edges": cpl.get("edges", {}),
     }
 
 

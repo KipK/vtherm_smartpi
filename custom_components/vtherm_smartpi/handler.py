@@ -21,6 +21,7 @@ from .smartpi.const import (
     SmartPICalibrationResult,
     NEAR_BAND_HYSTERESIS_C,
 )
+from .smartpi.room_coupling import EdgeConfig, get_coordinator
 from .const import (
     CONF_TARGET_VTHERM,
     CONF_MINIMAL_ACTIVATION_DELAY,
@@ -39,6 +40,10 @@ from .const import (
     CONF_SMART_PI_KNEE_DEMAND,
     CONF_SMART_PI_KNEE_VALVE,
     CONF_SMART_PI_MAX_VALVE,
+    CONF_SMART_PI_POWER_SENSOR,
+    CONF_SMART_PI_CONNECTIONS,
+    CONF_CONN_NEIGHBOR_VTHERM,
+    CONF_CONN_DOOR_SENSOR,
     DEFAULT_OPTIONS,
     DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
@@ -85,6 +90,9 @@ class SmartPIHandler:
         self._valve_linearization_configured: bool = False
         self._valve_curve_params: ValveCurveParams | None = None
         self._applied_config_entry_id: str | None = None
+        # Room coupling
+        self._power_sensor_entity_id: str | None = None
+        self._coupling_neighbor_uids: set[str] = set()
 
     def init_algorithm(self):
         """Initialize SmartPI algorithm."""
@@ -195,6 +203,23 @@ class SmartPIHandler:
             valve_mode=valve_mode_enabled,
         )
 
+        # --- Room coupling: power sensor + connection topology ---
+        self._power_sensor_entity_id = entry.get(CONF_SMART_PI_POWER_SENSOR) or None
+        edges: list[EdgeConfig] = []
+        neighbor_uids: set[str] = set()
+        for conn in entry.get(CONF_SMART_PI_CONNECTIONS, []) or []:
+            neighbor_uid = conn.get(CONF_CONN_NEIGHBOR_VTHERM)
+            door = conn.get(CONF_CONN_DOOR_SENSOR)
+            if neighbor_uid and door:
+                edges.append(
+                    EdgeConfig(neighbor_uid=neighbor_uid, door_entity_id=door)
+                )
+                neighbor_uids.add(neighbor_uid)
+        self._coupling_neighbor_uids = neighbor_uids
+        coordinator = get_coordinator(t.hass, t.hass.data.setdefault(DOMAIN, {}))
+        view = coordinator.register_room(t.unique_id, edges)
+        t.prop_algorithm.attach_coupling_view(view)
+
         _LOGGER.info("%s - SmartPI Algorithm initialized", t)
         async_dispatcher_send(t.hass, SIGNAL_SMARTPI_TARGET_UPDATED, t.unique_id)
 
@@ -264,6 +289,9 @@ class SmartPIHandler:
                     _LOGGER.debug("%s - SmartPI state loaded", t)
             except Exception as e:
                 _LOGGER.error("%s - Failed to load SmartPI state: %s", t, e)
+        # Drop any persisted coupling edges no longer present in the config.
+        if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
+            t.prop_algorithm.coupling_est.prune(self._coupling_neighbor_uids)
         self._bind_config_entry_to_device()
 
     async def async_startup(self):
@@ -293,6 +321,11 @@ class SmartPIHandler:
         """Cleanup and save state on removal."""
         t = self._thermostat
         self._unbind_config_entry_from_device()
+        try:
+            coordinator = get_coordinator(t.hass, t.hass.data.setdefault(DOMAIN, {}))
+            coordinator.unregister_room(t.unique_id)
+        except Exception:  # pragma: no cover - defensive cleanup
+            pass
         if self._store and t.prop_algorithm:
             # We can't await here easily, but we schedule save
             t.hass.async_create_task(self._async_save())
@@ -389,6 +422,17 @@ class SmartPIHandler:
             if guard_kick_action == GuardAction.KICK_TRIGGER:
                 algo._last_restart_reason = "guard_kick"
                 force = True
+
+            # Read this room's measured heating power (watts) for coupling aggregation.
+            if self._power_sensor_entity_id and isinstance(algo, SmartPI):
+                power_state = t.hass.states.get(self._power_sensor_entity_id)
+                power_w = None
+                if power_state is not None:
+                    try:
+                        power_w = float(power_state.state)
+                    except (TypeError, ValueError):
+                        power_w = None
+                algo.set_measured_power(power_w)
 
             # Calculate uses current temp, ext temp, etc.
             # If guard_cut is active, calculate() will set on_percent=0.

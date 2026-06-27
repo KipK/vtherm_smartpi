@@ -47,6 +47,7 @@ class GovernanceRegime(str, Enum):
     PERTURBED = "perturbed"            # External disturbance (window, shedding)
     DEGRADED = "degraded"              # Sensor absent, deadtime unknown
     SATURATED = "saturated"            # Command at 0% or 100%
+    COUPLED = "coupled"                # A connected door is open (room thermally coupled)
 
 
 class FreezeReason(str, Enum):
@@ -68,6 +69,7 @@ class FreezeReason(str, Enum):
     PERTURBED = "perturbed"
     SATURATION = "saturation"
     SYSTEM_INEFFICIENT = "system_inefficient"
+    COUPLED = "coupled"  # Base a/b frozen because a connected door is open
 
 
 class GovernanceDecision(str, Enum):
@@ -112,6 +114,13 @@ GOVERNANCE_MATRIX = {
     GovernanceRegime.DEGRADED: {
         "thermal": (GovernanceDecision.HARD_FREEZE, FreezeReason.SENSOR_INVALID),
         "gains": (GovernanceDecision.HARD_FREEZE, FreezeReason.SENSOR_INVALID),
+    },
+    GovernanceRegime.COUPLED: {
+        # A connected door is open: the room is no longer a clean single-zone
+        # 1R1C system. Freeze base a/b learning (protected — only the coupling
+        # estimator learns) and hold gains steady across the coupled period.
+        "thermal": (GovernanceDecision.HARD_FREEZE, FreezeReason.COUPLED),
+        "gains": (GovernanceDecision.FREEZE, FreezeReason.COUPLED),
     },
 }
 
@@ -408,6 +417,20 @@ FF3_COST_OVERSHOOT_WEIGHT = 4.0
 FF3_COST_DU_WEIGHT = 0.05
 FF3_SCORE_EPS_COST = 1e-4
 FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR = 0.5
+
+# --- Room coupling (connected rooms / open-door thermal exchange) ---
+# Coupling coefficient k_ij has the same units as b (min^-1): the inter-room
+# heat-exchange rate when the connecting door is open. b_eff = b + sum(k_ij).
+COUPLING_K_MAX = 0.5             # Max plausible per-edge coupling rate (min^-1)
+COUPLING_K_MIN = 0.0             # Coupling is a loss-like term: never negative
+COUPLING_DT_MIN_C = 0.5         # Min |T_i - T_j| (°C) to extract a k sample
+COUPLING_MIN_SAMPLES = 8        # Samples before an edge's k is considered reliable
+COUPLING_MAD_RATIO_MAX = 0.5   # MAD/median gate for reliability
+COUPLING_HIST_MAX = 40         # Per-edge raw-sample history length
+COUPLING_EMA_ALPHA = 0.10      # Live k EMA learning rate per accepted sample
+COUPLING_SLEW_ALPHA = 0.15     # Per-cycle slew of the effective coupling load
+                                # (smooths b_eff/Text_eff across door transitions)
+COUPLING_RESIDUAL_MAX_C_MIN = 0.5  # Clamp on |base-model residual| (°C/min)
 
 # --- Adaptive T_int Filter ---
 ENABLE_ADAPTIVE_TINT_FILTER = True

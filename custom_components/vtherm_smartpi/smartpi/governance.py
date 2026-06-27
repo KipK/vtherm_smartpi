@@ -78,7 +78,8 @@ class SmartPIGovernance:
         output_initialized: bool,
         u_cmd: float,
         in_deadband: bool,
-        in_near_band: bool
+        in_near_band: bool,
+        any_door_open: bool = False,
     ) -> GovernanceRegime:
         """Determines the current governance regime based on system state."""
 
@@ -93,6 +94,12 @@ class SmartPIGovernance:
         # Perturbed: active perturbation
         if power_shedding:
             return GovernanceRegime.PERTURBED
+
+        # Coupled: a connected door is open. The room is no longer a clean
+        # single-zone system, so freeze base a/b learning and hold gains. The
+        # coupling estimator (separate path) keeps learning k_ij.
+        if any_door_open:
+            return GovernanceRegime.COUPLED
 
         # Hold
         if integrator_hold:
