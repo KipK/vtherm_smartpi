@@ -58,6 +58,11 @@
           "smart_pi_power_sensor": "Power sensor (watts)",
           "neighbor_vtherm_entity": "Connected room (thermostat)",
           "connection_door_sensor": "Door / opening sensor",
+          "target_kind": "Connection type (room / sensor / outside)",
+          "neighbor_temp_sensor": "Neighbour temperature sensor",
+          "aperture_sensor": "Aperture open/closed sensor (door or window)",
+          "aperture_type": "Aperture type (door / window)",
+          "open_policy": "When open: model the loss or trip off",
           "add_another_connection": "Add another connection"
         }
       }
@@ -108,6 +113,11 @@
           "smart_pi_power_sensor": "Power sensor (watts)",
           "neighbor_vtherm_entity": "Connected room (thermostat)",
           "connection_door_sensor": "Door / opening sensor",
+          "target_kind": "Connection type (room / sensor / outside)",
+          "neighbor_temp_sensor": "Neighbour temperature sensor",
+          "aperture_sensor": "Aperture open/closed sensor (door or window)",
+          "aperture_type": "Aperture type (door / window)",
+          "open_policy": "When open: model the loss or trip off",
           "add_another_connection": "Add another connection"
         }
       }

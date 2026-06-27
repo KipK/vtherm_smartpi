@@ -58,6 +58,11 @@
           "smart_pi_power_sensor": "Capteur de puissance (watts)",
           "neighbor_vtherm_entity": "Pièce connectée (thermostat)",
           "connection_door_sensor": "Capteur de porte / ouverture",
+          "target_kind": "Type de connexion (pièce / capteur / extérieur)",
+          "neighbor_temp_sensor": "Capteur de température voisin",
+          "aperture_sensor": "Capteur d'ouverture (porte ou fenêtre)",
+          "aperture_type": "Type d'ouverture (porte / fenêtre)",
+          "open_policy": "À l'ouverture : modéliser la perte ou couper",
           "add_another_connection": "Ajouter une autre connexion"
         }
       }
@@ -108,6 +113,11 @@
           "smart_pi_power_sensor": "Capteur de puissance (watts)",
           "neighbor_vtherm_entity": "Pièce connectée (thermostat)",
           "connection_door_sensor": "Capteur de porte / ouverture",
+          "target_kind": "Type de connexion (pièce / capteur / extérieur)",
+          "neighbor_temp_sensor": "Capteur de température voisin",
+          "aperture_sensor": "Capteur d'ouverture (porte ou fenêtre)",
+          "aperture_type": "Type d'ouverture (porte / fenêtre)",
+          "open_policy": "À l'ouverture : modéliser la perte ou couper",
           "add_another_connection": "Ajouter une autre connexion"
         }
       }
