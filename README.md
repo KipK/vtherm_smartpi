@@ -102,4 +102,4 @@ If SmartPI is useful to you, you can support its development here:
 
 ## 📄 License
 
-This project is licensed under the Smart-PI licensing terms. See [LICENSE.md](LICENSE.md) for details.
+This project is licensed under the Apache 2 licensing terms. See [LICENSE](LICENSE) for details.
