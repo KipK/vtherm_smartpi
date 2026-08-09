@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from types import SimpleNamespace
 
 import pytest
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -380,6 +381,36 @@ async def test_legacy_global_entry_without_unique_id_adds_default_bound_sensor(
     assert created_entities[0].unique_id == "smartpi_diag_vt-legacy-global"
 
 
+def test_diagnostic_sensor_links_directly_to_vt_device(hass) -> None:
+    """The diagnostic sensor should link without declaring source device info."""
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="vt-linked",
+        data={CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI},
+    )
+    vt_entry.add_to_hass(hass)
+
+    device_registry = dr.async_get(hass)
+    source_device = device_registry.async_get_or_create(
+        config_entry_id=vt_entry.entry_id,
+        identifiers={(VT_DOMAIN, "vt-linked")},
+    )
+    entity_registry = er.async_get(hass)
+    climate_entry = entity_registry.async_get_or_create(
+        "climate",
+        VT_DOMAIN,
+        "vt-linked",
+        suggested_object_id="vt_linked",
+        config_entry=vt_entry,
+        device_id=source_device.id,
+    )
+
+    sensor = SmartPIDiagnosticSensor(hass, climate_entry.entity_id, "vt-linked")
+
+    assert sensor.device_entry is source_device
+    assert sensor.device_info is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("phase", "expected_state"),
@@ -406,7 +437,7 @@ async def test_diagnostic_sensor_state_reflects_smartpi_phase(
         ]
     )
 
-    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm", None)
+    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm")
 
     sensor._update_from_climate()
 
@@ -453,7 +484,7 @@ async def test_diagnostic_sensor_removes_registry_entry_when_climate_uses_anothe
         config_entry=plugin_entry,
     )
 
-    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm", None)
+    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm")
 
     sensor._update_from_climate()
 
@@ -503,7 +534,7 @@ async def test_diagnostic_sensor_keeps_registry_entry_when_smartpi_runtime_is_no
         config_entry=plugin_entry,
     )
 
-    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm", None)
+    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm")
 
     assert sensor._update_from_climate() is True
 

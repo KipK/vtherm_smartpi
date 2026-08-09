@@ -114,3 +114,7 @@ remove vtherm_api dependency ( use VT installed one )
 - Restrict SmartPI A learning fallback to calibration. Require robust ON slope for SmartPI A learning
 - Fix restored SmartPI AB confidence state
 - Add HVAC and target context to SmartPI learning windows, and skip B learning in HEAT when the passive heat-loss gradient is too weak or outdoor temperature is too close to target.
+
+  ## [0.3.7] - 2026-08-09
+
+  - Fix SmartPI device linking for single config entry ownership ( multi config entry went obsolete on ha 2026.8.0 )

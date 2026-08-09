@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.device import async_entity_id_to_device
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
@@ -21,7 +21,7 @@ from .const import (
     SIGNAL_SMARTPI_TARGET_UPDATED,
 )
 from .algo import SmartPI
-from .smartpi.device_link import target_uses_smartpi
+from .smartpi.device_link import cleanup_config_entry_devices, target_uses_smartpi
 from .smartpi.const import SmartPIPhase
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,22 +37,17 @@ def _get_dedicated_target_unique_ids(hass: HomeAssistant) -> set[str]:
     }
 
 
-def _get_climate_entry(
+def _get_climate_entity_id(
     hass: HomeAssistant,
     target_unique_id: str,
-):
-    """Resolve the VT climate registry entry for a thermostat unique id."""
+) -> str | None:
+    """Resolve the VT climate entity id for a thermostat unique id."""
     registry = er.async_get(hass)
-    climate_entity_id = registry.async_get_entity_id(
+    return registry.async_get_entity_id(
         CLIMATE_DOMAIN,
         VT_DOMAIN,
         target_unique_id,
     )
-    if not climate_entity_id:
-        return None, None
-
-    climate_entry = registry.async_get(climate_entity_id)
-    return climate_entity_id, climate_entry
 
 
 def _get_diagnostic_entity_id(
@@ -149,9 +144,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             ):
                 continue
             tracked_unique_ids.discard(target_unique_id)
-            climate_entity_id, climate_entry = _get_climate_entry(
-                hass, target_unique_id
-            )
+            climate_entity_id = _get_climate_entity_id(hass, target_unique_id)
             if not climate_entity_id:
                 continue
             tracked_unique_ids.add(target_unique_id)
@@ -160,7 +153,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     hass,
                     climate_entity_id,
                     target_unique_id,
-                    climate_entry,
                 )
             )
 
@@ -213,6 +205,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             )
         )
 
+    cleanup_config_entry_devices(hass, entry.entry_id, target_unique_ids)
     _async_add_targets(target_unique_ids)
 
 
@@ -232,7 +225,6 @@ class SmartPIDiagnosticSensor(SensorEntity):
         hass: HomeAssistant,
         climate_entity_id: str,
         unique_id_base: str,
-        climate_entry,
     ):
         """Initialize the sensor."""
         self.hass = hass
@@ -244,17 +236,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
         self._attr_extra_state_attributes = {}
         self._unsub = None
 
-        # Link to the underlying device if possible
-        if climate_entry and climate_entry.device_id:
-            device_registry = dr.async_get(hass)
-            device = device_registry.async_get(climate_entry.device_id)
-            if device:
-                self._attr_device_info = {
-                    "identifiers": device.identifiers,
-                    "name": device.name,
-                    "manufacturer": device.manufacturer,
-                    "model": device.model,
-                }
+        self.device_entry = async_entity_id_to_device(hass, climate_entity_id)
 
     async def async_added_to_hass(self):
         """Run when entity about to be added to hass."""
