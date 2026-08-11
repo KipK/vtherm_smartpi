@@ -106,7 +106,6 @@ def test_deadband_uses_u_db_nominal():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=19.95,
         target_temp=20.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=10,
         deadband_c=0.1,
@@ -144,7 +143,6 @@ def test_observed_valve_deadband_case_uses_frozen_integral_only():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=22.93,
         target_temp=23.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.10,
@@ -182,7 +180,6 @@ def test_tracking_trajectory_reduces_free_integral_growth():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=19.0,
         target_temp=20.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.0,
@@ -199,7 +196,7 @@ def test_tracking_trajectory_reduces_free_integral_growth():
 
 def test_t4_aw_blocked_in_guard():
     """AW must not modify integral when last_i_mode is I:GUARD."""
-    algo = make_algo(integral=0.5, i_mode="I:GUARD(freeze)")
+    algo = make_algo(integral=0.5, i_mode="I:GUARD(setpoint_change)")
     before = algo.integral
     algo.update_realized_power(u_applied=0.05, dt_min=5.0, elapsed_ratio=1.0)
     assert algo.integral == before, "Integral must not change when I:GUARD is active"

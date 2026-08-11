@@ -216,7 +216,6 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `in_core_deadband` | `boolean` | Indicates if the temperature is within the narrow core deadband. |
 | `in_near_band` | `boolean` | Indicates if the temperature is within the near-band. |
 | `setpoint_boost_active` | `boolean` | Indicates if setpoint boost/pre-heating is currently running. |
-| `hysteresis_thermal_guard` | `boolean` | Indicates if the hysteresis safety guard is active on setpoint decrease. |
 | `deadtime_heat_reliable` | `boolean` | Indicates if the estimated heating dead time is reliable. |
 | `deadtime_cool_reliable` | `boolean` | Indicates if the estimated cooling dead time is reliable. |
 | `in_deadtime_window` | `boolean` | Indicates if the controller is in a dead-time blanking window after a command change. |

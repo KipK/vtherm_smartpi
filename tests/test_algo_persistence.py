@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from custom_components.vtherm_smartpi.algo import SmartPI
+from custom_components.vtherm_smartpi.smartpi.const import (
+    PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN,
+)
 from custom_components.vtherm_smartpi.smartpi.diagnostics import build_published_diagnostics
 
 
@@ -41,6 +44,88 @@ def test_save_and_load_state() -> None:
     assert smartpi2.est.learn_ok_count == 10
     assert smartpi2.integral == 5.0
     assert smartpi2.u_prev == 0.0
+
+
+def test_last_active_wall_timestamp_is_persisted() -> None:
+    """Persistence must retain the last valid active regulation wall time."""
+    smartpi1 = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI1",
+    )
+    smartpi1._last_active_wall_ts = 1_700_000_000.0
+
+    smartpi2 = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI2",
+        saved_state=smartpi1.save_state(),
+    )
+
+    assert smartpi2._last_active_wall_ts == 1_700_000_000.0
+
+
+def test_prolonged_inactivity_expires_only_controller_memory() -> None:
+    """A pause beyond the configured limit must purge PI state but preserve the model."""
+    now_wall = 1_800_000_000.0
+    smartpi = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI",
+    )
+    smartpi.est.a = 0.015
+    smartpi.est.b = 0.003
+    smartpi.integral = 5.0
+    smartpi._last_active_wall_ts = now_wall - (
+        (PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN + 1.0) * 60.0
+    )
+
+    with patch("custom_components.vtherm_smartpi.algo.time.time", return_value=now_wall):
+        expired = smartpi._refresh_active_timestamp_and_expire_controller_memory()
+
+    assert expired is True
+    assert smartpi.integral == 0.0
+    assert smartpi.est.a == 0.015
+    assert smartpi.est.b == 0.003
+    assert smartpi._last_active_wall_ts == now_wall
+
+
+def test_missing_active_timestamp_does_not_expire_legacy_state() -> None:
+    """A state saved without an active timestamp must remain backward compatible."""
+    now_wall = 1_800_000_000.0
+    source = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI",
+    )
+    source.integral = 5.0
+    saved = source.save_state()
+    saved.pop("last_active_wall_ts")
+
+    smartpi = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPILegacy",
+        saved_state=saved,
+    )
+    assert smartpi.integral == 5.0
+
+    with patch("custom_components.vtherm_smartpi.algo.time.time", return_value=now_wall):
+        expired = smartpi._refresh_active_timestamp_and_expire_controller_memory()
+
+    assert expired is False
+    assert smartpi.integral == 5.0
+    assert smartpi._last_active_wall_ts == now_wall
 
 
 def test_debug_learning_counters_are_runtime_scoped_after_load() -> None:

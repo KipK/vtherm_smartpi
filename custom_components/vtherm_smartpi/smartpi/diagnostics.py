@@ -501,7 +501,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "deadband_p_mode": algo.ctl.deadband_p_mode,
         # Setpoint boost state
         "setpoint_boost_active": algo.sp_mgr.boost_active,
-        "hysteresis_thermal_guard": algo.ctl.hysteresis_thermal_guard,
         # Dead Time (Smart-PI v2)
         "deadtime_heat_s": algo.dt_est.deadtime_heat_s,
         "deadtime_heat_reliable": algo.dt_est.deadtime_heat_reliable,

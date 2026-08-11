@@ -216,7 +216,6 @@ Lorsque le **Mode debug SmartPI** est activé, un bloc imbriqué nommé **`debug
 | `in_core_deadband` | `boolean` | Indique si la température est dans la zone morte centrale étroite (core deadband). |
 | `in_near_band` | `boolean` | Indique si la température est dans la zone d'approche (near-band). |
 | `setpoint_boost_active` | `boolean` | Indique si le surcroît de puissance au démarrage (boost) est actif. |
-| `hysteresis_thermal_guard` | `boolean` | Indique si la protection thermique d'hystérésis est active suite à une baisse de consigne. |
 | `deadtime_heat_reliable` | `boolean` | Indique si le temps mort mesuré au chauffage est considéré comme fiable. |
 | `deadtime_cool_reliable` | `boolean` | Indique si le temps mort mesuré au refroidissement est considéré comme fiable. |
 | `in_deadtime_window` | `boolean` | Indique si le système est dans une fenêtre de neutralisation (blanking) après une modification. |

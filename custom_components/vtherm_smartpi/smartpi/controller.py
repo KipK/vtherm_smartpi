@@ -59,7 +59,6 @@ class SmartPIController:
 
         # Hysteresis State
         self.hysteresis_state: str = "off"
-        self.hysteresis_thermal_guard: bool = False
 
     def reset(self):
         self.integral = 0.0
@@ -80,7 +79,6 @@ class SmartPIController:
         self.u_cmd_before_cap = None
         self.u_cmd_cap = None
         self.hysteresis_state = "off"
-        self.hysteresis_thermal_guard = False
 
     def apply_command_cap(self, u_cap: float | None) -> float:
         """Apply the setpoint-response command cap to u_cmd."""
@@ -129,7 +127,7 @@ class SmartPIController:
         kp: float,
         ki: float,
     ) -> tuple[float, float]:
-        """Handle integral and thermal guard on setpoint changes.
+        """Preserve integral memory and restart the servo path on setpoint changes.
 
         Two-tier setpoint change handling:
         - Large change (>= SETPOINT_MODE_DELTA_C): preserve the integral but
@@ -172,31 +170,7 @@ class SmartPIController:
                 self._name, sp_delta, SETPOINT_MODE_DELTA_C, self.integral
             )
 
-            # Check for decrease to activate thermal guard (even on large change)
-            demand_reduction = (
-                (target_temp < last_target_temp and hvac_mode != VThermHvacMode_COOL)
-                or (target_temp > last_target_temp and hvac_mode == VThermHvacMode_COOL)
-            )
-            if demand_reduction:
-                self.hysteresis_thermal_guard = True
-                _LOGGER.info("%s - Thermal guard activated (Large Demand Reduction)", self._name)
-            else:
-                self.hysteresis_thermal_guard = False
-
             return new_e, new_e
-
-        # Small change: only manage thermal guard, integral is untouched
-        demand_reduction = (
-            (target_temp < last_target_temp and hvac_mode != VThermHvacMode_COOL)
-            or (target_temp > last_target_temp and hvac_mode == VThermHvacMode_COOL)
-        )
-
-        if demand_reduction:
-            self.hysteresis_thermal_guard = True
-            _LOGGER.info("%s - Small demand reduction (Δ=%.2f°C): Guard ON", self._name, sp_delta)
-        else:
-            self.hysteresis_thermal_guard = False
-            _LOGGER.info("%s - Small demand increase (Δ=%.2f°C): Guard OFF", self._name, sp_delta)
 
         return 0.0, 0.0
 
@@ -204,14 +178,12 @@ class SmartPIController:
         if not state:
             return
         self.integral = float(state.get("integral") or 0.0)
-        self.hysteresis_thermal_guard = bool(state.get("hysteresis_thermal_guard") or False)
         self.integral_hold_mode = str(state.get("integral_hold_mode") or "none")
         # Note: other internal diagnositcs not critical to restore
         
     def save_state(self) -> dict:
         return {
             "integral": self.integral,
-            "hysteresis_thermal_guard": self.hysteresis_thermal_guard,
             "integral_hold_mode": self.integral_hold_mode,
         }
 
@@ -269,7 +241,6 @@ class SmartPIController:
         hvac_mode: VThermHvacMode,
         current_temp: float,
         target_temp: float,
-        hysteresis_thermal_guard: bool,
         is_tau_reliable: bool,
         learn_ok_count_a: int,
         deadband_c: float,
@@ -381,12 +352,6 @@ class SmartPIController:
                             d_integral = 0.0
                             self.last_i_mode = "I:CLAMP(near_ovr)"
                             
-                    # Thermal guard after demand reduction, symmetric in signed error.
-                    if hysteresis_thermal_guard:
-                        if d_integral > 0.0:
-                            d_integral = 0.0
-                            self.last_i_mode = "I:GUARD(freeze)"
-                    
                     self.integral += d_integral
                     self.integral = clamp(self.integral, -i_max, i_max)
                     u_pi = kp * error_p_db + ki * self.integral

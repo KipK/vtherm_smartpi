@@ -93,7 +93,6 @@ def test_controller_requires_persistent_deadband_edge_before_p_term():
         "hvac_mode": VThermHvacMode_HEAT,
         "current_temp": 20.10,
         "target_temp": 20.0,
-        "hysteresis_thermal_guard": False,
         "is_tau_reliable": True,
         "learn_ok_count_a": 10,
         "deadband_c": 0.10,

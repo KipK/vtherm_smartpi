@@ -343,7 +343,7 @@ Les états transitoires de rattrapage ne sont pas restaurés après reboot :
 - la garde intégrale est remise à zéro,
 - tout `integral_hold_mode` temporaire est effacé.
 
-Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer des états servo transitoires qui ne sont plus physiquement valides hors de leur session d'origine.
+Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer des états servo transitoires qui ne sont plus physiquement valides hors de leur session d'origine. Le timestamp mural de la dernière régulation active valide est persisté et n'est pas rafraîchi lorsque le mode HVAC est OFF. Si l'inactivité dépasse 96 heures, la mémoire PI du contrôleur est purgée à la reprise tandis que le modèle A/B appris reste disponible.
 
 ### 4.5 Deadband, near-band et protections
 
@@ -358,9 +358,8 @@ Les protections complémentaires actuellement présentes sont :
 
 - `SmartPIGuards` : `guard_cut` et `guard_kick`,
 - anti-windup par tracking,
-- garde de croissance positive de l'intégrale pendant les reprises et rattrapages,
+- garde intégrale signée pendant les reprises, rattrapages et changements de consigne,
 - `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,
-- garde thermique sur baisse de consigne,
 - logique de maintien dans la deadband.
 
 Le calcul distingue aussi deux zones autour de la consigne :

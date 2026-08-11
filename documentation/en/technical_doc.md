@@ -343,7 +343,7 @@ Transient catch-up states are not restored after a reboot:
 - the integral guard is reset,
 - any temporary `integral_hold_mode` is cleared.
 
-The restart therefore keeps only useful persistent PI memory, without restoring transient servo states that are no longer physically valid outside their original runtime session.
+The restart therefore keeps only useful persistent PI memory, without restoring transient servo states that are no longer physically valid outside their original runtime session. The wall-clock timestamp of the last valid active regulation tick is persisted and is not refreshed while HVAC is OFF. If inactivity exceeds 96 hours, controller PI memory is purged on resume while the learned A/B model remains available.
 
 ### 4.5 Deadband, near-band, and protections
 
@@ -358,9 +358,8 @@ Additional protections currently present are:
 
 - `SmartPIGuards`: `guard_cut` and `guard_kick`,
 - tracking anti-windup,
-- positive-integral guard during resumes and catch-up phases,
+- signed integral guard during resumes, catch-up phases, and setpoint changes,
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
-- thermal guard on setpoint decrease,
 - deadband hold logic.
 
 ### 4.6 Auto-calibration

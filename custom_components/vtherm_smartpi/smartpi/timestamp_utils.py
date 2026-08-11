@@ -5,6 +5,32 @@ This module provides utilities for converting between monotonic timestamps
 """
 
 import time
+from math import isfinite
+
+
+def normalize_wall_timestamp(value: object) -> float | None:
+    """Return a finite positive wall-clock timestamp or None."""
+    if value is None:
+        return None
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(timestamp) or timestamp <= 0.0:
+        return None
+    return timestamp
+
+
+def elapsed_wall_minutes(
+    since_wall_ts: object,
+    now_wall_ts: object | None = None,
+) -> float | None:
+    """Return non-negative elapsed wall-clock minutes from a persisted timestamp."""
+    since = normalize_wall_timestamp(since_wall_ts)
+    now = normalize_wall_timestamp(time.time() if now_wall_ts is None else now_wall_ts)
+    if since is None or now is None:
+        return None
+    return max(now - since, 0.0) / 60.0
 
 
 def convert_monotonic_to_wall_ts(monotonic_ts: float | None) -> float | None:

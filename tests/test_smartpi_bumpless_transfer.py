@@ -28,11 +28,10 @@ def test_small_setpoint_increase_preserves_integral():
     )
 
     assert ctl.integral == 3.0, "Small setpoint increase must preserve integral"
-    assert ctl.hysteresis_thermal_guard is False
 
 
 def test_small_setpoint_decrease_preserves_integral():
-    """A small setpoint decrease must NOT modify the integral (only activates guard)."""
+    """A small setpoint decrease must preserve integral memory."""
     ctl = SmartPIController("test")
     ctl.integral = 3.0
 
@@ -46,7 +45,54 @@ def test_small_setpoint_decrease_preserves_integral():
     )
 
     assert ctl.integral == 3.0, "Small setpoint decrease must preserve integral"
-    assert ctl.hysteresis_thermal_guard is True
+
+
+def test_large_setpoint_decrease_below_target_preserves_integral():
+    """A demand reduction far below target must leave positive integration available."""
+    ctl = SmartPIController("test")
+    ctl.integral = -5.9
+
+    new_e, new_e_p = ctl.handle_setpoint_change(
+        target_temp=16.0,
+        last_target_temp=18.0,
+        current_temp=6.0,
+        hvac_mode=VThermHvacMode_HEAT,
+        kp=0.3,
+        ki=0.001,
+    )
+
+    assert new_e == pytest.approx(10.0)
+    assert new_e_p == pytest.approx(10.0)
+    assert ctl.integral == pytest.approx(-5.9)
+
+
+def test_positive_integral_growth_remains_available_below_target():
+    """Positive integration must remain available below target."""
+    ctl = SmartPIController("test")
+    ctl.integral = 0.0
+
+    ctl.compute_pwm(
+        error=0.7,
+        error_p=0.7,
+        kp=0.1,
+        ki=0.01,
+        u_ff=0.3,
+        dt_min=1.0,
+        cycle_min=10.0,
+        in_deadband=False,
+        in_near_band=False,
+        integrator_hold=False,
+        u_db_nominal=0.0,
+        hvac_mode=VThermHvacMode_HEAT,
+        current_temp=15.3,
+        target_temp=16.0,
+        is_tau_reliable=True,
+        learn_ok_count_a=15,
+        deadband_c=0.05,
+    )
+
+    assert ctl.integral == pytest.approx(0.7)
+    assert ctl.last_i_mode == "I:RUN"
 
 
 def test_large_setpoint_change_preserves_integral_without_recovery_hold():
@@ -111,7 +157,6 @@ def test_deadband_u_hold_and_u_cmd_from_nominal():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=19.95,
         target_temp=20.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.1,
@@ -147,7 +192,6 @@ def test_deadband_heat_overshoot_freezes_p_in_deadband():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=20.05,
         target_temp=20.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.1,
@@ -182,7 +226,6 @@ def test_deadband_cool_overshoot_freezes_p_in_deadband():
         hvac_mode=VThermHvacMode_COOL,
         current_temp=23.95,
         target_temp=24.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.1,
@@ -217,7 +260,6 @@ def test_deadband_allow_p_uses_damped_error_not_raw_error():
         "hvac_mode": VThermHvacMode_HEAT,
         "current_temp": 19.9,
         "target_temp": 20.0,
-        "hysteresis_thermal_guard": False,
         "is_tau_reliable": True,
         "learn_ok_count_a": 15,
         "deadband_c": 0.1,
@@ -261,7 +303,6 @@ def test_outside_deadband_u_hold_is_zero():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=19.5,
         target_temp=20.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.0,
@@ -295,7 +336,6 @@ def test_servo_integral_hold_blocks_integration_until_deadband():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=18.0,
         target_temp=19.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.1,
@@ -328,7 +368,6 @@ def test_servo_integral_hold_stays_active_in_near_band():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=18.8,
         target_temp=19.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.1,
@@ -360,7 +399,6 @@ def test_servo_integral_hold_releases_in_deadband():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=18.95,
         target_temp=19.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.1,
@@ -390,7 +428,6 @@ def test_core_deadband_unfreezes_integral_outside_latched_deadband_shell():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=19.93,
         target_temp=20.0,
-        hysteresis_thermal_guard=False,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.05,
@@ -421,7 +458,6 @@ def test_negative_guard_blocks_integral_drop_after_setpoint_reduction():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=20.2,
         target_temp=20.0,
-        hysteresis_thermal_guard=True,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.05,
@@ -453,7 +489,6 @@ def test_negative_guard_prevents_hold_bleed_after_setpoint_reduction():
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=20.2,
         target_temp=20.0,
-        hysteresis_thermal_guard=True,
         is_tau_reliable=True,
         learn_ok_count_a=15,
         deadband_c=0.05,

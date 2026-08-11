@@ -30,7 +30,7 @@ Key features (v2)
 
 4. Comfort & Protections:
    - Setpoint Boost: Faster reaction to manual setpoint increases (>0.3°C).
-   - Thermal Guard: Prevents integral windup on setpoint decreases.
+   - Directional Integral Guard: Protects integral memory during transitions.
    - Analytical Setpoint Trajectory: Shapes the proportional reference toward the target.
    - Anti-windup: Conditional integration + Tracking anti-windup.
 
@@ -123,7 +123,11 @@ from .smartpi.const import (
     FF_TRIM_MAX_SLOPE_H,
     ENABLE_ADAPTIVE_TINT_FILTER,
 )
-from .smartpi.timestamp_utils import convert_monotonic_to_wall_ts
+from .smartpi.timestamp_utils import (
+    convert_monotonic_to_wall_ts,
+    elapsed_wall_minutes,
+    normalize_wall_timestamp,
+)
 from .const import HVAC_OFF_REASON_WINDOW_DETECTION
 
 _LOGGER = logging.getLogger(__name__)
@@ -281,6 +285,9 @@ class SmartPI:
 
         # Track last time calculate() was executed for dt-based integration
         self._last_calculate_time: Optional[float] = None
+        # Wall-clock time of the last valid active regulation tick. OFF saves
+        # preserve this value so prolonged inactivity remains measurable.
+        self._last_active_wall_ts: float | None = None
         # Accumulated time for cycle counting (used for FF warm-up)
         self._accumulated_dt: float = 0.0
 
@@ -447,6 +454,7 @@ class SmartPI:
 
         # Reset learning states
         self._last_calculate_time = None
+        self._last_active_wall_ts = None
         self._learn_last_ts = None
         self._last_target_temp = None
         self._last_current_temp = None
@@ -1550,6 +1558,7 @@ class SmartPI:
             "version": 2,
             "on_percent": self._on_percent,
             "last_target_temp": self._last_target_temp,
+            "last_active_wall_ts": self._last_active_wall_ts,
             "last_calibration_time": self.calibration_mgr.last_calibration_time,
             "cycles_since_reset": self._cycles_since_reset,
             "accumulated_dt": self._accumulated_dt,
@@ -1625,6 +1634,9 @@ class SmartPI:
         self._deadtime_skip_count_a = int(state.get("deadtime_skip_count_a", 0))
         self._deadtime_skip_count_b = int(state.get("deadtime_skip_count_b", 0))
         self._accumulated_dt = float(state.get("accumulated_dt", 0.0))
+        self._last_active_wall_ts = normalize_wall_timestamp(
+            state.get("last_active_wall_ts")
+        )
         # The learning_resume_ts from the previous session must NOT be carried over:
         # _startup_grace_period handles the post-restart freeze for exactly one cycle.
         # Keeping a stale resume-ts (e.g., the 20-min OFF-resume value) would overwrite
@@ -1823,18 +1835,29 @@ class SmartPI:
                 self.learn_win.set_learning_resume_ts(now + (LEARNING_PAUSE_RESUME_MIN * 60.0))
                 _LOGGER.debug("%s - Resume from OFF: Learning paused for %d min", self._name, LEARNING_PAUSE_RESUME_MIN)
 
-            if dt_min > PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN:
-                _LOGGER.info(
-                    "%s - Prolonged pause (%.1f min) detected, purging PI state & integral memory", 
-                    self._name, dt_min
-                )
-                self.ctl.reset()
-
         # Cap dt to avoid huge jumps after pause
         if dt_min > (self._cycle_min * 10):
             dt_min = self._cycle_min
 
         return dt_min, resumed_from_off, startup_first_run, resume_guard_source
+
+    def _refresh_active_timestamp_and_expire_controller_memory(self) -> bool:
+        """Refresh active wall time and purge PI memory after prolonged inactivity."""
+        now_wall = time.time()
+        inactive_minutes = elapsed_wall_minutes(self._last_active_wall_ts, now_wall)
+        expired = (
+            inactive_minutes is not None
+            and inactive_minutes > PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN
+        )
+        if expired:
+            _LOGGER.info(
+                "%s - Prolonged pause (%.1f min) detected, purging PI state and integral memory",
+                self._name,
+                inactive_minutes,
+            )
+            self.ctl.reset()
+        self._last_active_wall_ts = now_wall
+        return expired
 
     def _compute_ff3_for_cycle(
         self,
@@ -2326,6 +2349,8 @@ class SmartPI:
             self._set_linear_output(0.0)
             return
 
+        self._refresh_active_timestamp_and_expire_controller_memory()
+
         # --- 1a. Adaptive T_int Filter ---
         if current_temp is not None:
             t_int_lp, t_int_clean = self.tint_filter.update(current_temp, now)
@@ -2372,7 +2397,7 @@ class SmartPI:
             self._recovery_hold_armed = False
             self._resume_deadtime_hold_source = IntegralGuardSource.NONE
             self._resume_deadtime_hold_started = False
-            # Handle integral reset and thermal guard on setpoint changes
+            # Preserve integral memory and restart the servo path.
             new_error, new_error_p = self.ctl.handle_setpoint_change(
                 target_temp, old_target_temp, current_temp, hvac_mode, self.Kp, self.Ki
             )
@@ -2560,12 +2585,6 @@ class SmartPI:
         # integrator fills the gap to hold power within a few cycles — the
         # building's thermal inertia absorbs the brief transient.
 
-        # --- 10. Thermal Guard ---
-        # Activation is handled on signed demand reduction. Release happens once
-        # the signed error returns close enough to equilibrium.
-        if self.ctl.hysteresis_thermal_guard and error_i <= self.deadband_c:
-            self.ctl.hysteresis_thermal_guard = False
-
         # --- 11. PID Compute ---
         # Capture saturation state before compute_pwm updates it (used for SAT_HI exit detection)
         prev_sat_before_compute = self.ctl.last_sat
@@ -2585,7 +2604,6 @@ class SmartPI:
             hvac_mode,
             current_temp,
             target_temp_filt,
-            self.ctl.hysteresis_thermal_guard,
             self._tau_reliable,
             self.est.learn_ok_count_a,
             deadband_c=self.deadband_c,
