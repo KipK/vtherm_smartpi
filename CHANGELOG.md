@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [0.3.8-dev]
 
+- Allow the directional integral guard to unwind opposing PI memory to zero, preventing setpoint recovery from stalling below target.
 - Remove the obsolete `hysteresis_thermal_guard` control path and diagnostic attribute, preventing stale guard state from blocking positive integral correction after setpoint changes.
 - Expire persisted PI controller memory after more than 96 hours without active regulation while preserving learned A/B thermal coefficients.
 

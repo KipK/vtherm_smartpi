@@ -301,7 +301,14 @@ Le code actuel applique aussi une garde explicite sur la croissance positive de 
 - après une reprise suivant power shedding,
 - pendant une trajectoire de récupération de perturbation.
 
-Cette garde n'empêche pas la décharge de l'intégrale. Elle est relâchée seulement quand deux conditions sont réunies :
+Cette garde n'empêche pas la décharge de l'intégrale. Si l'intégrale mémorisée
+s'oppose déjà au rattrapage demandé, la garde autorise
+la résorption de cette mémoire jusqu'à zéro. Elle continue d'interdire toute
+nouvelle accumulation au-delà de zéro dans la direction protégée. Une intégrale
+négative héritée de l'ancienne consigne ne peut donc plus maintenir la pièce
+sous une nouvelle consigne plus élevée.
+
+La garde est relâchée seulement quand deux conditions sont réunies :
 
 - l'erreur de release est revenue proche de l'échelle de la deadband configurée,
 - la pente signée de rapprochement est devenue faible de manière persistante.

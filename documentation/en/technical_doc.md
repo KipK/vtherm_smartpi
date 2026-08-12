@@ -301,7 +301,14 @@ The current code also applies an explicit guard on positive integral growth duri
 - after resuming from power shedding,
 - during a disturbance-recovery trajectory.
 
-This guard does not block integral discharge. It is released only when two conditions are met:
+This guard does not block integral discharge. If the stored integral already
+points against the requested recovery, the guard
+allows that opposing memory to unwind as far as zero. It still blocks any new
+accumulation beyond zero in the protected direction. This prevents a negative
+integral inherited from the previous setpoint from holding the room below a
+new, higher setpoint.
+
+The guard is released only when two conditions are met:
 
 - the release error has returned close to the configured deadband scale,
 - the signed recovery slope has collapsed persistently.

@@ -41,6 +41,34 @@ class IntegralGuardDecision:
     mode_suffix: str
 
 
+def constrain_guarded_integral_delta(
+    *,
+    integral: float,
+    requested_delta: float,
+    block_positive: bool,
+    block_negative: bool,
+) -> tuple[float, str]:
+    """Constrain an integral update while allowing opposing memory to unwind.
+
+    A directional guard protects against new accumulation in one direction. It
+    must not trap integral memory that already points in the opposite direction,
+    because neutralizing that memory is required to remove a steady-state error.
+
+    Returns the allowed delta and one of ``run``, ``unwind``, or ``blocked``.
+    """
+    if block_positive and requested_delta > 0.0:
+        if integral < 0.0:
+            return min(requested_delta, -integral), "unwind"
+        return 0.0, "blocked"
+
+    if block_negative and requested_delta < 0.0:
+        if integral > 0.0:
+            return max(requested_delta, -integral), "unwind"
+        return 0.0, "blocked"
+
+    return requested_delta, "run"
+
+
 class SmartPIIntegralGuard:
     """Track recovery phases and re-enable positive integral only after stabilization."""
 

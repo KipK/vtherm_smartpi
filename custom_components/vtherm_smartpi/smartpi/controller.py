@@ -11,6 +11,7 @@ from .const import (
     clamp
 )
 from .deadband_output import deadband_proportional_error
+from .integral_guard import constrain_guarded_integral_delta
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
 
 _LOGGER = logging.getLogger(__name__)
@@ -337,14 +338,22 @@ class SmartPIController:
                     d_integral = error * dt_min
                     self.last_i_mode = "I:RUN"
 
-                    if block_positive_integral and d_integral > 0.0:
-                        d_integral = 0.0
+                    d_integral, guard_delta_mode = constrain_guarded_integral_delta(
+                        integral=self.integral,
+                        requested_delta=d_integral,
+                        block_positive=block_positive_integral,
+                        block_negative=block_negative_integral,
+                    )
+                    if guard_delta_mode == "blocked":
                         self.last_i_mode = f"I:GUARD({positive_integral_guard_mode})"
-                    elif block_negative_integral and d_integral < 0.0:
-                        d_integral = 0.0
-                        self.last_i_mode = f"I:GUARD({positive_integral_guard_mode})"
+                    elif guard_delta_mode == "unwind":
+                        self.last_i_mode = f"I:GUARD_UNWIND({positive_integral_guard_mode})"
 
-                    if trajectory_shaping_active and d_integral > 0.0:
+                    if (
+                        trajectory_shaping_active
+                        and guard_delta_mode == "run"
+                        and d_integral > 0.0
+                    ):
                         d_integral *= TRAJECTORY_I_RUN_SCALE
                         self.last_i_mode = "I:RUN(traj_track)"
                     

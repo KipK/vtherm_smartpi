@@ -3,6 +3,7 @@
 from custom_components.vtherm_smartpi.smartpi.integral_guard import (
     IntegralGuardSource,
     SmartPIIntegralGuard,
+    constrain_guarded_integral_delta,
 )
 
 
@@ -216,3 +217,49 @@ def test_integral_guard_uses_absolute_slope_floor_when_relative_threshold_is_too
     assert decision.block_negative is False
     assert guard.active is False
     assert decision.mode_suffix == "released_stabilized"
+
+
+def test_positive_guard_allows_opposing_integral_to_unwind_without_crossing_zero():
+    """A positive guard must neutralize negative memory but not build positive memory."""
+    delta, mode = constrain_guarded_integral_delta(
+        integral=-0.4,
+        requested_delta=0.7,
+        block_positive=True,
+        block_negative=False,
+    )
+
+    assert delta == 0.4
+    assert mode == "unwind"
+
+    delta, mode = constrain_guarded_integral_delta(
+        integral=0.0,
+        requested_delta=0.7,
+        block_positive=True,
+        block_negative=False,
+    )
+
+    assert delta == 0.0
+    assert mode == "blocked"
+
+
+def test_negative_guard_allows_opposing_integral_to_unwind_without_crossing_zero():
+    """A negative guard must neutralize positive memory but not build negative memory."""
+    delta, mode = constrain_guarded_integral_delta(
+        integral=0.4,
+        requested_delta=-0.7,
+        block_positive=False,
+        block_negative=True,
+    )
+
+    assert delta == -0.4
+    assert mode == "unwind"
+
+    delta, mode = constrain_guarded_integral_delta(
+        integral=0.0,
+        requested_delta=-0.7,
+        block_positive=False,
+        block_negative=True,
+    )
+
+    assert delta == 0.0
+    assert mode == "blocked"

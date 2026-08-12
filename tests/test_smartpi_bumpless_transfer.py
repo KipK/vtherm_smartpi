@@ -95,6 +95,44 @@ def test_positive_integral_growth_remains_available_below_target():
     assert ctl.last_i_mode == "I:RUN"
 
 
+def test_positive_guard_unwinds_negative_integral_before_blocking_growth():
+    """Setpoint recovery may neutralize opposing memory without crossing zero."""
+    ctl = SmartPIController("test")
+    ctl.integral = -0.4
+
+    common = {
+        "error": 0.7,
+        "error_p": 0.7,
+        "kp": 0.1,
+        "ki": 0.01,
+        "u_ff": 0.3,
+        "dt_min": 1.0,
+        "cycle_min": 10.0,
+        "in_deadband": False,
+        "in_near_band": False,
+        "integrator_hold": False,
+        "u_db_nominal": 0.0,
+        "hvac_mode": VThermHvacMode_HEAT,
+        "current_temp": 19.3,
+        "target_temp": 20.0,
+        "is_tau_reliable": True,
+        "learn_ok_count_a": 15,
+        "deadband_c": 0.05,
+        "block_positive_integral": True,
+        "positive_integral_guard_mode": "setpoint_change",
+    }
+
+    ctl.compute_pwm(**common)
+
+    assert ctl.integral == 0.0
+    assert ctl.last_i_mode == "I:GUARD_UNWIND(setpoint_change)"
+
+    ctl.compute_pwm(**common)
+
+    assert ctl.integral == 0.0
+    assert ctl.last_i_mode == "I:GUARD(setpoint_change)"
+
+
 def test_large_setpoint_change_preserves_integral_without_recovery_hold():
     """A large setpoint change must preserve the integral without rewriting its mode."""
     ctl = SmartPIController("test")
