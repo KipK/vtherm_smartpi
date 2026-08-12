@@ -269,14 +269,17 @@ class SmartPIController:
             freeze_deadband=freeze_deadband,
             deadband_allow_p=deadband_allow_p,
         )
-        if self.deadband_p_mode == "deadband_edge":
+        if self.deadband_p_mode in {"deadband_edge", "deadzone_edge"}:
             edge_sign = 1.0 if error_p_db >= 0.0 else -1.0
             if self._deadband_edge_sign == edge_sign:
                 self._deadband_edge_count += 1
             else:
                 self._deadband_edge_sign = edge_sign
                 self._deadband_edge_count = 1
-            if self._deadband_edge_count < DEADBAND_EDGE_PERSISTENCE:
+            if (
+                self.deadband_p_mode == "deadband_edge"
+                and self._deadband_edge_count < DEADBAND_EDGE_PERSISTENCE
+            ):
                 error_p_db = 0.0
                 self.deadband_p_mode = "deadband_edge_pending"
         else:

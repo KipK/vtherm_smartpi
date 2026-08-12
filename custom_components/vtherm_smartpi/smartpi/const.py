@@ -151,7 +151,6 @@ SETPOINT_BOOST_RATE = 0.50       # boosted rate limit (/min) vs 0.15 normal
 # - Small change (< threshold): integral preserved, servo via P + SP filter + FF
 SETPOINT_MODE_DELTA_C = 0.5      # °C threshold for mode change detection
 OVERSHOOT_I_CLAMP_EPS_C = 0.04  # Guard band below setpoint where integral cannot increase (°C)
-ENABLE_PROPORTIONAL_DEADZONE = False  # When False, the P path uses the raw proportional error everywhere
 
 # Tracking anti-windup (back-calculation) tuned for slow thermal systems
 AW_TRACK_TAU_S = 120.0        # tracking time constant in seconds (typ. 60-180s)
