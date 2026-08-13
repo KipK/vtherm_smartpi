@@ -51,6 +51,7 @@ def _filter(
     u_ref: float = 1.0,
     next_u_ref: float = 0.0,
     cycle_min: float = 10.0,
+    ki: float | None = None,
 ):
     return manager.filter_setpoint(
         target_temp=target,
@@ -69,6 +70,7 @@ def _filter(
         cycle_min=cycle_min,
         remaining_cycle_min=remaining_cycle_min,
         now_monotonic=now,
+        ki=ki,
     )
 
 
@@ -119,6 +121,36 @@ class TestTrajectoryActivation:
         assert manager.trajectory_phase == TrajectoryPhase.TRACKING
         assert manager.trajectory_start_setpoint == pytest.approx(21.0)
         assert manager.trajectory_target_setpoint < 21.0
+
+    def test_armed_setpoint_enters_landing_below_arming_threshold(self):
+        manager = _make_manager()
+        _filter(manager, target=19.0, current=19.0, now=0.0)
+        _filter(manager, target=21.0, current=19.0, now=60.0)
+
+        result = _filter(
+            manager,
+            target=21.0,
+            current=20.92,
+            now=120.0,
+            ki=0.0,
+        )
+
+        assert 21.0 - 20.92 < TRAJECTORY_ENABLE_ERROR_THRESHOLD
+        assert result == pytest.approx(21.0)
+        assert manager.trajectory_active is True
+        assert manager.trajectory_source == "setpoint"
+        assert manager.landing_active is True
+
+    def test_small_disturbance_does_not_reuse_setpoint_landing_window(self):
+        manager = _make_manager()
+        _filter(manager, target=21.0, current=21.0, now=0.0)
+
+        result = _filter(manager, target=21.0, current=20.92, now=60.0)
+
+        assert 21.0 - 20.92 < TRAJECTORY_ENABLE_ERROR_THRESHOLD
+        assert result == pytest.approx(21.0)
+        assert manager.trajectory_active is False
+        assert manager.trajectory_source == "none"
 
     def test_arms_on_significant_disturbance_without_setpoint_change(self):
         manager = _make_manager()

@@ -239,6 +239,8 @@ The principle is:
 - the I branch keeps using the raw setpoint,
 - the P branch receives `filtered_setpoint`,
 - the P branch keeps the raw setpoint until the predicted braking zone is reached,
+- a significant setpoint change arms late braking once; in HEAT, its subsequent entry compares the predicted rise with the distance to `target - LANDING_SAFETY_MARGIN_C`, without reapplying the arming threshold,
+- disturbance-triggered entry continues to require the significant-gap threshold,
 - the exact learned 1R1C model, `deadtime_cool`, the remaining cycle latency, and the committed cycle power are used to detect the braking zone,
 - a smooth late-braking trajectory is then applied near the target while preserving a minimum positive proportional demand,
 - for HEAT setpoint trajectories, a landing cap can constrain the internal command after PI computation when the model predicts that stored heat is enough to reach the target,

@@ -239,6 +239,8 @@ Le principe est le suivant :
 - la branche I continue d’utiliser la consigne brute,
 - la branche P reçoit `filtered_setpoint`,
 - la branche P conserve la consigne brute tant que la zone de freinage prédite n'est pas atteinte,
+- un changement de consigne significatif arme une seule fois le freinage tardif ; en chauffage, son déclenchement compare ensuite la hausse prédite à la distance restante jusqu'à `target - LANDING_SAFETY_MARGIN_C`, sans réappliquer le seuil d'armement,
+- un déclenchement dû à une perturbation continue d'exiger le seuil d'écart significatif,
 - le modèle 1R1C appris, `deadtime_cool`, la latence restante du cycle et la puissance engagée sur le cycle servent à détecter cette zone de freinage,
 - une trajectoire de freinage tardif douce est ensuite appliquée près de la cible tout en conservant une demande proportionnelle minimale positive,
 - pour les trajectoires de consigne en chauffage, un cap d'atterrissage peut contraindre la commande interne après le calcul PI lorsque le modèle prédit que la chaleur stockée suffit à atteindre la cible,

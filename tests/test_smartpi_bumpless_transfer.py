@@ -476,34 +476,46 @@ def test_core_deadband_unfreezes_integral_outside_latched_deadband_shell():
     assert ctl.last_i_mode == "I:RUN"
 
 
-def test_negative_guard_blocks_integral_drop_after_setpoint_reduction():
-    """A setpoint reduction guard must preserve the integral while the room cools down."""
+def test_negative_guard_unwinds_positive_integral_after_setpoint_reduction():
+    """A setpoint reduction guard must neutralize opposing integral memory."""
     ctl = SmartPIController("test")
     ctl.integral = 3.0
 
-    ctl.compute_pwm(
-        error=-0.2,
-        error_p=-0.2,
-        kp=1.0,
-        ki=0.1,
-        u_ff=0.2,
-        dt_min=10.0,
-        cycle_min=10.0,
-        in_deadband=False,
-        in_near_band=True,
-        integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=20.2,
-        target_temp=20.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
-        deadband_c=0.05,
-        block_negative_integral=True,
-        positive_integral_guard_mode="setpoint_change",
-    )
+    common = {
+        "error": -0.2,
+        "error_p": -0.2,
+        "kp": 1.0,
+        "ki": 0.1,
+        "u_ff": 0.2,
+        "dt_min": 10.0,
+        "cycle_min": 10.0,
+        "in_deadband": False,
+        "in_near_band": True,
+        "integrator_hold": False,
+        "u_db_nominal": 0.0,
+        "hvac_mode": VThermHvacMode_HEAT,
+        "current_temp": 20.2,
+        "target_temp": 20.0,
+        "is_tau_reliable": True,
+        "learn_ok_count_a": 15,
+        "deadband_c": 0.05,
+        "block_negative_integral": True,
+        "positive_integral_guard_mode": "setpoint_change",
+    }
 
-    assert ctl.integral == pytest.approx(3.0)
+    ctl.compute_pwm(**common)
+
+    assert ctl.integral == pytest.approx(1.0)
+    assert ctl.last_i_mode == "I:GUARD_UNWIND(setpoint_change)"
+
+    ctl.compute_pwm(**common)
+
+    assert ctl.integral == pytest.approx(0.0)
+    assert ctl.last_i_mode == "I:GUARD_UNWIND(setpoint_change)"
+
+    ctl.compute_pwm(**common)
+
+    assert ctl.integral == pytest.approx(0.0)
     assert ctl.last_i_mode == "I:GUARD(setpoint_change)"
 
 

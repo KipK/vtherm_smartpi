@@ -874,13 +874,28 @@ class SmartPISetpointManager:
                     and signed_error > TRAJECTORY_COMPLETE_EPS_C
                 )
             else:
-                braking_needed = (
-                    braking_window
-                    and signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD
-                    and (
-                        self._pending_target_change_braking
-                        or allow_disturbance_trigger
+                # A significant target change has already passed the arming
+                # threshold. In HEAT, its entry window is the remaining
+                # distance to the landing margin, not the original target
+                # error. COOL keeps the regular braking window because the
+                # landing cap does not support it.
+                setpoint_entry_error = signed_error
+                if hvac_mode != VThermHvacMode_COOL:
+                    setpoint_entry_error = max(
+                        signed_error - LANDING_SAFETY_MARGIN_C,
+                        0.0,
                     )
+                setpoint_braking_window = (
+                    self._pending_target_change_braking
+                    and setpoint_entry_error <= braking_gap
+                )
+                disturbance_braking_window = (
+                    allow_disturbance_trigger
+                    and signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD
+                    and braking_window
+                )
+                braking_needed = (
+                    setpoint_braking_window or disturbance_braking_window
                 )
             min_signed_p_error = self._minimum_signed_p_error(
                 signed_error=signed_error,
