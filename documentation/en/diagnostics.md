@@ -36,6 +36,7 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `Kp` | `float` | PI Gains | Calculated proportional gain ($K_p$) currently applied. |
 | `Ki` | `float` | PI Gains | Calculated integral gain ($K_i$) currently applied. |
 | `integral_error` | `float` | PI State | Accumulated integral error (internal state of the I branch). |
+| `integral_mode` | `string` | PI State | Current integral decision, including `I:RUN`, hold/freeze/guard states, and `I:OVERRIDE(guard_cut)` while the safety cut forces the output off. |
 | `governance_regime` | `string` | Safety | Active safety-first governance regime (e.g. `WARMUP`, `EXCITED_STABLE`, `NEAR_BAND`, `DEAD_BAND`, `SATURATED`, `HOLD`, `PERTURBED`, `DEGRADED`). |
 | `last_decision_thermal` | `string` | Safety | Governance decision applied to thermal model updates (e.g. `ADAPT_ON`, `FREEZE`, `HARD_FREEZE`). |
 | `bootstrap_progress` | `float` | Bootstrap | Completion percentage of the bootstrap learning phase (only present in the `HYSTERESIS` phase). |
@@ -337,7 +338,7 @@ The thermostat also publishes **`specific_states.regulation_diagnostics`** with 
     "ext_sensor": 10.2,
     "error": 0.5,
     "integral_error": 50.0,
-    "integral_mode": "normal",
+    "integral_mode": "I:RUN",
     "integral_hold_mode": "none",
     "integral_guard_source": "none"
   },

@@ -202,6 +202,46 @@ def test_t4_aw_blocked_in_guard():
     assert algo.integral == before, "Integral must not change when I:GUARD is active"
 
 
+def test_aw_blocked_in_guard_cut_override():
+    """AW must preserve integral while guard cut overrides the PI output."""
+    algo = make_algo(integral=-50.0, i_mode="I:OVERRIDE(guard_cut)")
+    before = algo.integral
+
+    algo.update_realized_power(u_applied=0.0, dt_min=5.0, elapsed_ratio=1.0)
+
+    assert algo.integral == before
+    assert algo.aw_du == 0.0
+
+
+@pytest.mark.asyncio
+async def test_guard_cut_cycle_completion_preserves_integral():
+    """A completed zero-power guard-cut cycle must not drain the integral."""
+    algo = make_algo(integral=-50.0, i_mode="I:RUN")
+    algo.ctl.u_ff = 0.49
+    algo.ctl.last_error_p_db = -0.30
+    algo.guards._guard_cut_active = True
+    before = algo.integral
+
+    algo.calculate(
+        target_temp=20.0,
+        current_temp=20.37,
+        ext_current_temp=6.0,
+        hvac_mode=VThermHvacMode_HEAT,
+    )
+
+    assert algo.on_percent == 0.0
+    assert algo.ctl.last_i_mode == "I:OVERRIDE(guard_cut)"
+
+    await algo.on_cycle_completed(
+        e_eff=0.0,
+        elapsed_ratio=1.0,
+        cycle_duration_min=5.0,
+    )
+
+    assert algo.integral == before
+    assert algo.aw_du == 0.0
+
+
 # ---------------------------------------------------------------------------
 # T5 — AW blocked in I:CLAMP
 # ---------------------------------------------------------------------------

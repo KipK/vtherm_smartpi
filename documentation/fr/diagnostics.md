@@ -36,6 +36,7 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `Kp` | `float` | Gains PI | Gain proportionnel calculated ($K_p$) actuellement appliqué. |
 | `Ki` | `float` | Gains PI | Gain intégral calculé ($K_i$) actuellement appliqué. |
 | `integral_error` | `float` | État PI | Erreur intégrale accumulée (état interne de la branche I). |
+| `integral_mode` | `string` | État PI | Décision intégrale courante, incluant `I:RUN`, les états de maintien, gel ou garde, et `I:OVERRIDE(guard_cut)` lorsque la coupure de sécurité force la sortie à zéro. |
 | `governance_regime` | `string` | Sécurité | Régime de gouvernance de sécurité actif (ex. `WARMUP`, `EXCITED_STABLE`, `NEAR_BAND`, `DEAD_BAND`, `SATURATED`, `HOLD`, `PERTURBED`, `DEGRADED`). |
 | `last_decision_thermal` | `string` | Sécurité | Décision de gouvernance appliquée aux mises à jour du modèle thermique (ex. `ADAPT_ON`, `FREEZE`, `HARD_FREEZE`). |
 | `bootstrap_progress` | `float` | Bootstrap | Pourcentage de progression de la phase d'apprentissage bootstrap (présent uniquement en phase `HYSTERESIS`). |
@@ -337,7 +338,7 @@ Le thermostat publie aussi **`specific_states.regulation_diagnostics`** avec l'e
     "ext_sensor": 10.2,
     "error": 0.5,
     "integral_error": 50.0,
-    "integral_mode": "normal",
+    "integral_mode": "I:RUN",
     "integral_hold_mode": "none",
     "integral_guard_source": "none"
   },

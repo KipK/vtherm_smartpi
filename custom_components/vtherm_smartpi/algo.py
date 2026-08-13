@@ -1472,7 +1472,18 @@ class SmartPI:
 
         # Cascade policy: respect the integration decision made by compute_pwm (Path A)
         i_mode = str(self.ctl.last_i_mode)
-        if any(i_mode.startswith(p) for p in ("I:SKIP", "I:FREEZE", "I:GUARD", "I:CLAMP", "I:RESET", "I:BLEED")):
+        if any(
+            i_mode.startswith(prefix)
+            for prefix in (
+                "I:SKIP",
+                "I:FREEZE",
+                "I:GUARD",
+                "I:CLAMP",
+                "I:RESET",
+                "I:BLEED",
+                "I:OVERRIDE",
+            )
+        ):
             self._last_aw_du = 0.0
             return
 
@@ -2346,6 +2357,8 @@ class SmartPI:
 
         # Guard Cut: force 0% if active
         if self.guards.guard_cut_active:
+            self.ctl.last_i_mode = "I:OVERRIDE(guard_cut)"
+            self._last_aw_du = 0.0
             self._set_linear_output(0.0)
             return
 
