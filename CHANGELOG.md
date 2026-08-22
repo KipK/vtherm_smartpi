@@ -7,6 +7,8 @@ All notable changes to this project will be documented in this file.
 - Align FF trim learning with distinct temperature measurements and the delayed
   power that caused them, using independent thermal windows and the learned
   1R1C model.
+- Expose causal FF trim progress and decisions in the French and English
+  SmartPI diagnostic cards.
 
 ## [0.3.8] 2026-08-18
 

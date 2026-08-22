@@ -15,6 +15,7 @@
 {% set learning = spi.get('ab_learning', {}) %}
 {% set gov = spi.get('governance', {}) %}
 {% set ff = spi.get('feedforward', {}) %}
+{% set fftrim = ff.get('fftrim', {}) %}
 {% set setpoint = spi.get('setpoint', {}) %}
 {% set autocalib = spi.get('autocalib', {}) %}
 {% set calibration = spi.get('calibration', {}) %}
@@ -80,6 +81,31 @@
 {% set ff3_twin_usable = ff.get('ff3_twin_usable', false) %}
 {% set twin_status = ff.get('twin_status', 'unavailable') %}
 {% set deadband_source = ff.get('deadband_power_source', 'none') %}
+{% set fftrim_state = fftrim.get('state') %}
+{% set fftrim_last_reject_reason = fftrim.get('last_reject_reason') %}
+{% set fftrim_last_update_reason = fftrim.get('last_update_reason') %}
+{% set fftrim_windows_since_update = fftrim.get('windows_since_update') %}
+{% set fftrim_window_duration_s = fftrim.get('window_duration_s') %}
+{% set fftrim_window_target_duration_s = fftrim.get('window_target_duration_s') %}
+{% set fftrim_measurement_count = fftrim.get('measurement_count') %}
+{% set fftrim_alignment_delay_s = fftrim.get('alignment_delay_s') %}
+{% set fftrim_power_coverage_ratio = fftrim.get('power_coverage_ratio') %}
+{% set fftrim_mean_causal_power = fftrim.get('mean_causal_power') %}
+{% set fftrim_mean_ff1 = fftrim.get('mean_ff1') %}
+{% set fftrim_mean_temperature = fftrim.get('mean_temperature') %}
+{% set fftrim_mean_error = fftrim.get('mean_error') %}
+{% set fftrim_mean_slope_h = fftrim.get('mean_slope_h') %}
+{% set fftrim_observed_hold_power = fftrim.get('observed_hold_power') %}
+{% set fftrim_target_trim = fftrim.get('target_trim') %}
+{% set fftrim_correction = fftrim.get('correction') %}
+
+{% set fftrim_state_label = {
+  'warming_up': 'warming up',
+  'collecting': 'collecting',
+  'waiting_deadtime': 'waiting for dead time',
+  'ready': 'ready',
+  'rejected': 'rejected'
+}.get(fftrim_state, fftrim_state) %}
 
 {% set trajectory_active = setpoint.get('trajectory_active', false) %}
 {% set published_filtered_sp = setpoint.get('filtered_setpoint') %}
@@ -234,10 +260,6 @@
 {% set ff2_frozen = debug.get('ff2_frozen', false) %}
 {% set ff2_freeze_reason = debug.get('ff2_freeze_reason', debug.get('trim_freeze_reason', 'none')) %}
 {% set ff2_trim_delta = debug.get('ff2_trim_delta', 0) | float %}
-{% set fftrim_last_reject_reason = debug.get('fftrim_last_reject_reason', '—') %}
-{% set fftrim_last_update_reason = debug.get('fftrim_last_update_reason', '—') %}
-{% set fftrim_cycles_since_update = debug.get('fftrim_cycles_since_update', 0) | int %}
-{% set fftrim_cycle_admissible = debug.get('fftrim_cycle_admissible', false) %}
 {% set ff3_enabled = debug.get('ff3_enabled', false) %}
 {% set ff3_reason = debug.get('ff3_reason_disabled', '—') %}
 {% set ff3_raw_reason = debug.get('ff3_raw_reason_disabled', ff3_reason) %}
@@ -574,6 +596,27 @@
 
 ---
 
+### 🧭 Causal FF Trim
+
+| Signal | Value |
+|---|---:|
+| Observer | {% if fftrim_state is not none %}`{{ fftrim_state_label }}`{% else %}—{% endif %} |
+| Thermal window | {% if fftrim_window_duration_s is not none and fftrim_window_target_duration_s is not none %}{{ (fftrim_window_duration_s | float / 60) | round(1) }} / {{ (fftrim_window_target_duration_s | float / 60) | round(1) }} min{% else %}—{% endif %} |
+| Distinct measurements | {% if fftrim_measurement_count is not none %}{{ fftrim_measurement_count }}{% else %}—{% endif %} |
+| Dead-time alignment | {% if fftrim_alignment_delay_s is not none %}{{ fftrim_alignment_delay_s | float | round(1) }} s{% else %}—{% endif %} |
+| Power coverage | {% if fftrim_power_coverage_ratio is not none %}{{ (fftrim_power_coverage_ratio | float * 100) | round(1) }}%{% else %}—{% endif %} |
+| Causal power / FF1 | {% if fftrim_mean_causal_power is not none %}{{ (fftrim_mean_causal_power | float * 100) | round(1) }}%{% else %}—{% endif %} / {% if fftrim_mean_ff1 is not none %}{{ (fftrim_mean_ff1 | float * 100) | round(1) }}%{% else %}—{% endif %} |
+| Mean temperature / error | {% if fftrim_mean_temperature is not none %}{{ fftrim_mean_temperature | float | round(2) }}°C{% else %}—{% endif %} / {% if fftrim_mean_error is not none %}{{ '%+.2f' | format(fftrim_mean_error | float) }}°C{% else %}—{% endif %} |
+| Mean slope | {% if fftrim_mean_slope_h is not none %}{{ '%+.3f' | format(fftrim_mean_slope_h | float) }}°C/h{% else %}—{% endif %} |
+| Observed hold power | {% if fftrim_observed_hold_power is not none %}{{ (fftrim_observed_hold_power | float * 100) | round(1) }}%{% else %}—{% endif %} |
+| Target trim | {% if fftrim_target_trim is not none %}{{ '%+.3f' | format(fftrim_target_trim | float * 100) }}%{% else %}—{% endif %} |
+| Proposed correction | {% if fftrim_correction is not none %}{{ '%+.3f' | format(fftrim_correction | float * 100) }}%{% else %}—{% endif %} |
+| Last update | {% if fftrim_last_update_reason is not none %}`{{ fftrim_last_update_reason }}`{% else %}—{% endif %} |
+| Last rejection | {% if fftrim_last_reject_reason is not none %}`{{ fftrim_last_reject_reason }}`{% else %}—{% endif %} |
+| Windows since update | {% if fftrim_windows_since_update is not none %}{{ fftrim_windows_since_update }}{% else %}—{% endif %} |
+
+---
+
 ### 🔧 Calibration
 
 | Signal | Value |
@@ -627,10 +670,6 @@
 | FF2 authority | {% if ff2_authority is not none %}{{ (ff2_authority | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | FF2 frozen | {% if ff2_frozen %}🔒 yes{% else %}✅ no{% endif %} · `{{ ff2_freeze_reason }}` |
 | FF2 trim signal | `{{ '%+.3f' | format(ff2_trim_delta * 100) }}%` |
-| FFTrim admissible | {% if fftrim_cycle_admissible %}✅ yes{% else %}no{% endif %} |
-| FFTrim update | `{{ fftrim_last_update_reason }}` |
-| FFTrim reject | `{{ fftrim_last_reject_reason }}` |
-| Cycles since update | {{ fftrim_cycles_since_update }} |
 | FF warmup | {{ ff_ok }}/{{ ff_cyc }} |
 | FF3 State | {% if ff3_enabled %}🔮 active{% else %}⚪ inactive{% endif %} |
 | FF3 Reason | `{{ ff3_label }}` |
