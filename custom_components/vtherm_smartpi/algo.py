@@ -102,7 +102,12 @@ from .smartpi.ff3_eligibility import (
     build_ff3_disturbance_context,
     get_ff3_twin_unavailability_reason,
 )
-from .smartpi.ff_trim import FFTrim, evaluate_pi_eligibility_for_trim
+from .smartpi.ff_trim import (
+    CausalFFTrimObserver,
+    CausalFFTrimResult,
+    FFTrim,
+    FFTrimThermalSample,
+)
 from .smartpi.ff_ab_confidence import ABConfidence
 from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.integral_guard import (
@@ -118,9 +123,6 @@ from .smartpi.valve_curve import (
 from .smartpi.const import (
     ABConfidenceState,
     FF_TRIM_REBOOT_FREEZE_CYCLES,
-    FF_TRIM_K_ERROR,
-    FF_TRIM_MAX_ERROR_C,
-    FF_TRIM_MAX_SLOPE_H,
     ENABLE_ADAPTIVE_TINT_FILTER,
 )
 from .smartpi.timestamp_utils import (
@@ -243,8 +245,6 @@ class SmartPI:
         self._actuator_on_percent: float = 0.0
         self._actuator_committed_on_percent: float = 0.0
         self._last_actuator_applied: float = 0.0
-        self._pending_fftrim_cycle_sample: dict[str, Any] | None = None
-        self._last_fftrim_cycle_u_pi: float | None = None
 
         # Diagnostics / status
         self._last_error: float = 0.0
@@ -322,7 +322,7 @@ class SmartPI:
         self._last_u_limited: float = 0.0   # after rate-limit and max_on_percent
         self._last_u_applied: float = 0.0   # candidate output after timing constraints
         self._last_aw_du: float = 0.0       # tracking delta for diagnostics
-        self._last_ff_trim_delta: float = 0.0  # last slope-based trim signal
+        self._last_ff_trim_delta: float = 0.0
         self._last_fftrim_cycle_admissible: bool = False
         self._last_fftrim_reject_reason: str = "none"
         self._last_fftrim_update_reason: str = "none"
@@ -354,6 +354,7 @@ class SmartPI:
 
         # --- FFv2: trim bias + AB confidence ---
         self._ff_trim: FFTrim = FFTrim()
+        self._fftrim_observer = CausalFFTrimObserver(cycle_min)
         self._ab_confidence = ABConfidence()
         self._recovery_hold_armed: bool = False
         self._last_restart_reason: str = "none"
@@ -438,8 +439,6 @@ class SmartPI:
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
         self._last_actuator_applied = 0.0
-        self._pending_fftrim_cycle_sample = None
-        self._last_fftrim_cycle_u_pi = None
         self._last_aw_du = 0.0
         self._last_ff_trim_delta = 0.0
         self._last_fftrim_cycle_admissible = False
@@ -498,6 +497,7 @@ class SmartPI:
         if self.integral_guard:
             self.integral_guard.reset()
         self._ff_trim.reset()
+        self._fftrim_observer.reset_runtime()
         self._ab_confidence.reset()
         self._recovery_hold_armed = False
         self._last_restart_reason = "none"
@@ -611,6 +611,8 @@ class SmartPI:
         The CycleScheduler will re-drive cycle start/end via its own timer.
         """
         self._reset_learning_window()
+        self._ff_trim.clear_pending()
+        self._fftrim_observer.reset_runtime()
         _LOGGER.debug("%s - SmartPI: cycle state reset (learning window cleared)", self._name)
 
     @staticmethod
@@ -795,6 +797,10 @@ class SmartPI:
         self._u_ff3_cycle = self._u_ff3_pending
         self._ff3_active_cycle = self._ff3_pending_active
         linear_on_percent = self._set_committed_actuator_output(on_percent)
+        self._fftrim_observer.start_applied_cycle(
+            now_monotonic=cycle_start_now,
+            linear_power=linear_on_percent,
+        )
         self._current_cycle_start_monotonic = cycle_start_now
         self._update_deadtime_episode_status(linear_on_percent, hvac_mode, cycle_start_now)
         self._setpoint_changed_in_cycle = False
@@ -803,7 +809,7 @@ class SmartPI:
 
     async def on_cycle_completed(self, e_eff: float = None, elapsed_ratio: float = 1.0, cycle_duration_min: float = None, **_kw) -> None:
         """Handle end of cycle (learning)."""
-        fftrim_cycle_sample = self._pending_fftrim_cycle_sample
+        cycle_end_now = time.monotonic()
 
         if e_eff is not None:
             # Use the nominal cycle duration (provided by the scheduler) as dt_min for Astrom tracking.
@@ -811,36 +817,33 @@ class SmartPI:
             # when a recalc timer fires mid-cycle.
             self.update_realized_power(u_applied=e_eff, dt_min=cycle_duration_min, forced_by_timing=False, elapsed_ratio=elapsed_ratio)
 
-        admissible, reason = self._evaluate_fftrim_cycle(fftrim_cycle_sample, e_eff, elapsed_ratio)
-        self._last_fftrim_cycle_admissible = admissible
-        if admissible and fftrim_cycle_sample is not None:
-            slope_h = fftrim_cycle_sample.get("slope_h")
-            error = fftrim_cycle_sample.get("error", 0.0)
-            a_eff = max(abs(self.est.a), 1e-6)
-            delta_slope = -(slope_h / 60.0) / a_eff if slope_h is not None else 0.0
-            delta_error = FF_TRIM_K_ERROR * error
-            delta_power = delta_slope + delta_error
-            self._last_ff_trim_delta = delta_power
-            trim_update = self._ff_trim.update_persistent(
-                delta_power,
-                fftrim_cycle_sample["u_ff1"],
+        self._record_completed_fftrim_power(
+            cycle_end_now=cycle_end_now,
+            e_eff=e_eff,
+        )
+
+        deadtime_s, deadtime_reliable = self._fftrim_deadtime_context(
+            self._last_hvac_mode
+        )
+        if e_eff is None:
+            result = self._fftrim_observer.invalidate(
+                "missing_e_eff",
+                now_monotonic=cycle_end_now,
+                washout_s=deadtime_s if deadtime_reliable else 0.0,
             )
-            self._last_fftrim_update_reason = trim_update.reason
-            self._last_fftrim_reject_reason = "none"
-            if trim_update.updated:
-                self._cycles_since_fftrim_update = 0
-            else:
-                self._cycles_since_fftrim_update += 1
+            self._apply_fftrim_observer_result(result, count_window=False)
+        elif elapsed_ratio < 1.0:
+            result = self._fftrim_observer.invalidate(
+                "partial_cycle",
+                now_monotonic=cycle_end_now,
+                washout_s=deadtime_s if deadtime_reliable else 0.0,
+            )
+            self._apply_fftrim_observer_result(result, count_window=False)
         else:
-            self._ff_trim.clear_pending()
-            self._last_fftrim_reject_reason = reason
-            self._last_fftrim_update_reason = "skipped"
-            self._cycles_since_fftrim_update += 1
-
-        if fftrim_cycle_sample is not None:
-            self._last_fftrim_cycle_u_pi = fftrim_cycle_sample.get("u_pi")
-
-        self._pending_fftrim_cycle_sample = None
+            self._try_complete_fftrim_window(
+                deadtime_s=deadtime_s,
+                deadtime_reliable=deadtime_reliable,
+            )
 
         # Cycle accepted -> Count it
         self._cycles_since_reset += 1
@@ -859,48 +862,181 @@ class SmartPI:
         elapsed_min = max(0.0, (now_monotonic - self._current_cycle_start_monotonic) / 60.0)
         return max(0.0, self._cycle_min - elapsed_min)
 
-    def _evaluate_fftrim_cycle(
+    def _record_completed_fftrim_power(
         self,
-        sample: dict[str, Any] | None,
+        *,
+        cycle_end_now: float,
         e_eff: float | None,
-        elapsed_ratio: float,
-    ) -> tuple[bool, str]:
-        """Validate one cycle for trim learning using thermal signals only."""
-        if sample is None:
-            return False, "no_sample"
-        if self._ff_trim.frozen:
-            return False, f"frozen_{self._ff_trim.freeze_reason}"
-        if e_eff is None:
-            return False, "missing_e_eff"
-        if elapsed_ratio < 1.0:
-            return False, "partial_cycle"
-        if sample.get("ff3_active", False):
-            return False, "ff3_active"
-        if sample.get("setpoint_changed", False):
-            return False, "setpoint_changed"
-        if sample.get("sat_state") != "NO_SAT":
-            return False, f"sat_{sample.get('sat_state')}"
-
-        pi_eligibility = evaluate_pi_eligibility_for_trim(
-            regime=sample.get("regime"),
-            i_mode=sample.get("i_mode"),
-            u_pi=sample.get("u_pi"),
-            previous_u_pi=sample.get("previous_u_pi"),
+    ) -> None:
+        """Commit the completed cycle to the causal power timeline."""
+        self._fftrim_observer.complete_applied_cycle(
+            now_monotonic=cycle_end_now,
+            realized_linear_power=(
+                clamp(float(e_eff), 0.0, 1.0) if e_eff is not None else None
+            ),
+            use_valve_trace=self._valve_mode_enabled,
         )
-        if not pi_eligibility.admissible:
-            return False, pi_eligibility.reason
 
-        error = sample.get("error")
-        if error is None or abs(error) > FF_TRIM_MAX_ERROR_C:
-            return False, f"error_{error}"
+    def _fftrim_deadtime_context(
+        self,
+        hvac_mode: VThermHvacMode | None,
+    ) -> tuple[float | None, bool]:
+        """Return the reliable dead time matching the active HVAC mode."""
+        if hvac_mode == VThermHvacMode_HEAT:
+            return (
+                self.dt_est.deadtime_heat_s,
+                self.dt_est.deadtime_heat_reliable,
+            )
+        if hvac_mode == VThermHvacMode_COOL:
+            return (
+                self.dt_est.deadtime_cool_s,
+                self.dt_est.deadtime_cool_reliable,
+            )
+        return None, False
 
-        slope_h = sample.get("slope_h")
-        if slope_h is None:
-            return False, "missing_slope"
-        if abs(slope_h) > FF_TRIM_MAX_SLOPE_H:
-            return False, f"slope_{slope_h:.3f}"
+    def _try_complete_fftrim_window(
+        self,
+        *,
+        deadtime_s: float | None,
+        deadtime_reliable: bool,
+    ) -> None:
+        """Apply one complete causal window when enough evidence is available."""
+        result = self._fftrim_observer.try_complete_window(
+            a=self.est.a,
+            b=self.est.b,
+            deadtime_s=deadtime_s,
+            deadtime_reliable=deadtime_reliable,
+            current_trim=self._ff_trim.u_ff_trim,
+        )
+        if result is not None:
+            self._apply_fftrim_observer_result(result, count_window=True)
 
-        return True, "ok"
+    def _apply_fftrim_observer_result(
+        self,
+        result: CausalFFTrimResult,
+        *,
+        count_window: bool,
+    ) -> None:
+        """Route an observer result through the persistent trim safeguards."""
+        self._last_fftrim_cycle_admissible = result.admissible
+        if not result.admissible:
+            self._ff_trim.clear_pending()
+            self._last_fftrim_reject_reason = result.reason
+            self._last_fftrim_update_reason = "skipped"
+            self._fftrim_observer.last_update_reason = "skipped"
+            if count_window:
+                self._cycles_since_fftrim_update += 1
+            return
+
+        correction = result.correction
+        mean_ff1 = result.mean_ff1
+        if correction is None or mean_ff1 is None:
+            self._ff_trim.clear_pending()
+            self._last_fftrim_reject_reason = "incomplete_observer_result"
+            self._last_fftrim_update_reason = "skipped"
+            self._fftrim_observer.last_update_reason = "skipped"
+            return
+
+        self._last_ff_trim_delta = correction
+        trim_update = self._ff_trim.update_persistent(correction, mean_ff1)
+        self._last_fftrim_update_reason = trim_update.reason
+        self._last_fftrim_reject_reason = "none"
+        self._fftrim_observer.last_update_reason = trim_update.reason
+        if trim_update.updated:
+            self._cycles_since_fftrim_update = 0
+        elif count_window:
+            self._cycles_since_fftrim_update += 1
+
+    def _record_fftrim_thermal_measurement(
+        self,
+        *,
+        now_monotonic: float,
+        measurement_id: Any | None,
+        current_temp: float,
+        target_temp: float,
+        ext_current_temp: float | None,
+        hvac_mode: VThermHvacMode,
+        setpoint_changed: bool,
+    ) -> None:
+        """Record one VT sensor measurement and evaluate the causal window."""
+        deadtime_s, deadtime_reliable = self._fftrim_deadtime_context(hvac_mode)
+        if measurement_id is None:
+            result = self._fftrim_observer.invalidate(
+                "missing_measurement_id",
+                now_monotonic=now_monotonic,
+                washout_s=deadtime_s if deadtime_reliable else 0.0,
+            )
+            self._apply_fftrim_observer_result(result, count_window=False)
+            return
+
+        if hasattr(measurement_id, "isoformat"):
+            normalized_measurement_id = measurement_id.isoformat()
+        else:
+            normalized_measurement_id = str(measurement_id)
+
+        mode = (
+            "heat"
+            if hvac_mode == VThermHvacMode_HEAT
+            else "cool"
+            if hvac_mode == VThermHvacMode_COOL
+            else str(hvac_mode)
+        )
+        ff_result = self._last_ff_result
+        if ff_result is None:
+            return
+
+        sample = FFTrimThermalSample(
+            observed_monotonic=now_monotonic,
+            measurement_id=normalized_measurement_id,
+            temperature=float(current_temp),
+            target=float(target_temp),
+            ff1=float(ff_result.u_ff1),
+            regime=self.gov.regime,
+            i_mode=self.ctl.last_i_mode,
+            u_pi=self.ctl.u_pi,
+            hvac_mode=mode,
+            saturated=self.ctl.last_sat != "NO_SAT",
+            trajectory_active=self.sp_mgr.trajectory_active,
+            ff3_active=self._ff3_active_cycle,
+            setpoint_changed=setpoint_changed,
+            outside_temperature_available=ext_current_temp is not None,
+            model_reliable=(
+                self._ab_confidence.state == ABConfidenceState.AB_OK
+                and self.est.tau_reliability().reliable
+            ),
+            trim_frozen_reason=(
+                self._ff_trim.freeze_reason if self._ff_trim.frozen else None
+            ),
+        )
+        result = self._fftrim_observer.record_thermal_sample(
+            sample,
+            deadtime_s=deadtime_s,
+            deadtime_reliable=deadtime_reliable,
+        )
+        if result is not None:
+            self._apply_fftrim_observer_result(result, count_window=False)
+            return
+
+        self._try_complete_fftrim_window(
+            deadtime_s=deadtime_s,
+            deadtime_reliable=deadtime_reliable,
+        )
+
+    def _invalidate_fftrim_context(
+        self,
+        reason: str,
+        *,
+        now_monotonic: float,
+        hvac_mode: VThermHvacMode | None,
+    ) -> None:
+        """Reject the current window and wash out its delayed thermal response."""
+        deadtime_s, deadtime_reliable = self._fftrim_deadtime_context(hvac_mode)
+        result = self._fftrim_observer.invalidate(
+            reason,
+            now_monotonic=now_monotonic,
+            washout_s=deadtime_s if deadtime_reliable else 0.0,
+        )
+        self._apply_fftrim_observer_result(result, count_window=False)
 
     @property
     def a(self) -> float:
@@ -1561,6 +1697,10 @@ class SmartPI:
 
         now = time.monotonic()
         linear_on_percent = self._set_committed_actuator_output(applied_on_percent)
+        self._fftrim_observer.update_applied_power(
+            now_monotonic=now,
+            linear_power=linear_on_percent,
+        )
         self._update_deadtime_episode_status(linear_on_percent, hvac_mode, now)
 
     def save_state(self) -> dict:
@@ -1630,8 +1770,7 @@ class SmartPI:
 
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
-        self._pending_fftrim_cycle_sample = None
-        self._last_fftrim_cycle_u_pi = None
+        self._fftrim_observer.reset_runtime()
         self._last_u_applied = 0.0
         self._last_actuator_applied = 0.0
         self._recovery_hold_armed = False
@@ -1703,6 +1842,11 @@ class SmartPI:
         """
         if target_temp is None or current_temp is None:
             _LOGGER.warning("%s - Missing target or current temp, force 0", self._name)
+            self._invalidate_fftrim_context(
+                "missing_sensor",
+                now_monotonic=time.monotonic(),
+                hvac_mode=self._last_hvac_mode,
+            )
             self._set_linear_output(0.0)
             self._last_u_cmd = 0.0
             self._last_u_pi = 0.0
@@ -1729,8 +1873,11 @@ class SmartPI:
             self._last_ff3_horizon_capped = False
             self._last_ff3_action_sensitivity = 0.0
             self._last_ff3_raw_reason_disabled = self._last_ff3_reason_disabled
-            self._pending_fftrim_cycle_sample = None
-            self._last_fftrim_cycle_u_pi = None
+            self._invalidate_fftrim_context(
+                "hvac_off",
+                now_monotonic=time.monotonic(),
+                hvac_mode=self._last_hvac_mode,
+            )
             self._last_u_applied = 0.0
             self._last_actuator_applied = 0.0
             self.ctl.u_prev = 0.0
@@ -1776,8 +1923,11 @@ class SmartPI:
             self._last_ff3_horizon_capped = False
             self._last_ff3_action_sensitivity = 0.0
             self._last_ff3_raw_reason_disabled = self._last_ff3_reason_disabled
-            self._pending_fftrim_cycle_sample = None
-            self._last_fftrim_cycle_u_pi = None
+            self._invalidate_fftrim_context(
+                "power_shedding",
+                now_monotonic=time.monotonic(),
+                hvac_mode=hvac_mode,
+            )
             self._last_u_applied = 0.0
             self._last_actuator_applied = 0.0
             self._t_heat_episode_start = None
@@ -2307,6 +2457,7 @@ class SmartPI:
         power_shedding: bool = False,
         cycle_boundary: bool = False,
         off_reason: str | None = None,
+        temperature_measure_id: Any | None = None,
         *args,
         **_kwargs,
     ) -> float:
@@ -2336,7 +2487,6 @@ class SmartPI:
         self._last_temperature_slope_h = float(slope) if isinstance(slope, (int, float)) else None
 
         now = time.monotonic()
-        self._pending_fftrim_cycle_sample = None
 
         # --- 0. HVAC mode transition (HEAT↔COOL) → reset integral ---
         # Track active modes BEFORE validation so that missing presets in COOL
@@ -2357,6 +2507,11 @@ class SmartPI:
 
         # Guard Cut: force 0% if active
         if self.guards.guard_cut_active:
+            self._invalidate_fftrim_context(
+                "guard_cut",
+                now_monotonic=now,
+                hvac_mode=hvac_mode,
+            )
             self.ctl.last_i_mode = "I:OVERRIDE(guard_cut)"
             self._last_aw_du = 0.0
             self._set_linear_output(0.0)
@@ -2471,6 +2626,11 @@ class SmartPI:
         )
 
         if self.calibration_mgr.is_calibrating:
+            self._invalidate_fftrim_context(
+                "calibration",
+                now_monotonic=now,
+                hvac_mode=hvac_mode,
+            )
             self._recovery_hold_armed = False
             self.ctl.clear_integral_hold()
             self._calculate_forced_calibration(target_temp, current_temp, hvac_mode)
@@ -2487,6 +2647,11 @@ class SmartPI:
 
         # --- 5. Hysteresis Phase ---
         if self.phase == SmartPIPhase.HYSTERESIS:
+            self._invalidate_fftrim_context(
+                "hysteresis",
+                now_monotonic=now,
+                hvac_mode=hvac_mode,
+            )
             out = self.ctl.calculate_hysteresis(target_temp_filt, current_temp, hvac_mode, self._hyst_off, self._hyst_on)
             if out is not None:
                 self._set_linear_output(out)
@@ -2671,22 +2836,6 @@ class SmartPI:
                 )
             self._sat_persistent_cycles = 0
 
-        # Save the current cycle sample for trim learning at real cycle completion.
-        if self._last_ff_result is not None:
-            self._pending_fftrim_cycle_sample = {
-                "error": self._last_error,
-                "slope_h": slope,  # °C/h as received from thermostat
-                "regime": self.gov.regime,
-                "sat_state": self.ctl.last_sat,
-                "u_ff1": self._last_ff_result.u_ff1,
-                "u_pi": self.ctl.u_pi,
-                "ki": self.Ki,
-                "previous_u_pi": self._last_fftrim_cycle_u_pi,
-                "i_mode": self.ctl.last_i_mode,
-                "ff3_active": self._ff3_active_cycle,
-                "setpoint_changed": setpoint_changed,
-            }
-
         # --- 14c. FFv2: freeze management for trim ---
         # Post-reboot freeze countdown
         if self._ff_v2_reboot_freeze_remaining > 0:
@@ -2715,6 +2864,17 @@ class SmartPI:
             self._ff_trim.freeze("degraded")
         else:
             self._ff_trim.unfreeze()
+
+        # --- 14d. Causally aligned FF trim observation ---
+        self._record_fftrim_thermal_measurement(
+            now_monotonic=now,
+            measurement_id=temperature_measure_id,
+            current_temp=current_temp,
+            target_temp=target_temp,
+            ext_current_temp=ext_current_temp,
+            hvac_mode=hvac_mode,
+            setpoint_changed=setpoint_changed,
+        )
 
         # --- 15. Thermal Twin & ETA (diagnostics-only) ---
         self._update_twin_diagnostics(current_temp, ext_current_temp, target_temp, hvac_mode, dt_s=dt_min * 60.0)

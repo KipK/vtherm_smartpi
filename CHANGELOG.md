@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Align FF trim learning with distinct temperature measurements and the delayed
+  power that caused them, using independent thermal windows and the learned
+  1R1C model.
+
 ## [0.3.8] 2026-08-18
 
 - Allow the directional integral guard to unwind opposing PI memory to zero, preventing setpoint recovery from stalling below target.

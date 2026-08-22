@@ -378,14 +378,18 @@ AB_CONFIDENCE_MIN_SAMPLES_B = 11
 FF_TRIM_RHO = 0.15        # Max trim authority relative to u_ff_ab (dimensionless ratio)
 FF_TRIM_LAMBDA = 0.05     # Trim EMA learning rate per admissible episode
 FF_TRIM_EPSILON = 0.02    # Min u_ff_ab denominator for relative budget (avoids div-by-~0)
-FF_TRIM_K_ERROR = 0.1     # Error recentering gain for slope-based trim update
 FF_TRIM_REBOOT_FREEZE_CYCLES = 3  # Freeze trim learning for a few cycles after reboot
-FF_TRIM_MAX_ERROR_C = 0.3         # Max |error| (°C) for a cycle to be admissible for trim learning
-FF_TRIM_MAX_SLOPE_H = 0.6        # Max |slope| (°C/h) for a cycle to be admissible for trim learning
-FF_TRIM_PERSISTENCE = 3          # Same-direction samples required before applying trim
+FF_TRIM_MAX_ERROR_C = 0.3         # Max |error| (°C) across an admissible thermal window
+FF_TRIM_MAX_SLOPE_H = 0.6        # Max |mean slope| (°C/h) for an admissible thermal window
+FF_TRIM_PERSISTENCE = 3          # Same-direction independent windows required before applying trim
 FF_TRIM_BUFFER_SIZE = 5          # Rolling sample count used for median trim correction
 FF_TRIM_DELTA_EPSILON = 0.001    # Ignore power corrections below actuator precision scale
-FF_TRIM_PI_STABILITY_EPSILON = 0.01  # Max cycle-to-cycle PI output drift for near-band trim learning
+FF_TRIM_PI_STABILITY_EPSILON = 0.01  # Max PI output range across a near-band trim window
+FF_TRIM_MIN_WINDOW_MIN = 30.0
+FF_TRIM_MIN_WINDOW_CYCLES = 6
+FF_TRIM_DEADTIME_WINDOW_FACTOR = 2.0
+FF_TRIM_MIN_DISTINCT_MEASUREMENTS = 3
+FF_TRIM_MIN_POWER_COVERAGE = 0.995
 
 # Deadband output shaping
 DEADBAND_EDGE_PERSISTENCE = 2

@@ -376,6 +376,7 @@ class SmartPIHandler:
                 power_shedding=t.is_overpowering_detected,
                 cycle_boundary=cycle_boundary,
                 off_reason=t.hvac_off_reason,
+                temperature_measure_id=getattr(t, "last_temperature_measure", None),
             )
 
             # Force cycle restart on deadband and near-band transitions so the

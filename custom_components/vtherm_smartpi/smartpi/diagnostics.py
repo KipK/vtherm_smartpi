@@ -87,6 +87,21 @@ ESSENTIAL_KEYS = {
     "fftrim_last_reject_reason",
     "fftrim_last_update_reason",
     "fftrim_cycles_since_update",
+    "fftrim_windows_since_update",
+    "fftrim_observer_state",
+    "fftrim_window_duration_s",
+    "fftrim_window_target_duration_s",
+    "fftrim_measurement_count",
+    "fftrim_alignment_delay_s",
+    "fftrim_power_coverage_ratio",
+    "fftrim_mean_causal_power",
+    "fftrim_mean_ff1",
+    "fftrim_mean_temperature",
+    "fftrim_mean_error",
+    "fftrim_mean_slope_h",
+    "fftrim_observed_hold_power",
+    "fftrim_target_trim",
+    "fftrim_correction",
     "integral_hold_active",
     "integral_hold_mode",
     "restart_reason",
@@ -241,6 +256,31 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "twin_status": diag["twin_status"],
             "deadband_power_source": diag["deadband_power_source"],
             "deadband_p_mode": diag["deadband_p_mode"],
+            "fftrim": {
+                "state": diag["fftrim_observer_state"],
+                "last_reject_reason": diag["fftrim_last_reject_reason"],
+                "last_update_reason": diag["fftrim_last_update_reason"],
+                "windows_since_update": diag["fftrim_windows_since_update"],
+                "window_duration_s": diag["fftrim_window_duration_s"],
+                "window_target_duration_s": diag[
+                    "fftrim_window_target_duration_s"
+                ],
+                "measurement_count": diag["fftrim_measurement_count"],
+                "alignment_delay_s": diag["fftrim_alignment_delay_s"],
+                "power_coverage_ratio": diag[
+                    "fftrim_power_coverage_ratio"
+                ],
+                "mean_causal_power": diag["fftrim_mean_causal_power"],
+                "mean_ff1": diag["fftrim_mean_ff1"],
+                "mean_temperature": diag["fftrim_mean_temperature"],
+                "mean_error": diag["fftrim_mean_error"],
+                "mean_slope_h": diag["fftrim_mean_slope_h"],
+                "observed_hold_power": diag[
+                    "fftrim_observed_hold_power"
+                ],
+                "target_trim": diag["fftrim_target_trim"],
+                "correction": diag["fftrim_correction"],
+            },
         },
         "setpoint": {
             "filtered_setpoint": diag["filtered_setpoint"],
@@ -284,6 +324,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         and twin_diag.get("model_reliable") is True
         and twin_diag.get("warming_up") is not True
     )
+    fftrim_observer = algo._fftrim_observer.diagnostics
     u_ff1 = ff_result.u_ff1 if ff_result else 0.0
     u_ff2 = ff_result.u_ff2 if ff_result else 0.0
     u_ff_final = ff_result.u_ff_final if ff_result else 0.0
@@ -375,7 +416,64 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "fftrim_last_reject_reason": algo._last_fftrim_reject_reason,
         "fftrim_last_update_reason": algo._last_fftrim_update_reason,
         "fftrim_cycles_since_update": int(algo._cycles_since_fftrim_update),
+        "fftrim_windows_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_cycle_admissible": algo._last_fftrim_cycle_admissible,
+        "fftrim_observer_state": fftrim_observer["state"],
+        "fftrim_window_duration_s": round(
+            float(fftrim_observer["window_duration_s"]), 3
+        ),
+        "fftrim_window_target_duration_s": round(
+            float(fftrim_observer["window_target_duration_s"]), 3
+        ),
+        "fftrim_measurement_count": int(fftrim_observer["measurement_count"]),
+        "fftrim_alignment_delay_s": (
+            round(float(fftrim_observer["alignment_delay_s"]), 3)
+            if fftrim_observer["alignment_delay_s"] is not None
+            else None
+        ),
+        "fftrim_power_coverage_ratio": round(
+            float(fftrim_observer["power_coverage_ratio"]), 6
+        ),
+        "fftrim_mean_causal_power": (
+            round(float(fftrim_observer["mean_causal_power"]), 6)
+            if fftrim_observer["mean_causal_power"] is not None
+            else None
+        ),
+        "fftrim_mean_ff1": (
+            round(float(fftrim_observer["mean_ff1"]), 6)
+            if fftrim_observer["mean_ff1"] is not None
+            else None
+        ),
+        "fftrim_mean_temperature": (
+            round(float(fftrim_observer["mean_temperature"]), 6)
+            if fftrim_observer["mean_temperature"] is not None
+            else None
+        ),
+        "fftrim_mean_error": (
+            round(float(fftrim_observer["mean_error"]), 6)
+            if fftrim_observer["mean_error"] is not None
+            else None
+        ),
+        "fftrim_mean_slope_h": (
+            round(float(fftrim_observer["mean_slope_h"]), 6)
+            if fftrim_observer["mean_slope_h"] is not None
+            else None
+        ),
+        "fftrim_observed_hold_power": (
+            round(float(fftrim_observer["observed_hold_power"]), 6)
+            if fftrim_observer["observed_hold_power"] is not None
+            else None
+        ),
+        "fftrim_target_trim": (
+            round(float(fftrim_observer["target_trim"]), 6)
+            if fftrim_observer["target_trim"] is not None
+            else None
+        ),
+        "fftrim_correction": (
+            round(float(fftrim_observer["correction"]), 6)
+            if fftrim_observer["correction"] is not None
+            else None
+        ),
         # FF compatibility aliases
         "u_ff_ab": round(ff_result.u_ff_ab, 6) if ff_result else 0.0,
         "u_ff_trim": round(algo._ff_trim.u_ff_trim, 6),
