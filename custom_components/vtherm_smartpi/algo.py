@@ -959,16 +959,13 @@ class SmartPI:
         setpoint_changed: bool,
     ) -> None:
         """Record one VT sensor measurement and evaluate the causal window."""
-        deadtime_s, deadtime_reliable = self._fftrim_deadtime_context(hvac_mode)
         if measurement_id is None:
-            result = self._fftrim_observer.invalidate(
-                "missing_measurement_id",
-                now_monotonic=now_monotonic,
-                washout_s=deadtime_s if deadtime_reliable else 0.0,
-            )
-            self._apply_fftrim_observer_result(result, count_window=False)
+            # Generic VT recalculations do not carry plugin-specific measurement
+            # metadata. They are not thermal observations and must not discard a
+            # causal window assembled from handler-provided sensor timestamps.
             return
 
+        deadtime_s, deadtime_reliable = self._fftrim_deadtime_context(hvac_mode)
         if hasattr(measurement_id, "isoformat"):
             normalized_measurement_id = measurement_id.isoformat()
         else:

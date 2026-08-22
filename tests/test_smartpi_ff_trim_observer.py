@@ -1,7 +1,11 @@
 """Tests for the causally aligned FF trim observer."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
+from custom_components.vtherm_smartpi.algo import SmartPI
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
 from custom_components.vtherm_smartpi.smartpi.ff_trim import (
     AppliedPowerSegment,
@@ -177,6 +181,35 @@ def test_causal_observer_deduplicates_temperature_measurements() -> None:
     )
 
     assert observer.diagnostics["measurement_count"] == 1
+
+
+def test_generic_recalculation_without_measurement_id_keeps_window() -> None:
+    """A VT recalculation without sensor metadata must preserve observations."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=5.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI",
+    )
+    algo._fftrim_observer.record_thermal_sample(
+        _sample(120.0, 20.0, measurement_id="sensor-1"),
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+    diagnostics_before = dict(algo._fftrim_observer.diagnostics)
+
+    algo._record_fftrim_thermal_measurement(
+        now_monotonic=180.0,
+        measurement_id=None,
+        current_temp=20.0,
+        target_temp=20.0,
+        ext_current_temp=10.0,
+        hvac_mode=VThermHvacMode_HEAT,
+        setpoint_changed=False,
+    )
+
+    assert algo._fftrim_observer.diagnostics == diagnostics_before
 
 
 def test_causal_observer_cancels_symmetric_cycle_limit() -> None:

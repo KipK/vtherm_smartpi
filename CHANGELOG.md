@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
   1R1C model.
 - Expose causal FF trim progress and decisions in the French and English
   SmartPI diagnostic cards.
+- Preserve causal FF trim windows during generic VT recalculations that do not
+  carry a temperature measurement identifier.
 
 ## [0.3.8] 2026-08-18
 
