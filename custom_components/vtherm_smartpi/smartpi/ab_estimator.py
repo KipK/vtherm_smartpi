@@ -13,6 +13,11 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Deque, Optional, Tuple
 
+from ..hvac_mode import (
+    VThermHvacMode,
+    VThermHvacMode_COOL,
+    VThermHvacMode_HEAT,
+)
 from .ab_aggregator import ab_publish
 from .ab_drift import (
     DriftChannelState,
@@ -90,6 +95,8 @@ class ABEstimator:
 
         self.a = a_init
         self.b = b_init
+        self.model_hvac_mode: str | None = None
+        self._state_loaded = False
 
         # Robust bounds
         self.A_MIN: float = 1e-5
@@ -135,6 +142,8 @@ class ABEstimator:
         """Reset learned parameters and history to initial values."""
         self.a = self.A_INIT
         self.b = self.B_INIT
+        self.model_hvac_mode = None
+        self._state_loaded = False
         self.learn_ok_count = 0
         self.learn_ok_count_a = 0
         self.learn_ok_count_b = 0
@@ -155,6 +164,60 @@ class ABEstimator:
         self.diag_ab_mode_effective = "init"
         self.diag_a_last_reason = "reset"
         self.diag_b_last_reason = "reset"
+
+    @staticmethod
+    def _mode_sign(hvac_mode: VThermHvacMode) -> float:
+        """Return the physical sign of active HVAC power in the room model."""
+        return -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0
+
+    def _reset_a_channel(self, hvac_mode: VThermHvacMode) -> None:
+        """Reset only mode-dependent actuation learning while preserving losses."""
+        mode_sign = self._mode_sign(hvac_mode)
+        self.a = mode_sign * abs(self.A_INIT)
+        self.learn_ok_count = max(0, self.learn_ok_count - self.learn_ok_count_a)
+        self.learn_ok_count_a = 0
+        self.a_meas_hist.clear()
+        self._a_hat_hist.clear()
+        clear_channel_state(self.a_drift)
+        self.diag_a_mad_over_med = None
+        self.diag_a_last_reason = "reset: hvac mode contract"
+        self.learn_last_reason = "reset: hvac mode contract"
+
+    def ensure_hvac_mode(self, hvac_mode: VThermHvacMode | None) -> bool:
+        """Ensure persisted actuation data follows the signed mono-mode contract.
+
+        Legacy HEAT states already use a positive coefficient and remain valid.
+        Legacy COOL states used the same positive bootstrap coefficient but could
+        not learn a cooling coefficient; only their mode-dependent A channel is
+        discarded. The passive B channel remains physically reusable.
+
+        Returns True when persisted or learned A state had to be invalidated.
+        """
+        if hvac_mode not in (VThermHvacMode_HEAT, VThermHvacMode_COOL):
+            return False
+
+        mode_name = str(hvac_mode)
+        mode_sign = self._mode_sign(hvac_mode)
+        a_values = [self.a, *self.a_meas_hist, *self._a_hat_hist]
+        sign_consistent = all(mode_sign * float(value) > 0.0 for value in a_values)
+        mode_changed = (
+            self.model_hvac_mode is not None
+            and self.model_hvac_mode != mode_name
+        )
+
+        reset_required = mode_changed or not sign_consistent
+        had_mode_dependent_state = (
+            self._state_loaded
+            or mode_changed
+            or self.learn_ok_count_a > 0
+            or bool(self.a_meas_hist)
+            or bool(self._a_hat_hist)
+        )
+        if reset_required:
+            self._reset_a_channel(hvac_mode)
+
+        self.model_hvac_mode = mode_name
+        return reset_required and had_mode_dependent_state
 
     # ---------- Robust helpers (Static) ----------
 
@@ -537,12 +600,15 @@ class ABEstimator:
         t_ext: float,
         *,
         max_abs_dT_per_min: float = 0.35,
+        hvac_mode: VThermHvacMode = VThermHvacMode_HEAT,
     ) -> None:
         """
         Update (a,b) using Median + MAD approach.
 
         Model: dT/dt = a*u - b*(T_int - T_ext)
         """
+        self.ensure_hvac_mode(hvac_mode)
+        mode_sign = self._mode_sign(hvac_mode)
         dTdt = float(dT_int_per_min)
         delta = float(t_int - t_ext)
 
@@ -634,9 +700,9 @@ class ABEstimator:
             )
 
             a_meas = (dTdt + self.b * delta) / u
-            if a_meas <= 0:
+            if mode_sign * a_meas <= 0:
                 self.learn_skip_count += 1
-                self.learn_last_reason = "skip: a_meas <= 0"
+                self.learn_last_reason = "skip: a_meas wrong hvac sign"
                 self.diag_a_last_reason = self.learn_last_reason
                 return
 
@@ -672,9 +738,9 @@ class ABEstimator:
                 param_name="a",
                 history=self.a_meas_hist,
                 value=a_meas,
-                default_value=self.A_INIT,
+                default_value=mode_sign * abs(self.A_INIT),
             )
-            new_a = clamp(new_a, self.A_MIN, self.A_MAX)
+            new_a = mode_sign * clamp(abs(new_a), self.A_MIN, self.A_MAX)
 
             self.a = new_a
             self._a_hat_hist.append(new_a)
@@ -750,6 +816,7 @@ class ABEstimator:
         return {
             "a": self.a,
             "b": self.b,
+            "model_hvac_mode": self.model_hvac_mode,
             "learn_ok_count": self.learn_ok_count,
             "learn_ok_count_a": self.learn_ok_count_a,
             "learn_ok_count_b": self.learn_ok_count_b,
@@ -767,8 +834,18 @@ class ABEstimator:
         """Restore state."""
         if not state:
             return
+        self._state_loaded = True
         self.a = float(state.get("a", self.A_INIT))
         self.b = float(state.get("b", self.B_INIT))
+        persisted_mode = state.get("model_hvac_mode")
+        self.model_hvac_mode = (
+            str(persisted_mode)
+            if persisted_mode in {
+                str(VThermHvacMode_HEAT),
+                str(VThermHvacMode_COOL),
+            }
+            else None
+        )
         self.learn_ok_count = int(state.get("learn_ok_count", 0))
         self.learn_ok_count_a = int(state.get("learn_ok_count_a", 0))
         self.learn_ok_count_b = int(state.get("learn_ok_count_b", 0))

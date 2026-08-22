@@ -34,15 +34,16 @@
 
 SmartPI is an alternative to the classic TPI algorithm for Versatile Thermostat.
 
-Its goal is simple: instead of using fixed behavior, it learns how your room really heats up and cools down, then adjusts regulation automatically.
+Its goal is simple: instead of using fixed behavior, it learns how your room really heats up and cools down, then adjusts regulation automatically. Each SmartPI VTherm remains mono-mode: HEAT or COOL, never both at once.
 
 In practice, SmartPI learns:
 
-- how strongly your heating system warms the room,
-- how quickly the room loses heat,
-- how long the room takes to react after heating starts or stops.
+- how strongly the active equipment heats or cools the room,
+- how quickly outdoors passively heats or cools the room,
+- how long the room takes to react after the equipment starts or stops.
 
-From that, SmartPI builds a heating command that is usually more precise than a fixed TPI:
+From that, SmartPI builds a heating or cooling command that is usually more
+precise than a fixed TPI:
 
 - it corrects the current temperature error,
 - it estimates the power needed to hold the target,
@@ -68,7 +69,7 @@ For the first learning phase, try to avoid:
 Two practical recommendations help a lot:
 
 - let SmartPI run without interruption during the first day or two,
-- use a setpoint high enough above outdoor temperature for the room to show a clear heating response.
+- in HEAT, use a setpoint sufficiently above outdoor temperature; in COOL, an outdoor temperature sufficiently above the setpoint helps make active and passive responses observable.
 
 In practice, learning may take from a few hours to 48 hours on slow or highly inertial systems.
 

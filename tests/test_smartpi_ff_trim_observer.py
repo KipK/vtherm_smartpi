@@ -22,8 +22,9 @@ def _sample(
     regime: GovernanceRegime = GovernanceRegime.DEAD_BAND,
     i_mode: str = "I:FREEZE(deadband)",
     u_pi: float = 0.1,
+    hvac_mode: str = "heat",
 ) -> FFTrimThermalSample:
-    """Build one admissible heating measurement."""
+    """Build one admissible mono-mode thermal measurement."""
     return FFTrimThermalSample(
         observed_monotonic=observed_monotonic,
         measurement_id=measurement_id or str(observed_monotonic),
@@ -33,7 +34,7 @@ def _sample(
         regime=regime,
         i_mode=i_mode,
         u_pi=u_pi,
-        hvac_mode="heat",
+        hvac_mode=hvac_mode,
         saturated=False,
         trajectory_active=False,
         ff3_active=False,
@@ -49,6 +50,7 @@ def _record_samples(
     *,
     u_pi_values: tuple[float, ...] | None = None,
     regime: GovernanceRegime = GovernanceRegime.DEAD_BAND,
+    hvac_mode: str = "heat",
 ) -> None:
     """Record equally spaced measurements over a thirty-minute window."""
     timestamps = (120.0, 720.0, 1320.0, 1920.0)
@@ -66,6 +68,7 @@ def _record_samples(
                     else "I:FREEZE(deadband)"
                 ),
                 u_pi=u_pi_values[index] if u_pi_values else 0.1,
+                hvac_mode=hvac_mode,
             ),
             deadtime_s=120.0,
             deadtime_reliable=True,
@@ -112,6 +115,55 @@ def test_causal_observer_uses_model_to_reconstruct_missing_hold_power() -> None:
     assert result.mean_slope_h == pytest.approx(-0.2)
     assert result.observed_hold_power == pytest.approx(0.5358333, abs=1e-5)
     assert result.correction == pytest.approx(0.0358333, abs=1e-5)
+
+
+def test_causal_observer_returns_zero_for_correct_stable_cool_ff() -> None:
+    """The same physical observer equation is valid with a negative COOL A."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    _record_samples(
+        observer,
+        (20.0, 20.0, 20.0, 20.0),
+        hvac_mode="cool",
+    )
+
+    result = observer.try_complete_window(
+        a=-0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.observed_hold_power == pytest.approx(0.5)
+    assert result.correction == pytest.approx(0.0)
+
+
+def test_causal_observer_cool_warming_drift_requests_more_power() -> None:
+    """A warming room under COOL must reconstruct a positive cooling deficit."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    _record_samples(
+        observer,
+        (20.0, 20.0333, 20.0667, 20.1),
+        hvac_mode="cool",
+    )
+
+    result = observer.try_complete_window(
+        a=-0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.mean_slope_h == pytest.approx(0.2)
+    assert result.correction is not None
+    assert result.correction > 0.0
 
 
 def test_causal_observer_integrates_power_on_the_shifted_window() -> None:

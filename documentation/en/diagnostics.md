@@ -28,8 +28,8 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `hysteresis_state` | `string` | General | State of the hysteresis controller (e.g., HVAC demand state like ON/OFF). |
 | `on_percent` | `float` | Command | Computed output duty cycle / command percentage (0.0 to 1.0) for the next cycle. |
 | `error` | `float` | Temperature | Current temperature error (`Setpoint - Indoor Temperature`) in °C. |
-| `a` | `float` | Model | Estimated heating thermal gain ($a$ in the room's physical model). |
-| `b` | `float` | Model | Estimated room heat-loss coefficient ($b$ in the room's physical model). |
+| `a` | `float` | Model | Signed actuator thermal gain: positive in HEAT, negative in COOL. |
+| `b` | `float` | Model | Positive passive heat-exchange coefficient between the room and outdoors. |
 | `u_pi` | `float` | Command | Proportional-Integral contribution of the control command (0.0 to 1.0). |
 | `u_ff` | `float` | Command | Total feed-forward contribution of the control command (0.0 to 1.0). |
 | `u_hold` | `float` | Command | Frozen command value applied when the output is locked or held. |
@@ -47,8 +47,8 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `b_drift_buffer_count` | `int` | Drift | Number of items in the drift-detection buffer for parameter $b$. |
 | `a_drift_last_reason` | `string` | Drift | Reason for the last drift state change or update for parameter $a$. |
 | `b_drift_last_reason` | `string` | Drift | Reason for the last drift state change or update for parameter $b$. |
-| `deadtime_heat_s` | `float` | Model | Estimated heating reaction delay (dead time) in seconds. |
-| `deadtime_cool_s` | `float` | Model | Estimated cooling reaction delay (dead time) in seconds. |
+| `deadtime_heat_s` | `float` | Model | Estimated delay before a physical temperature-rise response, in seconds. |
+| `deadtime_cool_s` | `float` | Model | Estimated delay before a physical temperature-drop response, in seconds. |
 | `autocalib_last_trigger_ts` | `string` | AutoCalib | ISO timestamp of the last automatic calibration execution. |
 | `autocalib_next_check_ts` | `string` | AutoCalib | ISO timestamp of the next scheduled check by the autocalibration supervisor. |
 | `autocalib_snapshot_age_h` | `float` | AutoCalib | Elapsed time in hours since the baseline model snapshot was captured. |

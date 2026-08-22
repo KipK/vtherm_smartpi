@@ -26,9 +26,13 @@ With:
 
 - $T_{int}$: indoor temperature,
 - $T_{ext}$: outdoor temperature,
-- $u(t) \in [0,1]$: normalized heating command,
-- $a$: heating thermal gain,
-- $b$: loss coefficient.
+- $u(t) \in [0,1]$: normalized active-actuator command,
+- $a$: signed actuator thermal gain, positive in HEAT and negative in COOL,
+- $b > 0$: passive heat-exchange coefficient with outdoors.
+
+A SmartPI VTherm is mono-mode: it learns either a HEAT model or a COOL model.
+The equation is identical in both cases; the sign of $a$ carries the direction
+of active thermal action.
 
 The associated time constant is:
 
@@ -63,8 +67,10 @@ The value effectively injected into the controller is `u_ff_eff + u_pi`, then it
 
 In phase `HYSTERESIS`, learning follows a strict order:
 
-1. `deadtime_heat` must be reliable before useful collection for `a`,
-2. `deadtime_cool` must be reliable before useful collection for `b`,
+1. the active-response dead time must be reliable before useful collection for
+   `a` (`heat` in HEAT, `cool` in COOL),
+2. the passive-response dead time must be reliable before useful collection
+   for `b` (`cool` in HEAT, `heat` in COOL),
 3. `b` must progress before `a` through a soft gate.
 
 Rules effectively coded:
@@ -113,6 +119,7 @@ Validated slopes are then fed into `ABEstimator.learn()`, which:
 - rejects physical outliers (`max_abs_dT_per_min = 0.35`),
 - learns `b` if `u < U_OFF_MAX`,
 - learns `a` if `u > U_ON_MIN`,
+- requires `a > 0` in HEAT and `a < 0` in COOL,
 - publishes values with robust aggregation (median or weighted median depending on configuration).
 
 ### 3.4 Estimation of `a` and `b`
@@ -127,14 +134,19 @@ $$ b = -\frac{dT/dt}{T_{int} - T_{ext}} $$
 
 $$ a = \frac{dT/dt + b \cdot (T_{int} - T_{ext})}{u} $$
 
-Histories are filtered through median/MAD and published values are bounded.
+Histories are filtered through median/MAD. The published magnitude of `a` is
+bounded while preserving the mode sign; `b` remains strictly positive.
 
 ### 3.5 Dead-time estimation
 
-`DeadTimeEstimator` implements an independent FSM:
+`DeadTimeEstimator` implements an independent FSM. Its channels describe the
+physical room response, not the power-transition direction:
 
-- OFF -> ON transition: wait for a heating response,
-- ON -> OFF transition: wait for a cooling response.
+- `deadtime_heat`: delay before temperature starts rising,
+- `deadtime_cool`: delay before temperature starts falling.
+
+Therefore OFF -> ON learns `heat` in HEAT mode but `cool` in COOL mode. The
+ON -> OFF transition learns the opposite passive response.
 
 Reliability becomes true as soon as at least one valid measurement has been captured on the corresponding channel. Published values are the averages of the `heat` and `cool` histories.
 
@@ -146,21 +158,16 @@ Reliability becomes true as soon as at least one valid measurement has been capt
 
 `GainScheduler.calculate()` applies the following logic:
 
-1. if `tau` is not reliable, fall back to `KP_SAFE = 0.55` and `KI_SAFE = 0.010`,
-2. otherwise compute the heuristic:
+1. if `tau`, the sign of `a`, or the active dead time is unreliable, fall
+   back to `KP_SAFE = 0.55` and `KI_SAFE = 0.010`,
+2. otherwise compute IMC/SIMC from the active-gain magnitude:
 
-$$ K_{p,heu} = 0.35 + 0.9 \cdot \sqrt{\frac{\tau}{200}} $$
+$$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
-3. if `deadtime_heat` is reliable and `a > 0`, compute IMC:
+3. compute $K_i = K_p / \tau$,
+4. clamp the gains and apply governance freezes.
 
-$$ K_{p,IMC} = \frac{1}{2 \cdot a \cdot (L/60)} $$
-
-4. choose `min(Kp_IMC, Kp_heu)`,
-5. compute:
-
-$$ K_i = \frac{K_p}{\max(\tau, 10)} $$
-
-6. apply governance freezes.
+The active dead time is `deadtime_heat` in HEAT and `deadtime_cool` in COOL.
 
 Important:
 
@@ -176,6 +183,10 @@ $$ k_{ff} = \frac{b}{a} $$
 and:
 
 $$ u_{ff1} = clamp(k_{ff} \cdot (SP - T_{ext}), 0, 1) \cdot warmup\_scale $$
+
+In COOL, $a < 0$ and therefore $k_{ff} < 0$. When outdoors is warmer than the
+setpoint, the two negative differences correctly produce positive cooling
+power.
 
 `warmup_scale` is not a simple on/off switch. It depends on:
 

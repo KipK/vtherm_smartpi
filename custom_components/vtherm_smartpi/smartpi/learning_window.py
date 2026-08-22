@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, Optional
 from .timestamp_utils import convert_monotonic_to_wall_ts
 
 from .const import (
-    AB_B_HEAT_MIN_LOSS_GRADIENT_C,
-    AB_B_HEAT_OUTDOOR_BELOW_TARGET_MARGIN_C,
+    AB_B_MIN_PASSIVE_GRADIENT_C,
+    AB_B_OUTDOOR_TARGET_MARGIN_C,
     DELTA_MIN,
     DT_MAX_MIN,
     U_CV_MAX,
@@ -282,7 +282,7 @@ class LearningWindowManager:
         # Import here to avoid circular imports at module level
         from .governance import GovernanceDecision
         from .ab_estimator import ABEstimator
-        from ..hvac_mode import VThermHvacMode_HEAT
+        from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
         
         if dt_min <= 0:
             return deadtime_skip_count_a, deadtime_skip_count_b
@@ -329,18 +329,28 @@ class LearningWindowManager:
                 return deadtime_skip_count_a, deadtime_skip_count_b
 
         # --- Bootstrap: require deadtime before A/B collection ---
-        # During hysteresis phase, A collection is gated on heat deadtime availability,
-        # and B collection is gated on cool deadtime availability.
+        # During hysteresis, A uses the active response dead time and B uses
+        # the passive response dead time. The mapping is reversed in HVAC COOL.
         if is_hysteresis:
-            if u_active > U_ON_MIN and not dt_est.deadtime_heat_reliable:
+            active_deadtime_reliable = (
+                dt_est.deadtime_cool_reliable
+                if hvac_mode == VThermHvacMode_COOL
+                else dt_est.deadtime_heat_reliable
+            )
+            passive_deadtime_reliable = (
+                dt_est.deadtime_heat_reliable
+                if hvac_mode == VThermHvacMode_COOL
+                else dt_est.deadtime_cool_reliable
+            )
+            if u_active > U_ON_MIN and not active_deadtime_reliable:
                 estimator.learn_skip_count += 1
-                estimator.learn_last_reason = "skip: bootstrap - heat deadtime not yet learned"
+                estimator.learn_last_reason = "skip: bootstrap - active deadtime not yet learned"
                 if self._active:
                     self.reset()
                 return deadtime_skip_count_a, deadtime_skip_count_b
-            if u_active < U_OFF_MAX and not dt_est.deadtime_cool_reliable:
+            if u_active < U_OFF_MAX and not passive_deadtime_reliable:
                 estimator.learn_skip_count += 1
-                estimator.learn_last_reason = "skip: bootstrap - cool deadtime not yet learned"
+                estimator.learn_last_reason = "skip: bootstrap - passive deadtime not yet learned"
                 if self._active:
                     self.reset()
                 return deadtime_skip_count_a, deadtime_skip_count_b
@@ -512,12 +522,16 @@ class LearningWindowManager:
                 return deadtime_skip_count_a, deadtime_skip_count_b
 
             # --- Sliding start: discard data while slope direction is wrong ---
-            # B (OFF): temperature still rising after heater off (thermal flywheel) → dT > 0
-            # A (ON):  temperature still falling after heater on  (heat deadtime)   → dT < 0
+            # Work in an oriented temperature space where positive means that
+            # active HVAC power moves the room in the requested direction.
+            oriented_dT = -dT if hvac_mode == VThermHvacMode_COOL else dT
+
+            # B (OFF): temperature still follows the previous active response.
+            # A (ON): temperature still follows the passive response after start.
             # Slide the window anchor forward instead of resetting: this keeps the window
             # open while ensuring tin_history[start_ts:] only captures post-anomaly data.
-            b_wrong_dir = (u_eff_pre < U_OFF_MAX and dT > 0)
-            a_wrong_dir = (u_eff_pre > U_ON_MIN  and dT < 0)
+            b_wrong_dir = (u_eff_pre < U_OFF_MAX and oriented_dT > 0)
+            a_wrong_dir = (u_eff_pre > U_ON_MIN and oriented_dT < 0)
             if b_wrong_dir or a_wrong_dir:
                 # Accumulate sliding duration cumulatively across consecutive ticks.
                 # Using a per-tick window_dt_min would reset the timer every slide,
@@ -529,7 +543,11 @@ class LearningWindowManager:
                     self._T_ext_start = ext_temp
                     self._t_int_s = 0.0
                     self._u_int = 0.0
-                    label = f"B flywheel (+{dT:.2f}°C)" if b_wrong_dir else f"A deadtime ({dT:.2f}°C)"
+                    label = (
+                        f"B flywheel ({dT:+.2f}°C)"
+                        if b_wrong_dir
+                        else f"A deadtime ({dT:+.2f}°C)"
+                    )
                     estimator.learn_last_reason = f"skip: {label}, sliding start"
                     return deadtime_skip_count_a, deadtime_skip_count_b
                 else:
@@ -579,7 +597,7 @@ class LearningWindowManager:
             # OFF Learning
             if hvac_mode == VThermHvacMode_HEAT:
                 loss_gradient = self._T_int_start - self._T_ext_start
-                if loss_gradient < AB_B_HEAT_MIN_LOSS_GRADIENT_C:
+                if loss_gradient < AB_B_MIN_PASSIVE_GRADIENT_C:
                     estimator.learn_skip_count += 1
                     estimator.learn_last_reason = (
                         "skip: b heat mode - insufficient heat-loss gradient"
@@ -590,11 +608,32 @@ class LearningWindowManager:
                 if (
                     target_temp is not None
                     and self._T_ext_start
-                    > target_temp - AB_B_HEAT_OUTDOOR_BELOW_TARGET_MARGIN_C
+                    > target_temp - AB_B_OUTDOOR_TARGET_MARGIN_C
                 ):
                     estimator.learn_skip_count += 1
                     estimator.learn_last_reason = (
                         "skip: b heat mode - outdoor too close to target"
+                    )
+                    self.reset()
+                    return deadtime_skip_count_a, deadtime_skip_count_b
+            elif hvac_mode == VThermHvacMode_COOL:
+                gain_gradient = self._T_ext_start - self._T_int_start
+                if gain_gradient < AB_B_MIN_PASSIVE_GRADIENT_C:
+                    estimator.learn_skip_count += 1
+                    estimator.learn_last_reason = (
+                        "skip: b cool mode - insufficient heat-gain gradient"
+                    )
+                    self.reset()
+                    return deadtime_skip_count_a, deadtime_skip_count_b
+
+                if (
+                    target_temp is not None
+                    and self._T_ext_start
+                    < target_temp + AB_B_OUTDOOR_TARGET_MARGIN_C
+                ):
+                    estimator.learn_skip_count += 1
+                    estimator.learn_last_reason = (
+                        "skip: b cool mode - outdoor too close to target"
                     )
                     self.reset()
                     return deadtime_skip_count_a, deadtime_skip_count_b
@@ -607,9 +646,9 @@ class LearningWindowManager:
             slope_val, method, _ = ABEstimator.robust_dTdt_per_min(
                 relevant_samples,
                 trim_start_frac=0.10,
-                # trim_end omitted: the useful cooling signal arrives late in the
-                # window. Power-transition detection already closes the window before
-                # any heater-ON data can contaminate the tail.
+                # trim_end omitted: the useful passive signal arrives late in
+                # the window. Power-transition detection closes the window
+                # before active HVAC data can contaminate the tail.
             )
 
             if slope_val is not None:
@@ -626,6 +665,11 @@ class LearningWindowManager:
                 u=0.0,
                 t_int=self._T_int_start,
                 t_ext=self._T_ext_start,
+                hvac_mode=(
+                    VThermHvacMode_COOL
+                    if hvac_mode == VThermHvacMode_COOL
+                    else VThermHvacMode_HEAT
+                ),
             )
         elif u_eff > U_ON_MIN:
             # ON phase
@@ -652,6 +696,11 @@ class LearningWindowManager:
                 u=u_eff,
                 t_int=self._T_int_start,
                 t_ext=self._T_ext_start,
+                hvac_mode=(
+                    VThermHvacMode_COOL
+                    if hvac_mode == VThermHvacMode_COOL
+                    else VThermHvacMode_HEAT
+                ),
             )
         else:
             estimator.learn_last_reason = "skip: low excitation (u mid)"

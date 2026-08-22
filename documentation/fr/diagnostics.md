@@ -28,8 +28,8 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `hysteresis_state` | `string` | Général | État actuel du contrôleur d'hystérésis (par exemple, état de demande de chauffe ON/OFF). |
 | `on_percent` | `float` | Commande | Rapport cyclique / pourcentage de commande de sortie calculé (0.0 à 1.0) pour le cycle suivant. |
 | `error` | `float` | Température | Écart de température actuel (`Consigne - Température intérieure`) en °C. |
-| `a` | `float` | Modèle | Gain thermique de chauffage estimé ($a$ dans le modèle physique de la pièce). |
-| `b` | `float` | Modèle | Coefficient de déperdition thermique de la pièce estimé ($b$ dans le modèle physique de la pièce). |
+| `a` | `float` | Modèle | Gain thermique signé de l'actionneur : positif en HEAT, négatif en COOL. |
+| `b` | `float` | Modèle | Coefficient positif d'échange thermique passif de la pièce avec l'extérieur. |
 | `u_pi` | `float` | Commande | Contribution de la branche proportionnelle-intégrale à la commande finale (0.0 à 1.0). |
 | `u_ff` | `float` | Commande | Contribution totale du feed-forward (part anticipative) à la commande finale (0.0 à 1.0). |
 | `u_hold` | `float` | Commande | Valeur de commande gelée ou maintenue lorsque la régulation est bloquée. |
@@ -47,8 +47,8 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `b_drift_buffer_count` | `int` | Dérive | Nombre d'éléments dans le buffer de détection de dérive pour le paramètre $b$. |
 | `a_drift_last_reason` | `string` | Dérive | Dernière raison enregistrée pour le changement d'état ou la mise à jour de dérive pour $a$. |
 | `b_drift_last_reason` | `string` | Dérive | Dernière raison enregistrée pour le changement d'état ou la mise à jour de dérive pour $b$. |
-| `deadtime_heat_s` | `float` | Modèle | Temps de réaction (temps mort) estimé en chauffage (en secondes). |
-| `deadtime_cool_s` | `float` | Modèle | Temps de réaction (temps mort) estimé en refroidissement (en secondes). |
+| `deadtime_heat_s` | `float` | Modèle | Délai estimé avant une réponse physique de montée de température (en secondes). |
+| `deadtime_cool_s` | `float` | Modèle | Délai estimé avant une réponse physique de baisse de température (en secondes). |
 | `autocalib_last_trigger_ts` | `string` | AutoCalib | Horodatage ISO du dernier déclenchement d'une calibration automatique. |
 | `autocalib_next_check_ts` | `string` | AutoCalib | Horodatage ISO de la prochaine vérification planifiée par le superviseur d'autocalibration. |
 | `autocalib_snapshot_age_h` | `float` | AutoCalib | Âge en heures du snapshot du modèle de référence utilisé par le superviseur. |

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Make the mono-mode 1R1C model fully signed in COOL: learn a negative active
+  coefficient, use COOL dead time for IMC gains, and enable signed structural
+  feed-forward while preserving the positive passive coefficient.
+- Classify learned dead times by physical temperature response in both modes
+  and migrate incompatible legacy COOL A/dead-time state conservatively;
+  prevent HEAT's passive-dead-time AutoCalib fallback from validating COOL.
 - Align FF trim learning with distinct temperature measurements and the delayed
   power that caused them, using independent thermal windows and the learned
   1R1C model.

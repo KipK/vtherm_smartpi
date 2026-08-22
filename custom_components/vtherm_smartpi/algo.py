@@ -9,8 +9,9 @@
 """
 SmartPI Algorithm (v2) - Auto-adaptive PI controller for Versatile Thermostat.
 
-This module implements a duty-cycle PI controller for slow thermal systems (heating),
-with on-line identification of a 1st-order loss model + dead time.
+This module implements a duty-cycle PI controller for slow mono-mode thermal
+systems (heating or cooling), with online identification of a first-order
+signed actuation/loss model plus dead time.
 
 Key features (v2)
 -----------------
@@ -19,7 +20,8 @@ Key features (v2)
    - Stable: Adaptive PI control once model is reliable (31+ samples).
 
 2. Measurement & Modeling:
-   - Online learning of heating efficacy (a) and loss (b) via robust Median + MAD estimation.
+   - Online learning of signed actuation efficacy (a) and passive exchange (b)
+     via robust Median + MAD estimation.
    - Automatic Dead Time (L) estimation using Takeoff (Primary) and SK (Backup).
 
 3. Adaptive Control:
@@ -683,24 +685,15 @@ class SmartPI:
         if source == IntegralGuardSource.NONE:
             return
 
-        if hvac_mode != VThermHvacMode_HEAT:
-            if self.ctl.integral_hold_mode == source.value:
-                self.ctl.clear_integral_hold()
-            if self._should_arm_recovery_guard_after_deadtime(
-                error_i=error_i,
-                in_core_deadband=in_core_deadband,
-            ):
-                self._arm_integral_guard(source)
-            self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-            self._resume_deadtime_hold_started = False
-            return
-
-        deadtime_heat_ready = (
-            self.dt_est.deadtime_heat_reliable
-            and self.dt_est.deadtime_heat_s is not None
-            and self.dt_est.deadtime_heat_s > 0.0
+        active_deadtime_s, active_deadtime_reliable = (
+            self.dt_est.active_deadtime(hvac_mode)
         )
-        if not deadtime_heat_ready:
+        active_deadtime_ready = (
+            active_deadtime_reliable
+            and active_deadtime_s is not None
+            and active_deadtime_s > 0.0
+        )
+        if not active_deadtime_ready:
             if self.ctl.integral_hold_mode == source.value:
                 self.ctl.clear_integral_hold()
             if self._should_arm_recovery_guard_after_deadtime(
@@ -2300,6 +2293,7 @@ class SmartPI:
             near_band_ratio=near_band_ratio,
             cycle_min=self._cycle_min,
             valve_mode_enabled=self._valve_mode_enabled,
+            hvac_mode=hvac_mode,
         )
         new_ki = self.gain_scheduler.ki
 
@@ -2319,23 +2313,24 @@ class SmartPI:
         )
         ab_fallback = self._ab_confidence.get_ff_fallback()
 
-        # --- FFv2: compute k_ff (0 in COOL mode or when model not ready) ---
-        if hvac_mode == VThermHvacMode_COOL:
-            k_ff = 0.0
-            warmup_scale = 0.0
+        # --- FFv2: compute signed k_ff from the active mono-mode model ---
+        model_ready = (
+            len(self.est.a_meas_hist) >= AB_MIN_SAMPLES_A
+            and len(self.est.b_meas_hist) >= AB_MIN_SAMPLES_B
+        )
+        model_sign_valid = (
+            self.est.a < -1e-6
+            if hvac_mode == VThermHvacMode_COOL
+            else self.est.a > 1e-6
+        )
+        if model_ready and self._tau_reliable and model_sign_valid:
+            k_ff = clamp(self.est.b / self.est.a, -3.0, 3.0)
         else:
-            model_ready = (
-                len(self.est.a_meas_hist) >= AB_MIN_SAMPLES_A
-                and len(self.est.b_meas_hist) >= AB_MIN_SAMPLES_B
-            )
-            if model_ready and self._tau_reliable:
-                k_ff = clamp(self.est.b / max(self.est.a, 1e-6), 0.0, 3.0)
-            else:
-                k_ff = 0.0
-            learn_scale = clamp(self.est.learn_ok_count / float(self.ff_warmup_ok_count), 0.0, 1.0)
-            time_scale = clamp(self._cycles_since_reset / float(self.ff_warmup_cycles), 0.0, 1.0)
-            reliable_cap = 1.0 if self._tau_reliable else self.ff_scale_unreliable_max
-            warmup_scale = clamp(reliable_cap * learn_scale * time_scale, 0.0, 1.0)
+            k_ff = 0.0
+        learn_scale = clamp(self.est.learn_ok_count / float(self.ff_warmup_ok_count), 0.0, 1.0)
+        time_scale = clamp(self._cycles_since_reset / float(self.ff_warmup_cycles), 0.0, 1.0)
+        reliable_cap = 1.0 if self._tau_reliable else self.ff_scale_unreliable_max
+        warmup_scale = clamp(reliable_cap * learn_scale * time_scale, 0.0, 1.0)
 
         # Save previous FF state before computing the new FFResult
         prev_ff_result = self._last_ff_result
@@ -2497,6 +2492,24 @@ class SmartPI:
                     self._name, self._last_hvac_mode, hvac_mode
                 )
             self._last_hvac_mode = hvac_mode
+            model_reset = self.est.ensure_hvac_mode(hvac_mode)
+            self.dt_est.ensure_hvac_mode(hvac_mode)
+            if model_reset is True:
+                self._ab_confidence.reset()
+                self._ff_trim.reset()
+                self._fftrim_observer.reset_runtime()
+                self._cycles_since_reset = 0
+                self._session_learn_ok_count_base = self.est.learn_ok_count
+                self._session_learn_skip_count_base = self.est.learn_skip_count
+                self.twin = ThermalTwin1R1C(
+                    dt_s=SMARTPI_RECALC_INTERVAL_SEC,
+                    gamma=0.1,
+                )
+                self._last_twin_diag = {}
+                _LOGGER.info(
+                    "%s - HVAC signed-model migration: reset mode-dependent A, FF trim and twin state",
+                    self._name,
+                )
 
         # --- 1. Validation & Handle OFF ---
         if self._validate_and_handle_off(target_temp, current_temp, hvac_mode, power_shedding, off_reason):
@@ -2596,6 +2609,7 @@ class SmartPI:
                 u_applied=self._committed_on_percent,
                 max_on_percent=self._max_on_percent if self._max_on_percent is not None else 1.0,
                 is_hysteresis=False,
+                hvac_mode=hvac_mode,
             )
 
         # Heartbeat learning update
@@ -2664,6 +2678,7 @@ class SmartPI:
                 u_applied=self._committed_on_percent,
                 max_on_percent=self._max_on_percent if self._max_on_percent is not None else 1.0,
                 is_hysteresis=True,
+                hvac_mode=hvac_mode,
             )
 
             # Update Twin Diagnostics even in hysteresis

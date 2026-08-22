@@ -17,6 +17,10 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     KP_SAFE,
 )
 from custom_components.vtherm_smartpi.smartpi.gains import GainScheduler
+from custom_components.vtherm_smartpi.hvac_mode import (
+    VThermHvacMode_COOL,
+    VThermHvacMode_HEAT,
+)
 from unittest.mock import MagicMock
 
 
@@ -33,6 +37,7 @@ def _calculate_gains(
     governance_decision=GovernanceDecision.ADAPT_ON,
     cycle_min=10.0,
     valve_mode_enabled=False,
+    hvac_mode=VThermHvacMode_HEAT,
 ):
     """Build a complete gain calculation fixture."""
     scheduler = scheduler or GainScheduler("test")
@@ -41,6 +46,8 @@ def _calculate_gains(
     dt_est = MagicMock()
     dt_est.deadtime_heat_reliable = deadtime_reliable
     dt_est.deadtime_heat_s = deadtime_s
+    dt_est.deadtime_cool_reliable = deadtime_reliable
+    dt_est.deadtime_cool_s = deadtime_s
 
     return scheduler.calculate(
         tau_reliable=tau_reliable,
@@ -52,6 +59,7 @@ def _calculate_gains(
         near_band_ratio=near_band_ratio,
         cycle_min=cycle_min,
         valve_mode_enabled=valve_mode_enabled,
+        hvac_mode=hvac_mode,
     )
 
 
@@ -119,6 +127,62 @@ def test_median_convergence_a():
     assert est.learn_ok_count_a > 0, f"Should have learned a, reason: {est.learn_last_reason}"
 
 
+def test_median_convergence_a_in_cool_mode():
+    """COOL learns a negative physical actuation coefficient."""
+    est = ABEstimator()
+    true_b = 0.002
+
+    for i in range(AB_MIN_SAMPLES_B + AB_B_CONVERGENCE_MIN_SAMPLES + 2):
+        delta = -(8.0 + (i % 5))
+        dT = -true_b * delta
+        est.learn(
+            dT_int_per_min=dT,
+            u=0.0,
+            t_int=20.0,
+            t_ext=20.0 - delta,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+
+    true_a = -0.05
+    est.a = -0.04
+    delta = -10.0
+    for i in range(20):
+        u = 0.5 + 0.1 * (i % 6)
+        dT = true_a * u - est.b * delta
+        est.learn(
+            dT_int_per_min=dT,
+            u=u,
+            t_int=20.0,
+            t_ext=30.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+
+    assert -0.075 < est.a < -0.035
+    assert est.learn_ok_count_a > 0
+    assert est.model_hvac_mode == "cool"
+
+
+def test_legacy_cool_model_resets_only_mode_dependent_a_channel():
+    """A legacy positive COOL A cannot be reused, while passive B remains valid."""
+    est = ABEstimator()
+    est.a = 0.02
+    est.b = 0.003
+    est.learn_ok_count = 12
+    est.learn_ok_count_a = 5
+    est.learn_ok_count_b = 7
+    est.a_meas_hist.extend([0.02] * 5)
+    est.b_meas_hist.extend([0.003] * 7)
+
+    reset = est.ensure_hvac_mode(VThermHvacMode_COOL)
+
+    assert reset is True
+    assert est.a == -abs(est.A_INIT)
+    assert est.b == 0.003
+    assert est.learn_ok_count_a == 0
+    assert est.learn_ok_count_b == 7
+    assert list(est.b_meas_hist) == [0.003] * 7
+
+
 def test_smartpi_gain_adaptation():
     """Test the nominal IMC/SIMC gain calculation from A/B and dead time."""
     result = _calculate_gains()
@@ -127,6 +191,20 @@ def test_smartpi_gain_adaptation():
     assert result.ki == result.kp / 200.0
     assert result.kp_source == "imc_simc"
     assert result.ki_source == "imc_simc"
+
+
+def test_smartpi_gain_adaptation_is_symmetric_in_cool_mode():
+    """A negative COOL coefficient uses its magnitude and COOL dead time."""
+    heat = _calculate_gains(a=0.02, deadtime_s=120.0)
+    cool = _calculate_gains(
+        a=-0.02,
+        deadtime_s=120.0,
+        hvac_mode=VThermHvacMode_COOL,
+    )
+
+    assert cool.kp == heat.kp
+    assert cool.ki == heat.ki
+    assert cool.kp_source == "imc_simc"
 
 
 def test_smartpi_gain_kp_decreases_when_a_increases():

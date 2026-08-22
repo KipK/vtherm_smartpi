@@ -1,7 +1,10 @@
 """Tests for heat-mode B learning guards."""
 from unittest.mock import MagicMock, patch
 
-from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.hvac_mode import (
+    VThermHvacMode_COOL,
+    VThermHvacMode_HEAT,
+)
 from custom_components.vtherm_smartpi.smartpi.const import (
     FreezeReason,
     GovernanceDecision,
@@ -40,10 +43,12 @@ def _update_once(
     current_temp,
     ext_temp,
     target_temp,
+    hvac_mode=VThermHvacMode_HEAT,
+    slope=-0.1,
 ):
     with patch(
         "custom_components.vtherm_smartpi.smartpi.ab_estimator.ABEstimator.robust_dTdt_per_min",
-        return_value=(-0.1, "test_slope", 3),
+        return_value=(slope, "test_slope", 3),
     ):
         win.update(
             dt_min=1.0,
@@ -60,7 +65,7 @@ def _update_once(
             in_near_band=False,
             t_heat_episode_start=None,
             t_cool_episode_start=None,
-            hvac_mode=VThermHvacMode_HEAT,
+            hvac_mode=hvac_mode,
             target_temp=target_temp,
         )
 
@@ -121,8 +126,54 @@ def test_b_learning_allowed_when_real_heat_loss_gradient_exists():
         u=0.0,
         t_int=21.0,
         t_ext=8.0,
+        hvac_mode=VThermHvacMode_HEAT,
     )
     assert est.learn_last_reason not in {
         "skip: b heat mode - insufficient heat-loss gradient",
         "skip: b heat mode - outdoor too close to target",
     }
+
+
+def test_b_learning_skipped_without_passive_heat_gain_in_cool():
+    """COOL B learning requires outdoor heat gain, symmetric to HEAT loss."""
+    win = LearningWindowManager("test")
+    est = _make_estimator()
+
+    _update_once(
+        win,
+        est,
+        current_temp=20.0,
+        ext_temp=18.0,
+        target_temp=21.0,
+        hvac_mode=VThermHvacMode_COOL,
+        slope=0.1,
+    )
+
+    est.learn.assert_not_called()
+    assert est.learn_last_reason == (
+        "skip: b cool mode - insufficient heat-gain gradient"
+    )
+
+
+def test_b_learning_allowed_with_passive_heat_gain_in_cool():
+    """COOL OFF windows publish positive B from a rising room temperature."""
+    win = LearningWindowManager("test")
+    est = _make_estimator()
+
+    _update_once(
+        win,
+        est,
+        current_temp=20.0,
+        ext_temp=30.0,
+        target_temp=21.0,
+        hvac_mode=VThermHvacMode_COOL,
+        slope=0.1,
+    )
+
+    est.learn.assert_called_once_with(
+        dT_int_per_min=0.1,
+        u=0.0,
+        t_int=20.0,
+        t_ext=30.0,
+        hvac_mode=VThermHvacMode_COOL,
+    )

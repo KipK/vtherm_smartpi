@@ -26,9 +26,13 @@ Avec :
 
 - $T_{int}$ : température intérieure,
 - $T_{ext}$ : température extérieure,
-- $u(t) \in [0,1]$ : commande de chauffe normalisée,
-- $a$ : gain thermique de la chauffe,
-- $b$ : coefficient de pertes.
+- $u(t) \in [0,1]$ : commande normalisée de l'actionneur actif,
+- $a$ : gain thermique signé de l'actionneur, positif en HEAT et négatif en COOL,
+- $b > 0$ : coefficient d'échange passif avec l'extérieur.
+
+Un VTherm SmartPI est mono-mode : il apprend soit un modèle HEAT, soit un
+modèle COOL. L'équation reste identique dans les deux cas ; le signe de $a$
+porte le sens de l'action active.
 
 La constante de temps associée est :
 
@@ -63,8 +67,10 @@ La sortie réellement injectée dans le calcul est `u_ff_eff + u_pi`, puis elle 
 
 En phase `HYSTERESIS`, l'apprentissage suit un ordre strict :
 
-1. `deadtime_heat` doit être fiable avant toute collecte utile pour `a`,
-2. `deadtime_cool` doit être fiable avant toute collecte utile pour `b`,
+1. le temps mort de la réponse active doit être fiable avant toute collecte
+   utile pour `a` (`heat` en HEAT, `cool` en COOL),
+2. le temps mort de la réponse passive doit être fiable avant toute collecte
+   utile pour `b` (`cool` en HEAT, `heat` en COOL),
 3. `b` doit progresser avant `a` via un soft gate.
 
 Règles effectivement codées :
@@ -113,6 +119,7 @@ Les pentes validées alimentent ensuite `ABEstimator.learn()` qui :
 - rejette les outliers physiques (`max_abs_dT_per_min = 0.35`),
 - apprend `b` si `u < U_OFF_MAX`,
 - apprend `a` si `u > U_ON_MIN`,
+- exige `a > 0` en HEAT et `a < 0` en COOL,
 - publie les valeurs avec une agrégation robuste (median ou weighted median selon la configuration).
 
 ### 3.4 Estimation de `a` et `b`
@@ -127,14 +134,19 @@ $$ b = -\frac{dT/dt}{T_{int} - T_{ext}} $$
 
 $$ a = \frac{dT/dt + b \cdot (T_{int} - T_{ext})}{u} $$
 
-Les historiques sont filtrés par median/MAD et les valeurs publiées sont bornées.
+Les historiques sont filtrés par median/MAD. La magnitude publiée de `a` est
+bornée tout en conservant le signe du mode ; `b` reste strictement positif.
 
 ### 3.5 Estimation du temps mort
 
-`DeadTimeEstimator` implémente une FSM indépendante :
+`DeadTimeEstimator` implémente une FSM indépendante. Les canaux décrivent la
+réponse physique de la pièce, pas le sens de la transition de puissance :
 
-- transition OFF -> ON : attente d'une réponse de chauffe,
-- transition ON -> OFF : attente d'une réponse de refroidissement.
+- `deadtime_heat` : délai avant une montée de température,
+- `deadtime_cool` : délai avant une baisse de température.
+
+Ainsi, OFF -> ON apprend `heat` en mode HEAT mais `cool` en mode COOL.
+La transition ON -> OFF apprend la réponse passive opposée.
 
 La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée sur le canal correspondant. Les valeurs publiées sont les moyennes des historiques `heat` et `cool`.
 
@@ -146,21 +158,16 @@ La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée
 
 `GainScheduler.calculate()` applique la logique suivante :
 
-1. si `tau` n'est pas fiable, repli sur `KP_SAFE = 0.55` et `KI_SAFE = 0.010`,
-2. sinon calcul heuristique :
+1. si `tau`, le signe de `a` ou le temps mort actif ne sont pas fiables,
+   repli sur `KP_SAFE = 0.55` et `KI_SAFE = 0.010`,
+2. sinon calcul IMC/SIMC avec la magnitude du gain actif :
 
-$$ K_{p,heu} = 0.35 + 0.9 \cdot \sqrt{\frac{\tau}{200}} $$
+$$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
-3. si `deadtime_heat` est fiable et `a > 0`, calcul IMC :
+3. calcul de $K_i = K_p / \tau$,
+4. bornage des gains puis application des gels de gouvernance.
 
-$$ K_{p,IMC} = \frac{1}{2 \cdot a \cdot (L/60)} $$
-
-4. choix de `min(Kp_IMC, Kp_heu)`,
-5. calcul de :
-
-$$ K_i = \frac{K_p}{\max(\tau, 10)} $$
-
-6. application des gels de gouvernance.
+Le temps mort actif est `deadtime_heat` en HEAT et `deadtime_cool` en COOL.
 
 Important :
 
@@ -176,6 +183,10 @@ $$ k_{ff} = \frac{b}{a} $$
 et :
 
 $$ u_{ff1} = clamp(k_{ff} \cdot (SP - T_{ext}), 0, 1) \cdot warmup\_scale $$
+
+En COOL, $a < 0$ et donc $k_{ff} < 0$. Lorsque l'extérieur est plus chaud que
+la consigne, les deux différences négatives produisent bien une puissance de
+refroidissement positive.
 
 Le `warmup_scale` n'est pas un simple interrupteur. Il dépend :
 

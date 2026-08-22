@@ -1,6 +1,9 @@
 """Tests for the Feed-Forward orchestrator (smartpi/feedforward.py)."""
 
+from unittest.mock import MagicMock
+
 import pytest
+from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.feedforward import (
     compute_ff,
     FFResult,
@@ -22,6 +25,7 @@ from custom_components.vtherm_smartpi.smartpi.ff_trim import (
     evaluate_pi_eligibility_for_trim,
 )
 from custom_components.vtherm_smartpi.smartpi.const import (
+    GovernanceDecision,
     GovernanceRegime,
     FF3_DELTA_U,
     FF3_MAX_HORIZON_CYCLES,
@@ -37,7 +41,10 @@ from custom_components.vtherm_smartpi.const import (
     DEFAULT_OPTIONS,
     DEFAULT_SMART_PI_USE_FF3,
 )
-from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.hvac_mode import (
+    VThermHvacMode_COOL,
+    VThermHvacMode_HEAT,
+)
 
 
 def _call(
@@ -91,6 +98,65 @@ def test_smartpi_ff3_explicit_false_stays_disabled():
         DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3],
     )
     assert use_ff3 is False
+
+
+def test_signed_cool_feedforward_matches_heat_magnitude():
+    """Signed b/a produces positive holding power when outdoor air is warmer."""
+    heat = _call(
+        error=0.2,
+        k_ff=0.05,
+        target_temp_ff=20.0,
+        ext_temp=10.0,
+    )
+    cool = _call(
+        error=0.2,
+        k_ff=-0.05,
+        target_temp_ff=20.0,
+        ext_temp=30.0,
+    )
+
+    assert heat.u_ff1 == pytest.approx(0.5)
+    assert cool.u_ff1 == pytest.approx(heat.u_ff1)
+
+
+def test_algo_enables_signed_structural_feedforward_in_cool():
+    """The runtime orchestrator must no longer force COOL FF1 to zero."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="cool-ff",
+        use_ff3=False,
+    )
+    algo.est.a = -0.05
+    algo.est.b = 0.0025
+    algo.est.model_hvac_mode = "cool"
+    algo.est.a_meas_hist.extend([-0.05] * 8)
+    algo.est.b_meas_hist.extend([0.0025] * 8)
+    algo.est._b_hat_hist.extend([0.0025] * 5)
+    algo.est.learn_ok_count = 40
+    algo.est.learn_ok_count_a = 20
+    algo.est.learn_ok_count_b = 20
+    algo.dt_est.deadtime_cool_s = 120.0
+    algo.dt_est.deadtime_cool_reliable = True
+    algo._tau_reliable = True
+    algo._cycles_since_reset = algo.ff_warmup_cycles
+    algo.gov.regime = GovernanceRegime.EXCITED_STABLE
+
+    runtime_ff, _ = algo._apply_gains_and_ff(
+        GovernanceDecision.ADAPT_ON,
+        target_temp_ff=20.0,
+        ext_current_temp=30.0,
+        hvac_mode=VThermHvacMode_COOL,
+        error=0.2,
+        current_temp=20.2,
+        e_p=0.2,
+    )
+
+    assert algo._last_ff_result is not None
+    assert algo._last_ff_result.u_ff1 == pytest.approx(0.5)
+    assert runtime_ff == pytest.approx(0.5)
 
 
 def test_ff3_horizon_covers_heat_deadtime():

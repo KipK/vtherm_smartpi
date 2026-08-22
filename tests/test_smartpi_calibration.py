@@ -14,11 +14,16 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     HYST_LOWER_C,
     HYST_UPPER_C,
     AUTOCALIB_SNAPSHOT_PERIOD_H,
+    AUTOCALIB_DT_COOL_FALLBACK_DAYS,
     AUTOCALIB_COOLDOWN_H,
     AUTOCALIB_MAX_RETRIES,
 )
 from custom_components.vtherm_smartpi.smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
-from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode, VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.hvac_mode import (
+    VThermHvacMode,
+    VThermHvacMode_COOL,
+    VThermHvacMode_HEAT,
+)
 
 
 class MockHass:
@@ -267,6 +272,24 @@ def test_autocalib_waiting_snapshot_to_monitoring():
     assert event is not None
     assert event.event_type == "smartpi_autocalib_snapshot_taken"
     assert ac.snapshot_age_h is not None
+
+
+def test_autocalib_cool_never_falls_back_without_active_cool_deadtime():
+    """The HEAT winter fallback cannot validate a COOL model without active L."""
+    ac = AutoCalibTrigger("test_vtherm")
+    mock_algo = MagicMock()
+    mock_algo._last_hvac_mode = VThermHvacMode_COOL
+    mock_algo.est.tau_reliability.return_value = MagicMock(reliable=True)
+    mock_algo.dt_est.deadtime_heat_reliable = True
+    mock_algo.dt_est.deadtime_cool_reliable = False
+    ac._initial_reliables_ts = time.time() - (
+        (AUTOCALIB_DT_COOL_FALLBACK_DAYS + 1) * 86400.0
+    )
+
+    event = ac._check_phase_initial(time.time(), mock_algo)
+
+    assert event is None
+    assert ac.state == AutoCalibState.WAITING_SNAPSHOT
 
 
 def test_autocalib_stagnation_trigger():

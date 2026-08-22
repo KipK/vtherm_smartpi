@@ -62,7 +62,7 @@ def compute_ff(
     """Compute the full FF signal for one cycle.
 
     Args:
-        k_ff: FF gain = b / a (loss-to-heating ratio).
+        k_ff: Signed FF gain b / a (positive in HEAT, negative in COOL).
         target_temp_ff: Feedforward reference setpoint (°C).
         ext_temp: Outdoor temperature (°C), or None if unavailable.
         warmup_scale: Combined warmup scaling factor (learn_scale * time_scale * reliable_cap).

@@ -257,6 +257,7 @@ class CalibrationManager:
                 u_applied=on_percent,
                 max_on_percent=max_on_percent if max_on_percent is not None else 1.0,
                 is_hysteresis=True,
+                hvac_mode=hvac_mode,
             )
 
         return CalibrationResult(

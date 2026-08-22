@@ -34,15 +34,16 @@
 
 SmartPI est une alternative au TPI classique pour Versatile Thermostat.
 
-Son objectif est simple : au lieu d'utiliser un comportement fixe, il apprend comment votre pièce chauffe et refroidit réellement, puis adapte automatiquement la régulation.
+Son objectif est simple : au lieu d'utiliser un comportement fixe, il apprend comment votre pièce chauffe et refroidit réellement, puis adapte automatiquement la régulation. Chaque VTherm SmartPI reste mono-mode : HEAT ou COOL, jamais les deux à la fois.
 
 Concrètement, SmartPI apprend :
 
-- à quelle vitesse votre chauffage réchauffe la pièce,
-- à quelle vitesse la pièce perd sa chaleur,
-- combien de temps la pièce met à réagir quand la chauffe démarre ou s'arrête.
+- à quelle vitesse l'équipement actif chauffe ou refroidit la pièce,
+- à quelle vitesse l'extérieur réchauffe ou refroidit passivement la pièce,
+- combien de temps la pièce met à réagir quand l'équipement démarre ou s'arrête.
 
-À partir de là, SmartPI construit une commande de chauffe généralement plus précise qu'un TPI fixe :
+À partir de là, SmartPI construit une commande de chauffage ou de
+refroidissement généralement plus précise qu'un TPI fixe :
 
 - il corrige l'écart actuel à la consigne,
 - il estime la puissance nécessaire pour tenir la consigne,
@@ -68,7 +69,7 @@ Pendant la première phase d'apprentissage, essayez d'éviter :
 Deux conseils pratiques aident beaucoup :
 
 - laissez SmartPI fonctionner sans interruption pendant le premier ou les deux premiers jours,
-- utilisez une consigne suffisamment au-dessus de la température extérieure pour que la réponse de chauffe soit bien visible.
+- en HEAT, utilisez une consigne suffisamment au-dessus de la température extérieure ; en COOL, une température extérieure suffisamment au-dessus de la consigne aide à rendre les réponses active et passive observables.
 
 En pratique, l'apprentissage peut prendre de quelques heures à 48 heures sur les systèmes lents ou très inertiels.
 

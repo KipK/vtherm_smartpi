@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, TYPE_CHECKING
 
+from ..hvac_mode import VThermHvacMode_COOL
 from .const import (
     AutoCalibState,
     AutoCalibWaitingReason,
@@ -277,19 +278,20 @@ class AutoCalibTrigger:
         Evaluate phase-initial conditions to take the first snapshot.
 
         §4.0.1 Nominal: tau_reliable + deadtime_heat_reliable + deadtime_cool_reliable all True.
-        §4.0.2 Fallback: tau_reliable + deadtime_heat_reliable since 7 days without cool.
+        §4.0.2 HEAT-only fallback: tau_reliable + deadtime_heat_reliable
+        since 7 days without a passive cool response.
         """
-        tau_reliable = algo.dt_est.deadtime_heat_reliable and algo.est.tau_reliability().reliable
-        # Note: tau_reliable from spec refers to ABEstimator.tau_reliability().reliable
         tau_rel = algo.est.tau_reliability().reliable
         dt_heat_rel = algo.dt_est.deadtime_heat_reliable
         dt_cool_rel = algo.dt_est.deadtime_cool_reliable
+        is_cool_mode = algo._last_hvac_mode == VThermHvacMode_COOL
+        active_deadtime_rel = dt_cool_rel if is_cool_mode else dt_heat_rel
 
-        # Track when both heat flags first became true
-        if tau_rel and dt_heat_rel and self._initial_reliables_ts is None:
+        # Track when tau and the active response first become reliable.
+        if tau_rel and active_deadtime_rel and self._initial_reliables_ts is None:
             self._initial_reliables_ts = now_wall
             _LOGGER.debug(
-                "%s - AutoCalib: tau_reliable + deadtime_heat_reliable first seen, starting 7d countdown",
+                "%s - AutoCalib: tau + active deadtime first reliable",
                 self._name,
             )
 
@@ -310,7 +312,8 @@ class AutoCalibTrigger:
 
         # §4.0.2 Fallback: 7 days with tau+heat without cool
         if (
-            tau_rel
+            not is_cool_mode
+            and tau_rel
             and dt_heat_rel
             and not dt_cool_rel
             and self._initial_reliables_ts is not None
@@ -501,10 +504,20 @@ class AutoCalibTrigger:
         if not self._snap_dt_cool_unavailable:
             if not algo.dt_est.deadtime_cool_reliable and not self._snap_dt_cool_ok:
                 # Check gradient condition
+                thermal_gradient = (
+                    (
+                        ext_temp - current_temp
+                        if algo._last_hvac_mode == VThermHvacMode_COOL
+                        else current_temp - ext_temp
+                    )
+                    if current_temp is not None and ext_temp is not None
+                    else None
+                )
                 if (
                     current_temp is not None
                     and ext_temp is not None
-                    and (current_temp - ext_temp) >= AUTOCALIB_TEXT_GRADIENT_C
+                    and thermal_gradient is not None
+                    and thermal_gradient >= AUTOCALIB_TEXT_GRADIENT_C
                 ):
                     _LOGGER.debug(
                         "%s - AutoCalib: stagnation detected on 'deadtime_cool' (gradient ok)",

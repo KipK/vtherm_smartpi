@@ -1,5 +1,6 @@
 import pytest
 from custom_components.vtherm_smartpi.smartpi.deadtime_estimator import DeadTimeEstimator
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL
 
 class TestDeadTimeEstimatorNew:
     def setup_method(self):
@@ -65,6 +66,98 @@ class TestDeadTimeEstimatorNew:
         # start at 2060. Peak/inflection at 2120. Diff = 60.
         assert self.est.deadtime_cool_s == 60.0
         assert self.est.deadtime_cool_reliable is True
+
+    def test_active_cool_power_learns_falling_response_deadtime(self):
+        """In HVAC COOL, power ON must populate the physical cool dead time."""
+        now = 1000.0
+        self.est.update(
+            now,
+            24.0,
+            20.0,
+            0.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+        now += 600.0
+        self.est.update(
+            now,
+            24.0,
+            20.0,
+            1.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+
+        assert self.est.state == "WAITING_COOL_RESPONSE"
+        assert self.est.cool_start_time == now
+
+        now += 180.0
+        self.est.update(
+            now,
+            24.0,
+            20.0,
+            1.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+        now += 60.0
+        self.est.update(
+            now,
+            23.94,
+            20.0,
+            1.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+
+        assert self.est.deadtime_cool_s == 180.0
+        assert self.est.deadtime_cool_reliable is True
+        assert self.est.deadtime_heat_s is None
+
+    def test_cool_power_stop_learns_passive_rising_deadtime(self):
+        """In HVAC COOL, power OFF must populate the physical heat dead time."""
+        now = 1000.0
+        self.est.model_hvac_mode = "cool"
+        self.est.last_power = 1.0
+        self.est.state = "COOLING"
+        self.est.update(
+            now,
+            20.0,
+            20.0,
+            0.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+
+        assert self.est.state == "WAITING_HEAT_RESPONSE"
+
+        now += 120.0
+        self.est.update(
+            now,
+            20.0,
+            20.0,
+            0.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+        now += 60.0
+        self.est.update(
+            now,
+            20.06,
+            20.0,
+            0.0,
+            hvac_mode=VThermHvacMode_COOL,
+        )
+
+        assert self.est.deadtime_heat_s == 120.0
+        assert self.est.deadtime_heat_reliable is True
+
+    def test_legacy_cool_deadtime_state_is_reset_on_first_use(self):
+        """Legacy COOL transition labels are not silently reinterpreted."""
+        self.est.deadtime_heat_s = 120.0
+        self.est.deadtime_heat_reliable = True
+        self.est._history_heat.append(120.0)
+
+        reset = self.est.ensure_hvac_mode(VThermHvacMode_COOL)
+
+        assert reset is True
+        assert self.est.deadtime_heat_s is None
+        assert self.est.deadtime_cool_s is None
+        assert self.est.model_hvac_mode == "cool"
 
     def test_cooling_persistence(self):
         """Test that COOLING state persists even with subsequent updates at 0 power"""

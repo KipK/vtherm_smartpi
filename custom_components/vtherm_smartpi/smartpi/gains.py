@@ -9,6 +9,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..hvac_mode import (
+    VThermHvacMode,
+    VThermHvacMode_COOL,
+    VThermHvacMode_HEAT,
+)
 from .const import (
     GAIN_LAMBDA_CYCLE_FACTOR,
     GAIN_LAMBDA_DEADTIME_FACTOR,
@@ -92,6 +97,7 @@ class GainScheduler:
         near_band_ratio: float = 1.0,
         cycle_min: float = 10.0,
         valve_mode_enabled: bool = False,
+        hvac_mode: VThermHvacMode = VThermHvacMode_HEAT,
     ) -> GainResult:
         """Calculate Kp and Ki gains based on model and conditions.
         
@@ -99,23 +105,33 @@ class GainScheduler:
             tau_reliable: Whether the time constant estimate is reliable.
             tau_min: Minimum time constant in minutes.
             estimator: ABEstimator instance with 'a' attribute (gain coefficient).
-            dt_est: DeadTimeEstimator with deadtime_heat_s and deadtime_heat_reliable.
+            dt_est: DeadTimeEstimator with physical heat/cool response dead times.
             in_near_band: Whether currently in near-band region.
             near_band_ratio: |error| / near-band width, clamped to [0, 1].
             governance_decision: Current governance decision for gain adaptation.
             cycle_min: PWM cycle duration in minutes.
             valve_mode_enabled: Whether valve-mode tuning should be applied.
+            hvac_mode: Active mono-mode HVAC contract for A and dead time.
             
         Returns:
             GainResult with calculated kp, ki, and their sources.
         """
+        if hvac_mode == VThermHvacMode_COOL:
+            active_deadtime_s = dt_est.deadtime_cool_s
+            active_deadtime_reliable = dt_est.deadtime_cool_reliable
+            model_sign_valid = estimator.a < -1e-6
+        else:
+            active_deadtime_s = dt_est.deadtime_heat_s
+            active_deadtime_reliable = dt_est.deadtime_heat_reliable
+            model_sign_valid = estimator.a > 1e-6
+
         has_complete_model = (
             tau_reliable
             and tau_min > 0.0
-            and estimator.a > 1e-6
-            and dt_est.deadtime_heat_reliable
-            and dt_est.deadtime_heat_s is not None
-            and dt_est.deadtime_heat_s > 1.0
+            and model_sign_valid
+            and active_deadtime_reliable
+            and active_deadtime_s is not None
+            and active_deadtime_s > 1.0
         )
 
         if not has_complete_model:
@@ -124,7 +140,7 @@ class GainScheduler:
             kp_source = "safe"
             ki_source = "safe"
         else:
-            L_min = float(dt_est.deadtime_heat_s) / 60.0
+            L_min = float(active_deadtime_s) / 60.0
             cycle_min_eff = max(float(cycle_min), 0.0)
             deadtime_factor = (
                 GAIN_LAMBDA_VALVE_DEADTIME_FACTOR
@@ -136,7 +152,7 @@ class GainScheduler:
                 GAIN_LAMBDA_CYCLE_FACTOR * cycle_min_eff,
                 GAIN_LAMBDA_MIN_MIN,
             )
-            kp_calc = 1.0 / (float(estimator.a) * (lambda_min + L_min))
+            kp_calc = 1.0 / (abs(float(estimator.a)) * (lambda_min + L_min))
             kp = clamp(kp_calc, KP_MIN, KP_MAX)
             ti = float(tau_min)
             ki = clamp(kp / ti, KI_MIN, KI_MAX)
