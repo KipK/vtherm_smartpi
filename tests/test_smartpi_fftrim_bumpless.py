@@ -41,6 +41,46 @@ def test_stable_integral_bias_changes_owner_without_command_step(
     assert plan.net_command_delta == pytest.approx(0.0)
 
 
+def test_opposing_persisted_trim_and_integral_compact_without_command_step() -> None:
+    """Opposing stored trim and integral bias must both move toward zero."""
+    current_trim = -0.014593
+    current_i_power = 0.007642571
+    plan = prepare_bumpless_transfer(
+        current_trim=current_trim,
+        current_ff1=0.096757,
+        current_i_power=current_i_power,
+        observed_i_bias=current_i_power,
+        physical_power_deficit=0.0,
+        current_ki=0.001,
+        current_raw_command=0.089806571,
+    )
+
+    assert plan.applicable is True
+    assert abs(plan.new_trim) < abs(current_trim)
+    assert plan.applied_i_transfer > 0.0
+    assert abs(current_i_power - plan.applied_i_transfer) < abs(current_i_power)
+    assert plan.visible_ff_delta == pytest.approx(plan.applied_i_transfer)
+    assert plan.net_command_delta == pytest.approx(0.0)
+
+
+def test_small_same_direction_trim_and_integral_remain_quiet() -> None:
+    """Sub-precision ownership transfer must stay quiet without cancellation."""
+    current_trim = 0.014593
+    current_i_power = 0.007642571
+    plan = prepare_bumpless_transfer(
+        current_trim=current_trim,
+        current_ff1=0.096757,
+        current_i_power=current_i_power,
+        observed_i_bias=current_i_power,
+        physical_power_deficit=0.0,
+        current_ki=0.001,
+        current_raw_command=0.118992571,
+    )
+
+    assert plan.applicable is False
+    assert plan.reason == "quiet_trim_delta"
+
+
 def test_physical_deficit_remains_a_real_command_change() -> None:
     """Only the I-owned share is cancelled by the integral mutation."""
     plan = prepare_bumpless_transfer(

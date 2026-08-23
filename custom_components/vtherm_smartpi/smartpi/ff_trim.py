@@ -1346,9 +1346,15 @@ def prepare_bumpless_transfer(
     requested_i_transfer = FF_TRIM_LAMBDA * transferable_bias
     physical_delta = FF_TRIM_LAMBDA * deficit
     requested_trim_delta = requested_i_transfer + physical_delta
+    opposing_ownership_compaction = (
+        abs(requested_i_transfer) > 1e-12
+        and trim * requested_i_transfer < 0.0
+        and abs(trim + requested_trim_delta) < abs(trim)
+    )
     if (
         abs(requested_trim_delta) <= FF_TRIM_DELTA_EPSILON
         and abs(requested_i_transfer) <= FF_TRIM_DELTA_EPSILON
+        and not opposing_ownership_compaction
     ):
         return FFTrimBumplessPlan(
             False,

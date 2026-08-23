@@ -475,6 +475,9 @@ bounded transaction applies
 authority, FF branch bounds, integral capacity, and command headroom. The
 transaction runs only at the post-anti-windup cycle boundary and is identical
 in the signed HEAT and COOL model power space.
+Transfers below the generic actuator-precision threshold remain ignored unless
+they strictly reduce opposing stored trim and integral contributions. This
+ownership compaction keeps the same atomic bounds and command invariant.
 
 The current payload from `SmartPI.save_state()` notably contains:
 

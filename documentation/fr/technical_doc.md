@@ -485,6 +485,10 @@ transaction bornée applique
 trim, les clamps FF, la capacité intégrale et la marge de commande. La
 transaction s'exécute uniquement à la frontière de cycle après anti-windup,
 dans le même espace de puissance signé en HEAT et COOL.
+Les transferts inférieurs au seuil générique de précision de l'actionneur
+restent ignorés, sauf lorsqu'ils réduisent strictement des contributions trim
+et intégrale opposées. Ce compactage de propriété conserve les mêmes bornes
+atomiques et le même invariant de commande.
 
 Le payload actuel de `SmartPI.save_state()` contient notamment :
 
