@@ -429,7 +429,7 @@ The forced cycle is managed by `CalibrationManager`:
 | `deadband.py`          | deadband and near-band                                      |
 | `setpoint.py`          | analytical setpoint trajectory and HEAT landing cap         |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
-| `ff_trim.py`           | slow feed-forward bias                                      |
+| `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
 | `ff3.py`               | bounded FF3 predictive correction                           |
 | `governance.py`        | freeze decisions                                            |
@@ -464,6 +464,18 @@ self._ab_confidence = ABConfidence()
 
 ### 5.4 Current persistence
 
+The causal observer aligns a second, time-weighted control-ownership timeline
+with the physical-power timeline. A strict deadband window can therefore
+separate the stable integral bias $J=mean(K_i integral)$ from the physical
+deficit $D=H-mean(u_{applied})$. After three independent coherent windows, one
+bounded transaction applies
+`delta_trim = alpha * lambda * (J + D)` and
+`delta_u_i = -alpha * lambda * J`, hence
+`delta_u_cmd = alpha * lambda * D`. The same factor `alpha` handles trim
+authority, FF branch bounds, integral capacity, and command headroom. The
+transaction runs only at the post-anti-windup cycle boundary and is identical
+in the signed HEAT and COOL model power space.
+
 The current payload from `SmartPI.save_state()` notably contains:
 
 ```python
@@ -485,6 +497,10 @@ The current payload from `SmartPI.save_state()` notably contains:
 ```
 
 Loading can also read `ac_state`, but that block is not currently emitted again by `save_state()`.
+
+Only the learned trim remains persistent. Ownership windows, pending
+proposals, and integral transfers are transient; after restart the observer is
+rebuilt and the existing three-cycle trim freeze still applies.
 
 ### 5.5 Published diagnostics
 

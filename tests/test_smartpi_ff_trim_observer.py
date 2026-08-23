@@ -10,6 +10,7 @@ from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
 from custom_components.vtherm_smartpi.smartpi.ff_trim import (
     AppliedPowerSegment,
     CausalFFTrimObserver,
+    ControlOwnershipSnapshot,
     FFTrimThermalSample,
 )
 
@@ -23,6 +24,8 @@ def _sample(
     i_mode: str = "I:FREEZE(deadband)",
     u_pi: float = 0.1,
     hvac_mode: str = "heat",
+    ff1: float = 0.5,
+    outside_temperature: float | None = 10.0,
 ) -> FFTrimThermalSample:
     """Build one admissible mono-mode thermal measurement."""
     return FFTrimThermalSample(
@@ -30,7 +33,7 @@ def _sample(
         measurement_id=measurement_id or str(observed_monotonic),
         temperature=temperature,
         target=20.0,
-        ff1=0.5,
+        ff1=ff1,
         regime=regime,
         i_mode=i_mode,
         u_pi=u_pi,
@@ -41,6 +44,7 @@ def _sample(
         setpoint_changed=False,
         outside_temperature_available=True,
         model_reliable=True,
+        outside_temperature=outside_temperature,
     )
 
 
@@ -51,6 +55,8 @@ def _record_samples(
     u_pi_values: tuple[float, ...] | None = None,
     regime: GovernanceRegime = GovernanceRegime.DEAD_BAND,
     hvac_mode: str = "heat",
+    ff1: float = 0.5,
+    outside_temperature: float | None = 10.0,
 ) -> None:
     """Record equally spaced measurements over a thirty-minute window."""
     timestamps = (120.0, 720.0, 1320.0, 1920.0)
@@ -69,10 +75,59 @@ def _record_samples(
                 ),
                 u_pi=u_pi_values[index] if u_pi_values else 0.1,
                 hvac_mode=hvac_mode,
+                ff1=ff1,
+                outside_temperature=outside_temperature,
             ),
             deadtime_s=120.0,
             deadtime_reliable=True,
         )
+
+
+def _ownership(
+    *,
+    ff1: float = 0.4,
+    u_p: float = 0.0,
+    u_i: float = 0.1,
+    committed: float = 0.5,
+    hvac_regime: GovernanceRegime = GovernanceRegime.DEAD_BAND,
+    i_mode: str = "I:FREEZE(deadband)",
+) -> ControlOwnershipSnapshot:
+    """Build one internally consistent committed-command ownership snapshot."""
+    visible_ff = ff1
+    command = visible_ff + u_p + u_i
+    return ControlOwnershipSnapshot(
+        u_ff1=ff1,
+        trim_stored=0.0,
+        u_ff_visible=visible_ff,
+        u_ff3=0.0,
+        u_p=u_p,
+        u_i=u_i,
+        ki=0.02,
+        gain_generation=1,
+        u_cmd=command,
+        u_limited=command,
+        linear_committed_power=committed,
+        regime=hvac_regime,
+        i_mode=i_mode,
+        quality="switch_cycle_equivalent",
+    )
+
+
+def _record_owned_switch_window(
+    observer: CausalFFTrimObserver,
+    ownership: ControlOwnershipSnapshot,
+) -> None:
+    """Record one complete equivalent switch-power and ownership interval."""
+    observer.start_applied_cycle(
+        now_monotonic=0.0,
+        linear_power=ownership.linear_committed_power,
+        ownership=ownership,
+    )
+    observer.complete_applied_cycle(
+        now_monotonic=1800.0,
+        realized_linear_power=ownership.linear_committed_power,
+        use_valve_trace=False,
+    )
 
 
 def test_causal_observer_returns_zero_for_correct_stable_ff() -> None:
@@ -350,3 +405,108 @@ def test_causal_observer_invalidation_clears_window_and_imposes_washout() -> Non
 
     assert observer.state == "waiting_deadtime"
     assert observer.diagnostics["measurement_count"] == 0
+
+
+def test_causal_observer_separates_integral_bias_from_physical_deficit() -> None:
+    """A stable I-owned hold power must be transferable without a net step."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    _record_owned_switch_window(observer, _ownership())
+    _record_samples(
+        observer,
+        (20.0, 20.0, 20.0, 20.0),
+        ff1=0.4,
+    )
+
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.transfer_eligible is True
+    assert result.transfer_reason == "quasi_equilibrium"
+    assert result.mean_p_power == pytest.approx(0.0)
+    assert result.mean_i_power == pytest.approx(0.1)
+    assert result.physical_power_deficit == pytest.approx(0.0)
+    assert result.decomposed_correction == pytest.approx(0.1)
+
+
+def test_causal_observer_uses_ff1_from_aligned_ownership_window() -> None:
+    """Delayed FF1 ownership must replace the later thermal-sample value."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    _record_owned_switch_window(observer, _ownership(ff1=0.4))
+    _record_samples(
+        observer,
+        (20.0, 20.0, 20.0, 20.0),
+        ff1=0.6,
+    )
+
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.mean_ff1 == pytest.approx(0.4)
+    assert result.target_trim == pytest.approx(0.1)
+    assert result.correction == pytest.approx(0.1)
+
+
+def test_causal_observer_never_attributes_proportional_power_to_integral() -> None:
+    """A visible P contribution must make ownership transfer ineligible."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    _record_owned_switch_window(
+        observer,
+        _ownership(u_p=0.02, u_i=0.08),
+    )
+    _record_samples(
+        observer,
+        (20.0, 20.0, 20.0, 20.0),
+        ff1=0.4,
+    )
+
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.mean_p_power == pytest.approx(0.02)
+    assert result.mean_i_power == pytest.approx(0.08)
+    assert result.transfer_eligible is False
+    assert result.transfer_reason == "transfer_p_active"
+
+
+def test_causal_observer_signed_cool_uses_same_power_ownership() -> None:
+    """COOL changes the thermal sign, not the positive actuator ownership."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    _record_owned_switch_window(observer, _ownership())
+    _record_samples(
+        observer,
+        (20.0, 20.0, 20.0, 20.0),
+        hvac_mode="cool",
+        ff1=0.4,
+        outside_temperature=30.0,
+    )
+
+    result = observer.try_complete_window(
+        a=-0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.transfer_eligible is True
+    assert result.mean_i_power == pytest.approx(0.1)
+    assert result.physical_power_deficit == pytest.approx(0.0)

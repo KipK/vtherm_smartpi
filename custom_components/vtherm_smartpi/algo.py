@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from datetime import datetime
 from math import exp
 from typing import Any, Dict, Optional
@@ -83,6 +84,8 @@ from .smartpi.const import (
     AW_TRACK_MAX_DELTA_I,
     ERROR_FILTER_TAU,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
+    FF_TRIM_TRANSFER_COMMAND_EPSILON,
+    FF_TRIM_TRANSFER_MAX_POWER_RANGE,
     clamp,
 )
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
@@ -107,8 +110,12 @@ from .smartpi.ff3_eligibility import (
 from .smartpi.ff_trim import (
     CausalFFTrimObserver,
     CausalFFTrimResult,
+    ControlOwnershipSnapshot,
     FFTrim,
+    FFTrimPersistentResult,
     FFTrimThermalSample,
+    FFTrimWindowProposal,
+    prepare_bumpless_transfer,
 )
 from .smartpi.ff_ab_confidence import ABConfidence
 from .smartpi.tint_filter import AdaptiveTintFilter
@@ -329,6 +336,20 @@ class SmartPI:
         self._last_fftrim_reject_reason: str = "none"
         self._last_fftrim_update_reason: str = "none"
         self._cycles_since_fftrim_update: int = 0
+        self._gain_generation: int = 0
+        self._bumpless_transfer_state: str = "idle"
+        self._bumpless_transfer_reason: str = "none"
+        self._requested_trim_delta: float = 0.0
+        self._stored_trim_delta: float = 0.0
+        self._applied_trim_delta: float = 0.0
+        self._transferable_i_power: float = 0.0
+        self._requested_i_transfer: float = 0.0
+        self._applied_i_transfer: float = 0.0
+        self._net_command_delta: float = 0.0
+        self._transfer_pending_engagement: bool = False
+        self._transfer_quality: str = "unavailable"
+        self._pending_bumpless_persistent: FFTrimPersistentResult | None = None
+        self._pending_bumpless_quality: str = "unavailable"
         self._last_forced_by_timing: bool = False  # True when timing forced 0%/100%
         self._output_initialized: bool = False # True once calculate() runs successfully
 
@@ -447,6 +468,20 @@ class SmartPI:
         self._last_fftrim_reject_reason = "none"
         self._last_fftrim_update_reason = "none"
         self._cycles_since_fftrim_update = 0
+        self._gain_generation = 0
+        self._bumpless_transfer_state = "idle"
+        self._bumpless_transfer_reason = "none"
+        self._requested_trim_delta = 0.0
+        self._stored_trim_delta = 0.0
+        self._applied_trim_delta = 0.0
+        self._transferable_i_power = 0.0
+        self._requested_i_transfer = 0.0
+        self._applied_i_transfer = 0.0
+        self._net_command_delta = 0.0
+        self._transfer_pending_engagement = False
+        self._transfer_quality = "unavailable"
+        self._pending_bumpless_persistent = None
+        self._pending_bumpless_quality = "unavailable"
         self._e_filt = None
         self._cycles_since_reset = 0
         self._accumulated_dt = 0.0
@@ -538,7 +573,7 @@ class SmartPI:
         self.gov.regime = GovernanceRegime(value) if isinstance(value, str) else value
 
     @property
-    def phase(self) -> str:
+    def phase(self) -> SmartPIPhase:
         if self.calibration_mgr.state != SmartPICalibrationPhase.IDLE:
             return SmartPIPhase.CALIBRATION
         if len(self.est.a_meas_hist) < AB_MIN_SAMPLES_A or len(self.est.b_meas_hist) < AB_MIN_SAMPLES_B:
@@ -793,7 +828,13 @@ class SmartPI:
         self._fftrim_observer.start_applied_cycle(
             now_monotonic=cycle_start_now,
             linear_power=linear_on_percent,
+            ownership=self._build_fftrim_ownership_snapshot(linear_on_percent),
         )
+        if (
+            abs(linear_on_percent - self.ctl.u_cmd)
+            <= FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            self._transfer_pending_engagement = False
         self._current_cycle_start_monotonic = cycle_start_now
         self._update_deadtime_episode_status(linear_on_percent, hvac_mode, cycle_start_now)
         self._setpoint_changed_in_cycle = False
@@ -819,6 +860,7 @@ class SmartPI:
             self._last_hvac_mode
         )
         if e_eff is None:
+            self._pending_bumpless_persistent = None
             result = self._fftrim_observer.invalidate(
                 "missing_e_eff",
                 now_monotonic=cycle_end_now,
@@ -826,6 +868,7 @@ class SmartPI:
             )
             self._apply_fftrim_observer_result(result, count_window=False)
         elif elapsed_ratio < 1.0:
+            self._pending_bumpless_persistent = None
             result = self._fftrim_observer.invalidate(
                 "partial_cycle",
                 now_monotonic=cycle_end_now,
@@ -833,9 +876,11 @@ class SmartPI:
             )
             self._apply_fftrim_observer_result(result, count_window=False)
         else:
+            self._apply_pending_bumpless_at_cycle_boundary()
             self._try_complete_fftrim_window(
                 deadtime_s=deadtime_s,
                 deadtime_reliable=deadtime_reliable,
+                allow_bumpless=True,
             )
 
         # Cycle accepted -> Count it
@@ -870,6 +915,80 @@ class SmartPI:
             use_valve_trace=self._valve_mode_enabled,
         )
 
+    def _build_fftrim_ownership_snapshot(
+        self,
+        linear_committed_power: float,
+    ) -> ControlOwnershipSnapshot | None:
+        """Capture the control terms that own one committed physical command."""
+        ff_result = self._last_ff_result
+        if ff_result is None:
+            return None
+
+        flags: list[str] = []
+        if self.ctl.last_sat != "NO_SAT":
+            flags.append("saturated")
+        if self.sp_mgr.trajectory_active:
+            flags.append("trajectory")
+        if self.sp_mgr.landing_active:
+            flags.append("landing")
+        current_phase = self.phase
+        if current_phase != SmartPIPhase.STABLE:
+            flags.append(f"phase_{current_phase.value}")
+        if self.guards.guard_cut_active or self.guards.guard_kick_active:
+            flags.append("guard")
+        if self._setpoint_changed_in_cycle:
+            flags.append("setpoint_changed")
+        if (
+            self._recovery_hold_armed
+            or self._resume_deadtime_hold_source != IntegralGuardSource.NONE
+            or self._resume_deadtime_hold_started
+        ):
+            flags.append("recovery")
+        if self._last_forced_by_timing:
+            flags.append("timing")
+        if (
+            abs(self._last_u_cmd - self._last_u_limited)
+            > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            flags.append("output_limited")
+        if (
+            abs(self._last_u_limited - self._last_u_applied)
+            > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            flags.append("timing_output")
+
+        visible_ff = clamp(ff_result.u_ff1 + self._ff_trim.u_ff_trim, 0.0, 1.0)
+        actual_ff3 = self.ctl.u_ff - visible_ff
+        if abs(actual_ff3) > FF_TRIM_TRANSFER_COMMAND_EPSILON:
+            flags.append("ff3")
+        if (
+            abs(float(linear_committed_power) - self.ctl.u_cmd)
+            > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            flags.append("committed_mismatch")
+        quality = (
+            "valve_segmented_linear"
+            if self._valve_mode_enabled
+            else "switch_cycle_equivalent"
+        )
+        return ControlOwnershipSnapshot(
+            u_ff1=float(ff_result.u_ff1),
+            trim_stored=float(self._ff_trim.u_ff_trim),
+            u_ff_visible=float(visible_ff),
+            u_ff3=float(actual_ff3),
+            u_p=float(self.ctl.u_p),
+            u_i=float(self.ctl.u_i),
+            ki=float(self.Ki),
+            gain_generation=self._gain_generation,
+            u_cmd=float(self._last_u_cmd),
+            u_limited=float(self._last_u_limited),
+            linear_committed_power=float(linear_committed_power),
+            regime=self.gov.regime,
+            i_mode=self.ctl.last_i_mode,
+            quality=quality,
+            constraint_flags=tuple(sorted(set(flags))),
+        )
+
     def _fftrim_deadtime_context(
         self,
         hvac_mode: VThermHvacMode | None,
@@ -892,6 +1011,7 @@ class SmartPI:
         *,
         deadtime_s: float | None,
         deadtime_reliable: bool,
+        allow_bumpless: bool = False,
     ) -> None:
         """Apply one complete causal window when enough evidence is available."""
         result = self._fftrim_observer.try_complete_window(
@@ -902,18 +1022,28 @@ class SmartPI:
             current_trim=self._ff_trim.u_ff_trim,
         )
         if result is not None:
-            self._apply_fftrim_observer_result(result, count_window=True)
+            self._apply_fftrim_observer_result(
+                result,
+                count_window=True,
+                allow_bumpless=allow_bumpless,
+            )
 
     def _apply_fftrim_observer_result(
         self,
         result: CausalFFTrimResult,
         *,
         count_window: bool,
+        allow_bumpless: bool = False,
     ) -> None:
         """Route an observer result through the persistent trim safeguards."""
         self._last_fftrim_cycle_admissible = result.admissible
         if not result.admissible:
+            self._pending_bumpless_persistent = None
             self._ff_trim.clear_pending()
+            self._clear_bumpless_transfer_values()
+            self._bumpless_transfer_state = "observer_rejected"
+            self._bumpless_transfer_reason = result.reason
+            self._transfer_pending_engagement = False
             self._last_fftrim_reject_reason = result.reason
             self._last_fftrim_update_reason = "skipped"
             self._fftrim_observer.last_update_reason = "skipped"
@@ -921,24 +1051,270 @@ class SmartPI:
                 self._cycles_since_fftrim_update += 1
             return
 
-        correction = result.correction
+        correction = (
+            result.decomposed_correction
+            if result.transfer_eligible
+            else result.correction
+        )
         mean_ff1 = result.mean_ff1
         if correction is None or mean_ff1 is None:
             self._ff_trim.clear_pending()
+            self._clear_bumpless_transfer_values()
+            self._bumpless_transfer_state = "observer_rejected"
+            self._bumpless_transfer_reason = "incomplete_observer_result"
+            self._transfer_pending_engagement = False
             self._last_fftrim_reject_reason = "incomplete_observer_result"
             self._last_fftrim_update_reason = "skipped"
             self._fftrim_observer.last_update_reason = "skipped"
             return
 
-        self._last_ff_trim_delta = correction
-        trim_update = self._ff_trim.update_persistent(correction, mean_ff1)
-        self._last_fftrim_update_reason = trim_update.reason
+        proposal = FFTrimWindowProposal(
+            correction=float(correction),
+            mean_ff1=float(mean_ff1),
+            physical_power_deficit=result.physical_power_deficit,
+            integral_bias=result.mean_i_power,
+            transfer_eligible=result.transfer_eligible,
+            transfer_reason=result.transfer_reason,
+        )
+        persistent = self._ff_trim.collect_persistent(proposal)
+        self._last_ff_trim_delta = float(correction)
+        self._last_fftrim_update_reason = persistent.reason
         self._last_fftrim_reject_reason = "none"
-        self._fftrim_observer.last_update_reason = trim_update.reason
-        if trim_update.updated:
+        self._fftrim_observer.last_update_reason = persistent.reason
+        self._transfer_quality = result.transfer_quality
+        if not persistent.ready:
+            self._clear_bumpless_transfer_values()
+            self._transfer_pending_engagement = False
+            self._bumpless_transfer_state = (
+                "pending" if result.transfer_eligible else "ineligible"
+            )
+            self._bumpless_transfer_reason = (
+                persistent.reason
+                if result.transfer_eligible
+                else result.transfer_reason
+            )
+            if count_window:
+                self._cycles_since_fftrim_update += 1
+            return
+
+        if persistent.transfer_eligible:
+            if allow_bumpless:
+                updated = self._apply_bumpless_persistent_result(
+                    persistent=persistent,
+                    quality=result.transfer_quality,
+                )
+            else:
+                self._pending_bumpless_persistent = persistent
+                self._pending_bumpless_quality = result.transfer_quality
+                self._clear_bumpless_transfer_values()
+                self._transfer_pending_engagement = False
+                self._bumpless_transfer_state = "awaiting_cycle_boundary"
+                self._bumpless_transfer_reason = "awaiting_post_aw_boundary"
+                self._last_fftrim_update_reason = "awaiting_cycle_boundary"
+                self._fftrim_observer.last_update_reason = (
+                    "awaiting_cycle_boundary"
+                )
+                if count_window:
+                    self._cycles_since_fftrim_update += 1
+                return
+        else:
+            trim_update = self._ff_trim.apply_persistent_result(
+                persistent,
+                u_ff_ab=float(mean_ff1),
+            )
+            updated = trim_update.updated
+            self._last_fftrim_update_reason = trim_update.reason
+            self._fftrim_observer.last_update_reason = trim_update.reason
+            self._requested_trim_delta = trim_update.requested_trim_delta
+            self._stored_trim_delta = trim_update.stored_trim_delta
+            self._applied_trim_delta = trim_update.visible_ff_delta
+            self._transferable_i_power = 0.0
+            self._requested_i_transfer = 0.0
+            self._applied_i_transfer = 0.0
+            self._net_command_delta = trim_update.visible_ff_delta
+            self._bumpless_transfer_state = "causal_update_without_transfer"
+            self._bumpless_transfer_reason = result.transfer_reason
+            self._transfer_pending_engagement = False
+
+        if updated:
             self._cycles_since_fftrim_update = 0
         elif count_window:
             self._cycles_since_fftrim_update += 1
+
+    def _apply_bumpless_persistent_result(
+        self,
+        *,
+        persistent: FFTrimPersistentResult,
+        quality: str,
+    ) -> bool:
+        """Apply a persistent trim/I transaction after final context checks."""
+        ff_result = self._last_ff_result
+        deficit = persistent.median_physical_power_deficit
+        i_bias = persistent.median_integral_bias
+        if ff_result is None or deficit is None or i_bias is None:
+            return self._reject_bumpless_transfer("incomplete_transfer_result")
+
+        rejection = self._current_bumpless_context_rejection()
+        if rejection is not None:
+            return self._reject_bumpless_transfer(rejection)
+        if (
+            abs(ff_result.u_ff1 - persistent.median_ff1)
+            > FF_TRIM_TRANSFER_MAX_POWER_RANGE
+        ):
+            return self._reject_bumpless_transfer("ff1_changed")
+
+        visible_ff = clamp(
+            ff_result.u_ff1 + self._ff_trim.u_ff_trim,
+            0.0,
+            1.0,
+        )
+        current_i_power = self.Ki * self.ctl.integral
+        current_raw_command = visible_ff + self.ctl.u_p + current_i_power
+        plan = prepare_bumpless_transfer(
+            current_trim=self._ff_trim.u_ff_trim,
+            current_ff1=ff_result.u_ff1,
+            current_i_power=current_i_power,
+            observed_i_bias=float(i_bias),
+            physical_power_deficit=float(deficit),
+            current_ki=self.Ki,
+            current_raw_command=current_raw_command,
+        )
+        self._requested_trim_delta = plan.requested_trim_delta
+        self._stored_trim_delta = plan.stored_trim_delta
+        self._applied_trim_delta = plan.visible_ff_delta
+        self._transferable_i_power = plan.transferable_i_power
+        self._requested_i_transfer = plan.requested_i_transfer
+        self._applied_i_transfer = plan.applied_i_transfer
+        self._net_command_delta = plan.net_command_delta
+        self._transfer_quality = quality
+        if not plan.applicable:
+            return self._reject_bumpless_transfer(plan.reason, clear_values=False)
+
+        old_controller_ff = self.ctl.u_ff
+        if not self._ff_trim.commit_bumpless_plan(plan):
+            return self._reject_bumpless_transfer("trim_state_changed")
+
+        new_visible_ff = visible_ff + plan.visible_ff_delta
+        self.ctl.u_ff = new_visible_ff
+        integral_result = self.ctl.apply_integral_power_transfer(
+            ki=self.Ki,
+            requested_power=plan.applied_i_transfer,
+        )
+        if (
+            not integral_result.applied
+            or abs(integral_result.applied_power - plan.applied_i_transfer) > 1e-12
+        ):
+            self._ff_trim.rollback_bumpless_plan(plan)
+            self.ctl.u_ff = old_controller_ff
+            return self._reject_bumpless_transfer(integral_result.reason)
+
+        self._last_ff_result = replace(
+            ff_result,
+            u_ff2=plan.new_trim,
+            u_ff_trim=plan.new_trim,
+            u_ff_final=new_visible_ff,
+            u_db_nominal=new_visible_ff,
+            u_ff_eff=new_visible_ff,
+        )
+        self.ctl.u_cmd = clamp(
+            new_visible_ff + self.ctl.u_p + self.ctl.u_i,
+            0.0,
+            1.0,
+        )
+        self.ctl.u_hold = self.ctl.u_cmd
+        self._last_u_ff = new_visible_ff
+        self._last_u_pi = self.ctl.u_pi
+        self._last_u_cmd = self.ctl.u_cmd
+        self._last_ff_trim_delta = plan.visible_ff_delta
+        self._last_fftrim_update_reason = "updated_bumpless"
+        self._fftrim_observer.last_update_reason = "updated_bumpless"
+        self._bumpless_transfer_state = "applied"
+        self._bumpless_transfer_reason = plan.reason
+        self._transfer_pending_engagement = True
+        self._ff_trim.clear_pending()
+        self._pending_bumpless_persistent = None
+        return True
+
+    def _apply_pending_bumpless_at_cycle_boundary(self) -> None:
+        """Apply a prepared transaction only after cycle-end anti-windup."""
+        persistent = self._pending_bumpless_persistent
+        if persistent is None:
+            return
+        quality = self._pending_bumpless_quality
+        self._pending_bumpless_persistent = None
+        if self._apply_bumpless_persistent_result(
+            persistent=persistent,
+            quality=quality,
+        ):
+            self._cycles_since_fftrim_update = 0
+
+    def _current_bumpless_context_rejection(self) -> str | None:
+        """Revalidate strict deadband ownership at the mutation instant."""
+        if self.gov.regime != GovernanceRegime.DEAD_BAND:
+            return "application_not_deadband"
+        if self.ctl.last_i_mode != "I:FREEZE(deadband)":
+            return "application_i_not_frozen"
+        if self.ctl.last_sat != "NO_SAT":
+            return "application_saturated"
+        if self.sp_mgr.trajectory_active:
+            return "application_trajectory"
+        if self.sp_mgr.landing_active:
+            return "application_landing"
+        if self.calibration_mgr.state != SmartPICalibrationPhase.IDLE:
+            return "application_calibration"
+        if self.guards.guard_cut_active or self.guards.guard_kick_active:
+            return "application_guard"
+        if self._setpoint_changed_in_cycle:
+            return "application_setpoint_changed"
+        if (
+            self._recovery_hold_armed
+            or self._resume_deadtime_hold_source != IntegralGuardSource.NONE
+            or self._resume_deadtime_hold_started
+        ):
+            return "application_recovery"
+        if self._ff3_active_cycle or abs(self._u_ff3_cycle) > 1e-9:
+            return "application_ff3"
+        if self._last_forced_by_timing:
+            return "application_timing"
+        if (
+            abs(self._last_u_cmd - self._last_u_limited)
+            > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            return "application_output_limited"
+        if (
+            abs(self._last_u_limited - self._last_u_applied)
+            > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            return "application_timing_output"
+        return None
+
+    def _reject_bumpless_transfer(
+        self,
+        reason: str,
+        *,
+        clear_values: bool = True,
+    ) -> bool:
+        """Reject both sides of one ownership transaction."""
+        self._ff_trim.clear_pending()
+        self._pending_bumpless_persistent = None
+        self._last_fftrim_update_reason = f"transfer_rejected_{reason}"
+        self._fftrim_observer.last_update_reason = self._last_fftrim_update_reason
+        self._bumpless_transfer_state = "rejected"
+        self._bumpless_transfer_reason = reason
+        self._transfer_pending_engagement = False
+        if clear_values:
+            self._clear_bumpless_transfer_values()
+        return False
+
+    def _clear_bumpless_transfer_values(self) -> None:
+        """Clear deltas when no concrete transaction currently owns them."""
+        self._requested_trim_delta = 0.0
+        self._stored_trim_delta = 0.0
+        self._applied_trim_delta = 0.0
+        self._transferable_i_power = 0.0
+        self._requested_i_transfer = 0.0
+        self._applied_i_transfer = 0.0
+        self._net_command_delta = 0.0
 
     def _record_fftrim_thermal_measurement(
         self,
@@ -993,6 +1369,9 @@ class SmartPI:
             model_reliable=(
                 self._ab_confidence.state == ABConfidenceState.AB_OK
                 and self.est.tau_reliability().reliable
+            ),
+            outside_temperature=(
+                float(ext_current_temp) if ext_current_temp is not None else None
             ),
             trim_frozen_reason=(
                 self._ff_trim.freeze_reason if self._ff_trim.frozen else None
@@ -1690,7 +2069,13 @@ class SmartPI:
         self._fftrim_observer.update_applied_power(
             now_monotonic=now,
             linear_power=linear_on_percent,
+            ownership=self._build_fftrim_ownership_snapshot(linear_on_percent),
         )
+        if (
+            abs(linear_on_percent - self.ctl.u_cmd)
+            <= FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            self._transfer_pending_engagement = False
         self._update_deadtime_episode_status(linear_on_percent, hvac_mode, now)
 
     def save_state(self) -> dict:
@@ -2279,6 +2664,7 @@ class SmartPI:
         """
         # Capture old Ki for bumpless integral rescaling
         old_ki = self.gain_scheduler.ki
+        old_kp = self.gain_scheduler.kp
         near_band_ratio = self._near_band_gain_ratio(error, hvac_mode)
 
         # Delegate gain calculation to GainScheduler component
@@ -2296,6 +2682,9 @@ class SmartPI:
             hvac_mode=hvac_mode,
         )
         new_ki = self.gain_scheduler.ki
+        new_kp = self.gain_scheduler.kp
+        if abs(old_ki - new_ki) > 1e-9 or abs(old_kp - new_kp) > 1e-9:
+            self._gain_generation += 1
 
         # Bumpless Gain Scheduling: Rescale integral to preserve identical energy output
         if old_ki > 0.0 and new_ki > 0.0 and abs(old_ki - new_ki) > 1e-6:

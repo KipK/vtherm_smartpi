@@ -17,6 +17,11 @@ All notable changes to this project will be documented in this file.
   SmartPI diagnostic cards.
 - Preserve causal FF trim windows during generic VT recalculations that do not
   carry a temperature measurement identifier.
+- Transfer only the causally observed stable integral bias into FF trim at the
+  post-anti-windup cycle boundary, while retaining the physical deficit as a
+  real bounded command change in both HEAT and COOL.
+- Expose the aligned P/I/Ki ownership terms, requested and applied transaction
+  deltas, command invariant, rejection reason, and actuator engagement state.
 
 ## [0.3.8] 2026-08-18
 

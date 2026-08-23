@@ -437,7 +437,7 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `setpoint.py`          | trajectoire analytique de consigne et cap d'atterrissage |
 | `integral_guard.py`    | garde de croissance positive de l'intégrale              |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
-| `ff_trim.py`           | biais lent feed-forward                                  |
+| `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |
 | `ff3.py`               | correction prédictive bornée FF3                         |
 | `governance.py`        | décisions de gel                                         |
@@ -473,6 +473,19 @@ self._ab_confidence = ABConfidence()
 
 ### 5.4 Persistance actuelle
 
+L'observateur causal aligne une seconde timeline, pondérée dans le temps, de
+la propriété des termes de commande avec celle de la puissance physique. Une
+fenêtre stricte en deadband peut ainsi séparer le biais intégral stable
+$J=mean(K_i integral)$ du déficit physique
+$D=H-mean(u_{applied})$. Après trois fenêtres indépendantes cohérentes, une
+transaction bornée applique
+`delta_trim = alpha * lambda * (J + D)` et
+`delta_u_i = -alpha * lambda * J`, donc
+`delta_u_cmd = alpha * lambda * D`. Le même facteur `alpha` respecte l'autorité du
+trim, les clamps FF, la capacité intégrale et la marge de commande. La
+transaction s'exécute uniquement à la frontière de cycle après anti-windup,
+dans le même espace de puissance signé en HEAT et COOL.
+
 Le payload actuel de `SmartPI.save_state()` contient notamment :
 
 ```python
@@ -494,6 +507,10 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "tint_filter_state": {...},
 }
 ```
+
+Seul le trim appris reste persistant. Les fenêtres de propriété, propositions
+en attente et transferts d'intégrale sont transitoires ; après redémarrage,
+l'observateur est reconstruit et le gel existant de trois cycles est conservé.
 
 ### 5.5 Diagnostics publiés
 

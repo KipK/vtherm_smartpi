@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from math import isfinite
 
 from .const import (
     DEADBAND_EDGE_PERSISTENCE,
@@ -15,6 +17,18 @@ from .integral_guard import constrain_guarded_integral_delta
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IntegralPowerTransferResult:
+    """Result of moving one signed power contribution out of the integral."""
+
+    applied: bool
+    reason: str
+    requested_power: float
+    applied_power: float
+    old_i_power: float
+    new_i_power: float
 
 class SmartPIController:
     """
@@ -34,6 +48,8 @@ class SmartPIController:
         self.integral: float = 0.0
         self.u_prev: float = 0.0
         self.u_ff: float = 0.0
+        self.u_p: float = 0.0
+        self.u_i: float = 0.0
         self.u_pi: float = 0.0
         self.u_cmd: float = 0.0     # Requested (clamped 0-1)
         self.u_hold: float = 0.0    # Held deadband power
@@ -65,6 +81,8 @@ class SmartPIController:
         self.integral = 0.0
         self.u_prev = 0.0
         self.u_ff = 0.0
+        self.u_p = 0.0
+        self.u_i = 0.0
         self.u_pi = 0.0
         self.u_hold = 0.0
         self.last_error = 0.0
@@ -368,6 +386,8 @@ class SmartPIController:
                     self.integral = clamp(self.integral, -i_max, i_max)
                     u_pi = kp * error_p_db + ki * self.integral
 
+        self.u_p = kp * error_p_db
+        self.u_i = ki * self.integral
         self.u_pi = u_pi
         self.u_ff = u_ff
 
@@ -382,6 +402,105 @@ class SmartPIController:
         self.u_cmd = clamp(u_raw, 0.0, 1.0)
 
         return self.u_cmd
+
+    def apply_integral_power_transfer(
+        self,
+        *,
+        ki: float,
+        requested_power: float,
+    ) -> IntegralPowerTransferResult:
+        """Remove a signed power contribution from the integral atomically.
+
+        A positive request removes positive integral power. A negative request
+        removes negative integral power. The operation may only move the
+        integral contribution toward zero and never crosses it.
+        """
+        if not isfinite(float(ki)) or float(ki) < KI_MIN:
+            return IntegralPowerTransferResult(
+                False,
+                "invalid_ki",
+                float(requested_power),
+                0.0,
+                0.0,
+                0.0,
+            )
+        if not isfinite(float(requested_power)):
+            return IntegralPowerTransferResult(
+                False,
+                "invalid_i_transfer",
+                float(requested_power),
+                0.0,
+                float(ki) * self.integral,
+                float(ki) * self.integral,
+            )
+
+        ki_value = float(ki)
+        requested = float(requested_power)
+        old_i_power = ki_value * self.integral
+        if abs(requested) <= 1e-12:
+            return IntegralPowerTransferResult(
+                True,
+                "no_i_transfer",
+                requested,
+                0.0,
+                old_i_power,
+                old_i_power,
+            )
+        if old_i_power * requested <= 0.0:
+            return IntegralPowerTransferResult(
+                False,
+                "i_transfer_sign",
+                requested,
+                0.0,
+                old_i_power,
+                old_i_power,
+            )
+        if abs(requested) > abs(old_i_power) + 1e-9:
+            return IntegralPowerTransferResult(
+                False,
+                "i_transfer_capacity",
+                requested,
+                0.0,
+                old_i_power,
+                old_i_power,
+            )
+
+        new_i_power = old_i_power - requested
+        if old_i_power * new_i_power < -1e-12:
+            return IntegralPowerTransferResult(
+                False,
+                "i_transfer_crosses_zero",
+                requested,
+                0.0,
+                old_i_power,
+                old_i_power,
+            )
+
+        new_integral = new_i_power / ki_value
+        i_max = 2.0 / ki_value
+        if not isfinite(new_integral) or not -i_max <= new_integral <= i_max:
+            return IntegralPowerTransferResult(
+                False,
+                "i_transfer_clamped",
+                requested,
+                0.0,
+                old_i_power,
+                old_i_power,
+            )
+
+        self.integral = new_integral
+        self.u_i = new_i_power
+        self.u_pi = self.u_p + self.u_i
+        if self.last_i_mode == "I:FREEZE(deadband)":
+            self.u_hold = self.u_ff + self.u_pi
+        return IntegralPowerTransferResult(
+            True,
+            "i_transfer_applied",
+            requested,
+            requested,
+            old_i_power,
+            new_i_power,
+        )
 
     def finalize_cycle(
         self,

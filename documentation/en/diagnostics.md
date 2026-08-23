@@ -79,6 +79,14 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `fftrim_last_reject_reason` | `string` | Command | Reason why the last slow trim update was rejected. |
 | `fftrim_last_update_reason` | `string` | Command | Reason why the last slow trim update was accepted. |
 | `fftrim_cycles_since_update` | `int` | Command | Number of control cycles elapsed since the last `FFTrim` update. |
+| `fftrim_physical_power_deficit` | `float` | Command | Causal holding-power deficit, `H - mean_applied_power`, in linear model space. |
+| `fftrim_requested_trim_delta` | `float` | Command | Trim delta requested after the slow learning factor, before transactional bounds. |
+| `fftrim_applied_trim_delta` | `float` | Command | Trim delta actually visible after authority and feed-forward branch bounds. |
+| `fftrim_applied_i_transfer` | `float` | PI State | Signed power removed from the integral contribution and reassigned to trim. |
+| `fftrim_net_command_delta` | `float` | Command | Actual command change retained for the causal physical deficit or surplus. |
+| `fftrim_bumpless_transfer_state` | `string` | Command | State of the latest atomic trim/integral transaction. |
+| `fftrim_bumpless_transfer_reason` | `string` | Command | Eligibility, rejection, or application reason for that transaction. |
+| `fftrim_transfer_pending_engagement` | `boolean` | Command | True until the actuator timeline has committed the post-transfer command. |
 | `integral_hold_active` | `boolean` | PI State | Indicates if the integral branch accumulator is currently frozen/held. |
 | `integral_hold_mode` | `string` | PI State | Active mode or reason for the integral freeze (e.g. `window_hold`, `deadband_hold`). |
 | `restart_reason` | `string` | General | Cause of the last algorithm or integration restart. |
@@ -144,6 +152,16 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `ff2_frozen` | `boolean` | Indicates if slow trim adjustments are frozen. |
 | `ff2_freeze_reason` | `string` | Reason for freezing the slow trim update loop. |
 | `fftrim_cycle_admissible` | `boolean` | Indicates if the current cycle satisfies all stability criteria for `FFTrim` updates. |
+| `fftrim_mean_p_power` | `float` | Time-weighted proportional contribution over the aligned causal window. |
+| `fftrim_mean_i_power` | `float` | Time-weighted integral contribution, measured directly as `Ki × integral`. |
+| `fftrim_mean_visible_ff_power` | `float` | Time-weighted FF1 + stored trim after the feed-forward branch clamp. |
+| `fftrim_mean_ki` | `float` | Effective time-weighted `Ki` over the ownership window. |
+| `fftrim_mean_delivery_residual` | `float` | Mean difference between committed linear power and the modeled control sum. |
+| `fftrim_decomposed_correction` | `float` | Causal correction decomposed as physical deficit plus stable integral bias. |
+| `fftrim_stored_trim_delta` | `float` | Delta stored in `u_ff_trim`; it equals the visible delta for an accepted transaction. |
+| `fftrim_transferable_i_power` | `float` | Current integral power available for the ownership transfer. |
+| `fftrim_requested_i_transfer` | `float` | Signed integral power requested for transfer before the common bound factor. |
+| `fftrim_transfer_quality` | `string` | Source/quality of the aligned ownership timeline (switch-cycle or linearized valve). |
 | `u_ff_ab` | `float` | Pure feed-forward command component derived from learned $a$ and $b$. |
 | `u_ff_trim` | `float` | Slow bias contribution component calculated by the trim algorithm. |
 | `u_ff_base` | `float` | Base feed-forward command prior to trim. |

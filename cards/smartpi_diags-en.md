@@ -98,6 +98,19 @@
 {% set fftrim_observed_hold_power = fftrim.get('observed_hold_power') %}
 {% set fftrim_target_trim = fftrim.get('target_trim') %}
 {% set fftrim_correction = fftrim.get('correction') %}
+{% set fftrim_mean_p_power = fftrim.get('mean_p_power') %}
+{% set fftrim_mean_i_power = fftrim.get('mean_i_power') %}
+{% set fftrim_mean_delivery_residual = fftrim.get('mean_delivery_residual') %}
+{% set fftrim_physical_power_deficit = fftrim.get('physical_power_deficit') %}
+{% set fftrim_decomposed_correction = fftrim.get('decomposed_correction') %}
+{% set fftrim_requested_trim_delta = fftrim.get('requested_trim_delta') %}
+{% set fftrim_applied_trim_delta = fftrim.get('applied_trim_delta') %}
+{% set fftrim_applied_i_transfer = fftrim.get('applied_i_transfer') %}
+{% set fftrim_net_command_delta = fftrim.get('net_command_delta') %}
+{% set fftrim_transfer_state = fftrim.get('bumpless_transfer_state') %}
+{% set fftrim_transfer_reason = fftrim.get('bumpless_transfer_reason') %}
+{% set fftrim_transfer_pending = fftrim.get('transfer_pending_engagement', false) %}
+{% set fftrim_transfer_quality = fftrim.get('transfer_quality') %}
 
 {% set fftrim_state_label = {
   'warming_up': 'warming up',
@@ -611,6 +624,13 @@
 | Observed hold power | {% if fftrim_observed_hold_power is not none %}{{ (fftrim_observed_hold_power | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | Target trim | {% if fftrim_target_trim is not none %}{{ '%+.3f' | format(fftrim_target_trim | float * 100) }}%{% else %}—{% endif %} |
 | Proposed correction | {% if fftrim_correction is not none %}{{ '%+.3f' | format(fftrim_correction | float * 100) }}%{% else %}—{% endif %} |
+| Mean P / I ownership | {% if fftrim_mean_p_power is not none %}{{ '%+.3f' | format(fftrim_mean_p_power | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_mean_i_power is not none %}{{ '%+.3f' | format(fftrim_mean_i_power | float * 100) }}%{% else %}—{% endif %} |
+| Physical deficit / decomposed correction | {% if fftrim_physical_power_deficit is not none %}{{ '%+.3f' | format(fftrim_physical_power_deficit | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_decomposed_correction is not none %}{{ '%+.3f' | format(fftrim_decomposed_correction | float * 100) }}%{% else %}—{% endif %} |
+| Requested / visible trim delta | {% if fftrim_requested_trim_delta is not none %}{{ '%+.3f' | format(fftrim_requested_trim_delta | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_applied_trim_delta is not none %}{{ '%+.3f' | format(fftrim_applied_trim_delta | float * 100) }}%{% else %}—{% endif %} |
+| Applied I transfer / net command | {% if fftrim_applied_i_transfer is not none %}{{ '%+.3f' | format(fftrim_applied_i_transfer | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_net_command_delta is not none %}{{ '%+.3f' | format(fftrim_net_command_delta | float * 100) }}%{% else %}—{% endif %} |
+| Ownership residual / quality | {% if fftrim_mean_delivery_residual is not none %}{{ '%+.3f' | format(fftrim_mean_delivery_residual | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_transfer_quality is not none %}`{{ fftrim_transfer_quality }}`{% else %}—{% endif %} |
+| Bumpless transaction | {% if fftrim_transfer_state is not none %}`{{ fftrim_transfer_state }}`{% else %}—{% endif %}{% if fftrim_transfer_pending %} · awaiting actuator engagement{% endif %} |
+| Transaction reason | {% if fftrim_transfer_reason is not none %}`{{ fftrim_transfer_reason }}`{% else %}—{% endif %} |
 | Last update | {% if fftrim_last_update_reason is not none %}`{{ fftrim_last_update_reason }}`{% else %}—{% endif %} |
 | Last rejection | {% if fftrim_last_reject_reason is not none %}`{{ fftrim_last_reject_reason }}`{% else %}—{% endif %} |
 | Windows since update | {% if fftrim_windows_since_update is not none %}{{ fftrim_windows_since_update }}{% else %}—{% endif %} |

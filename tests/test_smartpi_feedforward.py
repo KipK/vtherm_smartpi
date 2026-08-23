@@ -361,16 +361,16 @@ class TestFFResult:
     def test_trim_update_applies_incremental_correction(self):
         """FFTrim.update must apply delta_power as an increment, not an absolute target.
 
-        authority = FF_TRIM_RHO * u_ff_ab = 0.15 * 1.0 = 0.15
-        Starting trim must be within [-0.15, 0.15] to avoid clamping.
+        authority = FF_TRIM_RHO * u_ff_ab = 0.15 * 0.5 = 0.075
+        Starting trim must be within [-0.075, 0.075] to avoid clamping.
         expected = u_ff_trim + FF_TRIM_LAMBDA * delta_power.
         """
         trim = FFTrim()
-        trim.u_ff_trim = 0.10  # within authority (0.15)
+        trim.u_ff_trim = 0.05  # within authority (0.075)
 
-        trim.update(delta_power=0.03, u_ff_ab=1.0)
+        trim.update(delta_power=0.03, u_ff_ab=0.5)
 
-        expected = 0.10 + FF_TRIM_LAMBDA * 0.03
+        expected = 0.05 + FF_TRIM_LAMBDA * 0.03
         assert trim.u_ff_trim == pytest.approx(expected)
 
     def test_trim_persistent_update_waits_for_same_direction_samples(self):
@@ -378,46 +378,52 @@ class TestFFResult:
         trim = FFTrim()
 
         for idx in range(FF_TRIM_PERSISTENCE - 1):
-            result = trim.update_persistent(delta_power=0.03, u_ff_ab=1.0)
+            result = trim.update_persistent(delta_power=0.03, u_ff_ab=0.5)
             assert result.updated is False
             assert result.reason == f"pending_{idx + 1}/{FF_TRIM_PERSISTENCE}"
             assert trim.u_ff_trim == pytest.approx(0.0)
 
-        result = trim.update_persistent(delta_power=0.03, u_ff_ab=1.0)
+        result = trim.update_persistent(delta_power=0.03, u_ff_ab=0.5)
 
         assert result.updated is True
         assert result.reason == "updated_persistent"
-        assert result.applied_delta == pytest.approx(0.03)
+        assert result.median_correction == pytest.approx(0.03)
+        assert result.requested_trim_delta == pytest.approx(
+            FF_TRIM_LAMBDA * 0.03
+        )
+        assert result.applied_delta == pytest.approx(FF_TRIM_LAMBDA * 0.03)
         assert trim.u_ff_trim == pytest.approx(FF_TRIM_LAMBDA * 0.03)
 
     def test_trim_persistent_update_uses_rolling_median(self):
         """Persistent trim must apply the robust median of pending corrections."""
         trim = FFTrim()
 
-        trim.update_persistent(delta_power=0.02, u_ff_ab=1.0)
-        trim.update_persistent(delta_power=0.04, u_ff_ab=1.0)
-        result = trim.update_persistent(delta_power=0.03, u_ff_ab=1.0)
+        trim.update_persistent(delta_power=0.02, u_ff_ab=0.5)
+        trim.update_persistent(delta_power=0.04, u_ff_ab=0.5)
+        result = trim.update_persistent(delta_power=0.03, u_ff_ab=0.5)
 
         assert result.updated is True
-        assert result.applied_delta == pytest.approx(0.03)
+        assert result.median_correction == pytest.approx(0.03)
+        assert result.applied_delta == pytest.approx(FF_TRIM_LAMBDA * 0.03)
         assert trim.u_ff_trim == pytest.approx(FF_TRIM_LAMBDA * 0.03)
 
     def test_trim_persistent_update_resets_on_sign_flip(self):
         """Opposite correction signs belong to different thermal contexts."""
         trim = FFTrim()
 
-        trim.update_persistent(delta_power=0.03, u_ff_ab=1.0)
-        result = trim.update_persistent(delta_power=-0.03, u_ff_ab=1.0)
+        trim.update_persistent(delta_power=0.03, u_ff_ab=0.5)
+        result = trim.update_persistent(delta_power=-0.03, u_ff_ab=0.5)
 
         assert result.updated is False
         assert result.reason == f"pending_1/{FF_TRIM_PERSISTENCE}"
         assert trim.u_ff_trim == pytest.approx(0.0)
 
-        trim.update_persistent(delta_power=-0.03, u_ff_ab=1.0)
-        result = trim.update_persistent(delta_power=-0.03, u_ff_ab=1.0)
+        trim.update_persistent(delta_power=-0.03, u_ff_ab=0.5)
+        result = trim.update_persistent(delta_power=-0.03, u_ff_ab=0.5)
 
         assert result.updated is True
-        assert result.applied_delta == pytest.approx(-0.03)
+        assert result.median_correction == pytest.approx(-0.03)
+        assert result.applied_delta == pytest.approx(-FF_TRIM_LAMBDA * 0.03)
         assert trim.u_ff_trim == pytest.approx(-FF_TRIM_LAMBDA * 0.03)
 
     def test_trim_pi_eligibility_accepts_frozen_deadband(self):

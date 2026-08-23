@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, sqrt
 from statistics import median
 from typing import Callable, Deque, Sequence
 
@@ -39,6 +39,13 @@ from .const import (
     FF_TRIM_MIN_POWER_COVERAGE,
     FF_TRIM_MAX_ERROR_C,
     FF_TRIM_MAX_SLOPE_H,
+    FF_TRIM_TRANSFER_MAX_ERROR_C,
+    FF_TRIM_TRANSFER_MAX_SLOPE_H,
+    FF_TRIM_TRANSFER_MAX_P_POWER,
+    FF_TRIM_TRANSFER_MAX_POWER_RANGE,
+    FF_TRIM_TRANSFER_MAX_DELIVERY_RESIDUAL,
+    FF_TRIM_TRANSFER_COMMAND_EPSILON,
+    KI_MIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,6 +59,10 @@ class FFTrimUpdateResult:
     reason: str
     applied_delta: float
     pending_count: int
+    median_correction: float = 0.0
+    requested_trim_delta: float = 0.0
+    stored_trim_delta: float = 0.0
+    visible_ff_delta: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,36 @@ class AppliedPowerSegment:
     start_monotonic: float
     end_monotonic: float
     linear_power: float
+
+
+@dataclass(frozen=True)
+class ControlOwnershipSnapshot:
+    """Control terms that own one physically committed command."""
+
+    u_ff1: float
+    trim_stored: float
+    u_ff_visible: float
+    u_ff3: float
+    u_p: float
+    u_i: float
+    ki: float
+    gain_generation: int
+    u_cmd: float
+    u_limited: float
+    linear_committed_power: float
+    regime: GovernanceRegime | str | None
+    i_mode: str | None
+    quality: str = "causal_full"
+    constraint_flags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ControlOwnershipSegment:
+    """One ownership snapshot over a monotonic physical interval."""
+
+    start_monotonic: float
+    end_monotonic: float
+    ownership: ControlOwnershipSnapshot
 
 
 @dataclass(frozen=True)
@@ -90,6 +131,7 @@ class FFTrimThermalSample:
     setpoint_changed: bool
     outside_temperature_available: bool
     model_reliable: bool
+    outside_temperature: float | None = None
     trim_frozen_reason: str | None = None
 
 
@@ -111,6 +153,92 @@ class CausalFFTrimResult:
     measurement_count: int
     alignment_delay_s: float | None
     power_coverage_ratio: float
+    mean_p_power: float | None = None
+    mean_i_power: float | None = None
+    mean_visible_ff_power: float | None = None
+    mean_ki: float | None = None
+    mean_delivery_residual: float | None = None
+    physical_power_deficit: float | None = None
+    decomposed_correction: float | None = None
+    transfer_eligible: bool = False
+    transfer_reason: str = "ownership_unavailable"
+    transfer_quality: str = "unavailable"
+
+
+@dataclass(frozen=True)
+class FFTrimWindowProposal:
+    """One independent causal window submitted to the persistence gate."""
+
+    correction: float
+    mean_ff1: float
+    physical_power_deficit: float | None
+    integral_bias: float | None
+    transfer_eligible: bool
+    transfer_reason: str
+
+
+@dataclass(frozen=True)
+class FFTrimPersistentResult:
+    """Robust aggregate of same-context causal window proposals."""
+
+    ready: bool
+    reason: str
+    pending_count: int
+    median_correction: float = 0.0
+    median_ff1: float = 0.0
+    median_physical_power_deficit: float | None = None
+    median_integral_bias: float | None = None
+    transfer_eligible: bool = False
+    transfer_reason: str = "not_ready"
+
+
+@dataclass(frozen=True)
+class FFTrimBumplessPlan:
+    """Fully bounded ownership-transfer transaction prepared without mutation."""
+
+    applicable: bool
+    state: str
+    reason: str
+    alpha: float = 0.0
+    old_trim: float = 0.0
+    new_trim: float = 0.0
+    requested_trim_delta: float = 0.0
+    stored_trim_delta: float = 0.0
+    visible_ff_delta: float = 0.0
+    transferable_i_power: float = 0.0
+    requested_i_transfer: float = 0.0
+    applied_i_transfer: float = 0.0
+    physical_power_deficit: float = 0.0
+    net_command_delta: float = 0.0
+
+
+@dataclass(frozen=True)
+class _OwnershipStats:
+    """Time-weighted ownership statistics over one causal interval."""
+
+    coverage: float
+    mean_ff1: float
+    mean_trim: float
+    mean_visible_ff: float
+    mean_ff3: float
+    mean_p: float
+    mean_i: float
+    mean_ki: float
+    mean_model_power: float
+    mean_committed_power: float
+    max_delivery_residual: float
+    ff1_range: float
+    trim_range: float
+    p_range: float
+    i_range: float
+    i_drift: float
+    ki_min: float
+    i_sign_persistent: bool
+    regimes: frozenset[GovernanceRegime | str | None]
+    i_modes: frozenset[str | None]
+    constraint_flags: frozenset[str]
+    gain_generations: frozenset[int]
+    quality: str
 
 
 class CausalFFTrimObserver:
@@ -122,9 +250,13 @@ class CausalFFTrimObserver:
     def __init__(self, cycle_min: float) -> None:
         self._cycle_min = max(float(cycle_min), 0.0)
         self._power_segments: Deque[AppliedPowerSegment] = deque()
+        self._ownership_segments: Deque[ControlOwnershipSegment] = deque()
         self._active_cycle_segments: list[AppliedPowerSegment] = []
+        self._active_ownership_segments: list[ControlOwnershipSegment] = []
         self._active_power_start: float | None = None
         self._active_linear_power: float | None = None
+        self._active_ownership_start: float | None = None
+        self._active_ownership: ControlOwnershipSnapshot | None = None
         self._thermal_samples: list[FFTrimThermalSample] = []
         self._last_measurement_id: str | None = None
         self._window_deadtime_s: float | None = None
@@ -179,17 +311,22 @@ class CausalFFTrimObserver:
         *,
         now_monotonic: float,
         linear_power: float,
+        ownership: ControlOwnershipSnapshot | None = None,
     ) -> None:
         """Start the transient trace for one physical scheduler cycle."""
         self._active_cycle_segments.clear()
+        self._active_ownership_segments.clear()
         self._active_power_start = float(now_monotonic)
         self._active_linear_power = clamp(float(linear_power), 0.0, 1.0)
+        self._active_ownership_start = float(now_monotonic)
+        self._active_ownership = ownership
 
     def update_applied_power(
         self,
         *,
         now_monotonic: float,
         linear_power: float,
+        ownership: ControlOwnershipSnapshot | None = None,
     ) -> None:
         """Record a physical valve-power change inside the active cycle."""
         now = float(now_monotonic)
@@ -205,8 +342,22 @@ class CausalFFTrimObserver:
                     self._active_linear_power,
                 )
             )
+        if (
+            self._active_ownership_start is not None
+            and self._active_ownership is not None
+            and now > self._active_ownership_start
+        ):
+            self._active_ownership_segments.append(
+                ControlOwnershipSegment(
+                    self._active_ownership_start,
+                    now,
+                    self._active_ownership,
+                )
+            )
         self._active_power_start = now
         self._active_linear_power = clamp(float(linear_power), 0.0, 1.0)
+        self._active_ownership_start = now
+        self._active_ownership = ownership
 
     def complete_applied_cycle(
         self,
@@ -243,6 +394,21 @@ class CausalFFTrimObserver:
                     clamp(float(realized_linear_power), 0.0, 1.0),
                 )
             )
+
+        if (
+            self._active_ownership_start is not None
+            and self._active_ownership is not None
+            and cycle_end > self._active_ownership_start
+        ):
+            self._active_ownership_segments.append(
+                ControlOwnershipSegment(
+                    self._active_ownership_start,
+                    cycle_end,
+                    self._active_ownership,
+                )
+            )
+        for segment in self._active_ownership_segments:
+            self._record_ownership_segment(segment)
 
         self._clear_active_cycle()
 
@@ -418,12 +584,22 @@ class CausalFFTrimObserver:
                 coverage=coverage,
             )
 
+        ownership_stats = self._ownership_stats(causal_start, causal_end)
+
         mean_temperature = self._time_weighted_mean(
             samples,
             lambda sample: sample.temperature,
         )
         mean_target = self._time_weighted_mean(samples, lambda sample: sample.target)
-        mean_ff1 = self._time_weighted_mean(samples, lambda sample: sample.ff1)
+        sampled_mean_ff1 = self._time_weighted_mean(
+            samples,
+            lambda sample: sample.ff1,
+        )
+        mean_ff1 = (
+            ownership_stats.mean_ff1
+            if ownership_stats is not None
+            else sampled_mean_ff1
+        )
         slope_per_min = (
             samples[-1].temperature - samples[0].temperature
         ) / (duration_s / 60.0)
@@ -452,9 +628,42 @@ class CausalFFTrimObserver:
         )
         target_trim = observed_hold_power - mean_ff1
         correction = target_trim - float(current_trim)
+        physical_power_deficit = observed_hold_power - mean_power
+        decomposed_correction = None
+        transfer_eligible = False
+        transfer_reason = "ownership_not_covered"
+        transfer_quality = "unavailable"
+        mean_p_power = None
+        mean_i_power = None
+        mean_visible_ff_power = None
+        mean_ki = None
+        mean_delivery_residual = None
+        if ownership_stats is not None:
+            mean_p_power = ownership_stats.mean_p
+            mean_i_power = ownership_stats.mean_i
+            mean_visible_ff_power = ownership_stats.mean_visible_ff
+            mean_ki = ownership_stats.mean_ki
+            mean_delivery_residual = mean_power - ownership_stats.mean_model_power
+            decomposed_correction = physical_power_deficit + mean_i_power
+            transfer_reason = self._transfer_rejection_reason(
+                samples=samples,
+                stats=ownership_stats,
+                a=float(a),
+                b=float(b),
+                mean_error=mean_error,
+                mean_slope_h=mean_slope_h,
+                mean_delivery_residual=mean_delivery_residual,
+            ) or "quasi_equilibrium"
+            transfer_eligible = transfer_reason == "quasi_equilibrium"
+            transfer_quality = ownership_stats.quality
         if not all(
             isfinite(value)
-            for value in (observed_hold_power, target_trim, correction)
+            for value in (
+                observed_hold_power,
+                target_trim,
+                correction,
+                physical_power_deficit,
+            )
         ):
             return self._reject_completed_window(
                 "non_finite_result",
@@ -478,6 +687,16 @@ class CausalFFTrimObserver:
             measurement_count=len(samples),
             alignment_delay_s=delay_s,
             power_coverage_ratio=coverage,
+            mean_p_power=mean_p_power,
+            mean_i_power=mean_i_power,
+            mean_visible_ff_power=mean_visible_ff_power,
+            mean_ki=mean_ki,
+            mean_delivery_residual=mean_delivery_residual,
+            physical_power_deficit=physical_power_deficit,
+            decomposed_correction=decomposed_correction,
+            transfer_eligible=transfer_eligible,
+            transfer_reason=transfer_reason,
+            transfer_quality=transfer_quality,
         )
         self.last_result = result
         self.state = "ready"
@@ -513,6 +732,7 @@ class CausalFFTrimObserver:
     def reset_runtime(self) -> None:
         """Clear transient observation state without changing persisted trim."""
         self._power_segments.clear()
+        self._ownership_segments.clear()
         self._clear_active_cycle()
         self._thermal_samples.clear()
         self._last_measurement_id = None
@@ -560,6 +780,28 @@ class CausalFFTrimObserver:
             ),
             "target_trim": None if has_samples else result.target_trim,
             "correction": None if has_samples else result.correction,
+            "mean_p_power": None if has_samples else result.mean_p_power,
+            "mean_i_power": None if has_samples else result.mean_i_power,
+            "mean_visible_ff_power": (
+                None if has_samples else result.mean_visible_ff_power
+            ),
+            "mean_ki": None if has_samples else result.mean_ki,
+            "mean_delivery_residual": (
+                None if has_samples else result.mean_delivery_residual
+            ),
+            "physical_power_deficit": (
+                None if has_samples else result.physical_power_deficit
+            ),
+            "decomposed_correction": (
+                None if has_samples else result.decomposed_correction
+            ),
+            "transfer_eligible": False if has_samples else result.transfer_eligible,
+            "transfer_reason": (
+                "collecting" if has_samples else result.transfer_reason
+            ),
+            "transfer_quality": (
+                "unavailable" if has_samples else result.transfer_quality
+            ),
             "last_reject_reason": self.last_reject_reason,
             "last_update_reason": self.last_update_reason,
         }
@@ -662,6 +904,234 @@ class CausalFFTrimObserver:
             ) * 0.5 * dt_s
         return integral / duration
 
+    def _ownership_stats(
+        self,
+        start: float,
+        end: float,
+    ) -> _OwnershipStats | None:
+        """Aggregate control ownership over the same causal power interval."""
+        duration = end - start
+        if duration <= 0.0:
+            return None
+
+        weighted = {
+            "ff1": 0.0,
+            "trim": 0.0,
+            "visible_ff": 0.0,
+            "ff3": 0.0,
+            "p": 0.0,
+            "i": 0.0,
+            "ki": 0.0,
+            "model": 0.0,
+            "committed": 0.0,
+        }
+        covered = 0.0
+        ff1_values: list[float] = []
+        trim_values: list[float] = []
+        p_values: list[float] = []
+        i_values: list[float] = []
+        ki_values: list[float] = []
+        residual_values: list[float] = []
+        regimes: set[GovernanceRegime | str | None] = set()
+        i_modes: set[str | None] = set()
+        flags: set[str] = set()
+        generations: set[int] = set()
+        qualities: set[str] = set()
+
+        for segment in self._ownership_segments:
+            overlap_start = max(start, segment.start_monotonic)
+            overlap_end = min(end, segment.end_monotonic)
+            if overlap_end <= overlap_start:
+                continue
+            overlap = overlap_end - overlap_start
+            item = segment.ownership
+            values = (
+                item.u_ff1,
+                item.trim_stored,
+                item.u_ff_visible,
+                item.u_ff3,
+                item.u_p,
+                item.u_i,
+                item.ki,
+                item.u_cmd,
+                item.u_limited,
+                item.linear_committed_power,
+            )
+            if not all(isfinite(float(value)) for value in values):
+                return None
+            model_power = item.u_ff_visible + item.u_ff3 + item.u_p + item.u_i
+            weighted["ff1"] += overlap * item.u_ff1
+            weighted["trim"] += overlap * item.trim_stored
+            weighted["visible_ff"] += overlap * item.u_ff_visible
+            weighted["ff3"] += overlap * item.u_ff3
+            weighted["p"] += overlap * item.u_p
+            weighted["i"] += overlap * item.u_i
+            weighted["ki"] += overlap * item.ki
+            weighted["model"] += overlap * model_power
+            weighted["committed"] += overlap * item.linear_committed_power
+            covered += overlap
+            ff1_values.append(item.u_ff1)
+            trim_values.append(item.trim_stored)
+            p_values.append(item.u_p)
+            i_values.append(item.u_i)
+            ki_values.append(item.ki)
+            residual_values.append(item.linear_committed_power - model_power)
+            regimes.add(item.regime)
+            i_modes.add(item.i_mode)
+            flags.update(item.constraint_flags)
+            generations.add(item.gain_generation)
+            qualities.add(item.quality)
+
+        coverage = clamp(covered / duration, 0.0, 1.0)
+        if covered <= 0.0 or coverage < FF_TRIM_MIN_POWER_COVERAGE:
+            return None
+
+        def _mean(name: str) -> float:
+            return weighted[name] / covered
+
+        def _range(values: Sequence[float]) -> float:
+            return max(values) - min(values) if values else 0.0
+
+        significant_i = [
+            value
+            for value in i_values
+            if abs(value) > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ]
+        i_sign_persistent = not significant_i or all(
+            value * significant_i[0] > 0.0 for value in significant_i
+        )
+        quality = next(iter(qualities)) if len(qualities) == 1 else "mixed"
+        return _OwnershipStats(
+            coverage=coverage,
+            mean_ff1=_mean("ff1"),
+            mean_trim=_mean("trim"),
+            mean_visible_ff=_mean("visible_ff"),
+            mean_ff3=_mean("ff3"),
+            mean_p=_mean("p"),
+            mean_i=_mean("i"),
+            mean_ki=_mean("ki"),
+            mean_model_power=_mean("model"),
+            mean_committed_power=_mean("committed"),
+            max_delivery_residual=max(abs(value) for value in residual_values),
+            ff1_range=_range(ff1_values),
+            trim_range=_range(trim_values),
+            p_range=_range(p_values),
+            i_range=_range(i_values),
+            i_drift=abs(i_values[-1] - i_values[0]),
+            ki_min=min(ki_values),
+            i_sign_persistent=i_sign_persistent,
+            regimes=frozenset(regimes),
+            i_modes=frozenset(i_modes),
+            constraint_flags=frozenset(flags),
+            gain_generations=frozenset(generations),
+            quality=quality,
+        )
+
+    @staticmethod
+    def _transfer_rejection_reason(
+        *,
+        samples: Sequence[FFTrimThermalSample],
+        stats: _OwnershipStats,
+        a: float,
+        b: float,
+        mean_error: float,
+        mean_slope_h: float,
+        mean_delivery_residual: float,
+    ) -> str | None:
+        """Return why ownership transfer is unsafe for this accepted window."""
+        if stats.regimes != frozenset({GovernanceRegime.DEAD_BAND}):
+            return "transfer_not_deadband"
+        if stats.i_modes != frozenset({"I:FREEZE(deadband)"}):
+            return "transfer_i_not_frozen"
+        if stats.constraint_flags:
+            return f"transfer_constraint_{sorted(stats.constraint_flags)[0]}"
+        if abs(stats.mean_ff3) > FF_TRIM_TRANSFER_COMMAND_EPSILON:
+            return "transfer_ff3_active"
+
+        errors = [sample.target - sample.temperature for sample in samples]
+        temperatures = [sample.temperature for sample in samples]
+        steps = [
+            abs(current - previous)
+            for previous, current in zip(temperatures, temperatures[1:])
+            if abs(current - previous) > 1e-9
+        ]
+        quantum = min(steps) if steps else 0.0
+        signed_steps = [
+            current - previous
+            for previous, current in zip(temperatures, temperatures[1:])
+        ]
+        sigma_temperature = 0.0
+        if signed_steps:
+            step_median = float(median(signed_steps))
+            sigma_temperature = 1.4826 * float(
+                median(abs(value - step_median) for value in signed_steps)
+            )
+        duration_h = max(
+            (samples[-1].observed_monotonic - samples[0].observed_monotonic)
+            / 3600.0,
+            1e-9,
+        )
+        epsilon_error = max(
+            0.001,
+            quantum / 2.0,
+            3.0 * sigma_temperature / sqrt(len(samples)),
+        )
+        epsilon_slope = max(
+            0.001,
+            quantum / duration_h,
+            3.0 * sqrt(2.0) * sigma_temperature / duration_h,
+        )
+        if (
+            epsilon_error > FF_TRIM_TRANSFER_MAX_ERROR_C
+            or epsilon_slope > FF_TRIM_TRANSFER_MAX_SLOPE_H
+        ):
+            return "transfer_temperature_noise"
+        if abs(mean_error) > epsilon_error:
+            return "transfer_mean_error"
+        if max(abs(value) for value in errors) > FF_TRIM_TRANSFER_MAX_ERROR_C:
+            return "transfer_sample_error"
+        if abs(mean_slope_h) > epsilon_slope:
+            return "transfer_slope"
+
+        outside_values = [
+            sample.outside_temperature
+            for sample in samples
+            if sample.outside_temperature is not None
+        ]
+        if len(outside_values) != len(samples):
+            return "transfer_outdoor_temperature_missing"
+        projected_outdoor_range = abs(b / a) * (
+            max(outside_values) - min(outside_values)
+        )
+        if projected_outdoor_range > FF_TRIM_TRANSFER_MAX_POWER_RANGE:
+            return "transfer_outdoor_temperature_unstable"
+        if (
+            stats.ff1_range > FF_TRIM_TRANSFER_MAX_POWER_RANGE
+            or stats.trim_range > FF_TRIM_TRANSFER_MAX_POWER_RANGE
+        ):
+            return "transfer_ff_unstable"
+        if (
+            abs(stats.mean_p) > FF_TRIM_TRANSFER_MAX_P_POWER
+            or stats.p_range > 2.0 * FF_TRIM_TRANSFER_MAX_POWER_RANGE
+        ):
+            return "transfer_p_active"
+        if (
+            stats.i_range > FF_TRIM_TRANSFER_MAX_POWER_RANGE
+            or stats.i_drift > FF_TRIM_TRANSFER_MAX_POWER_RANGE
+            or not stats.i_sign_persistent
+        ):
+            return "transfer_i_unstable"
+        if stats.ki_min < KI_MIN:
+            return "transfer_invalid_ki"
+        if (
+            abs(mean_delivery_residual)
+            > FF_TRIM_TRANSFER_MAX_DELIVERY_RESIDUAL
+            or stats.max_delivery_residual
+            > 2.0 * FF_TRIM_TRANSFER_MAX_DELIVERY_RESIDUAL
+        ):
+            return "transfer_delivery_residual"
+        return None
+
     def _reject_completed_window(
         self,
         reason: str,
@@ -742,11 +1212,55 @@ class CausalFFTrimObserver:
                 first.end_monotonic,
                 first.linear_power,
             )
+        while (
+            self._ownership_segments
+            and self._ownership_segments[0].end_monotonic <= cutoff
+        ):
+            self._ownership_segments.popleft()
+        if (
+            self._ownership_segments
+            and self._ownership_segments[0].start_monotonic < cutoff
+            < self._ownership_segments[0].end_monotonic
+        ):
+            first_ownership = self._ownership_segments[0]
+            self._ownership_segments[0] = ControlOwnershipSegment(
+                cutoff,
+                first_ownership.end_monotonic,
+                first_ownership.ownership,
+            )
+
+    def _record_ownership_segment(self, segment: ControlOwnershipSegment) -> None:
+        """Append one non-overlapping ownership segment."""
+        start = float(segment.start_monotonic)
+        end = float(segment.end_monotonic)
+        if not isfinite(start) or not isfinite(end) or end <= start:
+            return
+        if self._ownership_segments:
+            previous = self._ownership_segments[-1]
+            start = max(start, previous.end_monotonic)
+            if end <= start:
+                return
+            if (
+                abs(start - previous.end_monotonic) <= 1e-6
+                and previous.ownership == segment.ownership
+            ):
+                self._ownership_segments[-1] = ControlOwnershipSegment(
+                    previous.start_monotonic,
+                    end,
+                    segment.ownership,
+                )
+                return
+        self._ownership_segments.append(
+            ControlOwnershipSegment(start, end, segment.ownership)
+        )
 
     def _clear_active_cycle(self) -> None:
         self._active_cycle_segments.clear()
+        self._active_ownership_segments.clear()
         self._active_power_start = None
         self._active_linear_power = None
+        self._active_ownership_start = None
+        self._active_ownership = None
 
 
 def evaluate_pi_eligibility_for_trim(
@@ -788,6 +1302,163 @@ def evaluate_pi_eligibility_for_trim(
     return FFTrimPIEligibility(True, "pi_near_band_stable")
 
 
+def prepare_bumpless_transfer(
+    *,
+    current_trim: float,
+    current_ff1: float,
+    current_i_power: float,
+    observed_i_bias: float,
+    physical_power_deficit: float,
+    current_ki: float,
+    current_raw_command: float,
+) -> FFTrimBumplessPlan:
+    """Prepare one bounded trim/I ownership transaction without mutation."""
+    values = (
+        current_trim,
+        current_ff1,
+        current_i_power,
+        observed_i_bias,
+        physical_power_deficit,
+        current_ki,
+        current_raw_command,
+    )
+    if not all(isfinite(float(value)) for value in values):
+        return FFTrimBumplessPlan(False, "rejected", "non_finite_transfer")
+    if float(current_ki) < KI_MIN:
+        return FFTrimBumplessPlan(False, "rejected", "invalid_ki")
+
+    trim = float(current_trim)
+    ff1 = float(current_ff1)
+    i_now = float(current_i_power)
+    i_bias = float(observed_i_bias)
+    deficit = float(physical_power_deficit)
+    raw_command = float(current_raw_command)
+    old_ff_raw = ff1 + trim
+    margin = FF_TRIM_TRANSFER_COMMAND_EPSILON
+    if old_ff_raw <= margin or old_ff_raw >= 1.0 - margin:
+        return FFTrimBumplessPlan(False, "rejected", "ff_branch_clamped")
+    if raw_command < -margin or raw_command > 1.0 + margin:
+        return FFTrimBumplessPlan(False, "rejected", "command_clamped")
+
+    transferable_bias = (
+        0.0 if abs(i_bias) <= FF_TRIM_TRANSFER_COMMAND_EPSILON else i_bias
+    )
+    requested_i_transfer = FF_TRIM_LAMBDA * transferable_bias
+    physical_delta = FF_TRIM_LAMBDA * deficit
+    requested_trim_delta = requested_i_transfer + physical_delta
+    if (
+        abs(requested_trim_delta) <= FF_TRIM_DELTA_EPSILON
+        and abs(requested_i_transfer) <= FF_TRIM_DELTA_EPSILON
+    ):
+        return FFTrimBumplessPlan(
+            False,
+            "quiet",
+            "quiet_trim_delta",
+            requested_trim_delta=requested_trim_delta,
+            requested_i_transfer=requested_i_transfer,
+            physical_power_deficit=deficit,
+        )
+
+    if abs(requested_i_transfer) > 1e-12:
+        if i_now * requested_i_transfer <= 0.0:
+            return FFTrimBumplessPlan(
+                False,
+                "rejected",
+                "integral_sign_changed",
+                requested_trim_delta=requested_trim_delta,
+                requested_i_transfer=requested_i_transfer,
+                transferable_i_power=i_now,
+                physical_power_deficit=deficit,
+            )
+        if abs(i_now - i_bias) > FF_TRIM_TRANSFER_MAX_POWER_RANGE:
+            return FFTrimBumplessPlan(
+                False,
+                "rejected",
+                "integral_bias_changed",
+                requested_trim_delta=requested_trim_delta,
+                requested_i_transfer=requested_i_transfer,
+                transferable_i_power=i_now,
+                physical_power_deficit=deficit,
+            )
+
+    authority = FF_TRIM_RHO * max(ff1, FF_TRIM_EPSILON)
+    alpha_limits = [1.0]
+    if requested_trim_delta > 0.0:
+        alpha_limits.extend(
+            (
+                (authority - trim) / requested_trim_delta,
+                (1.0 - margin - old_ff_raw) / requested_trim_delta,
+            )
+        )
+    elif requested_trim_delta < 0.0:
+        alpha_limits.extend(
+            (
+                (trim + authority) / -requested_trim_delta,
+                (old_ff_raw - margin) / -requested_trim_delta,
+            )
+        )
+    if abs(requested_i_transfer) > 1e-12:
+        alpha_limits.append(abs(i_now) / abs(requested_i_transfer))
+    if physical_delta > 0.0:
+        alpha_limits.append((1.0 - margin - raw_command) / physical_delta)
+    elif physical_delta < 0.0:
+        alpha_limits.append((raw_command - margin) / -physical_delta)
+
+    alpha = clamp(min(alpha_limits), 0.0, 1.0)
+    if alpha <= 1e-12:
+        return FFTrimBumplessPlan(
+            False,
+            "rejected",
+            "no_atomic_headroom",
+            requested_trim_delta=requested_trim_delta,
+            requested_i_transfer=requested_i_transfer,
+            transferable_i_power=i_now,
+            physical_power_deficit=deficit,
+        )
+
+    stored_delta = alpha * requested_trim_delta
+    applied_i_transfer = alpha * requested_i_transfer
+    new_trim = trim + stored_delta
+    old_visible = clamp(old_ff_raw, 0.0, 1.0)
+    new_visible = clamp(ff1 + new_trim, 0.0, 1.0)
+    visible_delta = new_visible - old_visible
+    net_delta = visible_delta - applied_i_transfer
+    expected_net_delta = alpha * physical_delta
+    if (
+        abs(visible_delta - stored_delta) > 1e-12
+        or abs(net_delta - expected_net_delta) > 1e-12
+    ):
+        return FFTrimBumplessPlan(
+            False,
+            "rejected",
+            "transfer_invariant",
+            alpha=alpha,
+            old_trim=trim,
+            new_trim=trim,
+            requested_trim_delta=requested_trim_delta,
+            requested_i_transfer=requested_i_transfer,
+            transferable_i_power=i_now,
+            physical_power_deficit=deficit,
+        )
+
+    return FFTrimBumplessPlan(
+        True,
+        "ready",
+        "quasi_equilibrium",
+        alpha=alpha,
+        old_trim=trim,
+        new_trim=new_trim,
+        requested_trim_delta=requested_trim_delta,
+        stored_trim_delta=stored_delta,
+        visible_ff_delta=visible_delta,
+        transferable_i_power=i_now,
+        requested_i_transfer=requested_i_transfer,
+        applied_i_transfer=applied_i_transfer,
+        physical_power_deficit=deficit,
+        net_command_delta=net_delta,
+    )
+
+
 class FFTrim:
     """Slow trim correction on the FF principal u_ff_ab."""
 
@@ -799,7 +1470,9 @@ class FFTrim:
         self.u_ff_trim: float = 0.0
         self.frozen: bool = False
         self.freeze_reason: str = "none"
-        self._pending_deltas: Deque[float] = deque(maxlen=FF_TRIM_BUFFER_SIZE)
+        self._pending_proposals: Deque[FFTrimWindowProposal] = deque(
+            maxlen=FF_TRIM_BUFFER_SIZE
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -816,22 +1489,124 @@ class FFTrim:
                 (positive = need more power).
             u_ff_ab: Current FF principal value (used to compute authority budget).
         """
-        if self.frozen:
-            return
-
-        authority = FF_TRIM_RHO * max(u_ff_ab, FF_TRIM_EPSILON)
-        # delta_power is an incremental correction derived from thermal drift.
-        # The trim must therefore converge toward the current trim plus this
-        # correction, not toward delta_power as an absolute target.
-        target_trim = self.u_ff_trim + delta_power
-        new_trim = (1.0 - FF_TRIM_LAMBDA) * self.u_ff_trim + FF_TRIM_LAMBDA * target_trim
-        self.u_ff_trim = clamp(new_trim, -authority, authority)
+        result = self._apply_correction(
+            median_correction=float(delta_power),
+            u_ff_ab=float(u_ff_ab),
+            pending_count=len(self._pending_proposals),
+        )
 
         _LOGGER.debug(
-            "FFTrim: updated u_ff_trim=%.4f (delta_power=%.4f, authority=%.4f)",
+            "FFTrim: update reason=%s trim=%.4f correction=%.4f visible_delta=%.4f",
+            result.reason,
             self.u_ff_trim,
             delta_power,
-            authority,
+            result.visible_ff_delta,
+        )
+
+    def collect_persistent(
+        self,
+        proposal: FFTrimWindowProposal,
+    ) -> FFTrimPersistentResult:
+        """Collect one causal proposal in the only persistence buffer."""
+        if self.frozen:
+            self.clear_pending()
+            return FFTrimPersistentResult(
+                False,
+                f"frozen_{self.freeze_reason}",
+                0,
+            )
+        if not isfinite(float(proposal.correction)) or not isfinite(
+            float(proposal.mean_ff1)
+        ):
+            self.clear_pending()
+            return FFTrimPersistentResult(False, "invalid_proposal", 0)
+        if proposal.transfer_eligible and (
+            proposal.physical_power_deficit is None
+            or proposal.integral_bias is None
+            or not isfinite(float(proposal.physical_power_deficit))
+            or not isfinite(float(proposal.integral_bias))
+        ):
+            self.clear_pending()
+            return FFTrimPersistentResult(False, "invalid_transfer_proposal", 0)
+
+        transfer_signal_present = proposal.transfer_eligible and (
+            abs(float(proposal.physical_power_deficit)) > FF_TRIM_DELTA_EPSILON
+            or abs(float(proposal.integral_bias)) > FF_TRIM_DELTA_EPSILON
+        )
+        if (
+            abs(proposal.correction) <= FF_TRIM_DELTA_EPSILON
+            and not transfer_signal_present
+        ):
+            self.clear_pending()
+            return FFTrimPersistentResult(False, "quiet_delta", 0)
+
+        def direction(value: float | None) -> int:
+            if value is None or abs(float(value)) <= FF_TRIM_DELTA_EPSILON:
+                return 0
+            return 1 if float(value) > 0.0 else -1
+
+        proposal_direction = (
+            direction(proposal.correction),
+            direction(proposal.physical_power_deficit),
+            direction(proposal.integral_bias),
+        )
+        if self._pending_proposals:
+            previous = self._pending_proposals[-1]
+            previous_direction = (
+                direction(previous.correction),
+                direction(previous.physical_power_deficit),
+                direction(previous.integral_bias),
+            )
+            same_transfer_context = (
+                previous.transfer_eligible == proposal.transfer_eligible
+                and previous.transfer_reason == proposal.transfer_reason
+            )
+            if (
+                previous_direction != proposal_direction
+                or not same_transfer_context
+            ):
+                self.clear_pending()
+
+        self._pending_proposals.append(proposal)
+        pending_count = len(self._pending_proposals)
+        if pending_count < FF_TRIM_PERSISTENCE:
+            return FFTrimPersistentResult(
+                False,
+                f"pending_{pending_count}/{FF_TRIM_PERSISTENCE}",
+                pending_count,
+            )
+
+        proposals = tuple(self._pending_proposals)
+        transfer_eligible = all(
+            item.transfer_eligible
+            and item.physical_power_deficit is not None
+            and item.integral_bias is not None
+            for item in proposals
+        )
+        physical_deficit = (
+            float(median(item.physical_power_deficit for item in proposals))
+            if transfer_eligible
+            else None
+        )
+        integral_bias = (
+            float(median(item.integral_bias for item in proposals))
+            if transfer_eligible
+            else None
+        )
+        return FFTrimPersistentResult(
+            True,
+            "persistent_ready",
+            pending_count,
+            median_correction=float(median(item.correction for item in proposals)),
+            median_ff1=float(median(item.mean_ff1 for item in proposals)),
+            median_physical_power_deficit=physical_deficit,
+            median_integral_bias=integral_bias,
+            transfer_eligible=transfer_eligible,
+            transfer_reason=(
+                "quasi_equilibrium"
+                if transfer_eligible
+                else proposal.transfer_reason
+            ),
         )
 
     def update_persistent(
@@ -840,53 +1615,125 @@ class FFTrim:
         u_ff_ab: float,
     ) -> FFTrimUpdateResult:
         """Update trim only after same-direction thermal corrections persist."""
+        persistent = self.collect_persistent(
+            FFTrimWindowProposal(
+                correction=float(delta_power),
+                mean_ff1=float(u_ff_ab),
+                physical_power_deficit=None,
+                integral_bias=None,
+                transfer_eligible=False,
+                transfer_reason="causal_update_without_transfer",
+            )
+        )
+        if not persistent.ready:
+            return FFTrimUpdateResult(
+                False,
+                persistent.reason,
+                0.0,
+                persistent.pending_count,
+            )
+        return self.apply_persistent_result(
+            persistent,
+            u_ff_ab=float(u_ff_ab),
+        )
+
+    def apply_persistent_result(
+        self,
+        persistent: FFTrimPersistentResult,
+        *,
+        u_ff_ab: float,
+    ) -> FFTrimUpdateResult:
+        """Apply one robust persistent correction without integral transfer."""
+        if not persistent.ready:
+            return FFTrimUpdateResult(
+                False,
+                persistent.reason,
+                0.0,
+                persistent.pending_count,
+            )
+        return self._apply_correction(
+            median_correction=persistent.median_correction,
+            u_ff_ab=float(u_ff_ab),
+            pending_count=persistent.pending_count,
+        )
+
+    def _apply_correction(
+        self,
+        *,
+        median_correction: float,
+        u_ff_ab: float,
+        pending_count: int,
+    ) -> FFTrimUpdateResult:
+        """Apply lambda and clamps, returning stored and visible deltas."""
         if self.frozen:
-            self.clear_pending()
             return FFTrimUpdateResult(
                 False,
                 f"frozen_{self.freeze_reason}",
                 0.0,
-                0,
+                pending_count,
+                median_correction=median_correction,
             )
-
-        if abs(delta_power) <= FF_TRIM_DELTA_EPSILON:
-            self.clear_pending()
-            return FFTrimUpdateResult(False, "quiet_delta", 0.0, 0)
-
-        direction = 1.0 if delta_power > 0.0 else -1.0
-        previous_direction = self._pending_direction()
-        if previous_direction is not None and previous_direction != direction:
-            self.clear_pending()
-
-        self._pending_deltas.append(delta_power)
-        pending_count = len(self._pending_deltas)
-        if pending_count < FF_TRIM_PERSISTENCE:
+        old_trim = self.u_ff_trim
+        requested_delta = FF_TRIM_LAMBDA * median_correction
+        authority = FF_TRIM_RHO * max(u_ff_ab, FF_TRIM_EPSILON)
+        new_trim = clamp(old_trim + requested_delta, -authority, authority)
+        stored_delta = new_trim - old_trim
+        old_visible = clamp(u_ff_ab + old_trim, 0.0, 1.0)
+        new_visible = clamp(u_ff_ab + new_trim, 0.0, 1.0)
+        visible_delta = new_visible - old_visible
+        if abs(visible_delta - stored_delta) > 1e-12:
             return FFTrimUpdateResult(
                 False,
-                f"pending_{pending_count}/{FF_TRIM_PERSISTENCE}",
+                "ff_branch_clamped",
                 0.0,
                 pending_count,
+                median_correction=median_correction,
+                requested_trim_delta=requested_delta,
+                stored_trim_delta=0.0,
+                visible_ff_delta=0.0,
             )
-
-        applied_delta = float(median(self._pending_deltas))
-        self.update(applied_delta, u_ff_ab)
+        if abs(stored_delta) <= 1e-12:
+            return FFTrimUpdateResult(
+                False,
+                "trim_clamped",
+                0.0,
+                pending_count,
+                median_correction=median_correction,
+                requested_trim_delta=requested_delta,
+                stored_trim_delta=0.0,
+                visible_ff_delta=0.0,
+            )
+        self.u_ff_trim = new_trim
+        self.clear_pending()
         return FFTrimUpdateResult(
             True,
             "updated_persistent",
-            applied_delta,
+            visible_delta,
             pending_count,
+            median_correction=median_correction,
+            requested_trim_delta=requested_delta,
+            stored_trim_delta=stored_delta,
+            visible_ff_delta=visible_delta,
         )
+
+    def commit_bumpless_plan(self, plan: FFTrimBumplessPlan) -> bool:
+        """Commit a previously prepared trim side without recomputing it."""
+        if (
+            not plan.applicable
+            or abs(self.u_ff_trim - plan.old_trim) > 1e-12
+        ):
+            return False
+        self.u_ff_trim = plan.new_trim
+        return True
+
+    def rollback_bumpless_plan(self, plan: FFTrimBumplessPlan) -> None:
+        """Restore the trim side after an unexpected integral-side failure."""
+        if abs(self.u_ff_trim - plan.new_trim) <= 1e-12:
+            self.u_ff_trim = plan.old_trim
 
     def clear_pending(self) -> None:
         """Discard pending trim samples that belong to an invalid context."""
-        self._pending_deltas.clear()
-
-    def _pending_direction(self) -> float | None:
-        """Return the direction shared by pending deltas, if any."""
-        for delta in reversed(self._pending_deltas):
-            if abs(delta) > FF_TRIM_DELTA_EPSILON:
-                return 1.0 if delta > 0.0 else -1.0
-        return None
+        self._pending_proposals.clear()
 
     def compute_ff_base(self, u_ff_ab: float) -> float:
         """Return u_ff_base = clamp(u_ff_ab + u_ff_trim, 0, 1)."""

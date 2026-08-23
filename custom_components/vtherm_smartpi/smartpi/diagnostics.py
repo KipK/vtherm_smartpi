@@ -102,6 +102,24 @@ ESSENTIAL_KEYS = {
     "fftrim_observed_hold_power",
     "fftrim_target_trim",
     "fftrim_correction",
+    "fftrim_mean_p_power",
+    "fftrim_mean_i_power",
+    "fftrim_mean_visible_ff_power",
+    "fftrim_mean_ki",
+    "fftrim_mean_delivery_residual",
+    "fftrim_physical_power_deficit",
+    "fftrim_decomposed_correction",
+    "fftrim_requested_trim_delta",
+    "fftrim_stored_trim_delta",
+    "fftrim_applied_trim_delta",
+    "fftrim_transferable_i_power",
+    "fftrim_requested_i_transfer",
+    "fftrim_applied_i_transfer",
+    "fftrim_net_command_delta",
+    "fftrim_bumpless_transfer_state",
+    "fftrim_bumpless_transfer_reason",
+    "fftrim_transfer_pending_engagement",
+    "fftrim_transfer_quality",
     "integral_hold_active",
     "integral_hold_mode",
     "restart_reason",
@@ -280,6 +298,44 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
                 ],
                 "target_trim": diag["fftrim_target_trim"],
                 "correction": diag["fftrim_correction"],
+                "mean_p_power": diag["fftrim_mean_p_power"],
+                "mean_i_power": diag["fftrim_mean_i_power"],
+                "mean_visible_ff_power": diag[
+                    "fftrim_mean_visible_ff_power"
+                ],
+                "mean_ki": diag["fftrim_mean_ki"],
+                "mean_delivery_residual": diag[
+                    "fftrim_mean_delivery_residual"
+                ],
+                "physical_power_deficit": diag[
+                    "fftrim_physical_power_deficit"
+                ],
+                "decomposed_correction": diag[
+                    "fftrim_decomposed_correction"
+                ],
+                "requested_trim_delta": diag[
+                    "fftrim_requested_trim_delta"
+                ],
+                "stored_trim_delta": diag["fftrim_stored_trim_delta"],
+                "applied_trim_delta": diag["fftrim_applied_trim_delta"],
+                "transferable_i_power": diag[
+                    "fftrim_transferable_i_power"
+                ],
+                "requested_i_transfer": diag[
+                    "fftrim_requested_i_transfer"
+                ],
+                "applied_i_transfer": diag["fftrim_applied_i_transfer"],
+                "net_command_delta": diag["fftrim_net_command_delta"],
+                "bumpless_transfer_state": diag[
+                    "fftrim_bumpless_transfer_state"
+                ],
+                "bumpless_transfer_reason": diag[
+                    "fftrim_bumpless_transfer_reason"
+                ],
+                "transfer_pending_engagement": diag[
+                    "fftrim_transfer_pending_engagement"
+                ],
+                "transfer_quality": diag["fftrim_transfer_quality"],
             },
         },
         "setpoint": {
@@ -474,6 +530,54 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             if fftrim_observer["correction"] is not None
             else None
         ),
+        "fftrim_mean_p_power": (
+            round(float(fftrim_observer["mean_p_power"]), 6)
+            if fftrim_observer["mean_p_power"] is not None
+            else None
+        ),
+        "fftrim_mean_i_power": (
+            round(float(fftrim_observer["mean_i_power"]), 6)
+            if fftrim_observer["mean_i_power"] is not None
+            else None
+        ),
+        "fftrim_mean_visible_ff_power": (
+            round(float(fftrim_observer["mean_visible_ff_power"]), 6)
+            if fftrim_observer["mean_visible_ff_power"] is not None
+            else None
+        ),
+        "fftrim_mean_ki": (
+            round(float(fftrim_observer["mean_ki"]), 6)
+            if fftrim_observer["mean_ki"] is not None
+            else None
+        ),
+        "fftrim_mean_delivery_residual": (
+            round(float(fftrim_observer["mean_delivery_residual"]), 6)
+            if fftrim_observer["mean_delivery_residual"] is not None
+            else None
+        ),
+        "fftrim_physical_power_deficit": (
+            round(float(fftrim_observer["physical_power_deficit"]), 6)
+            if fftrim_observer["physical_power_deficit"] is not None
+            else None
+        ),
+        "fftrim_decomposed_correction": (
+            round(float(fftrim_observer["decomposed_correction"]), 6)
+            if fftrim_observer["decomposed_correction"] is not None
+            else None
+        ),
+        "fftrim_requested_trim_delta": round(algo._requested_trim_delta, 6),
+        "fftrim_stored_trim_delta": round(algo._stored_trim_delta, 6),
+        "fftrim_applied_trim_delta": round(algo._applied_trim_delta, 6),
+        "fftrim_transferable_i_power": round(algo._transferable_i_power, 6),
+        "fftrim_requested_i_transfer": round(algo._requested_i_transfer, 6),
+        "fftrim_applied_i_transfer": round(algo._applied_i_transfer, 6),
+        "fftrim_net_command_delta": round(algo._net_command_delta, 6),
+        "fftrim_bumpless_transfer_state": algo._bumpless_transfer_state,
+        "fftrim_bumpless_transfer_reason": algo._bumpless_transfer_reason,
+        "fftrim_transfer_pending_engagement": (
+            algo._transfer_pending_engagement
+        ),
+        "fftrim_transfer_quality": algo._transfer_quality,
         # FF compatibility aliases
         "u_ff_ab": round(ff_result.u_ff_ab, 6) if ff_result else 0.0,
         "u_ff_trim": round(algo._ff_trim.u_ff_trim, 6),

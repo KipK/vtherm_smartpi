@@ -79,6 +79,14 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `fftrim_last_reject_reason` | `string` | Commande | Raison du rejet de la dernière mise à jour de trim lent. |
 | `fftrim_last_update_reason` | `string` | Commande | Raison de l'acceptation de la dernière mise à jour de trim lent. |
 | `fftrim_cycles_since_update` | `int` | Commande | Nombre de cycles écoulés depuis la dernière mise à jour de `FFTrim`. |
+| `fftrim_physical_power_deficit` | `float` | Commande | Déficit causal de puissance de maintien, `H - puissance_appliquée_moyenne`, dans l'espace linéaire du modèle. |
+| `fftrim_requested_trim_delta` | `float` | Commande | Delta de trim demandé après le facteur d'apprentissage lent, avant les bornes transactionnelles. |
+| `fftrim_applied_trim_delta` | `float` | Commande | Delta de trim réellement visible après autorité et clamp de la branche feed-forward. |
+| `fftrim_applied_i_transfer` | `float` | État PI | Puissance signée retirée de la contribution intégrale et réaffectée au trim. |
+| `fftrim_net_command_delta` | `float` | Commande | Variation réelle de commande conservée pour le déficit ou surplus physique causal. |
+| `fftrim_bumpless_transfer_state` | `string` | Commande | État de la dernière transaction atomique trim/intégrale. |
+| `fftrim_bumpless_transfer_reason` | `string` | Commande | Raison d'éligibilité, de rejet ou d'application de cette transaction. |
+| `fftrim_transfer_pending_engagement` | `boolean` | Commande | Vrai jusqu'à l'engagement de la commande post-transfert dans la timeline actionneur. |
 | `integral_hold_active` | `boolean` | État PI | Indique si l'accumulateur de la branche intégrale est actuellement gelé. |
 | `integral_hold_mode` | `string` | État PI | Mode actif ou raison du gel de l'intégrale (ex. `window_hold`, `deadband_hold`). |
 | `restart_reason` | `string` | Général | Raison du dernier redémarrage de l'algorithme ou de l'intégration. |
@@ -144,6 +152,16 @@ Lorsque le **Mode debug SmartPI** est activé, un bloc imbriqué nommé **`debug
 | `ff2_frozen` | `boolean` | Indique si les ajustements du trim lent sont gelés. |
 | `ff2_freeze_reason` | `string` | Raison du gel de la boucle d'adaptation du trim lent. |
 | `fftrim_cycle_admissible` | `boolean` | Indique si le cycle actuel remplit les critères de stabilité pour mettre à jour `FFTrim`. |
+| `fftrim_mean_p_power` | `float` | Contribution proportionnelle moyenne pondérée dans le temps sur la fenêtre causale alignée. |
+| `fftrim_mean_i_power` | `float` | Contribution intégrale moyenne mesurée directement comme `Ki × integral`. |
+| `fftrim_mean_visible_ff_power` | `float` | FF1 + trim stocké moyen après clamp de la branche feed-forward. |
+| `fftrim_mean_ki` | `float` | `Ki` effectif moyen pondéré sur la fenêtre de propriété. |
+| `fftrim_mean_delivery_residual` | `float` | Écart moyen entre puissance linéaire engagée et somme de contrôle modélisée. |
+| `fftrim_decomposed_correction` | `float` | Correction causale décomposée en déficit physique plus biais intégral stable. |
+| `fftrim_stored_trim_delta` | `float` | Delta stocké dans `u_ff_trim` ; il égale le delta visible pour une transaction acceptée. |
+| `fftrim_transferable_i_power` | `float` | Puissance intégrale courante disponible pour le transfert de propriété. |
+| `fftrim_requested_i_transfer` | `float` | Puissance intégrale signée demandée avant application du facteur de borne commun. |
+| `fftrim_transfer_quality` | `string` | Source/qualité de la timeline de propriété alignée (cycle switch ou valve linéarisée). |
 | `u_ff_ab` | `float` | Composante de feed-forward issue strictement du modèle appris $a$ et $b$. |
 | `u_ff_trim` | `float` | Composante de biais calculée par la boucle de trim lent. |
 | `u_ff_base` | `float` | Commande de feed-forward de base avant application du trim. |
