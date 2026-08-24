@@ -152,6 +152,14 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `ff2_frozen` | `boolean` | Indicates if slow trim adjustments are frozen. |
 | `ff2_freeze_reason` | `string` | Reason for freezing the slow trim update loop. |
 | `fftrim_cycle_admissible` | `boolean` | Indicates if the current cycle satisfies all stability criteria for `FFTrim` updates. |
+| `fftrim_observation_mode` | `string` | Method that produced the latest FFTrim result: `stationary` or `periodic`. |
+| `fftrim_periodic_state` | `string` | State of phase-closed thermal-cycle selection. |
+| `fftrim_periodic_window_duration_s` | `float` | Duration of the active or completed periodic window. |
+| `fftrim_periodic_target_duration_s` | `float` | Minimum duration derived from VT cycles and dead time, without a fixed thirty-minute floor. |
+| `fftrim_periodic_measurement_count` | `int` | Number of distinct temperature measurements in the periodic window. |
+| `fftrim_periodic_amplitude_c` | `float` | Peak-to-peak thermal amplitude of the periodic window. |
+| `fftrim_periodic_closure_error_c` | `float` | Difference between the selected cycle’s start and end temperatures. |
+| `fftrim_periodic_last_reject_reason` | `string` | Latest reason preventing or rejecting a periodic window. |
 | `fftrim_mean_p_power` | `float` | Time-weighted proportional contribution over the aligned causal window. |
 | `fftrim_mean_i_power` | `float` | Time-weighted integral contribution, measured directly as `Ki × integral`. |
 | `fftrim_mean_visible_ff_power` | `float` | Time-weighted FF1 + stored trim after the feed-forward branch clamp. |

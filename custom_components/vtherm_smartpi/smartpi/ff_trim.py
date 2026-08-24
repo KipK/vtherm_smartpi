@@ -37,6 +37,7 @@ from .const import (
     FF_TRIM_DEADTIME_WINDOW_FACTOR,
     FF_TRIM_MIN_DISTINCT_MEASUREMENTS,
     FF_TRIM_MIN_POWER_COVERAGE,
+    FF_TRIM_PERIODIC_MIN_POWER_RANGE,
     FF_TRIM_MAX_ERROR_C,
     FF_TRIM_MAX_SLOPE_H,
     FF_TRIM_TRANSFER_MAX_ERROR_C,
@@ -133,6 +134,7 @@ class FFTrimThermalSample:
     model_reliable: bool
     outside_temperature: float | None = None
     trim_frozen_reason: str | None = None
+    saturation_state: str = "NO_SAT"
 
 
 @dataclass(frozen=True)
@@ -163,6 +165,7 @@ class CausalFFTrimResult:
     transfer_eligible: bool = False
     transfer_reason: str = "ownership_unavailable"
     transfer_quality: str = "unavailable"
+    observation_mode: str = "stationary"
 
 
 @dataclass(frozen=True)
@@ -175,6 +178,7 @@ class FFTrimWindowProposal:
     integral_bias: float | None
     transfer_eligible: bool
     transfer_reason: str
+    observation_mode: str = "stationary"
 
 
 @dataclass(frozen=True)
@@ -190,6 +194,7 @@ class FFTrimPersistentResult:
     median_integral_bias: float | None = None
     transfer_eligible: bool = False
     transfer_reason: str = "not_ready"
+    observation_mode: str = "stationary"
 
 
 @dataclass(frozen=True)
@@ -232,6 +237,7 @@ class _OwnershipStats:
     p_range: float
     i_range: float
     i_drift: float
+    committed_range: float
     ki_min: float
     i_sign_persistent: bool
     regimes: frozenset[GovernanceRegime | str | None]
@@ -522,12 +528,79 @@ class CausalFFTrimObserver:
             self.last_reject_reason = "window_too_short"
             return None
 
+        result = self._evaluate_completed_window(
+            samples=samples,
+            a=float(a),
+            b=float(b),
+            delay_s=delay_s,
+            current_trim=float(current_trim),
+            observation_mode="stationary",
+        )
+        if result is None:
+            self.state = "waiting_deadtime"
+            self.last_reject_reason = "causal_power_not_covered"
+            return None
+
+        self.last_result = result
+        self.state = "ready" if result.admissible else "rejected"
+        self.last_reject_reason = "none" if result.admissible else result.reason
+        self.last_update_reason = result.reason if result.admissible else "skipped"
+        self._thermal_samples.clear()
+        self._window_deadtime_s = None
+        return result
+
+    def evaluate_periodic_window(
+        self,
+        samples: Sequence[FFTrimThermalSample],
+        *,
+        a: float,
+        b: float,
+        deadtime_s: float,
+        current_trim: float,
+    ) -> CausalFFTrimResult | None:
+        """Evaluate a phase-closed window against the shared causal traces."""
+        return self._evaluate_completed_window(
+            samples=tuple(samples),
+            a=float(a),
+            b=float(b),
+            delay_s=float(deadtime_s),
+            current_trim=float(current_trim),
+            observation_mode="periodic",
+        )
+
+    def publish_external_result(self, result: CausalFFTrimResult) -> None:
+        """Publish a result evaluated from another logical sample window."""
+        self.last_result = result
+        self.state = "ready" if result.admissible else "rejected"
+        self.last_reject_reason = "none" if result.admissible else result.reason
+        self.last_update_reason = result.reason if result.admissible else "skipped"
+
+    @property
+    def earliest_power_start(self) -> float | None:
+        """Return the oldest physical-power timestamp still retained."""
+        if not self._power_segments:
+            return None
+        return self._power_segments[0].start_monotonic
+
+    def _evaluate_completed_window(
+        self,
+        *,
+        samples: Sequence[FFTrimThermalSample],
+        a: float,
+        b: float,
+        delay_s: float,
+        current_trim: float,
+        observation_mode: str,
+    ) -> CausalFFTrimResult | None:
+        """Evaluate one complete window using the shared causal traces."""
+        duration_s = samples[-1].observed_monotonic - samples[0].observed_monotonic
         model_rejection = self._model_rejection_reason(samples[-1].hvac_mode, a, b)
         if model_rejection is not None:
             return self._reject_completed_window(
                 model_rejection,
                 samples,
                 delay_s,
+                observation_mode=observation_mode,
             )
 
         target_span = max(sample.target for sample in samples) - min(
@@ -538,6 +611,7 @@ class CausalFFTrimObserver:
                 "setpoint_changed",
                 samples,
                 delay_s,
+                observation_mode=observation_mode,
             )
 
         modes = {sample.hvac_mode for sample in samples}
@@ -546,45 +620,64 @@ class CausalFFTrimObserver:
                 "hvac_mode_changed",
                 samples,
                 delay_s,
+                observation_mode=observation_mode,
             )
 
         u_pi_values = [sample.u_pi for sample in samples if sample.u_pi is not None]
-        if len(u_pi_values) != len(samples):
-            return self._reject_completed_window(
-                "pi_missing",
-                samples,
-                delay_s,
+        if observation_mode == "stationary":
+            if len(u_pi_values) != len(samples):
+                return self._reject_completed_window(
+                    "pi_missing",
+                    samples,
+                    delay_s,
+                    observation_mode=observation_mode,
+                )
+            has_near_band_sample = any(
+                sample.regime == GovernanceRegime.NEAR_BAND for sample in samples
             )
-        has_near_band_sample = any(
-            sample.regime == GovernanceRegime.NEAR_BAND for sample in samples
-        )
-        if (
-            has_near_band_sample
-            and max(u_pi_values) - min(u_pi_values)
-            > FF_TRIM_PI_STABILITY_EPSILON
-        ):
-            return self._reject_completed_window(
-                "pi_unstable",
-                samples,
-                delay_s,
-            )
+            if (
+                has_near_band_sample
+                and max(u_pi_values) - min(u_pi_values)
+                > FF_TRIM_PI_STABILITY_EPSILON
+            ):
+                return self._reject_completed_window(
+                    "pi_unstable",
+                    samples,
+                    delay_s,
+                    observation_mode=observation_mode,
+                )
 
         causal_start = samples[0].observed_monotonic - delay_s
         causal_end = samples[-1].observed_monotonic - delay_s
         mean_power, coverage = self._mean_causal_power(causal_start, causal_end)
         if mean_power is None or coverage < FF_TRIM_MIN_POWER_COVERAGE:
-            if self._power_segments[-1].end_monotonic < causal_end:
-                self.state = "waiting_deadtime"
-                self.last_reject_reason = "causal_power_not_covered"
+            if not self._power_segments or self._power_segments[-1].end_monotonic < causal_end:
                 return None
             return self._reject_completed_window(
                 "causal_power_not_covered",
                 samples,
                 delay_s,
                 coverage=coverage,
+                observation_mode=observation_mode,
             )
 
         ownership_stats = self._ownership_stats(causal_start, causal_end)
+        if observation_mode == "periodic":
+            periodic_rejection = self._periodic_ownership_rejection_reason(
+                samples=samples,
+                stats=ownership_stats,
+                a=a,
+                b=b,
+                current_trim=current_trim,
+            )
+            if periodic_rejection is not None:
+                return self._reject_completed_window(
+                    periodic_rejection,
+                    samples,
+                    delay_s,
+                    coverage=coverage,
+                    observation_mode=observation_mode,
+                )
 
         mean_temperature = self._time_weighted_mean(
             samples,
@@ -612,6 +705,7 @@ class CausalFFTrimObserver:
                 samples,
                 delay_s,
                 coverage=coverage,
+                observation_mode=observation_mode,
             )
         if abs(mean_slope_h) > FF_TRIM_MAX_SLOPE_H:
             return self._reject_completed_window(
@@ -619,15 +713,16 @@ class CausalFFTrimObserver:
                 samples,
                 delay_s,
                 coverage=coverage,
+                observation_mode=observation_mode,
             )
 
         observed_hold_power = (
             mean_power
-            - slope_per_min / float(a)
-            + (float(b) / float(a)) * (mean_target - mean_temperature)
+            - slope_per_min / a
+            + (b / a) * (mean_target - mean_temperature)
         )
         target_trim = observed_hold_power - mean_ff1
-        correction = target_trim - float(current_trim)
+        correction = target_trim - current_trim
         physical_power_deficit = observed_hold_power - mean_power
         decomposed_correction = None
         transfer_eligible = False
@@ -644,18 +739,22 @@ class CausalFFTrimObserver:
             mean_visible_ff_power = ownership_stats.mean_visible_ff
             mean_ki = ownership_stats.mean_ki
             mean_delivery_residual = mean_power - ownership_stats.mean_model_power
-            decomposed_correction = physical_power_deficit + mean_i_power
-            transfer_reason = self._transfer_rejection_reason(
-                samples=samples,
-                stats=ownership_stats,
-                a=float(a),
-                b=float(b),
-                mean_error=mean_error,
-                mean_slope_h=mean_slope_h,
-                mean_delivery_residual=mean_delivery_residual,
-            ) or "quasi_equilibrium"
-            transfer_eligible = transfer_reason == "quasi_equilibrium"
             transfer_quality = ownership_stats.quality
+            if observation_mode == "stationary":
+                decomposed_correction = physical_power_deficit + mean_i_power
+                transfer_reason = self._transfer_rejection_reason(
+                    samples=samples,
+                    stats=ownership_stats,
+                    a=a,
+                    b=b,
+                    mean_error=mean_error,
+                    mean_slope_h=mean_slope_h,
+                    mean_delivery_residual=mean_delivery_residual,
+                ) or "quasi_equilibrium"
+                transfer_eligible = transfer_reason == "quasi_equilibrium"
+            else:
+                transfer_reason = "periodic_equilibrium"
+
         if not all(
             isfinite(value)
             for value in (
@@ -670,11 +769,16 @@ class CausalFFTrimObserver:
                 samples,
                 delay_s,
                 coverage=coverage,
+                observation_mode=observation_mode,
             )
 
-        result = CausalFFTrimResult(
+        return CausalFFTrimResult(
             admissible=True,
-            reason="causal_window_ready",
+            reason=(
+                "periodic_window_ready"
+                if observation_mode == "periodic"
+                else "causal_window_ready"
+            ),
             correction=correction,
             target_trim=target_trim,
             mean_causal_power=mean_power,
@@ -697,15 +801,58 @@ class CausalFFTrimObserver:
             transfer_eligible=transfer_eligible,
             transfer_reason=transfer_reason,
             transfer_quality=transfer_quality,
+            observation_mode=observation_mode,
         )
-        self.last_result = result
-        self.state = "ready"
-        self.last_reject_reason = "none"
-        self.last_update_reason = "causal_window_ready"
-        self._thermal_samples.clear()
-        self._window_deadtime_s = None
-        self._discard_power_before(causal_end)
-        return result
+
+    @staticmethod
+    def _periodic_ownership_rejection_reason(
+        *,
+        samples: Sequence[FFTrimThermalSample],
+        stats: _OwnershipStats | None,
+        a: float,
+        b: float,
+        current_trim: float,
+    ) -> str | None:
+        """Return why a phase-closed cycle is unsafe for periodic trim."""
+        if stats is None:
+            return "periodic_ownership_not_covered"
+        allowed_regimes = frozenset(
+            {
+                GovernanceRegime.NEAR_BAND,
+                GovernanceRegime.DEAD_BAND,
+                GovernanceRegime.HOLD,
+                GovernanceRegime.SATURATED,
+            }
+        )
+        if not stats.regimes or not stats.regimes.issubset(allowed_regimes):
+            return "periodic_regime_changed"
+        disallowed_flags = stats.constraint_flags - {"saturated_low"}
+        if disallowed_flags:
+            return f"periodic_constraint_{sorted(disallowed_flags)[0]}"
+        if len(stats.gain_generations) != 1:
+            return "periodic_gains_changed"
+        if (
+            stats.ff1_range > FF_TRIM_TRANSFER_MAX_POWER_RANGE
+            or stats.trim_range > FF_TRIM_TRANSFER_MAX_POWER_RANGE
+            or abs(stats.mean_trim - current_trim)
+            > FF_TRIM_TRANSFER_MAX_POWER_RANGE
+        ):
+            return "periodic_ff_changed"
+        if stats.committed_range < FF_TRIM_PERIODIC_MIN_POWER_RANGE:
+            return "periodic_power_range"
+        outside_values = [
+            sample.outside_temperature
+            for sample in samples
+            if sample.outside_temperature is not None
+        ]
+        if len(outside_values) != len(samples):
+            return "periodic_outdoor_temperature_missing"
+        projected_outdoor_range = abs(b / a) * (
+            max(outside_values) - min(outside_values)
+        )
+        if projected_outdoor_range > FF_TRIM_TRANSFER_MAX_POWER_RANGE:
+            return "periodic_outdoor_temperature_unstable"
+        return None
 
     def invalidate(
         self,
@@ -728,6 +875,21 @@ class CausalFFTrimObserver:
         self.last_reject_reason = reason
         self.last_update_reason = "skipped"
         return result
+
+    def reset_after_trim_update(
+        self,
+        *,
+        now_monotonic: float,
+        washout_s: float,
+    ) -> None:
+        """Start a fresh stationary window after the reference trim changes."""
+        self._thermal_samples.clear()
+        self._window_deadtime_s = None
+        self._washout_until_monotonic = max(
+            self._washout_until_monotonic,
+            float(now_monotonic) + max(float(washout_s), 0.0),
+        )
+        self.state = "waiting_deadtime"
 
     def reset_runtime(self) -> None:
         """Clear transient observation state without changing persisted trim."""
@@ -932,6 +1094,7 @@ class CausalFFTrimObserver:
         i_values: list[float] = []
         ki_values: list[float] = []
         residual_values: list[float] = []
+        committed_values: list[float] = []
         regimes: set[GovernanceRegime | str | None] = set()
         i_modes: set[str | None] = set()
         flags: set[str] = set()
@@ -976,6 +1139,7 @@ class CausalFFTrimObserver:
             i_values.append(item.u_i)
             ki_values.append(item.ki)
             residual_values.append(item.linear_committed_power - model_power)
+            committed_values.append(item.linear_committed_power)
             regimes.add(item.regime)
             i_modes.add(item.i_mode)
             flags.update(item.constraint_flags)
@@ -1018,6 +1182,7 @@ class CausalFFTrimObserver:
             p_range=_range(p_values),
             i_range=_range(i_values),
             i_drift=abs(i_values[-1] - i_values[0]),
+            committed_range=_range(committed_values),
             ki_min=min(ki_values),
             i_sign_persistent=i_sign_persistent,
             regimes=frozenset(regimes),
@@ -1139,9 +1304,11 @@ class CausalFFTrimObserver:
         delay_s: float,
         *,
         coverage: float = 0.0,
+        observation_mode: str = "stationary",
     ) -> CausalFFTrimResult:
+        """Build one rejected result without consuming shared trace data."""
         duration_s = samples[-1].observed_monotonic - samples[0].observed_monotonic
-        result = CausalFFTrimResult(
+        return CausalFFTrimResult(
             admissible=False,
             reason=reason,
             correction=None,
@@ -1156,17 +1323,8 @@ class CausalFFTrimObserver:
             measurement_count=len(samples),
             alignment_delay_s=delay_s,
             power_coverage_ratio=coverage,
+            observation_mode=observation_mode,
         )
-        self.last_result = result
-        self.state = "rejected"
-        self.last_reject_reason = reason
-        self.last_update_reason = "skipped"
-        self._thermal_samples.clear()
-        self._window_deadtime_s = None
-        self._discard_power_before(
-            samples[-1].observed_monotonic - delay_s
-        )
-        return result
 
     @staticmethod
     def _empty_result(
@@ -1479,6 +1637,9 @@ class FFTrim:
         self._pending_proposals: Deque[FFTrimWindowProposal] = deque(
             maxlen=FF_TRIM_BUFFER_SIZE
         )
+        self._periodic_pending_proposals: Deque[FFTrimWindowProposal] = deque(
+            maxlen=FF_TRIM_BUFFER_SIZE
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -1513,27 +1674,40 @@ class FFTrim:
         self,
         proposal: FFTrimWindowProposal,
     ) -> FFTrimPersistentResult:
-        """Collect one causal proposal in the only persistence buffer."""
+        """Collect one causal proposal in its observation-mode buffer."""
+        observation_mode = proposal.observation_mode
+        pending_proposals = self._pending_buffer(observation_mode)
         if self.frozen:
-            self.clear_pending()
+            self.clear_pending(observation_mode)
             return FFTrimPersistentResult(
                 False,
                 f"frozen_{self.freeze_reason}",
                 0,
+                observation_mode=observation_mode,
             )
         if not isfinite(float(proposal.correction)) or not isfinite(
             float(proposal.mean_ff1)
         ):
-            self.clear_pending()
-            return FFTrimPersistentResult(False, "invalid_proposal", 0)
+            self.clear_pending(observation_mode)
+            return FFTrimPersistentResult(
+                False,
+                "invalid_proposal",
+                0,
+                observation_mode=observation_mode,
+            )
         if proposal.transfer_eligible and (
             proposal.physical_power_deficit is None
             or proposal.integral_bias is None
             or not isfinite(float(proposal.physical_power_deficit))
             or not isfinite(float(proposal.integral_bias))
         ):
-            self.clear_pending()
-            return FFTrimPersistentResult(False, "invalid_transfer_proposal", 0)
+            self.clear_pending(observation_mode)
+            return FFTrimPersistentResult(
+                False,
+                "invalid_transfer_proposal",
+                0,
+                observation_mode=observation_mode,
+            )
 
         transfer_signal_present = proposal.transfer_eligible and (
             abs(float(proposal.physical_power_deficit)) > FF_TRIM_DELTA_EPSILON
@@ -1543,8 +1717,13 @@ class FFTrim:
             abs(proposal.correction) <= FF_TRIM_DELTA_EPSILON
             and not transfer_signal_present
         ):
-            self.clear_pending()
-            return FFTrimPersistentResult(False, "quiet_delta", 0)
+            self.clear_pending(observation_mode)
+            return FFTrimPersistentResult(
+                False,
+                "quiet_delta",
+                0,
+                observation_mode=observation_mode,
+            )
 
         def direction(value: float | None) -> int:
             if value is None or abs(float(value)) <= FF_TRIM_DELTA_EPSILON:
@@ -1556,8 +1735,8 @@ class FFTrim:
             direction(proposal.physical_power_deficit),
             direction(proposal.integral_bias),
         )
-        if self._pending_proposals:
-            previous = self._pending_proposals[-1]
+        if pending_proposals:
+            previous = pending_proposals[-1]
             previous_direction = (
                 direction(previous.correction),
                 direction(previous.physical_power_deficit),
@@ -1571,18 +1750,19 @@ class FFTrim:
                 previous_direction != proposal_direction
                 or not same_transfer_context
             ):
-                self.clear_pending()
+                self.clear_pending(observation_mode)
 
-        self._pending_proposals.append(proposal)
-        pending_count = len(self._pending_proposals)
+        pending_proposals.append(proposal)
+        pending_count = len(pending_proposals)
         if pending_count < FF_TRIM_PERSISTENCE:
             return FFTrimPersistentResult(
                 False,
                 f"pending_{pending_count}/{FF_TRIM_PERSISTENCE}",
                 pending_count,
+                observation_mode=observation_mode,
             )
 
-        proposals = tuple(self._pending_proposals)
+        proposals = tuple(pending_proposals)
         transfer_eligible = all(
             item.transfer_eligible
             and item.physical_power_deficit is not None
@@ -1613,6 +1793,7 @@ class FFTrim:
                 if transfer_eligible
                 else proposal.transfer_reason
             ),
+            observation_mode=observation_mode,
         )
 
     def update_persistent(
@@ -1629,6 +1810,7 @@ class FFTrim:
                 integral_bias=None,
                 transfer_eligible=False,
                 transfer_reason="causal_update_without_transfer",
+                observation_mode="stationary",
             )
         )
         if not persistent.ready:
@@ -1737,9 +1919,22 @@ class FFTrim:
         if abs(self.u_ff_trim - plan.new_trim) <= 1e-12:
             self.u_ff_trim = plan.old_trim
 
-    def clear_pending(self) -> None:
-        """Discard pending trim samples that belong to an invalid context."""
-        self._pending_proposals.clear()
+    def clear_pending(self, observation_mode: str | None = None) -> None:
+        """Discard pending proposals for one mode or every mode."""
+        if observation_mode is None:
+            self._pending_proposals.clear()
+            self._periodic_pending_proposals.clear()
+            return
+        self._pending_buffer(observation_mode).clear()
+
+    def _pending_buffer(
+        self,
+        observation_mode: str,
+    ) -> Deque[FFTrimWindowProposal]:
+        """Return the persistence buffer belonging to one observer."""
+        if observation_mode == "periodic":
+            return self._periodic_pending_proposals
+        return self._pending_proposals
 
     def compute_ff_base(self, u_ff_ab: float) -> float:
         """Return u_ff_base = clamp(u_ff_ab + u_ff_trim, 0, 1)."""

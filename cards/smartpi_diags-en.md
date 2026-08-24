@@ -82,6 +82,14 @@
 {% set twin_status = ff.get('twin_status', 'unavailable') %}
 {% set deadband_source = ff.get('deadband_power_source', 'none') %}
 {% set fftrim_state = fftrim.get('state') %}
+{% set fftrim_observation_mode = fftrim.get('observation_mode') %}
+{% set fftrim_periodic_state = fftrim.get('periodic_state') %}
+{% set fftrim_periodic_window_duration_s = fftrim.get('periodic_window_duration_s') %}
+{% set fftrim_periodic_target_duration_s = fftrim.get('periodic_target_duration_s') %}
+{% set fftrim_periodic_measurement_count = fftrim.get('periodic_measurement_count') %}
+{% set fftrim_periodic_amplitude_c = fftrim.get('periodic_amplitude_c') %}
+{% set fftrim_periodic_closure_error_c = fftrim.get('periodic_closure_error_c') %}
+{% set fftrim_periodic_last_reject_reason = fftrim.get('periodic_last_reject_reason') %}
 {% set fftrim_last_reject_reason = fftrim.get('last_reject_reason') %}
 {% set fftrim_last_update_reason = fftrim.get('last_update_reason') %}
 {% set fftrim_windows_since_update = fftrim.get('windows_since_update') %}
@@ -119,6 +127,14 @@
   'ready': 'ready',
   'rejected': 'rejected'
 }.get(fftrim_state, fftrim_state) %}
+{% set fftrim_periodic_state_label = {
+  'warming_up': 'warming up',
+  'collecting': 'collecting',
+  'waiting_deadtime': 'waiting for dead time',
+  'waiting_phase': 'waiting for phase closure',
+  'ready': 'ready',
+  'rejected': 'rejected'
+}.get(fftrim_periodic_state, fftrim_periodic_state) %}
 
 {% set trajectory_active = setpoint.get('trajectory_active', false) %}
 {% set published_filtered_sp = setpoint.get('filtered_setpoint') %}
@@ -614,8 +630,13 @@
 | Signal | Value |
 |---|---:|
 | Observer | {% if fftrim_state is not none %}`{{ fftrim_state_label }}`{% else %}—{% endif %} |
+| Observation mode | {% if fftrim_observation_mode is not none %}`{{ fftrim_observation_mode }}`{% else %}—{% endif %} |
 | Thermal window | {% if fftrim_window_duration_s is not none and fftrim_window_target_duration_s is not none %}{{ (fftrim_window_duration_s | float / 60) | round(1) }} / {{ (fftrim_window_target_duration_s | float / 60) | round(1) }} min{% else %}—{% endif %} |
 | Distinct measurements | {% if fftrim_measurement_count is not none %}{{ fftrim_measurement_count }}{% else %}—{% endif %} |
+| Periodic observer | {% if fftrim_periodic_state is not none %}`{{ fftrim_periodic_state_label }}`{% else %}—{% endif %} |
+| Periodic window | {% if fftrim_periodic_window_duration_s is not none and fftrim_periodic_target_duration_s is not none %}{{ (fftrim_periodic_window_duration_s | float / 60) | round(1) }} / {{ (fftrim_periodic_target_duration_s | float / 60) | round(1) }} min · {{ fftrim_periodic_measurement_count }} measurements{% else %}—{% endif %} |
+| Amplitude / closure error | {% if fftrim_periodic_amplitude_c is not none %}{{ fftrim_periodic_amplitude_c | float | round(3) }}°C{% else %}—{% endif %} / {% if fftrim_periodic_closure_error_c is not none %}{{ fftrim_periodic_closure_error_c | float | round(3) }}°C{% else %}—{% endif %} |
+| Last periodic rejection | {% if fftrim_periodic_last_reject_reason is not none %}`{{ fftrim_periodic_last_reject_reason }}`{% else %}—{% endif %} |
 | Dead-time alignment | {% if fftrim_alignment_delay_s is not none %}{{ fftrim_alignment_delay_s | float | round(1) }} s{% else %}—{% endif %} |
 | Power coverage | {% if fftrim_power_coverage_ratio is not none %}{{ (fftrim_power_coverage_ratio | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | Causal power / FF1 | {% if fftrim_mean_causal_power is not none %}{{ (fftrim_mean_causal_power | float * 100) | round(1) }}%{% else %}—{% endif %} / {% if fftrim_mean_ff1 is not none %}{{ (fftrim_mean_ff1 | float * 100) | round(1) }}%{% else %}—{% endif %} |

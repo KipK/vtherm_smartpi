@@ -88,10 +88,18 @@ ESSENTIAL_KEYS = {
     "fftrim_last_update_reason",
     "fftrim_cycles_since_update",
     "fftrim_windows_since_update",
+    "fftrim_observation_mode",
     "fftrim_observer_state",
     "fftrim_window_duration_s",
     "fftrim_window_target_duration_s",
     "fftrim_measurement_count",
+    "fftrim_periodic_state",
+    "fftrim_periodic_window_duration_s",
+    "fftrim_periodic_target_duration_s",
+    "fftrim_periodic_measurement_count",
+    "fftrim_periodic_amplitude_c",
+    "fftrim_periodic_closure_error_c",
+    "fftrim_periodic_last_reject_reason",
     "fftrim_alignment_delay_s",
     "fftrim_power_coverage_ratio",
     "fftrim_mean_causal_power",
@@ -276,6 +284,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "deadband_p_mode": diag["deadband_p_mode"],
             "fftrim": {
                 "state": diag["fftrim_observer_state"],
+                "observation_mode": diag["fftrim_observation_mode"],
                 "last_reject_reason": diag["fftrim_last_reject_reason"],
                 "last_update_reason": diag["fftrim_last_update_reason"],
                 "windows_since_update": diag["fftrim_windows_since_update"],
@@ -284,6 +293,25 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
                     "fftrim_window_target_duration_s"
                 ],
                 "measurement_count": diag["fftrim_measurement_count"],
+                "periodic_state": diag["fftrim_periodic_state"],
+                "periodic_window_duration_s": diag[
+                    "fftrim_periodic_window_duration_s"
+                ],
+                "periodic_target_duration_s": diag[
+                    "fftrim_periodic_target_duration_s"
+                ],
+                "periodic_measurement_count": diag[
+                    "fftrim_periodic_measurement_count"
+                ],
+                "periodic_amplitude_c": diag[
+                    "fftrim_periodic_amplitude_c"
+                ],
+                "periodic_closure_error_c": diag[
+                    "fftrim_periodic_closure_error_c"
+                ],
+                "periodic_last_reject_reason": diag[
+                    "fftrim_periodic_last_reject_reason"
+                ],
                 "alignment_delay_s": diag["fftrim_alignment_delay_s"],
                 "power_coverage_ratio": diag[
                     "fftrim_power_coverage_ratio"
@@ -381,6 +409,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         and twin_diag.get("warming_up") is not True
     )
     fftrim_observer = algo._fftrim_observer.diagnostics
+    fftrim_periodic = algo._fftrim_periodic_observer.diagnostics
     u_ff1 = ff_result.u_ff1 if ff_result else 0.0
     u_ff2 = ff_result.u_ff2 if ff_result else 0.0
     u_ff_final = ff_result.u_ff_final if ff_result else 0.0
@@ -473,6 +502,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "fftrim_last_update_reason": algo._last_fftrim_update_reason,
         "fftrim_cycles_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_windows_since_update": int(algo._cycles_since_fftrim_update),
+        "fftrim_observation_mode": algo._fftrim_observation_mode,
         "fftrim_cycle_admissible": algo._last_fftrim_cycle_admissible,
         "fftrim_observer_state": fftrim_observer["state"],
         "fftrim_window_duration_s": round(
@@ -482,6 +512,25 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             float(fftrim_observer["window_target_duration_s"]), 3
         ),
         "fftrim_measurement_count": int(fftrim_observer["measurement_count"]),
+        "fftrim_periodic_state": fftrim_periodic["state"],
+        "fftrim_periodic_window_duration_s": round(
+            float(fftrim_periodic["window_duration_s"]), 3
+        ),
+        "fftrim_periodic_target_duration_s": round(
+            float(fftrim_periodic["window_target_duration_s"]), 3
+        ),
+        "fftrim_periodic_measurement_count": int(
+            fftrim_periodic["measurement_count"]
+        ),
+        "fftrim_periodic_amplitude_c": round(
+            float(fftrim_periodic["amplitude_c"]), 6
+        ),
+        "fftrim_periodic_closure_error_c": round(
+            float(fftrim_periodic["closure_error_c"]), 6
+        ),
+        "fftrim_periodic_last_reject_reason": fftrim_periodic[
+            "last_reject_reason"
+        ],
         "fftrim_alignment_delay_s": (
             round(float(fftrim_observer["alignment_delay_s"]), 3)
             if fftrim_observer["alignment_delay_s"] is not None

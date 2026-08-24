@@ -152,6 +152,14 @@ Lorsque le **Mode debug SmartPI** est activé, un bloc imbriqué nommé **`debug
 | `ff2_frozen` | `boolean` | Indique si les ajustements du trim lent sont gelés. |
 | `ff2_freeze_reason` | `string` | Raison du gel de la boucle d'adaptation du trim lent. |
 | `fftrim_cycle_admissible` | `boolean` | Indique si le cycle actuel remplit les critères de stabilité pour mettre à jour `FFTrim`. |
+| `fftrim_observation_mode` | `string` | Méthode ayant produit le dernier résultat FFTrim : `stationary` ou `periodic`. |
+| `fftrim_periodic_state` | `string` | État de la sélection d’un cycle thermique fermé. |
+| `fftrim_periodic_window_duration_s` | `float` | Durée de la fenêtre périodique active ou terminée. |
+| `fftrim_periodic_target_duration_s` | `float` | Durée minimale issue des cycles VT et du temps mort, sans plancher fixe de 30 minutes. |
+| `fftrim_periodic_measurement_count` | `int` | Nombre de mesures de température distinctes dans la fenêtre périodique. |
+| `fftrim_periodic_amplitude_c` | `float` | Amplitude thermique crête-à-crête de la fenêtre périodique. |
+| `fftrim_periodic_closure_error_c` | `float` | Écart entre les températures de début et de fin du cycle sélectionné. |
+| `fftrim_periodic_last_reject_reason` | `string` | Dernière raison empêchant ou rejetant une fenêtre périodique. |
 | `fftrim_mean_p_power` | `float` | Contribution proportionnelle moyenne pondérée dans le temps sur la fenêtre causale alignée. |
 | `fftrim_mean_i_power` | `float` | Contribution intégrale moyenne mesurée directement comme `Ki × integral`. |
 | `fftrim_mean_visible_ff_power` | `float` | FF1 + trim stocké moyen après clamp de la branche feed-forward. |

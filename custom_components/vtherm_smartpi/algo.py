@@ -117,6 +117,7 @@ from .smartpi.ff_trim import (
     FFTrimWindowProposal,
     prepare_bumpless_transfer,
 )
+from .smartpi.ff_trim_periodic import PeriodicFFTrimObserver
 from .smartpi.ff_ab_confidence import ABConfidence
 from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.integral_guard import (
@@ -378,6 +379,8 @@ class SmartPI:
         # --- FFv2: trim bias + AB confidence ---
         self._ff_trim: FFTrim = FFTrim()
         self._fftrim_observer = CausalFFTrimObserver(cycle_min)
+        self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
+        self._fftrim_observation_mode = "stationary"
         self._ab_confidence = ABConfidence()
         self._recovery_hold_armed: bool = False
         self._last_restart_reason: str = "none"
@@ -535,6 +538,8 @@ class SmartPI:
             self.integral_guard.reset()
         self._ff_trim.reset()
         self._fftrim_observer.reset_runtime()
+        self._fftrim_periodic_observer.reset_runtime()
+        self._fftrim_observation_mode = "stationary"
         self._ab_confidence.reset()
         self._recovery_hold_armed = False
         self._last_restart_reason = "none"
@@ -650,6 +655,8 @@ class SmartPI:
         self._reset_learning_window()
         self._ff_trim.clear_pending()
         self._fftrim_observer.reset_runtime()
+        self._fftrim_periodic_observer.reset_runtime()
+        self._fftrim_observation_mode = "stationary"
         _LOGGER.debug("%s - SmartPI: cycle state reset (learning window cleared)", self._name)
 
     @staticmethod
@@ -861,6 +868,11 @@ class SmartPI:
         )
         if e_eff is None:
             self._pending_bumpless_persistent = None
+            self._fftrim_periodic_observer.invalidate(
+                "missing_e_eff",
+                now_monotonic=cycle_end_now,
+                washout_s=deadtime_s if deadtime_reliable else 0.0,
+            )
             result = self._fftrim_observer.invalidate(
                 "missing_e_eff",
                 now_monotonic=cycle_end_now,
@@ -869,6 +881,11 @@ class SmartPI:
             self._apply_fftrim_observer_result(result, count_window=False)
         elif elapsed_ratio < 1.0:
             self._pending_bumpless_persistent = None
+            self._fftrim_periodic_observer.invalidate(
+                "partial_cycle",
+                now_monotonic=cycle_end_now,
+                washout_s=deadtime_s if deadtime_reliable else 0.0,
+            )
             result = self._fftrim_observer.invalidate(
                 "partial_cycle",
                 now_monotonic=cycle_end_now,
@@ -881,6 +898,10 @@ class SmartPI:
                 deadtime_s=deadtime_s,
                 deadtime_reliable=deadtime_reliable,
                 allow_bumpless=True,
+            )
+            self._try_complete_periodic_fftrim_window(
+                deadtime_s=deadtime_s,
+                deadtime_reliable=deadtime_reliable,
             )
 
         # Cycle accepted -> Count it
@@ -925,8 +946,10 @@ class SmartPI:
             return None
 
         flags: list[str] = []
-        if self.ctl.last_sat != "NO_SAT":
-            flags.append("saturated")
+        if self.ctl.last_sat == "SAT_HI":
+            flags.append("saturated_high")
+        elif self.ctl.last_sat == "SAT_LO":
+            flags.append("saturated_low")
         if self.sp_mgr.trajectory_active:
             flags.append("trajectory")
         if self.sp_mgr.landing_active:
@@ -1028,18 +1051,60 @@ class SmartPI:
                 allow_bumpless=allow_bumpless,
             )
 
+    def _try_complete_periodic_fftrim_window(
+        self,
+        *,
+        deadtime_s: float | None,
+        deadtime_reliable: bool,
+    ) -> None:
+        """Evaluate one phase-closed periodic window at a cycle boundary."""
+        window = self._fftrim_periodic_observer.try_close_window(
+            earliest_power_start=self._fftrim_observer.earliest_power_start,
+            deadtime_s=deadtime_s,
+            deadtime_reliable=deadtime_reliable,
+        )
+        if window is None:
+            return
+
+        result = self._fftrim_observer.evaluate_periodic_window(
+            window.samples,
+            a=self.est.a,
+            b=self.est.b,
+            deadtime_s=window.deadtime_s,
+            current_trim=self._ff_trim.u_ff_trim,
+        )
+        if result is None:
+            self._fftrim_periodic_observer.state = "waiting_deadtime"
+            self._fftrim_periodic_observer.last_reject_reason = (
+                "causal_power_not_covered"
+            )
+            return
+
+        self._fftrim_periodic_observer.complete_window(
+            window,
+            admissible=result.admissible,
+            reason=result.reason,
+        )
+        self._fftrim_observer.publish_external_result(result)
+        self._apply_fftrim_observer_result(
+            result,
+            count_window=True,
+        )
+
     def _apply_fftrim_observer_result(
         self,
         result: CausalFFTrimResult,
         *,
         count_window: bool,
         allow_bumpless: bool = False,
-    ) -> None:
+    ) -> bool:
         """Route an observer result through the persistent trim safeguards."""
+        observation_mode = result.observation_mode
+        self._fftrim_observation_mode = observation_mode
         self._last_fftrim_cycle_admissible = result.admissible
         if not result.admissible:
             self._pending_bumpless_persistent = None
-            self._ff_trim.clear_pending()
+            self._ff_trim.clear_pending(observation_mode)
             self._clear_bumpless_transfer_values()
             self._bumpless_transfer_state = "observer_rejected"
             self._bumpless_transfer_reason = result.reason
@@ -1049,7 +1114,7 @@ class SmartPI:
             self._fftrim_observer.last_update_reason = "skipped"
             if count_window:
                 self._cycles_since_fftrim_update += 1
-            return
+            return False
 
         correction = (
             result.decomposed_correction
@@ -1058,7 +1123,7 @@ class SmartPI:
         )
         mean_ff1 = result.mean_ff1
         if correction is None or mean_ff1 is None:
-            self._ff_trim.clear_pending()
+            self._ff_trim.clear_pending(observation_mode)
             self._clear_bumpless_transfer_values()
             self._bumpless_transfer_state = "observer_rejected"
             self._bumpless_transfer_reason = "incomplete_observer_result"
@@ -1066,7 +1131,7 @@ class SmartPI:
             self._last_fftrim_reject_reason = "incomplete_observer_result"
             self._last_fftrim_update_reason = "skipped"
             self._fftrim_observer.last_update_reason = "skipped"
-            return
+            return False
 
         proposal = FFTrimWindowProposal(
             correction=float(correction),
@@ -1075,6 +1140,7 @@ class SmartPI:
             integral_bias=result.mean_i_power,
             transfer_eligible=result.transfer_eligible,
             transfer_reason=result.transfer_reason,
+            observation_mode=observation_mode,
         )
         persistent = self._ff_trim.collect_persistent(proposal)
         self._last_ff_trim_delta = float(correction)
@@ -1095,7 +1161,7 @@ class SmartPI:
             )
             if count_window:
                 self._cycles_since_fftrim_update += 1
-            return
+            return False
 
         if persistent.transfer_eligible:
             if allow_bumpless:
@@ -1116,7 +1182,7 @@ class SmartPI:
                 )
                 if count_window:
                     self._cycles_since_fftrim_update += 1
-                return
+                return False
         else:
             trim_update = self._ff_trim.apply_persistent_result(
                 persistent,
@@ -1138,8 +1204,10 @@ class SmartPI:
 
         if updated:
             self._cycles_since_fftrim_update = 0
+            self._reset_fftrim_windows_after_update()
         elif count_window:
             self._cycles_since_fftrim_update += 1
+        return updated
 
     def _apply_bumpless_persistent_result(
         self,
@@ -1247,6 +1315,7 @@ class SmartPI:
             quality=quality,
         ):
             self._cycles_since_fftrim_update = 0
+            self._reset_fftrim_windows_after_update()
 
     def _current_bumpless_context_rejection(self) -> str | None:
         """Revalidate strict deadband ownership at the mutation instant."""
@@ -1316,6 +1385,26 @@ class SmartPI:
         self._applied_i_transfer = 0.0
         self._net_command_delta = 0.0
 
+    def _reset_fftrim_windows_after_update(self) -> None:
+        """Wash out both logical windows after the trim reference changes."""
+        deadtime_s, deadtime_reliable = self._fftrim_deadtime_context(
+            self._last_hvac_mode
+        )
+        washout_s = (
+            float(deadtime_s)
+            if deadtime_reliable and deadtime_s is not None
+            else 0.0
+        )
+        now_monotonic = time.monotonic()
+        self._fftrim_observer.reset_after_trim_update(
+            now_monotonic=now_monotonic,
+            washout_s=washout_s,
+        )
+        self._fftrim_periodic_observer.reset_after_trim_update(
+            now_monotonic=now_monotonic,
+            washout_s=washout_s,
+        )
+
     def _record_fftrim_thermal_measurement(
         self,
         *,
@@ -1376,6 +1465,12 @@ class SmartPI:
             trim_frozen_reason=(
                 self._ff_trim.freeze_reason if self._ff_trim.frozen else None
             ),
+            saturation_state=self.ctl.last_sat,
+        )
+        self._fftrim_periodic_observer.record_thermal_sample(
+            sample,
+            deadtime_s=deadtime_s,
+            deadtime_reliable=deadtime_reliable,
         )
         result = self._fftrim_observer.record_thermal_sample(
             sample,
@@ -1400,6 +1495,11 @@ class SmartPI:
     ) -> None:
         """Reject the current window and wash out its delayed thermal response."""
         deadtime_s, deadtime_reliable = self._fftrim_deadtime_context(hvac_mode)
+        self._fftrim_periodic_observer.invalidate(
+            reason,
+            now_monotonic=now_monotonic,
+            washout_s=deadtime_s if deadtime_reliable else 0.0,
+        )
         result = self._fftrim_observer.invalidate(
             reason,
             now_monotonic=now_monotonic,
@@ -2146,6 +2246,8 @@ class SmartPI:
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
         self._fftrim_observer.reset_runtime()
+        self._fftrim_periodic_observer.reset_runtime()
+        self._fftrim_observation_mode = "stationary"
         self._last_u_applied = 0.0
         self._last_actuator_applied = 0.0
         self._recovery_hold_armed = False
@@ -2876,6 +2978,10 @@ class SmartPI:
             if self._last_hvac_mode is not None and hvac_mode != self._last_hvac_mode:
                 self.ctl.reset()
                 self._recovery_hold_armed = False
+                self._ff_trim.clear_pending()
+                self._fftrim_observer.reset_runtime()
+                self._fftrim_periodic_observer.reset_runtime()
+                self._fftrim_observation_mode = "stationary"
                 _LOGGER.info(
                     "%s - HVAC mode changed (%s → %s): PI state reset",
                     self._name, self._last_hvac_mode, hvac_mode
@@ -2887,6 +2993,8 @@ class SmartPI:
                 self._ab_confidence.reset()
                 self._ff_trim.reset()
                 self._fftrim_observer.reset_runtime()
+                self._fftrim_periodic_observer.reset_runtime()
+                self._fftrim_observation_mode = "stationary"
                 self._cycles_since_reset = 0
                 self._session_learn_ok_count_base = self.est.learn_ok_count
                 self._session_learn_skip_count_base = self.est.learn_skip_count
@@ -3257,7 +3365,9 @@ class SmartPI:
             self._ff_trim.freeze(f"ab_{ab_state.value}")
         elif ab_state == ABConfidenceState.AB_DEGRADED:
             self._ff_trim.freeze(f"ab_{ab_state.value}")
-        elif is_saturated:
+        elif is_saturated and self.ctl.last_sat == "SAT_HI":
+            self._ff_trim.freeze("saturated_high")
+        elif is_saturated and self.ctl.last_sat != "SAT_LO":
             self._ff_trim.freeze("saturated")
         elif is_perturbed:
             self._ff_trim.freeze("perturbed")

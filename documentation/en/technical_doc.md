@@ -430,6 +430,7 @@ The forced cycle is managed by `CalibrationManager`:
 | `setpoint.py`          | analytical setpoint trajectory and HEAT landing cap         |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
+| `ff_trim_periodic.py`  | phase-closed periodic-equilibrium window selection          |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
 | `ff3.py`               | bounded FF3 predictive correction                           |
 | `governance.py`        | freeze decisions                                            |
@@ -459,6 +460,8 @@ self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()
 self.autocalib = AutoCalibTrigger(name)
 self._ff_trim = FFTrim()
+self._fftrim_observer = CausalFFTrimObserver(cycle_min)
+self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
 self._ab_confidence = ABConfidence()
 ```
 
@@ -478,6 +481,15 @@ in the signed HEAT and COOL model power space.
 Transfers below the generic actuator-precision threshold remain ignored unless
 they strictly reduce opposing stored trim and integral contributions. This
 ownership compaction keeps the same atomic bounds and command invariant.
+
+The stationary and periodic observers reuse one physical power and ownership
+timeline but keep separate thermal samples, washout state, and persistence
+buffers. The periodic path accepts lower saturation and integral hold as parts
+of a controller-driven cycle. It closes only after a return to the same thermal
+phase, following at least `max(6 VT cycles, 2 × dead time)`, so its horizon has
+no fixed thirty-minute floor. Its time-weighted causal estimate never performs
+an integral ownership transfer; persistent corrections remain subject to the
+same trim learning rate and authority limit.
 
 The current payload from `SmartPI.save_state()` notably contains:
 

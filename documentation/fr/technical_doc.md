@@ -438,6 +438,7 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `integral_guard.py`    | garde de croissance positive de l'intégrale              |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
+| `ff_trim_periodic.py`  | sélection de fenêtres d’équilibre périodique par phase   |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |
 | `ff3.py`               | correction prédictive bornée FF3                         |
 | `governance.py`        | décisions de gel                                         |
@@ -468,6 +469,8 @@ self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()
 self.autocalib = AutoCalibTrigger(name)
 self._ff_trim = FFTrim()
+self._fftrim_observer = CausalFFTrimObserver(cycle_min)
+self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
 self._ab_confidence = ABConfidence()
 ```
 
@@ -489,6 +492,17 @@ Les transferts inférieurs au seuil générique de précision de l'actionneur
 restent ignorés, sauf lorsqu'ils réduisent strictement des contributions trim
 et intégrale opposées. Ce compactage de propriété conserve les mêmes bornes
 atomiques et le même invariant de commande.
+
+Les observateurs stationnaire et périodique réutilisent une seule timeline de
+puissance physique et de propriété, mais conservent des mesures thermiques, un
+washout et des buffers de persistance séparés. La voie périodique accepte la
+saturation basse et le maintien de l’intégrale comme parties d’un cycle créé
+par la régulation. Elle ne ferme la fenêtre qu’après un retour à la même phase
+thermique et au moins `max(6 cycles VT, 2 × temps mort)` ; elle n’a donc pas de
+plancher fixe de trente minutes. Son estimation causale pondérée dans le temps
+n’effectue jamais de transfert de propriété de l’intégrale ; les corrections
+persistantes restent soumises au même taux d’apprentissage et à la même limite
+d’autorité du trim.
 
 Le payload actuel de `SmartPI.save_state()` contient notamment :
 
