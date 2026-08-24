@@ -26,6 +26,7 @@
   - [Diagnostics and Markdown card](#diagnostics-and-markdown-card)
   - [Regulation panel with Equinox](#regulation-panel-with-equinox)
   - [Services](#services)
+    - [`set_smartpi_learning`](#set_smartpi_learning)
     - [`reset_smartpi_learning`](#reset_smartpi_learning)
     - [`force_smartpi_calibration`](#force_smartpi_calibration)
     - [`reset_smartpi_integral`](#reset_smartpi_integral)
@@ -369,7 +370,15 @@ Install Equinox from its repository or HACS, configure it for the same Versatile
 
 ## Services
 
-SmartPI exposes three services in the `vtherm_smartpi` domain.
+SmartPI exposes four services in the `vtherm_smartpi` domain.
+
+### `set_smartpi_learning`
+
+Use this service to pause or resume thermal learning for one SmartPI thermostat. Set the required `learning_enabled` field to `false` to pause learning or `true` to resume it.
+
+While learning is paused, regulation continues with the model already learned, but SmartPI does not collect A/B or dead-time observations. Pausing does not erase the learned parameters or dead-time history. SmartPI starts fresh observation windows when the setting changes, and the setting is preserved across Home Assistant restarts.
+
+The current setting is available as `specific_states.smartpi_learning_enabled` on the climate entity and as `ab_learning.enabled` in the published diagnostics.
 
 ### `reset_smartpi_learning`
 

@@ -10,6 +10,24 @@ reset_smartpi_learning:
         entity:
           domain: climate
 
+set_smartpi_learning:
+  name: Set SmartPI learning
+  description: Enable or pause SmartPI thermal learning for a thermostat.
+  fields:
+    entity_id:
+      name: Target thermostat
+      description: The VTherm climate entity to update.
+      required: true
+      selector:
+        entity:
+          domain: climate
+    learning_enabled:
+      name: Learning enabled
+      description: Whether SmartPI may update its thermal model and dead-time estimates.
+      required: true
+      selector:
+        boolean:
+
 force_smartpi_calibration:
   name: Force SmartPI calibration
   description: Force a SmartPI calibration cycle for a thermostat.

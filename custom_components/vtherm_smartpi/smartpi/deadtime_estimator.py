@@ -85,6 +85,19 @@ class DeadTimeEstimator:
         self._history_cool.clear()
         self._tin_history.clear()
 
+    def reset_observation(self, current_power: float = 0.0) -> None:
+        """Clear transient detection state while preserving learned dead times."""
+        self.state = "OFF"
+        self.last_power = float(current_power)
+        self.last_stop_time = None
+        self.heat_start_time = None
+        self.heat_start_temp = None
+        self.heat_trough_temp = None
+        self.cool_start_time = None
+        self.cool_peak_temp = None
+        self._waiting_power_on = None
+        self._tin_history.clear()
+
     def ensure_hvac_mode(self, hvac_mode: VThermHvacMode | None) -> bool:
         """Ensure persisted transition data uses physical response semantics.
 

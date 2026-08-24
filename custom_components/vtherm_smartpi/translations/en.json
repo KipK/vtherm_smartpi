@@ -91,5 +91,21 @@
     "error": {
       "invalid_valve_curve": "The valve curve must satisfy minimum opening < knee opening < maximum opening."
     }
+  },
+  "services": {
+    "set_smartpi_learning": {
+      "name": "Set SmartPI learning",
+      "description": "Enable or pause SmartPI thermal learning for a thermostat.",
+      "fields": {
+        "entity_id": {
+          "name": "Target thermostat",
+          "description": "The VTherm climate entity to update."
+        },
+        "learning_enabled": {
+          "name": "Learning enabled",
+          "description": "Whether SmartPI may update its thermal model and dead-time estimates."
+        }
+      }
+    }
   }
 }

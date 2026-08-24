@@ -315,6 +315,7 @@ class SmartPI:
         self._last_hvac_mode: VThermHvacMode | None = None
 
         # Learning start timestamp
+        self._learning_enabled: bool = True
         self._learning_start_date: Optional[datetime] = datetime.now()
         self._session_learn_ok_count_base: int = 0
         self._session_learn_skip_count_base: int = 0
@@ -659,6 +660,29 @@ class SmartPI:
         self._fftrim_observation_mode = "stationary"
         _LOGGER.debug("%s - SmartPI: cycle state reset (learning window cleared)", self._name)
 
+    @property
+    def learning_enabled(self) -> bool:
+        """Return whether thermal model learning is enabled."""
+        return self._learning_enabled
+
+    def set_learning_enabled(self, enabled: bool) -> None:
+        """Enable or pause learning and invalidate in-flight observations."""
+        enabled = bool(enabled)
+        if enabled == self._learning_enabled:
+            return
+
+        self._learning_enabled = enabled
+        self._reset_learning_window()
+        self.dt_est.reset_observation(self._committed_on_percent)
+        self._heat_request_prev = False
+        self._t_heat_episode_start = None
+        self._t_cool_episode_start = None
+        _LOGGER.info(
+            "%s - SmartPI learning %s",
+            self._name,
+            "enabled" if enabled else "paused",
+        )
+
     @staticmethod
     def _signed_recovery_slope_h(
         slope_h: float | None,
@@ -800,6 +824,9 @@ class SmartPI:
             target_temp: Current target temperature.
         """
         now = time.monotonic()
+
+        if not self._learning_enabled:
+            return
 
         # Delegate to LearningWindowManager
         self._deadtime_skip_count_a, self._deadtime_skip_count_b = self.learn_win.update(
@@ -2182,6 +2209,7 @@ class SmartPI:
         """Save algorithm state for persistence."""
         state = {
             "version": 2,
+            "learning_enabled": self._learning_enabled,
             "on_percent": self._on_percent,
             "last_target_temp": self._last_target_temp,
             "last_active_wall_ts": self._last_active_wall_ts,
@@ -2282,6 +2310,8 @@ class SmartPI:
         # Freeze trim learning briefly after reboot.
         self._ff_trim.freeze("reboot")
         self._ff_v2_reboot_freeze_remaining = FF_TRIM_REBOOT_FREEZE_CYCLES
+
+        self.set_learning_enabled(bool(state.get("learning_enabled", True)))
 
         # Instant FF on reboot when model is well-learned:
         # skip the time_scale ramp by pre-setting _cycles_since_reset.
@@ -3093,7 +3123,11 @@ class SmartPI:
                 self._arm_integral_guard(resume_guard_source)
 
         # --- 4. Learning & Calibration ---
-        if self.phase != SmartPIPhase.HYSTERESIS and not self.calibration_mgr.is_calibrating:
+        if (
+            self._learning_enabled
+            and self.phase != SmartPIPhase.HYSTERESIS
+            and not self.calibration_mgr.is_calibrating
+        ):
             # During forced calibration, the deadtime estimator must be driven
             # only by the calibration state machine outputs. Feeding it first
             # with the stale committed cycle value can create a false 1 -> 0 -> 1
@@ -3168,15 +3202,16 @@ class SmartPI:
             # so commit the bang-bang output now for deadtime tracking.
             self._commit_current_linear_output()
             self._update_deadtime_episode_status(self._committed_on_percent, hvac_mode, now)
-            self.dt_est.update(
-                now=now,
-                tin=t_int_lp,
-                sp=target_temp_filt,
-                u_applied=self._committed_on_percent,
-                max_on_percent=self._max_on_percent if self._max_on_percent is not None else 1.0,
-                is_hysteresis=True,
-                hvac_mode=hvac_mode,
-            )
+            if self._learning_enabled:
+                self.dt_est.update(
+                    now=now,
+                    tin=t_int_lp,
+                    sp=target_temp_filt,
+                    u_applied=self._committed_on_percent,
+                    max_on_percent=self._max_on_percent if self._max_on_percent is not None else 1.0,
+                    is_hysteresis=True,
+                    hvac_mode=hvac_mode,
+                )
 
             # Update Twin Diagnostics even in hysteresis
             self._update_twin_diagnostics(current_temp, ext_current_temp, target_temp, hvac_mode, dt_s=dt_min * 60.0)

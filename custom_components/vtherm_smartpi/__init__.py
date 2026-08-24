@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
@@ -15,6 +17,7 @@ from vtherm_api.log_collector import get_vtherm_logger
 from vtherm_api.vtherm_api import VThermAPI
 
 from .const import (
+    ATTR_LEARNING_ENABLED,
     CONF_PROP_FUNCTION,
     CONF_TARGET_VTHERM,
     DATA_FACTORY_REGISTERED,
@@ -24,6 +27,7 @@ from .const import (
     SERVICE_FORCE_SMARTPI_CALIBRATION,
     SERVICE_RESET_SMARTPI_INTEGRAL,
     SERVICE_RESET_SMARTPI_LEARNING,
+    SERVICE_SET_SMARTPI_LEARNING,
 )
 from .factory import SmartPIHandlerFactory
 
@@ -73,7 +77,7 @@ def _register_services(hass: HomeAssistant) -> None:
     if data.get(DATA_SERVICES_REGISTERED) is True:
         return
 
-    async def _call_on_vtherms(call, method_name: str) -> None:
+    async def _call_on_vtherms(call, method_name: str, *args) -> None:
         entity_ids = set(await service_helper.async_extract_entity_ids(call))
 
         call_target = getattr(call, "target", None)
@@ -119,11 +123,19 @@ def _register_services(hass: HomeAssistant) -> None:
                     "Service %s not available on %s", method_name, entity.entity_id
                 )
                 continue
-            await handler()
+            await handler(*args)
 
     async def _handle_reset_learning(call) -> None:
         """Handle SmartPI learning reset with a real async callable."""
         await _call_on_vtherms(call, "service_reset_smart_pi_learning")
+
+    async def _handle_set_learning(call) -> None:
+        """Handle SmartPI learning enablement changes."""
+        await _call_on_vtherms(
+            call,
+            "service_set_smartpi_learning",
+            call.data[ATTR_LEARNING_ENABLED],
+        )
 
     async def _handle_force_calibration(call) -> None:
         """Handle SmartPI calibration forcing with a real async callable."""
@@ -137,6 +149,15 @@ def _register_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_RESET_SMARTPI_LEARNING,
         _handle_reset_learning,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_SMARTPI_LEARNING,
+        _handle_set_learning,
+        schema=vol.Schema(
+            {vol.Required(ATTR_LEARNING_ENABLED): cv.boolean},
+            extra=vol.ALLOW_EXTRA,
+        ),
     )
     hass.services.async_register(
         DOMAIN,
@@ -155,6 +176,7 @@ def _register_services(hass: HomeAssistant) -> None:
 def _unregister_services(hass: HomeAssistant) -> None:
     """Unregister SmartPI services from the plugin domain."""
     hass.services.async_remove(DOMAIN, SERVICE_RESET_SMARTPI_LEARNING)
+    hass.services.async_remove(DOMAIN, SERVICE_SET_SMARTPI_LEARNING)
     hass.services.async_remove(DOMAIN, SERVICE_FORCE_SMARTPI_CALIBRATION)
     hass.services.async_remove(DOMAIN, SERVICE_RESET_SMARTPI_INTEGRAL)
     _ensure_domain_data(hass)[DATA_SERVICES_REGISTERED] = False

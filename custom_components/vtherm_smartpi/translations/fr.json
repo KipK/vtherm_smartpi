@@ -91,5 +91,21 @@
     "error": {
       "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale."
     }
+  },
+  "services": {
+    "set_smartpi_learning": {
+      "name": "Définir l'apprentissage SmartPI",
+      "description": "Active ou met en pause l'apprentissage thermique SmartPI pour un thermostat.",
+      "fields": {
+        "entity_id": {
+          "name": "Thermostat cible",
+          "description": "L'entité climate VTherm à mettre à jour."
+        },
+        "learning_enabled": {
+          "name": "Apprentissage activé",
+          "description": "Indique si SmartPI peut mettre à jour son modèle thermique et ses estimations de temps mort."
+        }
+      }
+    }
   }
 }

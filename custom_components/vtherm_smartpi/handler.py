@@ -579,6 +579,10 @@ class SmartPIHandler:
         specific_states = t._attr_extra_state_attributes["specific_states"]
         diagnostic_entity_id = self._resolve_diagnostic_entity_id()
         specific_states["regulation_diagnostics"] = diagnostic_entity_id
+        algo = t.prop_algorithm if isinstance(t.prop_algorithm, SmartPI) else None
+        specific_states["smartpi_learning_enabled"] = (
+            algo.learning_enabled if algo is not None else True
+        )
 
     def _resolve_diagnostic_entity_id(self) -> str | None:
         """Resolve the SmartPI diagnostic sensor entity id from the registry."""
@@ -600,6 +604,27 @@ class SmartPIHandler:
             await self.control_heating(force=True)
             self.update_attributes()
             t.async_write_ha_state()
+            await self._async_save()
+
+    async def service_set_smartpi_learning(self, learning_enabled: bool):
+        """Enable or pause SmartPI thermal learning."""
+        t = self._thermostat
+        if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
+            enabled = bool(learning_enabled)
+            t.prop_algorithm.set_learning_enabled(enabled)
+            t.hass.bus.fire(EventType.SMART_PI_EVENT.value, {
+                "entity_id": t.entity_id,
+                "type": "learning_enabled_changed",
+                "learning_enabled": enabled,
+            })
+            write_event_log(
+                _LOGGER,
+                t,
+                f"SmartPI learning {'enabled' if enabled else 'paused'}",
+            )
+            self.update_attributes()
+            t.async_write_ha_state()
+            async_dispatcher_send(t.hass, f"smartpi_diag_update_{t.unique_id}")
             await self._async_save()
 
     async def service_force_smartpi_calibration(self):

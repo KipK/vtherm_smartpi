@@ -253,6 +253,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "b_stability_ratio": diag["diag_b_mad_over_med"],
         },
         "ab_learning": {
+            "enabled": algo.learning_enabled,
             "stage": _build_ab_learning_stage(algo, diag),
             "bootstrap_progress_percent": diag.get("bootstrap_progress"),
             "bootstrap_status": diag.get("bootstrap_state"),
