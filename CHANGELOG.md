@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Add action service to pause and resume SmartPI thermal learning
+  This can be usefull to trigger when a secondary heating system could
+  bias the thermal model.
 - Make the mono-mode 1R1C model fully signed in COOL: learn a negative active
   coefficient, use COOL dead time for IMC gains, and enable signed structural
   feed-forward while preserving the positive passive coefficient.
@@ -13,10 +16,6 @@ All notable changes to this project will be documented in this file.
 - Align FF trim learning with distinct temperature measurements and the delayed
   power that caused them, using independent thermal windows and the learned
   1R1C model.
-- Expose causal FF trim progress and decisions in the French and English
-  SmartPI diagnostic cards.
-- Preserve causal FF trim windows during generic VT recalculations that do not
-  carry a temperature measurement identifier.
 - Transfer only the causally observed stable integral bias into FF trim at the
   post-anti-windup cycle boundary, while retaining the physical deficit as a
   real bounded command change in both HEAT and COOL.
