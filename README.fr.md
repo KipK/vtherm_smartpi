@@ -14,6 +14,9 @@
   Un régulateur PI basé sur un modèle thermique qui apprend le comportement réel de votre pièce et adapte la régulation automatiquement — au-delà des approches à coefficients fixes.
 </p>
 
+> [!IMPORTANT]
+> Comme TPI, SmartPI est disponible uniquement pour les VTherms configurées avec un switch, une vanne ou une entité climate avec contrôle de la vanne.
+
 ## 🌟 Qu'est-ce que SmartPI ?
 
 SmartPI est un algorithme de contrôle thermique avancé basé sur un modèle de premier ordre (1R1C) et non sur une boucle PID classique. Il apprend la capacité de chauffe de la pièce, le taux de perte thermique et les temps morts, puis utilise ce modèle pour calculer une commande de chauffage bien plus précise qu'un contrôleur proportionnel à temps fixe.

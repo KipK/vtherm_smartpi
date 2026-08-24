@@ -14,6 +14,9 @@
   A model-based PI controller that learns your room's thermal behavior and adapts regulation automatically — beyond fixed-coefficient approaches.
 </p>
 
+> [!IMPORTANT]
+> Like TPI, SmartPI is available only for VTherms configured over a switch, over a valve, or over a climate entity with valve control.
+
 ## 🌟 What is SmartPI?
 
 SmartPI is an advanced PI-based thermal control algorithm built around a first-order thermal model (1R1C) rather than a classic PID loop. It learns your room's heating capability, heat loss rate and dead time, then uses that model to compute a much more accurate heating command than fixed-time proportional controllers.
