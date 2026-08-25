@@ -1,10 +1,18 @@
 """Tests for periodic-equilibrium FF trim observation."""
 
+from dataclasses import replace
+from unittest.mock import MagicMock
+
 import pytest
 
+from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
+from custom_components.vtherm_smartpi.smartpi.diagnostics import (
+    build_published_diagnostics,
+)
 from custom_components.vtherm_smartpi.smartpi.ff_trim import (
     CausalFFTrimObserver,
+    CausalFFTrimResult,
     ControlOwnershipSnapshot,
     FFTrim,
     FFTrimThermalSample,
@@ -212,3 +220,96 @@ def test_stationary_rejection_does_not_clear_periodic_persistence() -> None:
     assert first.pending_count == 1
     assert second.pending_count == 2
     assert second.observation_mode == "periodic"
+
+
+def test_admissible_result_survives_stationary_collection_and_rejection() -> None:
+    """Live stationary state must not replace the last admissible result."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="FF trim diagnostics",
+    )
+    periodic_result = CausalFFTrimResult(
+        admissible=True,
+        reason="periodic_window_ready",
+        correction=-0.01,
+        target_trim=-0.01,
+        mean_causal_power=0.04,
+        mean_ff1=0.08,
+        mean_temperature=20.0,
+        mean_error=0.0,
+        mean_slope_h=0.0,
+        observed_hold_power=0.04,
+        duration_s=1800.0,
+        measurement_count=7,
+        alignment_delay_s=120.0,
+        power_coverage_ratio=1.0,
+        transfer_eligible=False,
+        transfer_reason="periodic_equilibrium",
+        observation_mode="periodic",
+    )
+    algo._fftrim_observer.publish_external_result(periodic_result)
+    algo._fftrim_periodic_observer.last_reject_reason = "cycle_not_closed"
+
+    published = build_published_diagnostics(algo)["feedforward"]["fftrim"]
+
+    assert published["state"] == "warming_up"
+    assert published["stationary"]["window_duration_s"] == 0.0
+    assert published["alignment_delay_s"] is None
+    assert published["power_coverage_ratio"] == 0.0
+    assert published["last_result"]["observation_mode"] == "periodic"
+    assert published["last_result"]["alignment_delay_s"] == 120.0
+    assert published["last_result"]["power_coverage_ratio"] == 1.0
+
+    stationary_sample = replace(
+        _sample(2100.0, 20.0),
+        regime=GovernanceRegime.DEAD_BAND,
+        i_mode="I:FREEZE(deadband)",
+        u_pi=0.0,
+    )
+    algo._fftrim_observer.record_thermal_sample(
+        stationary_sample,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+
+    collecting = build_published_diagnostics(algo)["feedforward"]["fftrim"]
+
+    assert collecting["state"] == "collecting"
+    assert collecting["stationary"]["state"] == "collecting"
+    assert collecting["stationary"]["measurement_count"] == 1
+    assert collecting["alignment_delay_s"] == 120.0
+    assert collecting["power_coverage_ratio"] == 0.0
+    assert collecting["last_result"]["admissible"] is True
+    assert collecting["last_result"]["observation_mode"] == "periodic"
+    assert collecting["last_result"]["correction"] == pytest.approx(-0.01)
+    assert collecting["mean_causal_power"] == pytest.approx(0.04)
+    assert collecting["correction"] == pytest.approx(-0.01)
+
+    algo._fftrim_observer.invalidate("stationary_context_rejected")
+
+    rejected = build_published_diagnostics(algo)["feedforward"]["fftrim"]
+
+    assert rejected["state"] == "rejected"
+    assert rejected["window_duration_s"] == 0.0
+    assert rejected["stationary"]["window_duration_s"] == 0.0
+    assert (
+        rejected["stationary_last_reject_reason"]
+        == "stationary_context_rejected"
+    )
+    assert rejected["periodic_last_reject_reason"] == "cycle_not_closed"
+    assert rejected["last_result"]["admissible"] is True
+    assert rejected["last_result"]["observation_mode"] == "periodic"
+    assert rejected["last_result"]["measurement_count"] == 7
+    assert rejected["mean_causal_power"] == pytest.approx(0.04)
+    assert rejected["correction"] == pytest.approx(-0.01)
+
+    algo._fftrim_observer.reset_runtime()
+
+    reset = build_published_diagnostics(algo)["feedforward"]["fftrim"]
+
+    assert reset["last_result"] is None
+    assert reset["mean_causal_power"] is None
+    assert reset["correction"] is None

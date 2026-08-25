@@ -149,6 +149,11 @@ def test_causal_observer_returns_zero_for_correct_stable_ff() -> None:
     assert result.mean_causal_power == pytest.approx(0.5)
     assert result.observed_hold_power == pytest.approx(0.5)
     assert result.correction == pytest.approx(0.0)
+    assert observer.last_admissible_result is result
+
+    observer.invalidate("later_stationary_rejection")
+
+    assert observer.last_admissible_result is result
 
 
 def test_causal_observer_uses_model_to_reconstruct_missing_hold_power() -> None:

@@ -77,6 +77,8 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `deadband_p_mode` | `string` | Deadband | Mode de calcul de la branche proportionnelle appliqué dans le deadband. |
 | `ff2_trim_delta` | `float` | Commande | Correction de trim feed-forward lent (`FFTrim`). |
 | `fftrim_last_reject_reason` | `string` | Commande | Raison du rejet de la dernière mise à jour de trim lent. |
+| `fftrim_stationary_last_reject_reason` | `string` | Commande | Dernière raison empêchant ou rejetant l’observateur stationnaire, sans la confondre avec l’observateur périodique. |
+| `fftrim_last_result` | `object \| null` | Commande | Instantané runtime de la dernière fenêtre stationnaire ou périodique admissible. Il reste disponible pendant la collecte ou le rejet d’une autre fenêtre et est effacé au reset runtime. |
 | `fftrim_last_update_reason` | `string` | Commande | Raison de l'acceptation de la dernière mise à jour de trim lent. |
 | `fftrim_cycles_since_update` | `int` | Commande | Nombre de cycles écoulés depuis la dernière mise à jour de `FFTrim`. |
 | `fftrim_physical_power_deficit` | `float` | Commande | Déficit causal de puissance de maintien, `H - puissance_appliquée_moyenne`, dans l'espace linéaire du modèle. |
@@ -153,6 +155,8 @@ Lorsque le **Mode debug SmartPI** est activé, un bloc imbriqué nommé **`debug
 | `ff2_freeze_reason` | `string` | Raison du gel de la boucle d'adaptation du trim lent. |
 | `fftrim_cycle_admissible` | `boolean` | Indique si le cycle actuel remplit les critères de stabilité pour mettre à jour `FFTrim`. |
 | `fftrim_observation_mode` | `string` | Méthode ayant produit le dernier résultat FFTrim : `stationary` ou `periodic`. |
+| `fftrim_stationary_last_reject_reason` | `string` | Dernière raison empêchant ou rejetant la fenêtre stationnaire. |
+| `fftrim_last_result` | `object \| null` | Dernière fenêtre admissible terminée, conservée indépendamment des états de collecte stationnaire et périodique. |
 | `fftrim_periodic_state` | `string` | État de la sélection d’un cycle thermique fermé. |
 | `fftrim_periodic_window_duration_s` | `float` | Durée de la fenêtre périodique active ou terminée. |
 | `fftrim_periodic_target_duration_s` | `float` | Durée minimale issue des cycles VT et du temps mort, sans plancher fixe de 30 minutes. |
@@ -173,6 +177,12 @@ Lorsque le **Mode debug SmartPI** est activé, un bloc imbriqué nommé **`debug
 | `u_ff_ab` | `float` | Composante de feed-forward issue strictement du modèle appris $a$ et $b$. |
 | `u_ff_trim` | `float` | Composante de biais calculée par la boucle de trim lent. |
 | `u_ff_base` | `float` | Commande de feed-forward de base avant application du trim. |
+
+Les champs plats d’état de fenêtre FF trim décrivent l’observateur
+stationnaire. L’instantané `last_result` et les valeurs de résultat plates
+conservées décrivent la dernière fenêtre admissible terminée, qu’elle soit
+stationnaire ou périodique. Une collecte ou un rejet stationnaire n’efface donc
+pas le dernier résultat thermique exploitable.
 
 ### 3.4 Paramètres Avancés Prédictifs FF3
 

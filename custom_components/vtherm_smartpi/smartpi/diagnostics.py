@@ -85,6 +85,8 @@ ESSENTIAL_KEYS = {
     "deadband_p_mode",
     "ff2_trim_delta",
     "fftrim_last_reject_reason",
+    "fftrim_stationary_last_reject_reason",
+    "fftrim_last_result",
     "fftrim_last_update_reason",
     "fftrim_cycles_since_update",
     "fftrim_windows_since_update",
@@ -93,6 +95,7 @@ ESSENTIAL_KEYS = {
     "fftrim_window_duration_s",
     "fftrim_window_target_duration_s",
     "fftrim_measurement_count",
+    "fftrim_stationary_alignment_delay_s",
     "fftrim_periodic_state",
     "fftrim_periodic_window_duration_s",
     "fftrim_periodic_target_duration_s",
@@ -200,6 +203,43 @@ def _ratio_to_percent(value: Any, digits: int = 1) -> float | None:
     return round(float(value) * 100.0, digits)
 
 
+def _build_fftrim_result(result: Any | None) -> Dict[str, Any] | None:
+    """Build a stable public snapshot of one admissible FF trim result."""
+    if result is None:
+        return None
+
+    def optional_round(value: float | None, digits: int = 6) -> float | None:
+        return round(float(value), digits) if value is not None else None
+
+    return {
+        "admissible": bool(result.admissible),
+        "reason": str(result.reason),
+        "observation_mode": str(result.observation_mode),
+        "duration_s": round(float(result.duration_s), 3),
+        "measurement_count": int(result.measurement_count),
+        "alignment_delay_s": optional_round(result.alignment_delay_s, 3),
+        "power_coverage_ratio": round(float(result.power_coverage_ratio), 6),
+        "mean_causal_power": optional_round(result.mean_causal_power),
+        "mean_ff1": optional_round(result.mean_ff1),
+        "mean_temperature": optional_round(result.mean_temperature),
+        "mean_error": optional_round(result.mean_error),
+        "mean_slope_h": optional_round(result.mean_slope_h),
+        "observed_hold_power": optional_round(result.observed_hold_power),
+        "target_trim": optional_round(result.target_trim),
+        "correction": optional_round(result.correction),
+        "mean_p_power": optional_round(result.mean_p_power),
+        "mean_i_power": optional_round(result.mean_i_power),
+        "mean_visible_ff_power": optional_round(result.mean_visible_ff_power),
+        "mean_ki": optional_round(result.mean_ki),
+        "mean_delivery_residual": optional_round(result.mean_delivery_residual),
+        "physical_power_deficit": optional_round(result.physical_power_deficit),
+        "decomposed_correction": optional_round(result.decomposed_correction),
+        "transfer_eligible": bool(result.transfer_eligible),
+        "transfer_reason": str(result.transfer_reason),
+        "transfer_quality": str(result.transfer_quality),
+    }
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the compact SmartPI summary published in Home Assistant."""
     diag = _build_full_diagnostics(algo)
@@ -285,9 +325,27 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "deadband_p_mode": diag["deadband_p_mode"],
             "fftrim": {
                 "state": diag["fftrim_observer_state"],
+                "stationary": {
+                    "state": diag["fftrim_observer_state"],
+                    "window_duration_s": diag["fftrim_window_duration_s"],
+                    "window_target_duration_s": diag[
+                        "fftrim_window_target_duration_s"
+                    ],
+                    "measurement_count": diag["fftrim_measurement_count"],
+                    "alignment_delay_s": diag[
+                        "fftrim_stationary_alignment_delay_s"
+                    ],
+                    "last_reject_reason": diag[
+                        "fftrim_stationary_last_reject_reason"
+                    ],
+                },
                 "observation_mode": diag["fftrim_observation_mode"],
                 "last_reject_reason": diag["fftrim_last_reject_reason"],
                 "last_update_reason": diag["fftrim_last_update_reason"],
+                "stationary_last_reject_reason": diag[
+                    "fftrim_stationary_last_reject_reason"
+                ],
+                "last_result": diag["fftrim_last_result"],
                 "windows_since_update": diag["fftrim_windows_since_update"],
                 "window_duration_s": diag["fftrim_window_duration_s"],
                 "window_target_duration_s": diag[
@@ -400,6 +458,9 @@ def build_debug_diagnostics(algo: SmartPI) -> Dict[str, Any]:
 
 def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the complete SmartPI diagnostics payload."""
+    fftrim_last_result = _build_fftrim_result(
+        algo._fftrim_observer.last_admissible_result
+    )
     tau_info = algo.est.tau_reliability()
     ff_result = algo._last_ff_result
     twin_diag = getattr(algo, '_last_twin_diag', None) or {}
@@ -501,6 +562,10 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "ff2_freeze_reason": algo._ff_trim.freeze_reason,
         "fftrim_last_reject_reason": algo._last_fftrim_reject_reason,
         "fftrim_last_update_reason": algo._last_fftrim_update_reason,
+        "fftrim_stationary_last_reject_reason": fftrim_observer[
+            "last_reject_reason"
+        ],
+        "fftrim_last_result": fftrim_last_result,
         "fftrim_cycles_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_windows_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_observation_mode": algo._fftrim_observation_mode,
@@ -513,6 +578,11 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             float(fftrim_observer["window_target_duration_s"]), 3
         ),
         "fftrim_measurement_count": int(fftrim_observer["measurement_count"]),
+        "fftrim_stationary_alignment_delay_s": (
+            round(float(fftrim_observer["current_alignment_delay_s"]), 3)
+            if fftrim_observer["current_alignment_delay_s"] is not None
+            else None
+        ),
         "fftrim_periodic_state": fftrim_periodic["state"],
         "fftrim_periodic_window_duration_s": round(
             float(fftrim_periodic["window_duration_s"]), 3

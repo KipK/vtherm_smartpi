@@ -275,6 +275,7 @@ class CausalFFTrimObserver:
             "warming_up",
             measurement_count=0,
         )
+        self._last_admissible_result: CausalFFTrimResult | None = None
 
     def record_applied_power(self, segment: AppliedPowerSegment) -> None:
         """Append one non-overlapping segment in linear model space."""
@@ -542,6 +543,8 @@ class CausalFFTrimObserver:
             return None
 
         self.last_result = result
+        if result.admissible:
+            self._last_admissible_result = result
         self.state = "ready" if result.admissible else "rejected"
         self.last_reject_reason = "none" if result.admissible else result.reason
         self.last_update_reason = result.reason if result.admissible else "skipped"
@@ -570,10 +573,14 @@ class CausalFFTrimObserver:
 
     def publish_external_result(self, result: CausalFFTrimResult) -> None:
         """Publish a result evaluated from another logical sample window."""
-        self.last_result = result
-        self.state = "ready" if result.admissible else "rejected"
-        self.last_reject_reason = "none" if result.admissible else result.reason
         self.last_update_reason = result.reason if result.admissible else "skipped"
+        if result.admissible:
+            self._last_admissible_result = result
+
+    @property
+    def last_admissible_result(self) -> CausalFFTrimResult | None:
+        """Return the latest admissible completed result across all modes."""
+        return self._last_admissible_result
 
     @property
     def earliest_power_start(self) -> float | None:
@@ -907,11 +914,13 @@ class CausalFFTrimObserver:
             "warming_up",
             measurement_count=0,
         )
+        self._last_admissible_result = None
 
     @property
     def diagnostics(self) -> dict[str, float | int | str | None]:
         """Return the observer state without exposing mutable internals."""
-        result = self.last_result
+        current_result = self.last_result
+        result = self._last_admissible_result or current_result
         has_samples = bool(self._thermal_samples)
         duration_s = 0.0
         if len(self._thermal_samples) >= 2:
@@ -921,49 +930,44 @@ class CausalFFTrimObserver:
             )
         return {
             "state": self.state,
-            "window_duration_s": duration_s if has_samples else result.duration_s,
+            "window_duration_s": (
+                duration_s if has_samples else current_result.duration_s
+            ),
             "window_target_duration_s": self.target_duration_s,
             "measurement_count": (
-                len(self._thermal_samples) if has_samples else result.measurement_count
+                len(self._thermal_samples)
+                if has_samples
+                else current_result.measurement_count
+            ),
+            "current_alignment_delay_s": (
+                self._window_deadtime_s if has_samples else None
             ),
             "alignment_delay_s": (
-                self._window_deadtime_s if has_samples else result.alignment_delay_s
+                self._window_deadtime_s
+                if has_samples
+                else current_result.alignment_delay_s
             ),
             "power_coverage_ratio": (
-                0.0 if has_samples else result.power_coverage_ratio
+                0.0 if has_samples else current_result.power_coverage_ratio
             ),
-            "mean_causal_power": None if has_samples else result.mean_causal_power,
-            "mean_ff1": None if has_samples else result.mean_ff1,
-            "mean_temperature": None if has_samples else result.mean_temperature,
-            "mean_error": None if has_samples else result.mean_error,
-            "mean_slope_h": None if has_samples else result.mean_slope_h,
-            "observed_hold_power": (
-                None if has_samples else result.observed_hold_power
-            ),
-            "target_trim": None if has_samples else result.target_trim,
-            "correction": None if has_samples else result.correction,
-            "mean_p_power": None if has_samples else result.mean_p_power,
-            "mean_i_power": None if has_samples else result.mean_i_power,
-            "mean_visible_ff_power": (
-                None if has_samples else result.mean_visible_ff_power
-            ),
-            "mean_ki": None if has_samples else result.mean_ki,
-            "mean_delivery_residual": (
-                None if has_samples else result.mean_delivery_residual
-            ),
-            "physical_power_deficit": (
-                None if has_samples else result.physical_power_deficit
-            ),
-            "decomposed_correction": (
-                None if has_samples else result.decomposed_correction
-            ),
-            "transfer_eligible": False if has_samples else result.transfer_eligible,
-            "transfer_reason": (
-                "collecting" if has_samples else result.transfer_reason
-            ),
-            "transfer_quality": (
-                "unavailable" if has_samples else result.transfer_quality
-            ),
+            "mean_causal_power": result.mean_causal_power,
+            "mean_ff1": result.mean_ff1,
+            "mean_temperature": result.mean_temperature,
+            "mean_error": result.mean_error,
+            "mean_slope_h": result.mean_slope_h,
+            "observed_hold_power": result.observed_hold_power,
+            "target_trim": result.target_trim,
+            "correction": result.correction,
+            "mean_p_power": result.mean_p_power,
+            "mean_i_power": result.mean_i_power,
+            "mean_visible_ff_power": result.mean_visible_ff_power,
+            "mean_ki": result.mean_ki,
+            "mean_delivery_residual": result.mean_delivery_residual,
+            "physical_power_deficit": result.physical_power_deficit,
+            "decomposed_correction": result.decomposed_correction,
+            "transfer_eligible": result.transfer_eligible,
+            "transfer_reason": result.transfer_reason,
+            "transfer_quality": result.transfer_quality,
             "last_reject_reason": self.last_reject_reason,
             "last_update_reason": self.last_update_reason,
         }

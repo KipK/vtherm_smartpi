@@ -77,6 +77,8 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `deadband_p_mode` | `string` | Deadband | Proportional branch calculation mode applied in the deadband. |
 | `ff2_trim_delta` | `float` | Command | Slow feed-forward trim delta correction (`FFTrim`). |
 | `fftrim_last_reject_reason` | `string` | Command | Reason why the last slow trim update was rejected. |
+| `fftrim_stationary_last_reject_reason` | `string` | Command | Latest reason preventing or rejecting the stationary observer without conflating it with the periodic observer. |
+| `fftrim_last_result` | `object \| null` | Command | Runtime snapshot of the latest admissible stationary or periodic window. It remains available while another window is collected or rejected and is cleared on runtime reset. |
 | `fftrim_last_update_reason` | `string` | Command | Reason why the last slow trim update was accepted. |
 | `fftrim_cycles_since_update` | `int` | Command | Number of control cycles elapsed since the last `FFTrim` update. |
 | `fftrim_physical_power_deficit` | `float` | Command | Causal holding-power deficit, `H - mean_applied_power`, in linear model space. |
@@ -153,6 +155,8 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `ff2_freeze_reason` | `string` | Reason for freezing the slow trim update loop. |
 | `fftrim_cycle_admissible` | `boolean` | Indicates if the current cycle satisfies all stability criteria for `FFTrim` updates. |
 | `fftrim_observation_mode` | `string` | Method that produced the latest FFTrim result: `stationary` or `periodic`. |
+| `fftrim_stationary_last_reject_reason` | `string` | Latest reason preventing or rejecting the stationary window. |
+| `fftrim_last_result` | `object \| null` | Latest admissible completed window, retained independently from the live stationary and periodic collection states. |
 | `fftrim_periodic_state` | `string` | State of phase-closed thermal-cycle selection. |
 | `fftrim_periodic_window_duration_s` | `float` | Duration of the active or completed periodic window. |
 | `fftrim_periodic_target_duration_s` | `float` | Minimum duration derived from VT cycles and dead time, without a fixed thirty-minute floor. |
@@ -173,6 +177,12 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `u_ff_ab` | `float` | Pure feed-forward command component derived from learned $a$ and $b$. |
 | `u_ff_trim` | `float` | Slow bias contribution component calculated by the trim algorithm. |
 | `u_ff_base` | `float` | Base feed-forward command prior to trim. |
+
+The flat FF trim window state fields describe the stationary observer. The
+`last_result` snapshot and the retained flat result values describe the latest
+admissible completed window, whether it was stationary or periodic. Live
+stationary collection or rejection therefore does not erase the latest usable
+thermal result.
 
 ### 3.4 Advanced FF3 Predictive Parameters
 
