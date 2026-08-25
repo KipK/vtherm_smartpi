@@ -61,6 +61,7 @@ class SmartPIController:
         self.last_error_p: float = 0.0
         self.last_error_p_db: float = 0.0
         self.last_i_mode: str = "init"
+        self.last_integral_hold_source: str = "none"
         self.last_sat: str = "init"
         self.sat_p: bool = False
         self.sat_i: bool = False
@@ -93,6 +94,7 @@ class SmartPIController:
         self.deadband_power_source = "none"
         self.deadband_p_mode = "init"
         self.integral_hold_mode = "none"
+        self.last_integral_hold_source = "none"
         self._deadband_edge_count = 0
         self._deadband_edge_sign = None
         self.u_cmd_before_cap = None
@@ -198,6 +200,7 @@ class SmartPIController:
             return
         self.integral = float(state.get("integral") or 0.0)
         self.integral_hold_mode = str(state.get("integral_hold_mode") or "none")
+        self.last_integral_hold_source = "none"
         # Note: other internal diagnositcs not critical to restore
         
     def save_state(self) -> dict:
@@ -269,6 +272,7 @@ class SmartPIController:
         block_negative_integral: bool = False,
         positive_integral_guard_mode: str = "recovery_guard",
         deadband_allow_p: bool = False,
+        integrator_hold_source: str = "external",
     ) -> float:
         """
         Main PID Calculation logic.
@@ -277,6 +281,7 @@ class SmartPIController:
         """
         self.last_error = error
         self.last_error_p = error_p
+        self.last_integral_hold_source = "none"
         freeze_deadband = in_deadband if core_deadband is None else core_deadband
 
         if self.integral_hold_active and freeze_deadband:
@@ -342,9 +347,11 @@ class SmartPIController:
             if self.integral_hold_active:
                 u_pi = kp * error_p_db + ki * self.integral
                 self.last_i_mode = f"I:HOLD({self.integral_hold_mode})"
+                self.last_integral_hold_source = self.integral_hold_mode
             elif integrator_hold:
                 u_pi = kp * error_p_db + ki * self.integral
                 self.last_i_mode = "I:HOLD"
+                self.last_integral_hold_source = str(integrator_hold_source)
             else:
                 # Conditional Integration
                 if (sat == "SAT_HI" and error > 0) or (sat == "SAT_LO" and error < 0):

@@ -3005,6 +3005,9 @@ class SmartPI:
         """
         Compute the next duty-cycle command.
         """
+        integrator_hold_source = "external" if integrator_hold else "none"
+        self.ctl.last_integral_hold_source = "none"
+
         def _is_hvac_mode_like(value: Any) -> bool:
             """Return True when a value looks like a VTherm HVAC mode object."""
             return value is not None and str(value) in {
@@ -3292,6 +3295,7 @@ class SmartPI:
         # --- 6b. Integral freeze during deadtime window ---
         if self.in_deadtime_window:
             integrator_hold = True
+            integrator_hold_source = "deadtime"
 
         # --- 7. Governance Decision ---
         # Capture previous regime before update (for FFv2 bumpless and diagnostics)
@@ -3308,7 +3312,7 @@ class SmartPI:
             self.deadband_mgr.in_near_band
         )
         self.gov.update_regime(regime)
-        gov_decision_g, _ = self.gov.decide_update('gains')
+        gov_decision_g, gov_freeze_reason_g = self.gov.decide_update('gains')
         self.gov.decide_update('thermal', self.learn_win.learning_resume_ts, now)
 
         # --- 8. Gains & FF ---
@@ -3328,6 +3332,17 @@ class SmartPI:
             startup_first_run=startup_first_run,
         )
         # Apply explicit hold (parameter) or governance hold
+        if gov_hold and not integrator_hold:
+            if (
+                self.gov.regime == GovernanceRegime.DEAD_BAND
+                and self.deadband_mgr.in_deadband
+                and not in_core_deadband
+            ):
+                integrator_hold_source = "deadband_hysteresis_shell"
+            else:
+                integrator_hold_source = (
+                    f"governance_{gov_freeze_reason_g.value}"
+                )
         integrator_hold = integrator_hold or gov_hold
 
         # Deadband ENTRY: no bumpless transfer. The integral keeps its
@@ -3364,6 +3379,7 @@ class SmartPI:
             block_negative_integral=block_negative_integral,
             positive_integral_guard_mode=positive_integral_guard_mode,
             deadband_allow_p=self._deadband_allow_p,
+            integrator_hold_source=integrator_hold_source,
         )
 
         # --- 11b. Setpoint landing command cap (post-PI governor) ---

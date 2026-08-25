@@ -92,6 +92,7 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `fftrim_transfer_pending_engagement` | `boolean` | Command | True until the actuator timeline has committed the post-transfer command. |
 | `integral_hold_active` | `boolean` | PI State | Indicates if the integral branch accumulator is currently frozen/held. |
 | `integral_hold_mode` | `string` | PI State | Active mode or reason for the integral freeze (e.g. `window_hold`, `deadband_hold`). |
+| `integral_hold_source` | `string` | PI State | Effective source of the latest `I:HOLD` evaluation: `external`, `deadtime`, `deadband_hysteresis_shell`, an explicit resume mode, or `governance_<reason>`; `none` when the latest evaluation was not held. |
 | `restart_reason` | `string` | General | Cause of the last algorithm or integration restart. |
 | `filtered_setpoint` | `float` | Setpoint | Dynamic reference temperature followed by the proportional branch (P branch). |
 | `setpoint_trajectory_active` | `boolean` | Setpoint | Indicates if the analytical proportional setpoint trajectory is active. |
@@ -383,6 +384,7 @@ The thermostat also publishes **`specific_states.regulation_diagnostics`** with 
     "integral_error": 50.0,
     "integral_mode": "I:RUN",
     "integral_hold_mode": "none",
+    "integral_hold_source": "none",
     "integral_guard_source": "none"
   },
   "model": {

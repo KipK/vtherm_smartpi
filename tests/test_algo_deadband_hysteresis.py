@@ -116,6 +116,12 @@ def test_deadband_hysteresis_prevents_chattering() -> None:
             hvac_mode=VThermHvacMode_HEAT,
         )
         assert smartpi.in_deadband is True
+        if current_temp == 19.885:
+            assert smartpi.ctl.last_i_mode == "I:HOLD"
+            assert (
+                smartpi.ctl.last_integral_hold_source
+                == "deadband_hysteresis_shell"
+            )
 
 
 def test_deadband_hysteresis_zone_from_outside() -> None:

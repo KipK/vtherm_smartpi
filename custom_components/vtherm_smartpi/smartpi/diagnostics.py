@@ -134,6 +134,7 @@ ESSENTIAL_KEYS = {
     "fftrim_transfer_quality",
     "integral_hold_active",
     "integral_hold_mode",
+    "integral_hold_source",
     "restart_reason",
     # Setpoint trajectory
     "filtered_setpoint",
@@ -305,6 +306,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "integral_error": diag["integral_error"],
             "integral_mode": diag["i_mode"],
             "integral_hold_mode": diag["integral_hold_mode"],
+            "integral_hold_source": diag["integral_hold_source"],
             "integral_guard_source": diag["integral_guard_source"],
         },
         "model": {
@@ -756,6 +758,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "ff3_twin_usable": ff3_twin_usable,
         "integral_hold_active": algo.ctl.integral_hold_active,
         "integral_hold_mode": algo.ctl.integral_hold_mode,
+        "integral_hold_source": algo.ctl.last_integral_hold_source,
         "integral_hold_reason": algo.ctl.integral_hold_mode,
         "restart_reason": algo._last_restart_reason,
         "signed_error_mode": "positive_means_hvac_demand",

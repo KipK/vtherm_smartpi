@@ -5,6 +5,11 @@ from unittest.mock import MagicMock
 
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import AB_HISTORY_SIZE
+from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
+from custom_components.vtherm_smartpi.smartpi.diagnostics import (
+    build_diagnostics,
+    build_published_diagnostics,
+)
 from custom_components.vtherm_smartpi.smartpi.integral_guard import IntegralGuardSource
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 
@@ -83,6 +88,15 @@ class TestIntegralHoldDuringDeadtime:
         integrator_hold_arg = mock_pwm.call_args[0][9]
         assert integrator_hold_arg is True, (
             f"compute_pwm should receive integrator_hold=True during deadtime, got {integrator_hold_arg}"
+        )
+        assert mock_pwm.call_args.kwargs["integrator_hold_source"] == "deadtime"
+        assert pi.ctl.last_integral_hold_source == "deadtime"
+        assert build_diagnostics(pi)["integral_hold_source"] == "deadtime"
+        assert (
+            build_published_diagnostics(pi)["temperature"][
+                "integral_hold_source"
+            ]
+            == "deadtime"
         )
 
     def test_deadtime_does_not_set_hold_outside_window(self):
@@ -236,3 +250,67 @@ class TestIntegralHoldDuringDeadtime:
         assert pi.ctl.integral_hold_mode == "none"
         assert pi.integral_guard.active is True
         assert pi.integral_guard.source == IntegralGuardSource.POWER_SHEDDING_RESUME
+
+
+def test_controller_reports_effective_hold_source_and_clears_it_next_cycle() -> None:
+    """Explicit hold modes must override the bare source for diagnostics."""
+    controller = SmartPIController("hold-source")
+    common = {
+        "error": 0.2,
+        "error_p": 0.2,
+        "kp": 0.5,
+        "ki": 0.01,
+        "u_ff": 0.2,
+        "dt_min": 5.0,
+        "cycle_min": 10.0,
+        "in_deadband": False,
+        "in_near_band": True,
+        "u_db_nominal": 0.2,
+        "hvac_mode": VThermHvacMode_HEAT,
+        "current_temp": 19.8,
+        "target_temp": 20.0,
+        "is_tau_reliable": True,
+        "learn_ok_count_a": 20,
+        "deadband_c": 0.1,
+    }
+
+    controller.compute_pwm(
+        **common,
+        integrator_hold=True,
+        integrator_hold_source="external",
+    )
+    assert controller.last_i_mode == "I:HOLD"
+    assert controller.last_integral_hold_source == "external"
+
+    controller.start_integral_hold("window_resume")
+    controller.compute_pwm(
+        **common,
+        integrator_hold=True,
+        integrator_hold_source="deadtime",
+    )
+    assert controller.last_i_mode == "I:HOLD(window_resume)"
+    assert controller.last_integral_hold_source == "window_resume"
+
+    controller.clear_integral_hold()
+    controller.compute_pwm(
+        **common,
+        integrator_hold=False,
+    )
+    assert not controller.last_i_mode.startswith("I:HOLD")
+    assert controller.last_integral_hold_source == "none"
+
+
+def test_early_return_clears_previous_hold_source() -> None:
+    """A calculation without PI evaluation must not retain a stale source."""
+    pi = make_smartpi()
+    pi.ctl.last_integral_hold_source = "external"
+
+    pi.calculate(
+        target_temp=20.0,
+        current_temp=None,
+        ext_current_temp=5.0,
+        hvac_mode=VThermHvacMode_HEAT,
+    )
+
+    assert pi.ctl.last_i_mode == "I:FREEZE(missing_sensor)"
+    assert pi.ctl.last_integral_hold_source == "none"

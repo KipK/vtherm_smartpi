@@ -92,6 +92,7 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `fftrim_transfer_pending_engagement` | `boolean` | Commande | Vrai jusqu'à l'engagement de la commande post-transfert dans la timeline actionneur. |
 | `integral_hold_active` | `boolean` | État PI | Indique si l'accumulateur de la branche intégrale est actuellement gelé. |
 | `integral_hold_mode` | `string` | État PI | Mode actif ou raison du gel de l'intégrale (ex. `window_hold`, `deadband_hold`). |
+| `integral_hold_source` | `string` | État PI | Source effective de la dernière évaluation `I:HOLD` : `external`, `deadtime`, `deadband_hysteresis_shell`, un mode explicite de reprise ou `governance_<raison>` ; `none` lorsque la dernière évaluation n’était pas maintenue. |
 | `restart_reason` | `string` | Général | Raison du dernier redémarrage de l'algorithme ou de l'intégration. |
 | `filtered_setpoint` | `float` | Consigne | Température de consigne filtrée dynamiquement suivie par la branche proportionnelle (branche P). |
 | `setpoint_trajectory_active` | `boolean` | Consigne | Indique si la trajectoire analytique de consigne proportionnelle est active. |
@@ -383,6 +384,7 @@ Le thermostat publie aussi **`specific_states.regulation_diagnostics`** avec l'e
     "integral_error": 50.0,
     "integral_mode": "I:RUN",
     "integral_hold_mode": "none",
+    "integral_hold_source": "none",
     "integral_guard_source": "none"
   },
   "model": {
