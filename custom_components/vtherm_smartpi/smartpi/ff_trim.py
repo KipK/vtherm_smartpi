@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from math import isfinite, sqrt
 from statistics import median
 from typing import Callable, Deque, Sequence
@@ -215,6 +216,24 @@ class FFTrimBumplessPlan:
     applied_i_transfer: float = 0.0
     physical_power_deficit: float = 0.0
     net_command_delta: float = 0.0
+
+
+@dataclass(frozen=True)
+class FFTrimTransactionSnapshot:
+    """Runtime snapshot of one successfully applied FF trim transaction."""
+
+    timestamp_utc: str
+    observation_mode: str
+    state: str
+    reason: str
+    quality: str
+    requested_trim_delta: float
+    stored_trim_delta: float
+    applied_trim_delta: float
+    transferable_i_power: float
+    requested_i_transfer: float
+    applied_i_transfer: float
+    net_command_delta: float
 
 
 @dataclass(frozen=True)
@@ -1638,6 +1657,7 @@ class FFTrim:
         self.u_ff_trim: float = 0.0
         self.frozen: bool = False
         self.freeze_reason: str = "none"
+        self._last_transaction: FFTrimTransactionSnapshot | None = None
         self._pending_proposals: Deque[FFTrimWindowProposal] = deque(
             maxlen=FF_TRIM_BUFFER_SIZE
         )
@@ -1931,6 +1951,46 @@ class FFTrim:
             return
         self._pending_buffer(observation_mode).clear()
 
+    def record_applied_transaction(
+        self,
+        *,
+        observation_mode: str,
+        state: str,
+        reason: str,
+        quality: str,
+        requested_trim_delta: float,
+        stored_trim_delta: float,
+        applied_trim_delta: float,
+        transferable_i_power: float,
+        requested_i_transfer: float,
+        applied_i_transfer: float,
+        net_command_delta: float,
+    ) -> None:
+        """Retain one successfully committed runtime transaction."""
+        self._last_transaction = FFTrimTransactionSnapshot(
+            timestamp_utc=datetime.now(timezone.utc).isoformat(),
+            observation_mode=str(observation_mode),
+            state=str(state),
+            reason=str(reason),
+            quality=str(quality),
+            requested_trim_delta=float(requested_trim_delta),
+            stored_trim_delta=float(stored_trim_delta),
+            applied_trim_delta=float(applied_trim_delta),
+            transferable_i_power=float(transferable_i_power),
+            requested_i_transfer=float(requested_i_transfer),
+            applied_i_transfer=float(applied_i_transfer),
+            net_command_delta=float(net_command_delta),
+        )
+
+    @property
+    def last_transaction(self) -> FFTrimTransactionSnapshot | None:
+        """Return the latest successfully applied runtime transaction."""
+        return self._last_transaction
+
+    def clear_last_transaction(self) -> None:
+        """Clear the retained runtime transaction."""
+        self._last_transaction = None
+
     def _pending_buffer(
         self,
         observation_mode: str,
@@ -1965,6 +2025,7 @@ class FFTrim:
         self.frozen = False
         self.freeze_reason = "none"
         self.clear_pending()
+        self.clear_last_transaction()
 
     # ------------------------------------------------------------------
     # Persistence
@@ -1976,3 +2037,4 @@ class FFTrim:
     def load_state(self, state: dict) -> None:
         self.u_ff_trim = float(state.get("u_ff_trim", 0.0))
         self.clear_pending()
+        self.clear_last_transaction()

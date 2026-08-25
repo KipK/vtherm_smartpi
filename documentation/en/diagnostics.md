@@ -79,6 +79,7 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `fftrim_last_reject_reason` | `string` | Command | Reason why the last slow trim update was rejected. |
 | `fftrim_stationary_last_reject_reason` | `string` | Command | Latest reason preventing or rejecting the stationary observer without conflating it with the periodic observer. |
 | `fftrim_last_result` | `object \| null` | Command | Runtime snapshot of the latest admissible stationary or periodic window. It remains available while another window is collected or rejected and is cleared on runtime reset. |
+| `fftrim_last_transaction` | `object \| null` | Command | Runtime snapshot of the latest successfully applied trim transaction, including its UTC timestamp, observation mode, state, reason, quality, and trim/integral deltas. Live collection or rejection does not erase it; runtime reset does. |
 | `fftrim_last_update_reason` | `string` | Command | Reason why the last slow trim update was accepted. |
 | `fftrim_cycles_since_update` | `int` | Command | Number of control cycles elapsed since the last `FFTrim` update. |
 | `fftrim_physical_power_deficit` | `float` | Command | Causal holding-power deficit, `H - mean_applied_power`, in linear model space. |
@@ -157,6 +158,7 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `fftrim_observation_mode` | `string` | Method that produced the latest FFTrim result: `stationary` or `periodic`. |
 | `fftrim_stationary_last_reject_reason` | `string` | Latest reason preventing or rejecting the stationary window. |
 | `fftrim_last_result` | `object \| null` | Latest admissible completed window, retained independently from the live stationary and periodic collection states. |
+| `fftrim_last_transaction` | `object \| null` | Latest successfully applied trim transaction. It is runtime-only and is not restored from persisted learning state. |
 | `fftrim_periodic_state` | `string` | State of phase-closed thermal-cycle selection. |
 | `fftrim_periodic_window_duration_s` | `float` | Duration of the active or completed periodic window. |
 | `fftrim_periodic_target_duration_s` | `float` | Minimum duration derived from VT cycles and dead time, without a fixed thirty-minute floor. |
@@ -183,6 +185,11 @@ The flat FF trim window state fields describe the stationary observer. The
 admissible completed window, whether it was stationary or periodic. Live
 stationary collection or rejection therefore does not erase the latest usable
 thermal result.
+
+The `last_transaction` snapshot preserves the seven transaction deltas after a
+successful stationary bumpless transfer or periodic trim update. The flat delta
+fields continue to describe the live transaction attempt and may therefore
+return to zero while `last_transaction` remains available.
 
 ### 3.4 Advanced FF3 Predictive Parameters
 

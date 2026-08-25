@@ -655,6 +655,7 @@ class SmartPI:
         """
         self._reset_learning_window()
         self._ff_trim.clear_pending()
+        self._ff_trim.clear_last_transaction()
         self._fftrim_observer.reset_runtime()
         self._fftrim_periodic_observer.reset_runtime()
         self._fftrim_observation_mode = "stationary"
@@ -1228,6 +1229,10 @@ class SmartPI:
             self._bumpless_transfer_state = "causal_update_without_transfer"
             self._bumpless_transfer_reason = result.transfer_reason
             self._transfer_pending_engagement = False
+            if updated:
+                self._record_applied_fftrim_transaction(
+                    observation_mode=observation_mode
+                )
 
         if updated:
             self._cycles_since_fftrim_update = 0
@@ -1326,6 +1331,9 @@ class SmartPI:
         self._bumpless_transfer_state = "applied"
         self._bumpless_transfer_reason = plan.reason
         self._transfer_pending_engagement = True
+        self._record_applied_fftrim_transaction(
+            observation_mode=persistent.observation_mode
+        )
         self._ff_trim.clear_pending()
         self._pending_bumpless_persistent = None
         return True
@@ -1411,6 +1419,26 @@ class SmartPI:
         self._requested_i_transfer = 0.0
         self._applied_i_transfer = 0.0
         self._net_command_delta = 0.0
+
+    def _record_applied_fftrim_transaction(
+        self,
+        *,
+        observation_mode: str,
+    ) -> None:
+        """Retain the latest successfully applied FF trim transaction."""
+        self._ff_trim.record_applied_transaction(
+            observation_mode=observation_mode,
+            state=self._bumpless_transfer_state,
+            reason=self._bumpless_transfer_reason,
+            quality=self._transfer_quality,
+            requested_trim_delta=self._requested_trim_delta,
+            stored_trim_delta=self._stored_trim_delta,
+            applied_trim_delta=self._applied_trim_delta,
+            transferable_i_power=self._transferable_i_power,
+            requested_i_transfer=self._requested_i_transfer,
+            applied_i_transfer=self._applied_i_transfer,
+            net_command_delta=self._net_command_delta,
+        )
 
     def _reset_fftrim_windows_after_update(self) -> None:
         """Wash out both logical windows after the trim reference changes."""
@@ -3009,6 +3037,7 @@ class SmartPI:
                 self.ctl.reset()
                 self._recovery_hold_armed = False
                 self._ff_trim.clear_pending()
+                self._ff_trim.clear_last_transaction()
                 self._fftrim_observer.reset_runtime()
                 self._fftrim_periodic_observer.reset_runtime()
                 self._fftrim_observation_mode = "stationary"

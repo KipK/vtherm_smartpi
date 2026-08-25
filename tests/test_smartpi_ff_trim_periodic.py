@@ -1,6 +1,7 @@
 """Tests for periodic-equilibrium FF trim observation."""
 
 from dataclasses import replace
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -313,3 +314,135 @@ def test_admissible_result_survives_stationary_collection_and_rejection() -> Non
     assert reset["last_result"] is None
     assert reset["mean_causal_power"] is None
     assert reset["correction"] is None
+
+
+def test_applied_periodic_transaction_survives_live_rejection_until_reset() -> None:
+    """Applied deltas must remain inspectable after live fields are cleared."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="FF trim transaction diagnostics",
+    )
+    periodic_result = CausalFFTrimResult(
+        admissible=True,
+        reason="periodic_window_ready",
+        correction=-0.01,
+        target_trim=-0.01,
+        mean_causal_power=0.04,
+        mean_ff1=0.08,
+        mean_temperature=20.0,
+        mean_error=0.0,
+        mean_slope_h=0.0,
+        observed_hold_power=0.04,
+        duration_s=1800.0,
+        measurement_count=7,
+        alignment_delay_s=120.0,
+        power_coverage_ratio=1.0,
+        transfer_eligible=False,
+        transfer_reason="periodic_equilibrium",
+        transfer_quality="valve_segmented_linear",
+        observation_mode="periodic",
+    )
+
+    quiet_result = replace(
+        periodic_result,
+        correction=0.0,
+        target_trim=0.0,
+    )
+    assert (
+        algo._apply_fftrim_observer_result(
+            quiet_result,
+            count_window=False,
+        )
+        is False
+    )
+    assert algo._ff_trim.last_transaction is None
+
+    for proposal_index in range(3):
+        updated = algo._apply_fftrim_observer_result(
+            periodic_result,
+            count_window=False,
+        )
+        if proposal_index < 2:
+            assert updated is False
+            assert algo._ff_trim.last_transaction is None
+
+    transaction = algo._ff_trim.last_transaction
+    assert transaction is not None
+    assert (
+        datetime.fromisoformat(transaction.timestamp_utc).tzinfo
+        == timezone.utc
+    )
+    assert transaction.observation_mode == "periodic"
+    assert transaction.state == "causal_update_without_transfer"
+    assert transaction.reason == "periodic_equilibrium"
+    assert transaction.quality == "valve_segmented_linear"
+    assert transaction.requested_trim_delta == pytest.approx(-0.0005)
+    assert transaction.stored_trim_delta == pytest.approx(-0.0005)
+    assert transaction.applied_trim_delta == pytest.approx(-0.0005)
+    assert transaction.transferable_i_power == pytest.approx(0.0)
+    assert transaction.requested_i_transfer == pytest.approx(0.0)
+    assert transaction.applied_i_transfer == pytest.approx(0.0)
+    assert transaction.net_command_delta == pytest.approx(-0.0005)
+    assert algo._ff_trim.save_state() == {"u_ff_trim": pytest.approx(-0.0005)}
+    saved_state = algo.save_state()
+    assert "last_transaction" not in saved_state["ff_v2_trim"]
+
+    rejected_result = replace(
+        periodic_result,
+        admissible=False,
+        reason="cycle_not_closed",
+        correction=None,
+        target_trim=None,
+    )
+    algo._apply_fftrim_observer_result(rejected_result, count_window=False)
+
+    assert algo._requested_trim_delta == pytest.approx(0.0)
+    assert algo._stored_trim_delta == pytest.approx(0.0)
+    assert algo._applied_trim_delta == pytest.approx(0.0)
+    assert algo._transferable_i_power == pytest.approx(0.0)
+    assert algo._requested_i_transfer == pytest.approx(0.0)
+    assert algo._applied_i_transfer == pytest.approx(0.0)
+    assert algo._net_command_delta == pytest.approx(0.0)
+    assert algo._ff_trim.last_transaction == transaction
+
+    published = build_published_diagnostics(algo)["feedforward"]["fftrim"]
+    assert published["last_transaction"] == {
+        "timestamp_utc": transaction.timestamp_utc,
+        "observation_mode": "periodic",
+        "state": "causal_update_without_transfer",
+        "reason": "periodic_equilibrium",
+        "quality": "valve_segmented_linear",
+        "requested_trim_delta": -0.0005,
+        "stored_trim_delta": -0.0005,
+        "applied_trim_delta": -0.0005,
+        "transferable_i_power": 0.0,
+        "requested_i_transfer": 0.0,
+        "applied_i_transfer": 0.0,
+        "net_command_delta": -0.0005,
+    }
+
+    algo.load_state(saved_state)
+
+    assert algo._ff_trim.last_transaction is None
+
+    algo._ff_trim.unfreeze()
+    for _ in range(3):
+        algo._apply_fftrim_observer_result(
+            periodic_result,
+            count_window=False,
+        )
+
+    assert algo._ff_trim.last_transaction is not None
+
+    algo.reset_cycle_state()
+
+    assert algo._ff_trim.last_transaction is None
+    assert (
+        build_published_diagnostics(algo)["feedforward"]["fftrim"][
+            "last_transaction"
+        ]
+        is None
+    )

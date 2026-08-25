@@ -87,6 +87,7 @@ ESSENTIAL_KEYS = {
     "fftrim_last_reject_reason",
     "fftrim_stationary_last_reject_reason",
     "fftrim_last_result",
+    "fftrim_last_transaction",
     "fftrim_last_update_reason",
     "fftrim_cycles_since_update",
     "fftrim_windows_since_update",
@@ -240,6 +241,33 @@ def _build_fftrim_result(result: Any | None) -> Dict[str, Any] | None:
     }
 
 
+def _build_fftrim_transaction(transaction: Any | None) -> Dict[str, Any] | None:
+    """Build a stable public snapshot of one applied FF trim transaction."""
+    if transaction is None:
+        return None
+
+    return {
+        "timestamp_utc": str(transaction.timestamp_utc),
+        "observation_mode": str(transaction.observation_mode),
+        "state": str(transaction.state),
+        "reason": str(transaction.reason),
+        "quality": str(transaction.quality),
+        "requested_trim_delta": round(
+            float(transaction.requested_trim_delta), 6
+        ),
+        "stored_trim_delta": round(float(transaction.stored_trim_delta), 6),
+        "applied_trim_delta": round(float(transaction.applied_trim_delta), 6),
+        "transferable_i_power": round(
+            float(transaction.transferable_i_power), 6
+        ),
+        "requested_i_transfer": round(
+            float(transaction.requested_i_transfer), 6
+        ),
+        "applied_i_transfer": round(float(transaction.applied_i_transfer), 6),
+        "net_command_delta": round(float(transaction.net_command_delta), 6),
+    }
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the compact SmartPI summary published in Home Assistant."""
     diag = _build_full_diagnostics(algo)
@@ -346,6 +374,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
                     "fftrim_stationary_last_reject_reason"
                 ],
                 "last_result": diag["fftrim_last_result"],
+                "last_transaction": diag["fftrim_last_transaction"],
                 "windows_since_update": diag["fftrim_windows_since_update"],
                 "window_duration_s": diag["fftrim_window_duration_s"],
                 "window_target_duration_s": diag[
@@ -461,6 +490,9 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     fftrim_last_result = _build_fftrim_result(
         algo._fftrim_observer.last_admissible_result
     )
+    fftrim_last_transaction = _build_fftrim_transaction(
+        algo._ff_trim.last_transaction
+    )
     tau_info = algo.est.tau_reliability()
     ff_result = algo._last_ff_result
     twin_diag = getattr(algo, '_last_twin_diag', None) or {}
@@ -566,6 +598,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "last_reject_reason"
         ],
         "fftrim_last_result": fftrim_last_result,
+        "fftrim_last_transaction": fftrim_last_transaction,
         "fftrim_cycles_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_windows_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_observation_mode": algo._fftrim_observation_mode,

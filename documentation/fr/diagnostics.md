@@ -79,6 +79,7 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `fftrim_last_reject_reason` | `string` | Commande | Raison du rejet de la dernière mise à jour de trim lent. |
 | `fftrim_stationary_last_reject_reason` | `string` | Commande | Dernière raison empêchant ou rejetant l’observateur stationnaire, sans la confondre avec l’observateur périodique. |
 | `fftrim_last_result` | `object \| null` | Commande | Instantané runtime de la dernière fenêtre stationnaire ou périodique admissible. Il reste disponible pendant la collecte ou le rejet d’une autre fenêtre et est effacé au reset runtime. |
+| `fftrim_last_transaction` | `object \| null` | Commande | Instantané runtime de la dernière transaction de trim appliquée avec succès, incluant horodatage UTC, mode d’observation, état, raison, qualité et deltas trim/intégrale. Une collecte ou un rejet ne l’efface pas ; un reset runtime l’efface. |
 | `fftrim_last_update_reason` | `string` | Commande | Raison de l'acceptation de la dernière mise à jour de trim lent. |
 | `fftrim_cycles_since_update` | `int` | Commande | Nombre de cycles écoulés depuis la dernière mise à jour de `FFTrim`. |
 | `fftrim_physical_power_deficit` | `float` | Commande | Déficit causal de puissance de maintien, `H - puissance_appliquée_moyenne`, dans l'espace linéaire du modèle. |
@@ -157,6 +158,7 @@ Lorsque le **Mode debug SmartPI** est activé, un bloc imbriqué nommé **`debug
 | `fftrim_observation_mode` | `string` | Méthode ayant produit le dernier résultat FFTrim : `stationary` ou `periodic`. |
 | `fftrim_stationary_last_reject_reason` | `string` | Dernière raison empêchant ou rejetant la fenêtre stationnaire. |
 | `fftrim_last_result` | `object \| null` | Dernière fenêtre admissible terminée, conservée indépendamment des états de collecte stationnaire et périodique. |
+| `fftrim_last_transaction` | `object \| null` | Dernière transaction de trim appliquée avec succès. Elle est propre au runtime et n’est pas restaurée depuis l’état d’apprentissage persistant. |
 | `fftrim_periodic_state` | `string` | État de la sélection d’un cycle thermique fermé. |
 | `fftrim_periodic_window_duration_s` | `float` | Durée de la fenêtre périodique active ou terminée. |
 | `fftrim_periodic_target_duration_s` | `float` | Durée minimale issue des cycles VT et du temps mort, sans plancher fixe de 30 minutes. |
@@ -183,6 +185,11 @@ stationnaire. L’instantané `last_result` et les valeurs de résultat plates
 conservées décrivent la dernière fenêtre admissible terminée, qu’elle soit
 stationnaire ou périodique. Une collecte ou un rejet stationnaire n’efface donc
 pas le dernier résultat thermique exploitable.
+
+L’instantané `last_transaction` conserve les sept deltas transactionnels après
+un transfert bumpless stationnaire ou une mise à jour périodique appliquée avec
+succès. Les champs plats de delta continuent de décrire la tentative courante et
+peuvent donc revenir à zéro tandis que `last_transaction` reste disponible.
 
 ### 3.4 Paramètres Avancés Prédictifs FF3
 

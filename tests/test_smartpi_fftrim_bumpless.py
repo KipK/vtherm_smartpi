@@ -312,3 +312,22 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
     assert algo._net_command_delta == pytest.approx(0.003)
     assert algo._bumpless_transfer_state == "applied"
     assert algo._transfer_pending_engagement is True
+    transaction = algo._ff_trim.last_transaction
+    assert transaction is not None
+    assert transaction.observation_mode == "stationary"
+    assert transaction.state == "applied"
+    assert transaction.reason == "quasi_equilibrium"
+    assert transaction.quality == "switch_cycle_equivalent"
+    assert transaction.applied_trim_delta == pytest.approx(0.008)
+    assert transaction.applied_i_transfer == pytest.approx(0.005)
+    assert transaction.net_command_delta == pytest.approx(0.003)
+
+    algo.gov.regime = GovernanceRegime.HOLD
+    rejected = algo._apply_bumpless_persistent_result(
+        persistent=persistent,
+        quality="switch_cycle_equivalent",
+    )
+
+    assert rejected is False
+    assert algo._bumpless_transfer_state == "rejected"
+    assert algo._ff_trim.last_transaction == transaction
