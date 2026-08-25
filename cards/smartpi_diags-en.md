@@ -36,6 +36,7 @@
 {% set integral_error = temp.get('integral_error') %}
 {% set integral_mode = temp.get('integral_mode', temp.get('integral_hold_mode', 'none')) %}
 {% set hold_mode = temp.get('integral_hold_mode', 'none') %}
+{% set hold_source = temp.get('integral_hold_source', 'none') %}
 {% set integral_guard_source_pub = temp.get('integral_guard_source', 'none') %}
 
 {% set current_cycle = power.get('current_cycle_percent', 0) | float(0) %}
@@ -81,8 +82,12 @@
 {% set ff3_twin_usable = ff.get('ff3_twin_usable', false) %}
 {% set twin_status = ff.get('twin_status', 'unavailable') %}
 {% set deadband_source = ff.get('deadband_power_source', 'none') %}
-{% set fftrim_state = fftrim.get('state') %}
-{% set fftrim_observation_mode = fftrim.get('observation_mode') %}
+{% set fftrim_stationary = fftrim.get('stationary', {}) %}
+{% set fftrim_last_result = fftrim.get('last_result') or {} %}
+{% set fftrim_last_transaction = fftrim.get('last_transaction') or {} %}
+{% set fftrim_state = fftrim_stationary.get('state', fftrim.get('state')) %}
+{% set fftrim_observation_mode = fftrim_last_result.get('observation_mode', fftrim.get('observation_mode')) %}
+{% set fftrim_last_result_reason = fftrim_last_result.get('reason') %}
 {% set fftrim_periodic_state = fftrim.get('periodic_state') %}
 {% set fftrim_periodic_window_duration_s = fftrim.get('periodic_window_duration_s') %}
 {% set fftrim_periodic_target_duration_s = fftrim.get('periodic_target_duration_s') %}
@@ -93,13 +98,13 @@
 {% set fftrim_last_reject_reason = fftrim.get('last_reject_reason') %}
 {% set fftrim_last_update_reason = fftrim.get('last_update_reason') %}
 {% set fftrim_windows_since_update = fftrim.get('windows_since_update') %}
-{% set fftrim_window_duration_s = fftrim.get('window_duration_s') %}
-{% set fftrim_window_target_duration_s = fftrim.get('window_target_duration_s') %}
-{% set fftrim_measurement_count = fftrim.get('measurement_count') %}
+{% set fftrim_window_duration_s = fftrim_stationary.get('window_duration_s', fftrim.get('window_duration_s')) %}
+{% set fftrim_window_target_duration_s = fftrim_stationary.get('window_target_duration_s', fftrim.get('window_target_duration_s')) %}
+{% set fftrim_measurement_count = fftrim_stationary.get('measurement_count', fftrim.get('measurement_count')) %}
 {% set fftrim_alignment_delay_s = fftrim.get('alignment_delay_s') %}
 {% set fftrim_power_coverage_ratio = fftrim.get('power_coverage_ratio') %}
-{% set fftrim_mean_causal_power = fftrim.get('mean_causal_power') %}
-{% set fftrim_mean_ff1 = fftrim.get('mean_ff1') %}
+{% set fftrim_mean_causal_power = fftrim_last_result.get('mean_causal_power', fftrim.get('mean_causal_power')) %}
+{% set fftrim_mean_ff1 = fftrim_last_result.get('mean_ff1', fftrim.get('mean_ff1')) %}
 {% set fftrim_mean_temperature = fftrim.get('mean_temperature') %}
 {% set fftrim_mean_error = fftrim.get('mean_error') %}
 {% set fftrim_mean_slope_h = fftrim.get('mean_slope_h') %}
@@ -119,6 +124,12 @@
 {% set fftrim_transfer_reason = fftrim.get('bumpless_transfer_reason') %}
 {% set fftrim_transfer_pending = fftrim.get('transfer_pending_engagement', false) %}
 {% set fftrim_transfer_quality = fftrim.get('transfer_quality') %}
+{% set fftrim_last_transaction_timestamp = fftrim_last_transaction.get('timestamp_utc') %}
+{% set fftrim_last_transaction_mode = fftrim_last_transaction.get('observation_mode') %}
+{% set fftrim_last_transaction_state = fftrim_last_transaction.get('state') %}
+{% set fftrim_last_transaction_reason = fftrim_last_transaction.get('reason') %}
+{% set fftrim_last_transaction_trim = fftrim_last_transaction.get('applied_trim_delta') %}
+{% set fftrim_last_transaction_i = fftrim_last_transaction.get('applied_i_transfer') %}
 
 {% set fftrim_state_label = {
   'warming_up': 'warming up',
@@ -471,6 +482,7 @@
 | Error | {% if error is not none %}`{{ '%+.2f' | format((error | float)) }}°C`{% else %}—{% endif %}{% if has_debug and error_f is not none %} → `{{ '%+.2f' | format(err_display) }}°C`{% endif %} |
 | Integral | {% if integral_error is not none %}{{ integral_error | float | round(4) }}{% else %}—{% endif %} |
 | Mode I | `{{ integral_mode }}` |
+| I hold source | `{{ hold_source }}` |
 | Guard I | `{{ integral_guard_label }}` |
 {% if has_debug -%}
 | Near-band | {{ nb_status }} · `{{ nb_src }}` |
@@ -629,8 +641,8 @@
 
 | Signal | Value |
 |---|---:|
-| Observer | {% if fftrim_state is not none %}`{{ fftrim_state_label }}`{% else %}—{% endif %} |
-| Observation mode | {% if fftrim_observation_mode is not none %}`{{ fftrim_observation_mode }}`{% else %}—{% endif %} |
+| Live stationary observer | {% if fftrim_state is not none %}`{{ fftrim_state_label }}`{% else %}—{% endif %} |
+| Last result mode / reason | {% if fftrim_observation_mode is not none %}`{{ fftrim_observation_mode }}`{% else %}—{% endif %} / {% if fftrim_last_result_reason is not none %}`{{ fftrim_last_result_reason }}`{% else %}—{% endif %} |
 | Thermal window | {% if fftrim_window_duration_s is not none and fftrim_window_target_duration_s is not none %}{{ (fftrim_window_duration_s | float / 60) | round(1) }} / {{ (fftrim_window_target_duration_s | float / 60) | round(1) }} min{% else %}—{% endif %} |
 | Distinct measurements | {% if fftrim_measurement_count is not none %}{{ fftrim_measurement_count }}{% else %}—{% endif %} |
 | Periodic observer | {% if fftrim_periodic_state is not none %}`{{ fftrim_periodic_state_label }}`{% else %}—{% endif %} |
@@ -647,8 +659,11 @@
 | Proposed correction | {% if fftrim_correction is not none %}{{ '%+.3f' | format(fftrim_correction | float * 100) }}%{% else %}—{% endif %} |
 | Mean P / I ownership | {% if fftrim_mean_p_power is not none %}{{ '%+.3f' | format(fftrim_mean_p_power | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_mean_i_power is not none %}{{ '%+.3f' | format(fftrim_mean_i_power | float * 100) }}%{% else %}—{% endif %} |
 | Physical deficit / decomposed correction | {% if fftrim_physical_power_deficit is not none %}{{ '%+.3f' | format(fftrim_physical_power_deficit | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_decomposed_correction is not none %}{{ '%+.3f' | format(fftrim_decomposed_correction | float * 100) }}%{% else %}—{% endif %} |
-| Requested / visible trim delta | {% if fftrim_requested_trim_delta is not none %}{{ '%+.3f' | format(fftrim_requested_trim_delta | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_applied_trim_delta is not none %}{{ '%+.3f' | format(fftrim_applied_trim_delta | float * 100) }}%{% else %}—{% endif %} |
-| Applied I transfer / net command | {% if fftrim_applied_i_transfer is not none %}{{ '%+.3f' | format(fftrim_applied_i_transfer | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_net_command_delta is not none %}{{ '%+.3f' | format(fftrim_net_command_delta | float * 100) }}%{% else %}—{% endif %} |
+| Live requested / visible trim delta | {% if fftrim_requested_trim_delta is not none %}{{ '%+.3f' | format(fftrim_requested_trim_delta | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_applied_trim_delta is not none %}{{ '%+.3f' | format(fftrim_applied_trim_delta | float * 100) }}%{% else %}—{% endif %} |
+| Live I transfer / net command | {% if fftrim_applied_i_transfer is not none %}{{ '%+.3f' | format(fftrim_applied_i_transfer | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_net_command_delta is not none %}{{ '%+.3f' | format(fftrim_net_command_delta | float * 100) }}%{% else %}—{% endif %} |
+| Last applied transaction | {% if fftrim_last_transaction_timestamp is not none %}`{{ fftrim_last_transaction_timestamp }}` · `{{ fftrim_last_transaction_mode }}` · `{{ fftrim_last_transaction_state }}`{% else %}—{% endif %} |
+| Last transaction reason | {% if fftrim_last_transaction_reason is not none %}`{{ fftrim_last_transaction_reason }}`{% else %}—{% endif %} |
+| Last applied trim / I transfer | {% if fftrim_last_transaction_trim is not none %}{{ '%+.3f' | format(fftrim_last_transaction_trim | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_last_transaction_i is not none %}{{ '%+.3f' | format(fftrim_last_transaction_i | float * 100) }}%{% else %}—{% endif %} |
 | Ownership residual / quality | {% if fftrim_mean_delivery_residual is not none %}{{ '%+.3f' | format(fftrim_mean_delivery_residual | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_transfer_quality is not none %}`{{ fftrim_transfer_quality }}`{% else %}—{% endif %} |
 | Bumpless transaction | {% if fftrim_transfer_state is not none %}`{{ fftrim_transfer_state }}`{% else %}—{% endif %}{% if fftrim_transfer_pending %} · awaiting actuator engagement{% endif %} |
 | Transaction reason | {% if fftrim_transfer_reason is not none %}`{{ fftrim_transfer_reason }}`{% else %}—{% endif %} |
