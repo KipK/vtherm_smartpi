@@ -90,12 +90,19 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `fftrim_bumpless_transfer_state` | `string` | Command | State of the latest atomic trim/integral transaction. |
 | `fftrim_bumpless_transfer_reason` | `string` | Command | Eligibility, rejection, or application reason for that transaction. |
 | `fftrim_transfer_pending_engagement` | `boolean` | Command | True until the actuator timeline has committed the post-transfer command. |
+| `feedforward.fftrim.command_ownership` | `object` | Command | Latest frozen command-to-actuator binding. It reports `status`, `reason`, `request_sequence`, requested/projected/realized powers, their delta, projected/realized ON/OFF times, and `forced_by_timing`. |
 | `integral_hold_active` | `boolean` | PI State | Indicates if the integral branch accumulator is currently frozen/held. |
 | `integral_hold_mode` | `string` | PI State | Active mode or reason for the integral freeze (e.g. `window_hold`, `deadband_hold`). |
 | `integral_hold_source` | `string` | PI State | Effective source of the latest `I:HOLD` evaluation: `external`, `deadtime`, `deadband_hysteresis_shell`, an explicit resume mode, or `governance_<reason>`; `none` when the latest evaluation was not held. |
 | `restart_reason` | `string` | General | Cause of the last algorithm or integration restart. |
 | `filtered_setpoint` | `float` | Setpoint | Dynamic reference temperature followed by the proportional branch (P branch). |
 | `setpoint_trajectory_active` | `boolean` | Setpoint | Indicates if the analytical proportional setpoint trajectory is active. |
+
+`command_ownership.status` is `none`, `pending`, `bound`, `reused`, or
+`rejected`. A rejected binding is fail-closed: it never reconstructs ownership
+from the current controller state. `reason` distinguishes missing requests,
+callback mismatches, context changes, timing constraints, and discontinuities.
+The power and ON/OFF fields provide the evidence used for that decision.
 
 ---
 
@@ -177,6 +184,7 @@ When **SmartPI debug mode** is enabled, all normal mode attributes are accompani
 | `fftrim_transferable_i_power` | `float` | Current integral power available for the ownership transfer. |
 | `fftrim_requested_i_transfer` | `float` | Signed integral power requested for transfer before the common bound factor. |
 | `fftrim_transfer_quality` | `string` | Source/quality of the aligned ownership timeline (switch-cycle or linearized valve). |
+| `command_ownership` | `object` | Nested under `feedforward.fftrim`; includes the request sequence and callback comparison evidence. |
 | `u_ff_ab` | `float` | Pure feed-forward command component derived from learned $a$ and $b$. |
 | `u_ff_trim` | `float` | Slow bias contribution component calculated by the trim algorithm. |
 | `u_ff_base` | `float` | Base feed-forward command prior to trim. |

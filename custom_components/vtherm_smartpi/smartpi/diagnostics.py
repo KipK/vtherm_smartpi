@@ -269,6 +269,54 @@ def _build_fftrim_transaction(transaction: Any | None) -> Dict[str, Any] | None:
     }
 
 
+def _build_command_ownership(algo: SmartPI) -> Dict[str, Any]:
+    """Build the latest immutable command-to-actuator binding diagnostics."""
+    binding = algo._command_ownership.last_binding
+    snapshot = binding.snapshot
+    projection = snapshot.projection if snapshot is not None else None
+    realized_power = binding.realized_power
+    projected_power = projection.projected_power if projection is not None else None
+
+    return {
+        "status": binding.status.value,
+        "reason": binding.reason,
+        "request_sequence": (
+            snapshot.request_sequence if snapshot is not None else None
+        ),
+        "requested_power": (
+            round(float(projection.requested_power), 6)
+            if projection is not None
+            else None
+        ),
+        "projected_power": (
+            round(float(projected_power), 6)
+            if projected_power is not None
+            else None
+        ),
+        "realized_power": (
+            round(float(realized_power), 6)
+            if realized_power is not None
+            else None
+        ),
+        "power_delta": (
+            round(float(realized_power - projected_power), 6)
+            if realized_power is not None and projected_power is not None
+            else None
+        ),
+        "projected_on_time_sec": (
+            projection.on_time_sec if projection is not None else None
+        ),
+        "projected_off_time_sec": (
+            projection.off_time_sec if projection is not None else None
+        ),
+        "realized_on_time_sec": binding.realized_on_time_sec,
+        "realized_off_time_sec": binding.realized_off_time_sec,
+        "forced_by_timing": (
+            projection.forced_by_timing if projection is not None else None
+        ),
+    }
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the compact SmartPI summary published in Home Assistant."""
     diag = _build_full_diagnostics(algo)
@@ -454,6 +502,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
                     "fftrim_transfer_pending_engagement"
                 ],
                 "transfer_quality": diag["fftrim_transfer_quality"],
+                "command_ownership": diag["command_ownership"],
             },
         },
         "setpoint": {
@@ -506,6 +555,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     )
     fftrim_observer = algo._fftrim_observer.diagnostics
     fftrim_periodic = algo._fftrim_periodic_observer.diagnostics
+    command_ownership = _build_command_ownership(algo)
     u_ff1 = ff_result.u_ff1 if ff_result else 0.0
     u_ff2 = ff_result.u_ff2 if ff_result else 0.0
     u_ff_final = ff_result.u_ff_final if ff_result else 0.0
@@ -733,6 +783,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             algo._transfer_pending_engagement
         ),
         "fftrim_transfer_quality": algo._transfer_quality,
+        "command_ownership": command_ownership,
         # FF compatibility aliases
         "u_ff_ab": round(ff_result.u_ff_ab, 6) if ff_result else 0.0,
         "u_ff_trim": round(algo._ff_trim.u_ff_trim, 6),

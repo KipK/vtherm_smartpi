@@ -438,6 +438,7 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `integral_guard.py`    | garde de croissance positive de l'intégrale              |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
+| `command_ownership.py` | projection de commande figée et suivi de rattachement du scheduler |
 | `ff_trim_periodic.py`  | sélection de fenêtres d’équilibre périodique par phase   |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |
 | `ff3.py`               | correction prédictive bornée FF3                         |
@@ -471,6 +472,7 @@ self.autocalib = AutoCalibTrigger(name)
 self._ff_trim = FFTrim()
 self._fftrim_observer = CausalFFTrimObserver(cycle_min)
 self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
+self._command_ownership = CommandOwnershipTracker()
 self._ab_confidence = ABConfidence()
 ```
 
@@ -530,6 +532,16 @@ Seul le trim appris reste persistant. Les fenêtres de propriété, propositions
 en attente et transferts d'intégrale sont transitoires ; après redémarrage,
 l'observateur est reconstruit et le gel existant de trois cycles est conservé.
 
+Pour les commandes switch, SmartPI prépare un snapshot de propriété figé juste
+avant la soumission au scheduler. Le callback de début de cycle ne le rattache
+que si le mode HVAC, les durées ON/OFF projetées et la puissance réalisée
+correspondent. La quantification normale à la seconde est portée par la
+projection ; une contrainte de durée minimale reste un segment causal rejeté.
+Un callback absent ou divergent ne reconstruit jamais la propriété depuis
+l’état courant du contrôleur. Les snapshots valve suivent la même règle de
+propriété figée dans l’espace actionneur avant leur conversion vers l’espace
+linéaire du modèle.
+
 ### 5.5 Diagnostics publiés
 
 `diagnostics.py` expose trois niveaux :
@@ -541,6 +553,12 @@ l'observateur est reconstruit et le gel existant de trois cycles est conservé.
 Dans les diagnostics debug, `learn_ok_count` et `learn_skip_count` sont des compteurs d'exécution relatifs au processus Home Assistant courant. Les compteurs persistés du modèle restent internes et servent aux décisions de qualité du modèle et de warm-up.
 
 Quand le jumeau thermique est exploitable, un sous-bloc `pred` est ajouté au debug.
+
+`feedforward.fftrim.command_ownership` expose le dernier état de rattachement,
+son motif de rejet, la séquence de requête, les puissances et durées
+demandées/projetées/réalisées, leur delta de puissance et l’indicateur de
+contrainte temporelle. Ces valeurs sont des observations : elles expliquent
+une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 
 ---
 

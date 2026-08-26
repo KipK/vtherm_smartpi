@@ -11,6 +11,9 @@ from custom_components.vtherm_smartpi.smartpi.command_ownership import (
     CommandOwnershipBindingStatus,
     project_cycle_command,
 )
+from custom_components.vtherm_smartpi.smartpi.diagnostics import (
+    build_published_diagnostics,
+)
 from custom_components.vtherm_smartpi.smartpi.feedforward import FFResult
 from helpers import force_smartpi_stable_mode
 from fakes.fake_thermostat_runtime import FakeThermostatRuntime
@@ -139,6 +142,63 @@ async def test_switch_callback_uses_frozen_ownership_not_live_control():
     assert "committed_mismatch" not in (
         algo._fftrim_observer._active_ownership.constraint_flags
     )
+
+
+@pytest.mark.asyncio
+async def test_published_ownership_diagnostics_report_bound_and_rejected_cycles():
+    """Published diagnostics retain the request and callback evidence."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="ownership-diagnostics",
+    )
+    _configure_switch_ownership_context(algo, power=0.132)
+    algo.stage_cycle_command(
+        project_cycle_command(0.132, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+
+    await algo.on_cycle_started(15, 104, 0.125, VThermHvacMode_HEAT)
+
+    ownership = build_published_diagnostics(algo)["feedforward"]["fftrim"][
+        "command_ownership"
+    ]
+    assert ownership == {
+        "status": "bound",
+        "reason": None,
+        "request_sequence": 1,
+        "requested_power": 0.132,
+        "projected_power": 0.125,
+        "realized_power": 0.125,
+        "power_delta": 0.0,
+        "projected_on_time_sec": 15,
+        "projected_off_time_sec": 104,
+        "realized_on_time_sec": 15,
+        "realized_off_time_sec": 104,
+        "forced_by_timing": False,
+    }
+
+    _configure_switch_ownership_context(algo, power=0.5)
+    algo.stage_cycle_command(
+        project_cycle_command(0.5, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+    await algo.on_cycle_started(60, 60, 0.4, VThermHvacMode_HEAT)
+
+    ownership = build_published_diagnostics(algo)["feedforward"]["fftrim"][
+        "command_ownership"
+    ]
+    assert ownership["status"] == "rejected"
+    assert ownership["reason"] == "ownership_commit_mismatch"
+    assert ownership["request_sequence"] == 2
+    assert ownership["requested_power"] == 0.5
+    assert ownership["projected_power"] == 0.5
+    assert ownership["realized_power"] == 0.4
+    assert ownership["power_delta"] == -0.1
+    assert ownership["realized_on_time_sec"] == 60
+    assert ownership["realized_off_time_sec"] == 60
 
 
 @pytest.mark.asyncio

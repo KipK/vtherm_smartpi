@@ -430,6 +430,7 @@ The forced cycle is managed by `CalibrationManager`:
 | `setpoint.py`          | analytical setpoint trajectory and HEAT landing cap         |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
+| `command_ownership.py` | frozen command projection and scheduler binding tracker     |
 | `ff_trim_periodic.py`  | phase-closed periodic-equilibrium window selection          |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
 | `ff3.py`               | bounded FF3 predictive correction                           |
@@ -462,6 +463,7 @@ self.autocalib = AutoCalibTrigger(name)
 self._ff_trim = FFTrim()
 self._fftrim_observer = CausalFFTrimObserver(cycle_min)
 self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
+self._command_ownership = CommandOwnershipTracker()
 self._ab_confidence = ABConfidence()
 ```
 
@@ -517,6 +519,15 @@ Only the learned trim remains persistent. Ownership windows, pending
 proposals, and integral transfers are transient; after restart the observer is
 rebuilt and the existing three-cycle trim freeze still applies.
 
+For switch commands, SmartPI stages a frozen ownership snapshot immediately
+before submitting the scheduler request. The cycle-start callback binds it only
+when HVAC mode, projected ON/OFF durations, and realized power agree. Normal
+second quantization is represented by the projection; a minimum timing
+constraint remains a rejected causal segment. A missing or mismatched callback
+never falls back to the live controller state. Valve command snapshots follow
+the same frozen ownership rule in actuator space before their linear model
+mapping.
+
 ### 5.5 Published diagnostics
 
 `diagnostics.py` exposes three levels:
@@ -528,6 +539,12 @@ rebuilt and the existing three-cycle trim freeze still applies.
 In the debug diagnostics, `learn_ok_count` and `learn_skip_count` are runtime counters relative to the current Home Assistant process. Persisted model counters remain internal and are used for model quality and warm-up decisions.
 
 When the thermal twin is usable, a `pred` sub-block is added to debug diagnostics.
+
+`feedforward.fftrim.command_ownership` exposes the latest binding status,
+rejection reason, request sequence, requested/projected/realized powers and
+durations, their power delta, and the timing-constraint flag. These values are
+observational: they explain a causal acceptance or rejection without changing
+the learning decision.
 
 ---
 
