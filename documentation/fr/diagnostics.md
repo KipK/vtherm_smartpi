@@ -90,7 +90,7 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 | `fftrim_bumpless_transfer_state` | `string` | Commande | État de la dernière transaction atomique trim/intégrale. |
 | `fftrim_bumpless_transfer_reason` | `string` | Commande | Raison d'éligibilité, de rejet ou d'application de cette transaction. |
 | `fftrim_transfer_pending_engagement` | `boolean` | Commande | Vrai jusqu'à l'engagement de la commande post-transfert dans la timeline actionneur. |
-| `feedforward.fftrim.command_ownership` | `object` | Commande | Dernier rattachement figé entre une commande et l’actionneur. Il expose `status`, `reason`, `request_sequence`, les puissances demandée/projetée/réalisée, leur delta, les temps ON/OFF projetés/réalisés et `forced_by_timing`. |
+| `feedforward.fftrim.command_ownership` | `object` | Commande | Dernier rattachement figé entre une commande et l’actionneur. Il distingue les puissances demandée/projetée/réalisée du scheduler des puissances attendue et publiée par l’actionneur, leurs deltas, les temps ON/OFF projetés/réalisés et `forced_by_timing`. |
 | `integral_hold_active` | `boolean` | État PI | Indique si l'accumulateur de la branche intégrale est actuellement gelé. |
 | `integral_hold_mode` | `string` | État PI | Mode actif ou raison du gel de l'intégrale (ex. `window_hold`, `deadband_hold`). |
 | `integral_hold_source` | `string` | État PI | Source effective de la dernière évaluation `I:HOLD` : `external`, `deadtime`, `deadband_hysteresis_shell`, un mode explicite de reprise ou `governance_<raison>` ; `none` lorsque la dernière évaluation n’était pas maintenue. |
@@ -101,8 +101,9 @@ Ces attributs sont toujours publiés par l'intégration SmartPI, quel que soit l
 `command_ownership.status` vaut `none`, `pending`, `bound`, `reused` ou
 `rejected`. Un rattachement rejeté est strict : il ne reconstruit jamais la
 propriété à partir de l’état courant du contrôleur. `reason` distingue les
-requêtes absentes, divergences de callback, changements de contexte,
-contraintes temporelles et ruptures de continuité. Les puissances et temps
+requêtes absentes, divergences de callback scheduler, divergences ou absence
+de commande actionneur publiée, changements de contexte, contraintes
+temporelles et ruptures de continuité. Les puissances et temps
 ON/OFF donnent les éléments ayant conduit à cette décision.
 
 ---

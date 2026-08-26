@@ -21,6 +21,10 @@ All notable changes to this project will be documented in this file.
   real bounded command change in both HEAT and COOL.
 - Expose the aligned P/I/Ki ownership terms, requested and applied transaction
   deltas, command invariant, rejection reason, and actuator engagement state.
+- Bind valve ownership to the integer-percent opening published by the
+  thermostat, while retaining scheduler realization as independent evidence.
+- Synchronize SmartPI cycle projections with the scheduler effective minimum
+  activation and deactivation delays.
 
 ## [0.3.8] 2026-08-18
 

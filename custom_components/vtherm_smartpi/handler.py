@@ -103,6 +103,10 @@ class SmartPIHandler:
         # Update thermostat attributes directly (like TPIHandler)
         t.minimal_activation_delay = minimal_activation_delay
         t.minimal_deactivation_delay = minimal_deactivation_delay
+        self._synchronize_scheduler_timing(
+            minimal_activation_delay,
+            minimal_deactivation_delay,
+        )
 
         # SmartPI specific
         deadband = entry.get(CONF_SMART_PI_DEADBAND, 0.05)
@@ -273,14 +277,97 @@ class SmartPIHandler:
         """Register SmartPI learning callbacks on the cycle scheduler."""
         algo = self._thermostat.prop_algorithm
         if algo:
+            self._synchronize_scheduler_timing(
+                self._thermostat.minimal_activation_delay,
+                self._thermostat.minimal_deactivation_delay,
+                scheduler=scheduler,
+            )
             algo.configure_valve_linearization(
                 self._valve_linearization_configured
                 and bool(getattr(scheduler, "is_valve_mode", False)),
                 self._valve_curve_params,
                 valve_mode=bool(getattr(scheduler, "is_valve_mode", False)),
             )
-            scheduler.register_cycle_start_callback(algo.on_cycle_started)
+            scheduler.register_cycle_start_callback(self._on_scheduler_cycle_started)
             scheduler.register_cycle_end_callback(algo.on_cycle_completed)
+
+    def _synchronize_scheduler_timing(
+        self,
+        minimal_activation_delay: int,
+        minimal_deactivation_delay: int,
+        *,
+        scheduler=None,
+    ) -> None:
+        """Keep the scheduler timing inputs aligned with SmartPI configuration."""
+        scheduler = (
+            scheduler if scheduler is not None else self._thermostat.cycle_scheduler
+        )
+        if scheduler is None:
+            return
+        scheduler.min_activation_delay = int(minimal_activation_delay)
+        scheduler.min_deactivation_delay = int(minimal_deactivation_delay)
+
+    def _project_scheduler_command(self, on_percent: float):
+        """Project one request from the effective scheduler timing inputs."""
+        t = self._thermostat
+        scheduler = t.cycle_scheduler
+        cycle_duration_sec = getattr(scheduler, "_cycle_duration_sec", None)
+        cycle_min = (
+            float(cycle_duration_sec) / 60.0
+            if isinstance(cycle_duration_sec, (int, float)) and cycle_duration_sec > 0
+            else t.cycle_min
+        )
+        minimal_activation_delay = getattr(
+            scheduler,
+            "min_activation_delay",
+            t.minimal_activation_delay,
+        )
+        minimal_deactivation_delay = getattr(
+            scheduler,
+            "min_deactivation_delay",
+            t.minimal_deactivation_delay,
+        )
+        return project_cycle_command(
+            on_percent=on_percent,
+            cycle_min=cycle_min,
+            minimal_activation_delay=int(minimal_activation_delay),
+            minimal_deactivation_delay=int(minimal_deactivation_delay),
+        )
+
+    @staticmethod
+    def _published_valve_power(thermostat) -> float | None:
+        """Return the current valve opening published by the thermostat."""
+        valve_open_percent = getattr(thermostat, "valve_open_percent", None)
+        if valve_open_percent is None:
+            return None
+        try:
+            return max(0.0, min(1.0, float(valve_open_percent) / 100.0))
+        except (TypeError, ValueError):
+            return None
+
+    async def _on_scheduler_cycle_started(
+        self,
+        on_time_sec: float,
+        off_time_sec: float,
+        on_percent: float,
+        hvac_mode: str,
+    ) -> None:
+        """Forward scheduler starts after valve publication when required."""
+        algo = self._thermostat.prop_algorithm
+        if not isinstance(algo, SmartPI):
+            return
+        if not bool(
+            getattr(self._thermostat.cycle_scheduler, "is_valve_mode", False)
+        ):
+            await algo.on_cycle_started(on_time_sec, off_time_sec, on_percent, hvac_mode)
+            return
+        await algo.on_cycle_started(
+            on_time_sec,
+            off_time_sec,
+            on_percent,
+            hvac_mode,
+            physical_on_percent=self._published_valve_power(self._thermostat),
+        )
 
     def should_publish_intermediate(self) -> bool:
         """Return True when VT may publish the current control iteration."""
@@ -426,12 +513,7 @@ class SmartPIHandler:
             is_valve_mode = bool(
                 getattr(t.cycle_scheduler, "is_valve_mode", False)
             )
-            projection = project_cycle_command(
-                on_percent=on_percent,
-                cycle_min=t.cycle_min,
-                minimal_activation_delay=t.minimal_activation_delay,
-                minimal_deactivation_delay=t.minimal_deactivation_delay,
-            )
+            projection = self._project_scheduler_command(on_percent)
             valve_segment_staged = False
             if algo is not None:
                 if not is_valve_mode:
@@ -453,7 +535,7 @@ class SmartPIHandler:
                 and valve_segment_staged
             ):
                 algo.on_applied_power_updated(
-                    on_percent=projection.projected_power,
+                    on_percent=self._published_valve_power(t),
                     hvac_mode=t.vtherm_hvac_mode,
                     projection=projection,
                 )

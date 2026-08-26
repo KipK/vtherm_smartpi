@@ -90,7 +90,7 @@ These attributes are always published by the SmartPI integration, regardless of 
 | `fftrim_bumpless_transfer_state` | `string` | Command | State of the latest atomic trim/integral transaction. |
 | `fftrim_bumpless_transfer_reason` | `string` | Command | Eligibility, rejection, or application reason for that transaction. |
 | `fftrim_transfer_pending_engagement` | `boolean` | Command | True until the actuator timeline has committed the post-transfer command. |
-| `feedforward.fftrim.command_ownership` | `object` | Command | Latest frozen command-to-actuator binding. It reports `status`, `reason`, `request_sequence`, requested/projected/realized powers, their delta, projected/realized ON/OFF times, and `forced_by_timing`. |
+| `feedforward.fftrim.command_ownership` | `object` | Command | Latest frozen command-to-actuator binding. It reports scheduler requested/projected/realized powers separately from the expected and published actuator powers, their deltas, projected/realized ON/OFF times, and `forced_by_timing`. |
 | `integral_hold_active` | `boolean` | PI State | Indicates if the integral branch accumulator is currently frozen/held. |
 | `integral_hold_mode` | `string` | PI State | Active mode or reason for the integral freeze (e.g. `window_hold`, `deadband_hold`). |
 | `integral_hold_source` | `string` | PI State | Effective source of the latest `I:HOLD` evaluation: `external`, `deadtime`, `deadband_hysteresis_shell`, an explicit resume mode, or `governance_<reason>`; `none` when the latest evaluation was not held. |
@@ -101,7 +101,8 @@ These attributes are always published by the SmartPI integration, regardless of 
 `command_ownership.status` is `none`, `pending`, `bound`, `reused`, or
 `rejected`. A rejected binding is fail-closed: it never reconstructs ownership
 from the current controller state. `reason` distinguishes missing requests,
-callback mismatches, context changes, timing constraints, and discontinuities.
+scheduler callback mismatches, published-actuator mismatches or absence, context
+changes, timing constraints, and discontinuities.
 The power and ON/OFF fields provide the evidence used for that decision.
 
 ---

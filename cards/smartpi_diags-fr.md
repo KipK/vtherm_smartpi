@@ -138,6 +138,9 @@
 {% set ownership_projected_power = fftrim_ownership.get('projected_power') %}
 {% set ownership_realized_power = fftrim_ownership.get('realized_power') %}
 {% set ownership_power_delta = fftrim_ownership.get('power_delta') %}
+{% set ownership_expected_actuator_power = fftrim_ownership.get('expected_actuator_power') %}
+{% set ownership_scheduler_realized_power = fftrim_ownership.get('scheduler_realized_power') %}
+{% set ownership_actuator_power_delta = fftrim_ownership.get('actuator_power_delta') %}
 {% set ownership_projected_on = fftrim_ownership.get('projected_on_time_sec') %}
 {% set ownership_projected_off = fftrim_ownership.get('projected_off_time_sec') %}
 {% set ownership_realized_on = fftrim_ownership.get('realized_on_time_sec') %}
@@ -679,7 +682,8 @@
 | Derniers trim / transfert I appliqués | {% if fftrim_last_transaction_trim is not none %}{{ '%+.3f' | format(fftrim_last_transaction_trim | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_last_transaction_i is not none %}{{ '%+.3f' | format(fftrim_last_transaction_i | float * 100) }}%{% else %}—{% endif %} |
 | Résidu de propriété / qualité | {% if fftrim_mean_delivery_residual is not none %}{{ '%+.3f' | format(fftrim_mean_delivery_residual | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_transfer_quality is not none %}`{{ fftrim_transfer_quality }}`{% else %}—{% endif %} |
 | Propriété de commande | {% if ownership_status is not none %}`{{ ownership_status }}`{% else %}—{% endif %}{% if ownership_reason is not none %} · `{{ ownership_reason }}`{% endif %}{% if ownership_sequence is not none %} · requête {{ ownership_sequence }}{% endif %} |
-| Puissance demandée / projetée / réalisée | {% if ownership_requested_power is not none %}{{ (ownership_requested_power | float * 100) | round(3) }}%{% else %}—{% endif %} / {% if ownership_projected_power is not none %}{{ (ownership_projected_power | float * 100) | round(3) }}%{% else %}—{% endif %} / {% if ownership_realized_power is not none %}{{ (ownership_realized_power | float * 100) | round(3) }}%{% else %}—{% endif %} |
+| Puissance scheduler demandée / projetée / réalisée | {% if ownership_requested_power is not none %}{{ (ownership_requested_power | float * 100) | round(3) }}%{% else %}—{% endif %} / {% if ownership_projected_power is not none %}{{ (ownership_projected_power | float * 100) | round(3) }}%{% else %}—{% endif %} / {% if ownership_scheduler_realized_power is not none %}{{ (ownership_scheduler_realized_power | float * 100) | round(3) }}%{% else %}—{% endif %} |
+| Puissance actionneur attendue / publiée | {% if ownership_expected_actuator_power is not none %}{{ (ownership_expected_actuator_power | float * 100) | round(3) }}%{% else %}—{% endif %} / {% if ownership_realized_power is not none %}{{ (ownership_realized_power | float * 100) | round(3) }}%{% else %}—{% endif %}{% if ownership_actuator_power_delta is not none %} · {{ '%+.3f' | format(ownership_actuator_power_delta | float * 100) }}%{% endif %} |
 | Delta puissance / timing | {% if ownership_power_delta is not none %}{{ '%+.3f' | format(ownership_power_delta | float * 100) }}%{% else %}—{% endif %} / {% if ownership_projected_on is not none %}{{ ownership_projected_on }} / {{ ownership_projected_off }} s{% else %}—{% endif %} → {% if ownership_realized_on is not none %}{{ ownership_realized_on }} / {{ ownership_realized_off }} s{% else %}—{% endif %}{% if ownership_forced %} · contrainte temporelle{% endif %} |
 | Transaction bumpless | {% if fftrim_transfer_state is not none %}`{{ fftrim_transfer_state }}`{% else %}—{% endif %}{% if fftrim_transfer_pending %} · attente engagement actionneur{% endif %} |
 | Raison de transaction | {% if fftrim_transfer_reason is not none %}`{{ fftrim_transfer_reason }}`{% else %}—{% endif %} |

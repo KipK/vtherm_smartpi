@@ -124,6 +124,7 @@ from .smartpi.command_ownership import (
     CommandOwnershipSnapshot,
     CommandOwnershipTracker,
     CycleCommandProjection,
+    project_valve_actuator_power,
 )
 from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.integral_guard import (
@@ -879,11 +880,20 @@ class SmartPI:
         self,
         projection: CycleCommandProjection,
         hvac_mode: VThermHvacMode,
+        expected_actuator_power: float | None = None,
     ) -> None:
         """Freeze the control context submitted for one valve segment."""
-        self._command_ownership.stage(
-            self._build_command_ownership_snapshot(projection, hvac_mode)
-        )
+        snapshot = self._build_command_ownership_snapshot(projection, hvac_mode)
+        if snapshot is not None:
+            snapshot = replace(
+                snapshot,
+                expected_actuator_power=(
+                    project_valve_actuator_power(projection.clamped_power)
+                    if expected_actuator_power is None
+                    else clamp(expected_actuator_power, 0.0, 1.0)
+                ),
+            )
+        self._command_ownership.stage(snapshot)
 
     def reset_command_ownership(self, reason: str = "ownership_discontinuity") -> None:
         """Discard all transient ownership requests and reusable bindings."""
@@ -891,18 +901,38 @@ class SmartPI:
         self._transfer_pending_engagement = False
         self._transfer_pending_request_sequence = None
 
-    async def on_cycle_started(self, on_time_sec: float, off_time_sec: float, on_percent: float, hvac_mode: str) -> None:
+    async def on_cycle_started(
+        self,
+        on_time_sec: float,
+        off_time_sec: float,
+        on_percent: float,
+        hvac_mode: str,
+        physical_on_percent: float | None = None,
+    ) -> None:
         """Called when a cycle starts."""
         cycle_start_now = time.monotonic()
         self._u_ff3_cycle = self._u_ff3_pending
         self._ff3_active_cycle = self._ff3_pending_active
-        linear_on_percent = self._set_committed_actuator_output(on_percent)
+        scheduler_on_percent = clamp(on_percent, 0.0, 1.0)
+        actuator_on_percent = (
+            clamp(physical_on_percent, 0.0, 1.0)
+            if self._valve_mode_enabled and physical_on_percent is not None
+            else scheduler_on_percent
+        )
+        linear_on_percent = self._set_committed_actuator_output(actuator_on_percent)
 
         binding = self._command_ownership.bind_started_cycle(
             on_time_sec=on_time_sec,
             off_time_sec=off_time_sec,
-            realized_power=(on_percent if self._valve_mode_enabled else linear_on_percent),
+            realized_power=(
+                physical_on_percent
+                if self._valve_mode_enabled
+                else linear_on_percent
+            ),
             hvac_mode=hvac_mode,
+            scheduler_realized_power=(
+                scheduler_on_percent if self._valve_mode_enabled else None
+            ),
         )
         bound_snapshot = (
             binding.snapshot
@@ -2316,19 +2346,26 @@ class SmartPI:
     def on_applied_power_updated(
         self,
         *,
-        on_percent: float,
+        on_percent: float | None,
         hvac_mode: VThermHvacMode,
         projection: CycleCommandProjection,
     ) -> None:
         """Bind and synchronize one projected valve segment mid-cycle."""
-        applied_on_percent = clamp(on_percent, 0.0, 1.0)
+        applied_on_percent = (
+            clamp(on_percent, 0.0, 1.0)
+            if on_percent is not None
+            else projection.projected_power
+        )
         now = time.monotonic()
         linear_on_percent = self._set_committed_actuator_output(applied_on_percent)
         binding = self._command_ownership.bind_started_cycle(
             on_time_sec=projection.on_time_sec,
             off_time_sec=projection.off_time_sec,
-            realized_power=applied_on_percent,
+            realized_power=(
+                applied_on_percent if on_percent is not None else None
+            ),
             hvac_mode=hvac_mode,
+            scheduler_realized_power=projection.projected_power,
         )
         bound_snapshot = (
             binding.snapshot

@@ -11,6 +11,7 @@ from custom_components.vtherm_smartpi.smartpi.command_ownership import (
     CommandOwnershipSnapshot,
     CommandOwnershipTracker,
     project_cycle_command,
+    project_valve_actuator_power,
 )
 
 
@@ -179,6 +180,55 @@ def test_tracker_binds_an_actuator_projection_without_comparing_linear_power() -
     )
 
     assert binding.status == CommandOwnershipBindingStatus.BOUND
+
+
+def test_tracker_keeps_scheduler_and_published_valve_power_separate() -> None:
+    """A valve may publish an integer-percent command after PWM quantization."""
+    tracker = CommandOwnershipTracker()
+    projection = project_cycle_command(0.132, cycle_min=2)
+    snapshot = replace(
+        _snapshot(0.132),
+        projection=projection,
+        actuator_command=0.132,
+        expected_actuator_power=project_valve_actuator_power(0.132),
+    )
+    tracker.stage(snapshot)
+
+    binding = tracker.bind_started_cycle(
+        on_time_sec=15,
+        off_time_sec=104,
+        realized_power=0.13,
+        scheduler_realized_power=0.125,
+        hvac_mode="heat",
+    )
+
+    assert binding.status == CommandOwnershipBindingStatus.BOUND
+    assert binding.realized_power == pytest.approx(0.13)
+    assert binding.scheduler_realized_power == pytest.approx(0.125)
+
+
+def test_tracker_rejects_retained_valve_opening() -> None:
+    """Valve dpercent filtering must not inherit ownership from a stale opening."""
+    tracker = CommandOwnershipTracker()
+    projection = project_cycle_command(0.132, cycle_min=2)
+    tracker.stage(
+        replace(
+            _snapshot(0.132),
+            projection=projection,
+            expected_actuator_power=0.13,
+        )
+    )
+
+    binding = tracker.bind_started_cycle(
+        on_time_sec=15,
+        off_time_sec=104,
+        realized_power=0.11,
+        scheduler_realized_power=0.125,
+        hvac_mode="heat",
+    )
+
+    assert binding.status == CommandOwnershipBindingStatus.REJECTED
+    assert binding.reason == "ownership_actuator_mismatch"
 
 
 def test_tracker_replaces_pending_request_with_latest_snapshot() -> None:

@@ -12,6 +12,7 @@ from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.command_ownership import (
     CommandOwnershipBindingStatus,
     project_cycle_command,
+    project_valve_actuator_power,
 )
 from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
 from custom_components.vtherm_smartpi.smartpi.feedforward import FFResult
@@ -125,6 +126,7 @@ async def test_handler_passes_projected_valve_power_to_mid_cycle_binding(
 
     def fake_calculate(*_args, **_kwargs) -> None:
         algo._set_linear_output(0.73)
+        thermostat.valve_open_percent = round(algo.on_percent * 100)
 
     with (
         patch.object(type(algo), "phase", new_callable=PropertyMock, return_value=SmartPIPhase.STABLE),
@@ -135,7 +137,7 @@ async def test_handler_passes_projected_valve_power_to_mid_cycle_binding(
 
     projection = project_cycle_command(algo.on_percent, thermostat.cycle_min)
     assert applied.call_args.kwargs["on_percent"] == pytest.approx(
-        projection.projected_power
+        thermostat.valve_open_percent / 100
     )
     assert applied.call_args.kwargs["projection"] == projection
 
@@ -181,6 +183,7 @@ async def test_same_valve_power_binds_the_later_frozen_ownership() -> None:
     algo.configure_valve_linearization(True, valve_mode=True)
     _configure_valve_ownership_context(algo, 0.73)
     first_projection = project_cycle_command(algo.on_percent, cycle_min=2)
+    first_published_power = project_valve_actuator_power(algo.on_percent)
     algo.stage_valve_command(first_projection, VThermHvacMode_HEAT)
 
     with patch("custom_components.vtherm_smartpi.algo.time.monotonic", return_value=1.0):
@@ -189,6 +192,7 @@ async def test_same_valve_power_binds_the_later_frozen_ownership() -> None:
             first_projection.off_time_sec,
             first_projection.projected_power,
             VThermHvacMode_HEAT,
+            physical_on_percent=first_published_power,
         )
 
     _configure_valve_ownership_context(algo, 0.73)
@@ -196,6 +200,7 @@ async def test_same_valve_power_binds_the_later_frozen_ownership() -> None:
     algo.ctl.u_i = 0.23
     frozen_i = algo.ctl.u_i
     second_projection = project_cycle_command(algo.on_percent, cycle_min=2)
+    second_published_power = project_valve_actuator_power(algo.on_percent)
     assert second_projection.projected_power == pytest.approx(
         first_projection.projected_power
     )
@@ -205,7 +210,7 @@ async def test_same_valve_power_binds_the_later_frozen_ownership() -> None:
 
     with patch("custom_components.vtherm_smartpi.algo.time.monotonic", return_value=2.0):
         algo.on_applied_power_updated(
-            on_percent=second_projection.projected_power,
+            on_percent=second_published_power,
             hvac_mode=VThermHvacMode_HEAT,
             projection=second_projection,
         )
@@ -217,7 +222,7 @@ async def test_same_valve_power_binds_the_later_frozen_ownership() -> None:
         0.33
     )
     assert algo._fftrim_observer._active_ownership.linear_committed_power == pytest.approx(
-        algo.valve_curve.invert(second_projection.projected_power)
+        algo.valve_curve.invert(second_published_power)
     )
 
 
@@ -239,6 +244,65 @@ async def test_valve_feedback_is_projected_to_linear_state() -> None:
     assert algo.linear_committed_on_percent == pytest.approx(0.8)
     assert algo.u_prev == pytest.approx(0.8)
     assert algo.linear_u_applied == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_valve_wrapper_binds_published_power_immediately_and_on_auto_repeat(
+    fake_handler_runtime,
+) -> None:
+    """The scheduler callback wrapper must use the published valve position."""
+    thermostat = fake_handler_runtime
+    thermostat.cycle_scheduler.is_valve_mode = True
+    thermostat.valve_open_percent = 13
+    thermostat.cycle_min = 2
+    handler = SmartPIHandler(thermostat)
+    handler.init_algorithm()
+    algo = thermostat.prop_algorithm
+    assert isinstance(algo, SmartPI)
+    _configure_valve_ownership_context(algo, 0.132)
+    projection = project_cycle_command(0.132, cycle_min=thermostat.cycle_min)
+    algo.stage_valve_command(projection, VThermHvacMode_HEAT)
+
+    with patch.object(thermostat.hass, "async_create_task") as create_task:
+        await handler._on_scheduler_cycle_started(
+            15, 104, 0.125, VThermHvacMode_HEAT
+        )
+        assert (
+            algo._command_ownership.last_binding.status
+            == CommandOwnershipBindingStatus.BOUND
+        )
+
+        algo._command_ownership.complete_active()
+        await handler._on_scheduler_cycle_started(
+            15, 104, 0.125, VThermHvacMode_HEAT
+        )
+        assert (
+            algo._command_ownership.last_binding.status
+            == CommandOwnershipBindingStatus.REUSED
+        )
+        create_task.assert_not_called()
+
+
+def test_handler_syncs_scheduler_delays_before_projection(fake_handler_runtime) -> None:
+    """Scheduler delay values must be the values used by ownership projection."""
+    thermostat = fake_handler_runtime
+    thermostat.entry_infos.update(
+        {
+            "minimal_activation_delay": 20,
+            "minimal_deactivation_delay": 30,
+        }
+    )
+    thermostat.cycle_scheduler.min_activation_delay = 1
+    thermostat.cycle_scheduler.min_deactivation_delay = 2
+    handler = SmartPIHandler(thermostat)
+
+    handler.init_algorithm()
+    projection = handler._project_scheduler_command(0.02)
+
+    assert thermostat.cycle_scheduler.min_activation_delay == 20
+    assert thermostat.cycle_scheduler.min_deactivation_delay == 30
+    assert projection.forced_by_timing is True
+    assert projection.on_time_sec == 0
 
 
 def test_non_valve_keeps_min_activation_zero_cut() -> None:

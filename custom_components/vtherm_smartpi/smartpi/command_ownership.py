@@ -60,6 +60,7 @@ class CommandOwnershipSnapshot:
     request_sequence: int = 0
     constraint_flags: tuple[str, ...] = ()
     actuator_command: float | None = None
+    expected_actuator_power: float | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,7 @@ class CommandOwnershipBinding:
     snapshot: CommandOwnershipSnapshot | None
     reason: str | None = None
     realized_power: float | None = None
+    scheduler_realized_power: float | None = None
     realized_on_time_sec: int | None = None
     realized_off_time_sec: int | None = None
 
@@ -136,8 +138,9 @@ class CommandOwnershipTracker:
         *,
         on_time_sec: float,
         off_time_sec: float,
-        realized_power: float,
+        realized_power: float | None,
         hvac_mode: object,
+        scheduler_realized_power: float | None = None,
     ) -> CommandOwnershipBinding:
         """Bind one physical cycle without consulting current controller state."""
         if self._pending_received:
@@ -175,20 +178,16 @@ class CommandOwnershipTracker:
             )
 
         projection = candidate.projection
-        requested_command = (
-            candidate.actuator_command
-            if candidate.actuator_command is not None
-            else candidate.linear_command
-        )
         if (
-            abs(projection.requested_power - requested_command)
-            > OWNERSHIP_MATCH_EPSILON
-            or abs(float(on_time_sec) - projection.on_time_sec)
+            abs(float(on_time_sec) - projection.on_time_sec)
             > OWNERSHIP_MATCH_EPSILON
             or abs(float(off_time_sec) - projection.off_time_sec)
             > OWNERSHIP_MATCH_EPSILON
-            or abs(float(realized_power) - projection.projected_power)
-            > OWNERSHIP_MATCH_EPSILON
+            or (
+                scheduler_realized_power is not None
+                and abs(float(scheduler_realized_power) - projection.projected_power)
+                > OWNERSHIP_MATCH_EPSILON
+            )
         ):
             return self._reject(
                 "ownership_commit_mismatch",
@@ -196,6 +195,36 @@ class CommandOwnershipTracker:
                 realized_power=realized_power,
                 on_time_sec=on_time_sec,
                 off_time_sec=off_time_sec,
+                scheduler_realized_power=scheduler_realized_power,
+            )
+
+        expected_actuator_power = candidate.expected_actuator_power
+        if expected_actuator_power is None:
+            expected_actuator_power = projection.projected_power
+        if realized_power is None:
+            return self._reject(
+                "ownership_actuator_missing",
+                snapshot=candidate,
+                realized_power=None,
+                on_time_sec=on_time_sec,
+                off_time_sec=off_time_sec,
+                scheduler_realized_power=scheduler_realized_power,
+            )
+        if (
+            abs(float(realized_power) - expected_actuator_power)
+            > OWNERSHIP_MATCH_EPSILON
+        ):
+            return self._reject(
+                (
+                    "ownership_actuator_mismatch"
+                    if candidate.expected_actuator_power is not None
+                    else "ownership_commit_mismatch"
+                ),
+                snapshot=candidate,
+                realized_power=realized_power,
+                on_time_sec=on_time_sec,
+                off_time_sec=off_time_sec,
+                scheduler_realized_power=scheduler_realized_power,
             )
 
         if projection.forced_by_timing or "timing" in candidate.constraint_flags:
@@ -205,6 +234,7 @@ class CommandOwnershipTracker:
                 realized_power=realized_power,
                 on_time_sec=on_time_sec,
                 off_time_sec=off_time_sec,
+                scheduler_realized_power=scheduler_realized_power,
             )
 
         self._active = candidate
@@ -213,6 +243,11 @@ class CommandOwnershipTracker:
             status=status,
             snapshot=candidate,
             realized_power=float(realized_power),
+            scheduler_realized_power=(
+                float(scheduler_realized_power)
+                if scheduler_realized_power is not None
+                else None
+            ),
             realized_on_time_sec=int(on_time_sec),
             realized_off_time_sec=int(off_time_sec),
         )
@@ -256,9 +291,10 @@ class CommandOwnershipTracker:
         reason: str,
         *,
         snapshot: CommandOwnershipSnapshot | None,
-        realized_power: float,
+        realized_power: float | None,
         on_time_sec: float,
         off_time_sec: float,
+        scheduler_realized_power: float | None = None,
     ) -> CommandOwnershipBinding:
         """Reject one callback and prevent reuse of any older binding."""
         self._active = None
@@ -267,7 +303,14 @@ class CommandOwnershipTracker:
             status=CommandOwnershipBindingStatus.REJECTED,
             snapshot=snapshot,
             reason=reason,
-            realized_power=float(realized_power),
+            realized_power=(
+                float(realized_power) if realized_power is not None else None
+            ),
+            scheduler_realized_power=(
+                float(scheduler_realized_power)
+                if scheduler_realized_power is not None
+                else None
+            ),
             realized_on_time_sec=int(on_time_sec),
             realized_off_time_sec=int(off_time_sec),
         )
@@ -321,3 +364,9 @@ def project_cycle_command(
         projected_power=projected_power,
         forced_by_timing=forced_by_timing,
     )
+
+
+def project_valve_actuator_power(requested_power: float) -> float:
+    """Return the integer-percent actuator value published by VT valve climate."""
+    clamped_power = max(0.0, min(1.0, requested_power))
+    return round(clamped_power * 100) / 100

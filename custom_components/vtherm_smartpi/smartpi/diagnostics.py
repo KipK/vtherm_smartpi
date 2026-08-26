@@ -275,7 +275,13 @@ def _build_command_ownership(algo: SmartPI) -> Dict[str, Any]:
     snapshot = binding.snapshot
     projection = snapshot.projection if snapshot is not None else None
     realized_power = binding.realized_power
+    scheduler_realized_power = binding.scheduler_realized_power
     projected_power = projection.projected_power if projection is not None else None
+    expected_actuator_power = (
+        snapshot.expected_actuator_power
+        if snapshot is not None and snapshot.expected_actuator_power is not None
+        else projected_power
+    )
 
     return {
         "status": binding.status.value,
@@ -301,6 +307,21 @@ def _build_command_ownership(algo: SmartPI) -> Dict[str, Any]:
         "power_delta": (
             round(float(realized_power - projected_power), 6)
             if realized_power is not None and projected_power is not None
+            else None
+        ),
+        "expected_actuator_power": (
+            round(float(expected_actuator_power), 6)
+            if expected_actuator_power is not None
+            else None
+        ),
+        "scheduler_realized_power": (
+            round(float(scheduler_realized_power), 6)
+            if scheduler_realized_power is not None
+            else None
+        ),
+        "actuator_power_delta": (
+            round(float(realized_power - expected_actuator_power), 6)
+            if realized_power is not None and expected_actuator_power is not None
             else None
         ),
         "projected_on_time_sec": (
