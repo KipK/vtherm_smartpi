@@ -8,8 +8,11 @@ binding can be added without reconstructing ownership from controller state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
+
+
+OWNERSHIP_MATCH_EPSILON = 1e-9
 
 
 class CommandOwnershipBindingStatus(str, Enum):
@@ -54,6 +57,7 @@ class CommandOwnershipSnapshot:
     linear_command: float
     regime: str | None
     i_mode: str | None
+    request_sequence: int = 0
     constraint_flags: tuple[str, ...] = ()
 
 
@@ -67,6 +71,202 @@ class CommandOwnershipBinding:
     realized_power: float | None = None
     realized_on_time_sec: int | None = None
     realized_off_time_sec: int | None = None
+
+
+class CommandOwnershipTracker:
+    """Bind scheduler callbacks to the latest frozen command request.
+
+    A pending request is tracked separately from its optional snapshot.  This
+    prevents an unowned request from falling back to the previously bound
+    command when the scheduler eventually commits it.
+    """
+
+    def __init__(self) -> None:
+        self._pending_received = False
+        self._last_request_sequence = 0
+        self._pending: CommandOwnershipSnapshot | None = None
+        self._active: CommandOwnershipSnapshot | None = None
+        self._last_bound: CommandOwnershipSnapshot | None = None
+        self._last_binding = CommandOwnershipBinding(
+            status=CommandOwnershipBindingStatus.NONE,
+            snapshot=None,
+        )
+
+    @property
+    def pending(self) -> CommandOwnershipSnapshot | None:
+        """Return the latest staged snapshot, if it is causally complete."""
+        return self._pending
+
+    @property
+    def active(self) -> CommandOwnershipSnapshot | None:
+        """Return the snapshot owning the currently started cycle."""
+        return self._active
+
+    @property
+    def last_binding(self) -> CommandOwnershipBinding:
+        """Return the latest staging, binding, reuse, or rejection result."""
+        return self._last_binding
+
+    @property
+    def last_staged_sequence(self) -> int:
+        """Return the sequence assigned to the latest submitted request."""
+        return self._last_request_sequence
+
+    def stage(
+        self,
+        snapshot: CommandOwnershipSnapshot | None,
+    ) -> CommandOwnershipSnapshot | None:
+        """Replace the request that the scheduler will use for its next cycle."""
+        self._last_request_sequence += 1
+        self._pending_received = True
+        self._pending = (
+            replace(snapshot, request_sequence=self._last_request_sequence)
+            if snapshot is not None
+            else None
+        )
+        self._last_binding = CommandOwnershipBinding(
+            status=CommandOwnershipBindingStatus.PENDING,
+            snapshot=self._pending,
+        )
+        return self._pending
+
+    def bind_started_cycle(
+        self,
+        *,
+        on_time_sec: float,
+        off_time_sec: float,
+        realized_power: float,
+        hvac_mode: object,
+    ) -> CommandOwnershipBinding:
+        """Bind one physical cycle without consulting current controller state."""
+        if self._pending_received:
+            candidate = self._pending
+            self._pending_received = False
+            self._pending = None
+            if candidate is None:
+                return self._reject(
+                    "ownership_request_missing",
+                    snapshot=None,
+                    realized_power=realized_power,
+                    on_time_sec=on_time_sec,
+                    off_time_sec=off_time_sec,
+                )
+            status = CommandOwnershipBindingStatus.BOUND
+        else:
+            candidate = self._last_bound
+            if candidate is None:
+                return self._reject(
+                    "ownership_request_missing",
+                    snapshot=None,
+                    realized_power=realized_power,
+                    on_time_sec=on_time_sec,
+                    off_time_sec=off_time_sec,
+                )
+            status = CommandOwnershipBindingStatus.REUSED
+
+        if candidate.hvac_mode != str(hvac_mode):
+            return self._reject(
+                "ownership_context_changed",
+                snapshot=candidate,
+                realized_power=realized_power,
+                on_time_sec=on_time_sec,
+                off_time_sec=off_time_sec,
+            )
+
+        projection = candidate.projection
+        if (
+            abs(projection.requested_power - candidate.linear_command)
+            > OWNERSHIP_MATCH_EPSILON
+            or abs(float(on_time_sec) - projection.on_time_sec)
+            > OWNERSHIP_MATCH_EPSILON
+            or abs(float(off_time_sec) - projection.off_time_sec)
+            > OWNERSHIP_MATCH_EPSILON
+            or abs(float(realized_power) - projection.projected_power)
+            > OWNERSHIP_MATCH_EPSILON
+        ):
+            return self._reject(
+                "ownership_commit_mismatch",
+                snapshot=candidate,
+                realized_power=realized_power,
+                on_time_sec=on_time_sec,
+                off_time_sec=off_time_sec,
+            )
+
+        if projection.forced_by_timing or "timing" in candidate.constraint_flags:
+            return self._reject(
+                "scheduler_timing",
+                snapshot=candidate,
+                realized_power=realized_power,
+                on_time_sec=on_time_sec,
+                off_time_sec=off_time_sec,
+            )
+
+        self._active = candidate
+        self._last_bound = candidate
+        binding = CommandOwnershipBinding(
+            status=status,
+            snapshot=candidate,
+            realized_power=float(realized_power),
+            realized_on_time_sec=int(on_time_sec),
+            realized_off_time_sec=int(off_time_sec),
+        )
+        self._last_binding = binding
+        return binding
+
+    def invalidate_active(self, reason: str = "ownership_discontinuity") -> None:
+        """Invalidate reuse while preserving a request staged for the next cycle."""
+        self._active = None
+        self._last_bound = None
+        if not self._pending_received:
+            self._last_binding = CommandOwnershipBinding(
+                status=CommandOwnershipBindingStatus.REJECTED,
+                snapshot=None,
+                reason=reason,
+            )
+
+    def complete_active(self) -> None:
+        """Mark the current segment complete while retaining safe reuse state."""
+        self._active = None
+
+    def reset(self, reason: str | None = None) -> None:
+        """Discard all transient command ownership state."""
+        self._pending_received = False
+        self._last_request_sequence = 0
+        self._pending = None
+        self._active = None
+        self._last_bound = None
+        self._last_binding = CommandOwnershipBinding(
+            status=(
+                CommandOwnershipBindingStatus.REJECTED
+                if reason is not None
+                else CommandOwnershipBindingStatus.NONE
+            ),
+            snapshot=None,
+            reason=reason,
+        )
+
+    def _reject(
+        self,
+        reason: str,
+        *,
+        snapshot: CommandOwnershipSnapshot | None,
+        realized_power: float,
+        on_time_sec: float,
+        off_time_sec: float,
+    ) -> CommandOwnershipBinding:
+        """Reject one callback and prevent reuse of any older binding."""
+        self._active = None
+        self._last_bound = None
+        binding = CommandOwnershipBinding(
+            status=CommandOwnershipBindingStatus.REJECTED,
+            snapshot=snapshot,
+            reason=reason,
+            realized_power=float(realized_power),
+            realized_on_time_sec=int(on_time_sec),
+            realized_off_time_sec=int(off_time_sec),
+        )
+        self._last_binding = binding
+        return binding
 
 
 def project_cycle_command(

@@ -13,7 +13,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from datetime import timedelta
 
 from .algo import SmartPI
-from .cycle_utils import calculate_cycle_times
+from .smartpi.command_ownership import project_cycle_command
 from .smartpi.const import (
     SMARTPI_RECALC_INTERVAL_SEC,
     SmartPIPhase,
@@ -423,6 +423,20 @@ class SmartPIHandler:
                 or (t.prop_algorithm.phase == SmartPIPhase.HYSTERESIS and on_percent_changed)
             )
 
+            is_valve_mode = bool(
+                getattr(t.cycle_scheduler, "is_valve_mode", False)
+            )
+            if algo is not None and not is_valve_mode:
+                algo.stage_cycle_command(
+                    project_cycle_command(
+                        on_percent=on_percent,
+                        cycle_min=t.cycle_min,
+                        minimal_activation_delay=t.minimal_activation_delay,
+                        minimal_deactivation_delay=t.minimal_deactivation_delay,
+                    ),
+                    t.vtherm_hvac_mode,
+                )
+
             await t.cycle_scheduler.start_cycle(
                 t.vtherm_hvac_mode,
                 on_percent,
@@ -432,7 +446,7 @@ class SmartPIHandler:
                 algo is not None
                 and was_cycle_running
                 and not force_cycle
-                and bool(getattr(t.cycle_scheduler, "is_valve_mode", False))
+                and is_valve_mode
             ):
                 algo.on_applied_power_updated(
                     on_percent=on_percent,

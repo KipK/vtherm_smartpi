@@ -7,6 +7,11 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.smartpi.command_ownership import (
+    CommandOwnershipBindingStatus,
+    project_cycle_command,
+)
+from custom_components.vtherm_smartpi.smartpi.feedforward import FFResult
 from helpers import force_smartpi_stable_mode
 from fakes.fake_thermostat_runtime import FakeThermostatRuntime
 
@@ -28,6 +33,214 @@ class MockThermostat(FakeThermostatRuntime):
         self.recalculate = MagicMock()
         self.power_manager = None
         self._smartpi_recalc_timer_remove = None
+
+
+def _configure_switch_ownership_context(algo: SmartPI, power: float = 0.5) -> None:
+    """Set one internally consistent control decomposition for switch tests."""
+    force_smartpi_stable_mode(algo)
+    algo._last_ff_result = FFResult(
+        ff_raw=0.3,
+        u_ff1=0.3,
+        u_ff2=0.0,
+        u_ff_final=0.3,
+        u_ff3=0.0,
+        u_db_nominal=0.3,
+        u_ff_ab=0.3,
+        u_ff_trim=0.0,
+        u_ff_base=0.3,
+        u_ff_eff=0.3,
+        ff_reason="ff_none",
+    )
+    algo.ctl.u_ff = 0.3
+    algo.ctl.u_p = 0.1
+    algo.ctl.u_i = power - 0.4
+    algo.ctl.u_cmd = power
+    algo.ctl.last_sat = "NO_SAT"
+    algo.ctl.last_i_mode = "I:FREEZE(deadband)"
+    algo._last_u_cmd = power
+    algo._last_u_limited = power
+    algo._last_u_applied = power
+    algo._set_linear_output(power)
+
+
+@pytest.mark.asyncio
+async def test_handler_stages_switch_ownership_before_scheduler_submission():
+    """The handler must freeze the exact request before calling start_cycle."""
+    thermostat = MockThermostat()
+    handler = SmartPIHandler(thermostat)
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="switch-stage",
+    )
+    thermostat.prop_algorithm = algo
+    thermostat.cycle_min = 2
+    _configure_switch_ownership_context(algo, power=0.132)
+    order: list[str] = []
+
+    def _stage_side_effect(*_args, **_kwargs):
+        order.append("stage")
+
+    async def _start_side_effect(*_args, **_kwargs):
+        order.append("start")
+
+    with (
+        patch.object(algo, "calculate"),
+        patch.object(
+            algo,
+            "stage_cycle_command",
+            side_effect=_stage_side_effect,
+        ) as stage,
+        patch.object(
+            thermostat.cycle_scheduler,
+            "start_cycle",
+            side_effect=_start_side_effect,
+        ),
+        patch.object(handler, "_async_save", new_callable=AsyncMock),
+    ):
+        await handler.control_heating(timestamp=None)
+
+    assert order == ["stage", "start"]
+    projection = stage.call_args.args[0]
+    assert projection.on_time_sec == 15
+    assert projection.off_time_sec == 104
+    assert projection.projected_power == pytest.approx(0.125)
+
+
+@pytest.mark.asyncio
+async def test_switch_callback_uses_frozen_ownership_not_live_control():
+    """A later controller change must not alter the submitted decomposition."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="switch-bind",
+    )
+    _configure_switch_ownership_context(algo, power=0.5)
+    frozen_i = algo.ctl.u_i
+    algo.stage_cycle_command(
+        project_cycle_command(0.5, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+    algo.ctl.u_i = 0.4
+    algo.ctl.u_cmd = 0.8
+
+    await algo.on_cycle_started(60, 60, 0.5, VThermHvacMode_HEAT)
+
+    assert (
+        algo._command_ownership.last_binding.status
+        == CommandOwnershipBindingStatus.BOUND
+    )
+    assert algo._fftrim_observer._active_ownership is not None
+    assert algo._fftrim_observer._active_ownership.u_i == pytest.approx(frozen_i)
+    assert "committed_mismatch" not in (
+        algo._fftrim_observer._active_ownership.constraint_flags
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_transfer_identical_command_does_not_confirm_engagement():
+    """The already submitted request cannot confirm a later transaction."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="switch-engagement",
+    )
+    _configure_switch_ownership_context(algo, power=0.5)
+    algo.stage_cycle_command(
+        project_cycle_command(0.5, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+    algo._transfer_pending_engagement = True
+    algo._transfer_pending_request_sequence = (
+        algo._command_ownership.last_staged_sequence
+    )
+
+    await algo.on_cycle_started(60, 60, 0.5, VThermHvacMode_HEAT)
+
+    assert algo._transfer_pending_engagement is True
+    assert (
+        algo._command_ownership.last_binding.snapshot.request_sequence
+        == algo._transfer_pending_request_sequence
+    )
+
+
+@pytest.mark.asyncio
+async def test_different_post_transfer_request_confirms_engagement():
+    """Any strictly later bound request proves the transaction was submitted."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="switch-engagement",
+    )
+    _configure_switch_ownership_context(algo, power=0.5)
+    algo.stage_cycle_command(
+        project_cycle_command(0.5, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+    algo._transfer_pending_engagement = True
+    algo._transfer_pending_request_sequence = (
+        algo._command_ownership.last_staged_sequence
+    )
+    await algo.on_cycle_started(60, 60, 0.5, VThermHvacMode_HEAT)
+
+    _configure_switch_ownership_context(algo, power=0.6)
+    algo.stage_cycle_command(
+        project_cycle_command(0.6, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+    await algo.on_cycle_started(72, 48, 0.6, VThermHvacMode_HEAT)
+
+    assert algo._transfer_pending_engagement is False
+    assert algo._transfer_pending_request_sequence is None
+
+
+def test_switch_request_sequences_are_transient_and_reset_with_cycle_state():
+    """Request ordering must neither persist nor survive a runtime discontinuity."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="switch-sequence-reset",
+    )
+    _configure_switch_ownership_context(algo, power=0.5)
+    algo.stage_cycle_command(
+        project_cycle_command(0.5, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+    algo._transfer_pending_engagement = True
+    algo._transfer_pending_request_sequence = 1
+
+    state = algo.save_state()
+    assert "command_ownership" not in state
+    assert "request_sequence" not in state
+
+    algo.reset_cycle_state()
+    assert algo._command_ownership.last_staged_sequence == 0
+    assert algo._command_ownership.pending is None
+    assert algo._transfer_pending_engagement is False
+    assert algo._transfer_pending_request_sequence is None
+
+    restored = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="switch-sequence-restored",
+        saved_state=state,
+    )
+    assert restored._command_ownership.last_staged_sequence == 0
+    assert restored._command_ownership.pending is None
+    assert restored._transfer_pending_engagement is False
+    assert restored._transfer_pending_request_sequence is None
 
 
 @pytest.mark.asyncio

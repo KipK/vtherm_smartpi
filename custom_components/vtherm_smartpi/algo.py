@@ -119,6 +119,12 @@ from .smartpi.ff_trim import (
 )
 from .smartpi.ff_trim_periodic import PeriodicFFTrimObserver
 from .smartpi.ff_ab_confidence import ABConfidence
+from .smartpi.command_ownership import (
+    CommandOwnershipBindingStatus,
+    CommandOwnershipSnapshot,
+    CommandOwnershipTracker,
+    CycleCommandProjection,
+)
 from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.integral_guard import (
     IntegralGuardSource,
@@ -339,6 +345,7 @@ class SmartPI:
         self._last_fftrim_update_reason: str = "none"
         self._cycles_since_fftrim_update: int = 0
         self._gain_generation: int = 0
+        self._command_ownership = CommandOwnershipTracker()
         self._bumpless_transfer_state: str = "idle"
         self._bumpless_transfer_reason: str = "none"
         self._requested_trim_delta: float = 0.0
@@ -349,6 +356,7 @@ class SmartPI:
         self._applied_i_transfer: float = 0.0
         self._net_command_delta: float = 0.0
         self._transfer_pending_engagement: bool = False
+        self._transfer_pending_request_sequence: int | None = None
         self._transfer_quality: str = "unavailable"
         self._pending_bumpless_persistent: FFTrimPersistentResult | None = None
         self._pending_bumpless_quality: str = "unavailable"
@@ -473,6 +481,7 @@ class SmartPI:
         self._last_fftrim_update_reason = "none"
         self._cycles_since_fftrim_update = 0
         self._gain_generation = 0
+        self._command_ownership.reset()
         self._bumpless_transfer_state = "idle"
         self._bumpless_transfer_reason = "none"
         self._requested_trim_delta = 0.0
@@ -483,6 +492,7 @@ class SmartPI:
         self._applied_i_transfer = 0.0
         self._net_command_delta = 0.0
         self._transfer_pending_engagement = False
+        self._transfer_pending_request_sequence = None
         self._transfer_quality = "unavailable"
         self._pending_bumpless_persistent = None
         self._pending_bumpless_quality = "unavailable"
@@ -659,6 +669,7 @@ class SmartPI:
         self._fftrim_observer.reset_runtime()
         self._fftrim_periodic_observer.reset_runtime()
         self._fftrim_observation_mode = "stationary"
+        self.reset_command_ownership("ownership_discontinuity")
         _LOGGER.debug("%s - SmartPI: cycle state reset (learning window cleared)", self._name)
 
     @property
@@ -854,22 +865,72 @@ class SmartPI:
             target_temp=target_temp,
         )
 
+    def stage_cycle_command(
+        self,
+        projection: CycleCommandProjection,
+        hvac_mode: VThermHvacMode,
+    ) -> None:
+        """Freeze the control context submitted for the next switch cycle."""
+        self._command_ownership.stage(
+            self._build_command_ownership_snapshot(projection, hvac_mode)
+        )
+
+    def reset_command_ownership(self, reason: str = "ownership_discontinuity") -> None:
+        """Discard all switch ownership requests and reusable bindings."""
+        self._command_ownership.reset(reason)
+        self._transfer_pending_engagement = False
+        self._transfer_pending_request_sequence = None
+
     async def on_cycle_started(self, on_time_sec: float, off_time_sec: float, on_percent: float, hvac_mode: str) -> None:
         """Called when a cycle starts."""
         cycle_start_now = time.monotonic()
         self._u_ff3_cycle = self._u_ff3_pending
         self._ff3_active_cycle = self._ff3_pending_active
         linear_on_percent = self._set_committed_actuator_output(on_percent)
+
+        if self._valve_mode_enabled:
+            ownership = self._build_fftrim_ownership_snapshot(linear_on_percent)
+            transfer_engaged = (
+                self._transfer_pending_engagement
+                and abs(linear_on_percent - self.ctl.u_cmd)
+                <= FF_TRIM_TRANSFER_COMMAND_EPSILON
+            )
+        else:
+            binding = self._command_ownership.bind_started_cycle(
+                on_time_sec=on_time_sec,
+                off_time_sec=off_time_sec,
+                realized_power=linear_on_percent,
+                hvac_mode=hvac_mode,
+            )
+            bound_snapshot = (
+                binding.snapshot
+                if binding.status
+                in {
+                    CommandOwnershipBindingStatus.BOUND,
+                    CommandOwnershipBindingStatus.REUSED,
+                }
+                else None
+            )
+            ownership = self._to_fftrim_ownership_snapshot(
+                bound_snapshot,
+                linear_on_percent,
+            )
+            transfer_engaged = bool(
+                self._transfer_pending_engagement
+                and bound_snapshot is not None
+                and self._transfer_pending_request_sequence is not None
+                and bound_snapshot.request_sequence
+                > self._transfer_pending_request_sequence
+            )
+
         self._fftrim_observer.start_applied_cycle(
             now_monotonic=cycle_start_now,
             linear_power=linear_on_percent,
-            ownership=self._build_fftrim_ownership_snapshot(linear_on_percent),
+            ownership=ownership,
         )
-        if (
-            abs(linear_on_percent - self.ctl.u_cmd)
-            <= FF_TRIM_TRANSFER_COMMAND_EPSILON
-        ):
+        if transfer_engaged:
             self._transfer_pending_engagement = False
+            self._transfer_pending_request_sequence = None
         self._current_cycle_start_monotonic = cycle_start_now
         self._update_deadtime_episode_status(linear_on_percent, hvac_mode, cycle_start_now)
         self._setpoint_changed_in_cycle = False
@@ -895,6 +956,7 @@ class SmartPI:
             self._last_hvac_mode
         )
         if e_eff is None:
+            self._command_ownership.invalidate_active("missing_e_eff")
             self._pending_bumpless_persistent = None
             self._fftrim_periodic_observer.invalidate(
                 "missing_e_eff",
@@ -908,6 +970,7 @@ class SmartPI:
             )
             self._apply_fftrim_observer_result(result, count_window=False)
         elif elapsed_ratio < 1.0:
+            self._command_ownership.invalidate_active("partial_cycle")
             self._pending_bumpless_persistent = None
             self._fftrim_periodic_observer.invalidate(
                 "partial_cycle",
@@ -921,6 +984,7 @@ class SmartPI:
             )
             self._apply_fftrim_observer_result(result, count_window=False)
         else:
+            self._command_ownership.complete_active()
             self._apply_pending_bumpless_at_cycle_boundary()
             self._try_complete_fftrim_window(
                 deadtime_s=deadtime_s,
@@ -964,15 +1028,8 @@ class SmartPI:
             use_valve_trace=self._valve_mode_enabled,
         )
 
-    def _build_fftrim_ownership_snapshot(
-        self,
-        linear_committed_power: float,
-    ) -> ControlOwnershipSnapshot | None:
-        """Capture the control terms that own one committed physical command."""
-        ff_result = self._last_ff_result
-        if ff_result is None:
-            return None
-
+    def _build_ownership_constraint_flags(self, actual_ff3: float) -> tuple[str, ...]:
+        """Return downstream constraints attached to the current command."""
         flags: list[str] = []
         if self.ctl.last_sat == "SAT_HI":
             flags.append("saturated_high")
@@ -1007,21 +1064,84 @@ class SmartPI:
             > FF_TRIM_TRANSFER_COMMAND_EPSILON
         ):
             flags.append("timing_output")
+        if abs(actual_ff3) > FF_TRIM_TRANSFER_COMMAND_EPSILON:
+            flags.append("ff3")
+        return tuple(sorted(set(flags)))
+
+    def _build_command_ownership_snapshot(
+        self,
+        projection: CycleCommandProjection,
+        hvac_mode: VThermHvacMode,
+    ) -> CommandOwnershipSnapshot | None:
+        """Freeze the control decomposition that produced a switch request."""
+        ff_result = self._last_ff_result
+        if ff_result is None:
+            return None
 
         visible_ff = clamp(ff_result.u_ff1 + self._ff_trim.u_ff_trim, 0.0, 1.0)
         actual_ff3 = self.ctl.u_ff - visible_ff
-        if abs(actual_ff3) > FF_TRIM_TRANSFER_COMMAND_EPSILON:
-            flags.append("ff3")
+        return CommandOwnershipSnapshot(
+            projection=projection,
+            hvac_mode=str(hvac_mode),
+            u_ff1=float(ff_result.u_ff1),
+            trim_stored=float(self._ff_trim.u_ff_trim),
+            u_ff_visible=float(visible_ff),
+            u_ff3=float(actual_ff3),
+            u_p=float(self.ctl.u_p),
+            u_i=float(self.ctl.u_i),
+            ki=float(self.Ki),
+            gain_generation=self._gain_generation,
+            u_cmd=float(self._last_u_cmd),
+            u_limited=float(self._last_u_limited),
+            linear_command=float(self._on_percent),
+            regime=self.gov.regime,
+            i_mode=self.ctl.last_i_mode,
+            constraint_flags=self._build_ownership_constraint_flags(actual_ff3),
+        )
+
+    @staticmethod
+    def _to_fftrim_ownership_snapshot(
+        snapshot: CommandOwnershipSnapshot | None,
+        linear_committed_power: float,
+    ) -> ControlOwnershipSnapshot | None:
+        """Convert an accepted frozen switch binding for the FF trim observer."""
+        if snapshot is None:
+            return None
+        return ControlOwnershipSnapshot(
+            u_ff1=snapshot.u_ff1,
+            trim_stored=snapshot.trim_stored,
+            u_ff_visible=snapshot.u_ff_visible,
+            u_ff3=snapshot.u_ff3,
+            u_p=snapshot.u_p,
+            u_i=snapshot.u_i,
+            ki=snapshot.ki,
+            gain_generation=snapshot.gain_generation,
+            u_cmd=snapshot.u_cmd,
+            u_limited=snapshot.u_limited,
+            linear_committed_power=float(linear_committed_power),
+            regime=snapshot.regime,
+            i_mode=snapshot.i_mode,
+            quality="switch_cycle_equivalent",
+            constraint_flags=snapshot.constraint_flags,
+        )
+
+    def _build_fftrim_ownership_snapshot(
+        self,
+        linear_committed_power: float,
+    ) -> ControlOwnershipSnapshot | None:
+        """Capture valve ownership until projected valve binding is available."""
+        ff_result = self._last_ff_result
+        if ff_result is None:
+            return None
+
+        visible_ff = clamp(ff_result.u_ff1 + self._ff_trim.u_ff_trim, 0.0, 1.0)
+        actual_ff3 = self.ctl.u_ff - visible_ff
+        flags = list(self._build_ownership_constraint_flags(actual_ff3))
         if (
             abs(float(linear_committed_power) - self.ctl.u_cmd)
             > FF_TRIM_TRANSFER_COMMAND_EPSILON
         ):
             flags.append("committed_mismatch")
-        quality = (
-            "valve_segmented_linear"
-            if self._valve_mode_enabled
-            else "switch_cycle_equivalent"
-        )
         return ControlOwnershipSnapshot(
             u_ff1=float(ff_result.u_ff1),
             trim_stored=float(self._ff_trim.u_ff_trim),
@@ -1036,7 +1156,7 @@ class SmartPI:
             linear_committed_power=float(linear_committed_power),
             regime=self.gov.regime,
             i_mode=self.ctl.last_i_mode,
-            quality=quality,
+            quality="valve_segmented_linear",
             constraint_flags=tuple(sorted(set(flags))),
         )
 
@@ -1137,6 +1257,7 @@ class SmartPI:
             self._bumpless_transfer_state = "observer_rejected"
             self._bumpless_transfer_reason = result.reason
             self._transfer_pending_engagement = False
+            self._transfer_pending_request_sequence = None
             self._last_fftrim_reject_reason = result.reason
             self._last_fftrim_update_reason = "skipped"
             self._fftrim_observer.last_update_reason = "skipped"
@@ -1156,6 +1277,7 @@ class SmartPI:
             self._bumpless_transfer_state = "observer_rejected"
             self._bumpless_transfer_reason = "incomplete_observer_result"
             self._transfer_pending_engagement = False
+            self._transfer_pending_request_sequence = None
             self._last_fftrim_reject_reason = "incomplete_observer_result"
             self._last_fftrim_update_reason = "skipped"
             self._fftrim_observer.last_update_reason = "skipped"
@@ -1179,6 +1301,7 @@ class SmartPI:
         if not persistent.ready:
             self._clear_bumpless_transfer_values()
             self._transfer_pending_engagement = False
+            self._transfer_pending_request_sequence = None
             self._bumpless_transfer_state = (
                 "pending" if result.transfer_eligible else "ineligible"
             )
@@ -1202,6 +1325,7 @@ class SmartPI:
                 self._pending_bumpless_quality = result.transfer_quality
                 self._clear_bumpless_transfer_values()
                 self._transfer_pending_engagement = False
+                self._transfer_pending_request_sequence = None
                 self._bumpless_transfer_state = "awaiting_cycle_boundary"
                 self._bumpless_transfer_reason = "awaiting_post_aw_boundary"
                 self._last_fftrim_update_reason = "awaiting_cycle_boundary"
@@ -1229,6 +1353,7 @@ class SmartPI:
             self._bumpless_transfer_state = "causal_update_without_transfer"
             self._bumpless_transfer_reason = result.transfer_reason
             self._transfer_pending_engagement = False
+            self._transfer_pending_request_sequence = None
             if updated:
                 self._record_applied_fftrim_transaction(
                     observation_mode=observation_mode
@@ -1331,6 +1456,11 @@ class SmartPI:
         self._bumpless_transfer_state = "applied"
         self._bumpless_transfer_reason = plan.reason
         self._transfer_pending_engagement = True
+        self._transfer_pending_request_sequence = (
+            None
+            if self._valve_mode_enabled
+            else self._command_ownership.last_staged_sequence
+        )
         self._record_applied_fftrim_transaction(
             observation_mode=persistent.observation_mode
         )
@@ -1406,6 +1536,7 @@ class SmartPI:
         self._bumpless_transfer_state = "rejected"
         self._bumpless_transfer_reason = reason
         self._transfer_pending_engagement = False
+        self._transfer_pending_request_sequence = None
         if clear_values:
             self._clear_bumpless_transfer_values()
         return False
@@ -1549,6 +1680,7 @@ class SmartPI:
         hvac_mode: VThermHvacMode | None,
     ) -> None:
         """Reject the current window and wash out its delayed thermal response."""
+        self.reset_command_ownership("ownership_discontinuity")
         deadtime_s, deadtime_reliable = self._fftrim_deadtime_context(hvac_mode)
         self._fftrim_periodic_observer.invalidate(
             reason,
@@ -2231,6 +2363,7 @@ class SmartPI:
             <= FF_TRIM_TRANSFER_COMMAND_EPSILON
         ):
             self._transfer_pending_engagement = False
+            self._transfer_pending_request_sequence = None
         self._update_deadtime_episode_status(linear_on_percent, hvac_mode, now)
 
     def save_state(self) -> dict:
@@ -2301,6 +2434,7 @@ class SmartPI:
 
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
+        self.reset_command_ownership("ownership_discontinuity")
         self._fftrim_observer.reset_runtime()
         self._fftrim_periodic_observer.reset_runtime()
         self._fftrim_observation_mode = "stationary"
@@ -3044,6 +3178,7 @@ class SmartPI:
                 self._fftrim_observer.reset_runtime()
                 self._fftrim_periodic_observer.reset_runtime()
                 self._fftrim_observation_mode = "stationary"
+                self.reset_command_ownership("ownership_context_changed")
                 _LOGGER.info(
                     "%s - HVAC mode changed (%s → %s): PI state reset",
                     self._name, self._last_hvac_mode, hvac_mode
@@ -3057,6 +3192,7 @@ class SmartPI:
                 self._fftrim_observer.reset_runtime()
                 self._fftrim_periodic_observer.reset_runtime()
                 self._fftrim_observation_mode = "stationary"
+                self.reset_command_ownership("ownership_context_changed")
                 self._cycles_since_reset = 0
                 self._session_learn_ok_count_base = self.est.learn_ok_count
                 self._session_learn_skip_count_base = self.est.learn_skip_count

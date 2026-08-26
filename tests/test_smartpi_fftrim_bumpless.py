@@ -4,6 +4,10 @@ import pytest
 from unittest.mock import MagicMock
 
 from custom_components.vtherm_smartpi.algo import SmartPI
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.smartpi.command_ownership import (
+    project_cycle_command,
+)
 from custom_components.vtherm_smartpi.smartpi.const import (
     FF_TRIM_LAMBDA,
     GovernanceRegime,
@@ -273,6 +277,7 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
     algo._last_u_cmd = 0.5
     algo._last_u_limited = 0.5
     algo._last_u_applied = 0.5
+    algo._set_linear_output(0.5)
     algo._last_ff_result = FFResult(
         ff_raw=0.4,
         u_ff1=0.4,
@@ -297,6 +302,10 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
         transfer_eligible=True,
         transfer_reason="quasi_equilibrium",
     )
+    algo.stage_cycle_command(
+        project_cycle_command(0.5, cycle_min=5),
+        VThermHvacMode_HEAT,
+    )
 
     updated = algo._apply_bumpless_persistent_result(
         persistent=persistent,
@@ -312,6 +321,7 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
     assert algo._net_command_delta == pytest.approx(0.003)
     assert algo._bumpless_transfer_state == "applied"
     assert algo._transfer_pending_engagement is True
+    assert algo._transfer_pending_request_sequence == 1
     transaction = algo._ff_trim.last_transaction
     assert transaction is not None
     assert transaction.observation_mode == "stationary"
