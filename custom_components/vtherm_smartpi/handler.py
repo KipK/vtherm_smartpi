@@ -426,16 +426,19 @@ class SmartPIHandler:
             is_valve_mode = bool(
                 getattr(t.cycle_scheduler, "is_valve_mode", False)
             )
-            if algo is not None and not is_valve_mode:
-                algo.stage_cycle_command(
-                    project_cycle_command(
-                        on_percent=on_percent,
-                        cycle_min=t.cycle_min,
-                        minimal_activation_delay=t.minimal_activation_delay,
-                        minimal_deactivation_delay=t.minimal_deactivation_delay,
-                    ),
-                    t.vtherm_hvac_mode,
-                )
+            projection = project_cycle_command(
+                on_percent=on_percent,
+                cycle_min=t.cycle_min,
+                minimal_activation_delay=t.minimal_activation_delay,
+                minimal_deactivation_delay=t.minimal_deactivation_delay,
+            )
+            valve_segment_staged = False
+            if algo is not None:
+                if not is_valve_mode:
+                    algo.stage_cycle_command(projection, t.vtherm_hvac_mode)
+                else:
+                    algo.stage_valve_command(projection, t.vtherm_hvac_mode)
+                    valve_segment_staged = True
 
             await t.cycle_scheduler.start_cycle(
                 t.vtherm_hvac_mode,
@@ -447,10 +450,12 @@ class SmartPIHandler:
                 and was_cycle_running
                 and not force_cycle
                 and is_valve_mode
+                and valve_segment_staged
             ):
                 algo.on_applied_power_updated(
-                    on_percent=on_percent,
+                    on_percent=projection.projected_power,
                     hvac_mode=t.vtherm_hvac_mode,
+                    projection=projection,
                 )
 
         if (

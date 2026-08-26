@@ -1,5 +1,7 @@
 """Unit tests for pure command projection and ownership value objects."""
 
+from dataclasses import replace
+
 import pytest
 
 from custom_components.vtherm_smartpi.cycle_utils import calculate_cycle_times
@@ -155,6 +157,28 @@ def test_tracker_binds_normal_scheduler_quantization() -> None:
 
     assert binding.status == CommandOwnershipBindingStatus.BOUND
     assert binding.snapshot is staged
+
+
+def test_tracker_binds_an_actuator_projection_without_comparing_linear_power() -> None:
+    """A nonlinear valve command must validate in actuator command space."""
+    tracker = CommandOwnershipTracker()
+    actuator_projection = project_cycle_command(0.15, cycle_min=2)
+    snapshot = replace(
+        _snapshot(0.8),
+        projection=actuator_projection,
+        linear_command=0.8,
+        actuator_command=0.15,
+    )
+    tracker.stage(snapshot)
+
+    binding = tracker.bind_started_cycle(
+        on_time_sec=actuator_projection.on_time_sec,
+        off_time_sec=actuator_projection.off_time_sec,
+        realized_power=actuator_projection.projected_power,
+        hvac_mode="heat",
+    )
+
+    assert binding.status == CommandOwnershipBindingStatus.BOUND
 
 
 def test_tracker_replaces_pending_request_with_latest_snapshot() -> None:

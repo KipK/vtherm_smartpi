@@ -875,8 +875,18 @@ class SmartPI:
             self._build_command_ownership_snapshot(projection, hvac_mode)
         )
 
+    def stage_valve_command(
+        self,
+        projection: CycleCommandProjection,
+        hvac_mode: VThermHvacMode,
+    ) -> None:
+        """Freeze the control context submitted for one valve segment."""
+        self._command_ownership.stage(
+            self._build_command_ownership_snapshot(projection, hvac_mode)
+        )
+
     def reset_command_ownership(self, reason: str = "ownership_discontinuity") -> None:
-        """Discard all switch ownership requests and reusable bindings."""
+        """Discard all transient ownership requests and reusable bindings."""
         self._command_ownership.reset(reason)
         self._transfer_pending_engagement = False
         self._transfer_pending_request_sequence = None
@@ -888,40 +898,37 @@ class SmartPI:
         self._ff3_active_cycle = self._ff3_pending_active
         linear_on_percent = self._set_committed_actuator_output(on_percent)
 
-        if self._valve_mode_enabled:
-            ownership = self._build_fftrim_ownership_snapshot(linear_on_percent)
-            transfer_engaged = (
-                self._transfer_pending_engagement
-                and abs(linear_on_percent - self.ctl.u_cmd)
-                <= FF_TRIM_TRANSFER_COMMAND_EPSILON
-            )
-        else:
-            binding = self._command_ownership.bind_started_cycle(
-                on_time_sec=on_time_sec,
-                off_time_sec=off_time_sec,
-                realized_power=linear_on_percent,
-                hvac_mode=hvac_mode,
-            )
-            bound_snapshot = (
-                binding.snapshot
-                if binding.status
-                in {
-                    CommandOwnershipBindingStatus.BOUND,
-                    CommandOwnershipBindingStatus.REUSED,
-                }
-                else None
-            )
-            ownership = self._to_fftrim_ownership_snapshot(
-                bound_snapshot,
-                linear_on_percent,
-            )
-            transfer_engaged = bool(
-                self._transfer_pending_engagement
-                and bound_snapshot is not None
-                and self._transfer_pending_request_sequence is not None
-                and bound_snapshot.request_sequence
-                > self._transfer_pending_request_sequence
-            )
+        binding = self._command_ownership.bind_started_cycle(
+            on_time_sec=on_time_sec,
+            off_time_sec=off_time_sec,
+            realized_power=(on_percent if self._valve_mode_enabled else linear_on_percent),
+            hvac_mode=hvac_mode,
+        )
+        bound_snapshot = (
+            binding.snapshot
+            if binding.status
+            in {
+                CommandOwnershipBindingStatus.BOUND,
+                CommandOwnershipBindingStatus.REUSED,
+            }
+            else None
+        )
+        ownership = self._to_fftrim_ownership_snapshot(
+            bound_snapshot,
+            linear_on_percent,
+            quality=(
+                "valve_segmented_linear"
+                if self._valve_mode_enabled
+                else "switch_cycle_equivalent"
+            ),
+        )
+        transfer_engaged = bool(
+            self._transfer_pending_engagement
+            and bound_snapshot is not None
+            and self._transfer_pending_request_sequence is not None
+            and bound_snapshot.request_sequence
+            > self._transfer_pending_request_sequence
+        )
 
         self._fftrim_observer.start_applied_cycle(
             now_monotonic=cycle_start_now,
@@ -1073,7 +1080,7 @@ class SmartPI:
         projection: CycleCommandProjection,
         hvac_mode: VThermHvacMode,
     ) -> CommandOwnershipSnapshot | None:
-        """Freeze the control decomposition that produced a switch request."""
+        """Freeze the control decomposition that produced an actuator request."""
         ff_result = self._last_ff_result
         if ff_result is None:
             return None
@@ -1096,6 +1103,7 @@ class SmartPI:
             linear_command=float(self._on_percent),
             regime=self.gov.regime,
             i_mode=self.ctl.last_i_mode,
+            actuator_command=float(projection.requested_power),
             constraint_flags=self._build_ownership_constraint_flags(actual_ff3),
         )
 
@@ -1103,8 +1111,10 @@ class SmartPI:
     def _to_fftrim_ownership_snapshot(
         snapshot: CommandOwnershipSnapshot | None,
         linear_committed_power: float,
+        *,
+        quality: str,
     ) -> ControlOwnershipSnapshot | None:
-        """Convert an accepted frozen switch binding for the FF trim observer."""
+        """Convert an accepted frozen binding for the FF trim observer."""
         if snapshot is None:
             return None
         return ControlOwnershipSnapshot(
@@ -1121,43 +1131,8 @@ class SmartPI:
             linear_committed_power=float(linear_committed_power),
             regime=snapshot.regime,
             i_mode=snapshot.i_mode,
-            quality="switch_cycle_equivalent",
+            quality=quality,
             constraint_flags=snapshot.constraint_flags,
-        )
-
-    def _build_fftrim_ownership_snapshot(
-        self,
-        linear_committed_power: float,
-    ) -> ControlOwnershipSnapshot | None:
-        """Capture valve ownership until projected valve binding is available."""
-        ff_result = self._last_ff_result
-        if ff_result is None:
-            return None
-
-        visible_ff = clamp(ff_result.u_ff1 + self._ff_trim.u_ff_trim, 0.0, 1.0)
-        actual_ff3 = self.ctl.u_ff - visible_ff
-        flags = list(self._build_ownership_constraint_flags(actual_ff3))
-        if (
-            abs(float(linear_committed_power) - self.ctl.u_cmd)
-            > FF_TRIM_TRANSFER_COMMAND_EPSILON
-        ):
-            flags.append("committed_mismatch")
-        return ControlOwnershipSnapshot(
-            u_ff1=float(ff_result.u_ff1),
-            trim_stored=float(self._ff_trim.u_ff_trim),
-            u_ff_visible=float(visible_ff),
-            u_ff3=float(actual_ff3),
-            u_p=float(self.ctl.u_p),
-            u_i=float(self.ctl.u_i),
-            ki=float(self.Ki),
-            gain_generation=self._gain_generation,
-            u_cmd=float(self._last_u_cmd),
-            u_limited=float(self._last_u_limited),
-            linear_committed_power=float(linear_committed_power),
-            regime=self.gov.regime,
-            i_mode=self.ctl.last_i_mode,
-            quality="valve_segmented_linear",
-            constraint_flags=tuple(sorted(set(flags))),
         )
 
     def _fftrim_deadtime_context(
@@ -1457,9 +1432,7 @@ class SmartPI:
         self._bumpless_transfer_reason = plan.reason
         self._transfer_pending_engagement = True
         self._transfer_pending_request_sequence = (
-            None
-            if self._valve_mode_enabled
-            else self._command_ownership.last_staged_sequence
+            self._command_ownership.last_staged_sequence
         )
         self._record_applied_fftrim_transaction(
             observation_mode=persistent.observation_mode
@@ -2345,22 +2318,38 @@ class SmartPI:
         *,
         on_percent: float,
         hvac_mode: VThermHvacMode,
+        projection: CycleCommandProjection,
     ) -> None:
-        """Synchronize state after a valve command is applied mid-cycle."""
+        """Bind and synchronize one projected valve segment mid-cycle."""
         applied_on_percent = clamp(on_percent, 0.0, 1.0)
-        if abs(applied_on_percent - self._actuator_committed_on_percent) <= 0.001:
-            return
-
         now = time.monotonic()
         linear_on_percent = self._set_committed_actuator_output(applied_on_percent)
+        binding = self._command_ownership.bind_started_cycle(
+            on_time_sec=projection.on_time_sec,
+            off_time_sec=projection.off_time_sec,
+            realized_power=applied_on_percent,
+            hvac_mode=hvac_mode,
+        )
+        bound_snapshot = (
+            binding.snapshot
+            if binding.status == CommandOwnershipBindingStatus.BOUND
+            else None
+        )
         self._fftrim_observer.update_applied_power(
             now_monotonic=now,
             linear_power=linear_on_percent,
-            ownership=self._build_fftrim_ownership_snapshot(linear_on_percent),
+            ownership=self._to_fftrim_ownership_snapshot(
+                bound_snapshot,
+                linear_on_percent,
+                quality="valve_segmented_linear",
+            ),
         )
         if (
-            abs(linear_on_percent - self.ctl.u_cmd)
-            <= FF_TRIM_TRANSFER_COMMAND_EPSILON
+            self._transfer_pending_engagement
+            and bound_snapshot is not None
+            and self._transfer_pending_request_sequence is not None
+            and bound_snapshot.request_sequence
+            > self._transfer_pending_request_sequence
         ):
             self._transfer_pending_engagement = False
             self._transfer_pending_request_sequence = None

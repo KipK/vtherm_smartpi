@@ -59,6 +59,7 @@ class CommandOwnershipSnapshot:
     i_mode: str | None
     request_sequence: int = 0
     constraint_flags: tuple[str, ...] = ()
+    actuator_command: float | None = None
 
 
 @dataclass(frozen=True)
@@ -174,8 +175,13 @@ class CommandOwnershipTracker:
             )
 
         projection = candidate.projection
+        requested_command = (
+            candidate.actuator_command
+            if candidate.actuator_command is not None
+            else candidate.linear_command
+        )
         if (
-            abs(projection.requested_power - candidate.linear_command)
+            abs(projection.requested_power - requested_command)
             > OWNERSHIP_MATCH_EPSILON
             or abs(float(on_time_sec) - projection.on_time_sec)
             > OWNERSHIP_MATCH_EPSILON
