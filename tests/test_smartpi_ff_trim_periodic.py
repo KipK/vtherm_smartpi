@@ -63,8 +63,14 @@ def _ownership(
     committed: float,
     *,
     saturated_low: bool,
+    u_cmd: float | None = None,
+    u_limited: float | None = None,
+    constraint_flags: tuple[str, ...] | None = None,
 ) -> ControlOwnershipSnapshot:
     """Build one ownership snapshot matching the committed linear power."""
+    flags = constraint_flags
+    if flags is None:
+        flags = ("saturated_low",) if saturated_low else ()
     return ControlOwnershipSnapshot(
         u_ff1=0.08,
         trim_stored=0.0,
@@ -74,8 +80,8 @@ def _ownership(
         u_i=0.0,
         ki=0.001,
         gain_generation=1,
-        u_cmd=committed,
-        u_limited=committed,
+        u_cmd=committed if u_cmd is None else u_cmd,
+        u_limited=committed if u_limited is None else u_limited,
         linear_committed_power=committed,
         regime=(
             GovernanceRegime.SATURATED
@@ -84,7 +90,7 @@ def _ownership(
         ),
         i_mode="I:HOLD(deadband)",
         quality="valve_segmented_linear",
-        constraint_flags=("saturated_low",) if saturated_low else (),
+        constraint_flags=flags,
     )
 
 
@@ -154,6 +160,113 @@ def test_periodic_window_uses_shared_trace_and_never_transfers_integral() -> Non
     assert result.transfer_reason == "periodic_equilibrium"
     assert result.decomposed_correction is None
     assert causal.earliest_power_start == pytest.approx(0.0)
+
+
+def test_periodic_window_accepts_small_scheduler_quantization_limits() -> None:
+    """Small command and PWM quantization deltas remain observable."""
+    causal = CausalFFTrimObserver(cycle_min=2.0)
+    periodic = PeriodicFFTrimObserver(cycle_min=2.0)
+    causal.start_applied_cycle(
+        now_monotonic=0.0,
+        linear_power=0.0,
+        ownership=_ownership(0.0, saturated_low=True),
+    )
+    causal.update_applied_power(
+        now_monotonic=900.0,
+        linear_power=0.08,
+        ownership=_ownership(
+            0.08,
+            saturated_low=False,
+            u_cmd=0.12,
+            u_limited=0.11,
+            constraint_flags=("output_limited", "timing_output"),
+        ),
+    )
+    causal.complete_applied_cycle(
+        now_monotonic=1800.0,
+        realized_linear_power=None,
+        use_valve_trace=True,
+    )
+    _record_periodic_temperatures(periodic)
+
+    window = periodic.try_close_window(
+        earliest_power_start=causal.earliest_power_start,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+
+    assert window is not None
+    result = causal.evaluate_periodic_window(
+        window.samples,
+        a=0.1,
+        b=0.005,
+        deadtime_s=window.deadtime_s,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.reason == "periodic_window_ready"
+
+
+@pytest.mark.parametrize(
+    ("u_cmd", "u_limited", "committed", "flag", "reason"),
+    (
+        (0.14, 0.09, 0.08, "output_limited", "periodic_constraint_output_limited"),
+        (0.13, 0.13, 0.08, "timing_output", "periodic_constraint_timing_output"),
+    ),
+)
+def test_periodic_window_rejects_hard_scheduler_limits(
+    u_cmd: float,
+    u_limited: float,
+    committed: float,
+    flag: str,
+    reason: str,
+) -> None:
+    """Large command or PWM deltas are still unsafe for periodic trim."""
+    causal = CausalFFTrimObserver(cycle_min=2.0)
+    periodic = PeriodicFFTrimObserver(cycle_min=2.0)
+    causal.start_applied_cycle(
+        now_monotonic=0.0,
+        linear_power=0.0,
+        ownership=_ownership(0.0, saturated_low=True),
+    )
+    causal.update_applied_power(
+        now_monotonic=900.0,
+        linear_power=committed,
+        ownership=_ownership(
+            committed,
+            saturated_low=False,
+            u_cmd=u_cmd,
+            u_limited=u_limited,
+            constraint_flags=(flag,),
+        ),
+    )
+    causal.complete_applied_cycle(
+        now_monotonic=1800.0,
+        realized_linear_power=None,
+        use_valve_trace=True,
+    )
+    _record_periodic_temperatures(periodic)
+
+    window = periodic.try_close_window(
+        earliest_power_start=causal.earliest_power_start,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+
+    assert window is not None
+    result = causal.evaluate_periodic_window(
+        window.samples,
+        a=0.1,
+        b=0.005,
+        deadtime_s=window.deadtime_s,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is False
+    assert result.reason == reason
 
 
 def test_periodic_window_rejects_opposite_phase_half_cycle() -> None:

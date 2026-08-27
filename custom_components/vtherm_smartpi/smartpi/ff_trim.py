@@ -39,6 +39,7 @@ from .const import (
     FF_TRIM_MIN_DISTINCT_MEASUREMENTS,
     FF_TRIM_MIN_POWER_COVERAGE,
     FF_TRIM_PERIODIC_MIN_POWER_RANGE,
+    FF_TRIM_PERIODIC_NEGLIGIBLE_LIMIT_S,
     FF_TRIM_MAX_ERROR_C,
     FF_TRIM_MAX_SLOPE_H,
     FF_TRIM_TRANSFER_MAX_ERROR_C,
@@ -257,6 +258,8 @@ class _OwnershipStats:
     i_range: float
     i_drift: float
     committed_range: float
+    max_command_limit_delta: float
+    max_pwm_delta: float
     ki_min: float
     i_sign_persistent: bool
     regimes: frozenset[GovernanceRegime | str | None]
@@ -830,8 +833,8 @@ class CausalFFTrimObserver:
             observation_mode=observation_mode,
         )
 
-    @staticmethod
     def _periodic_ownership_rejection_reason(
+        self,
         *,
         samples: Sequence[FFTrimThermalSample],
         stats: _OwnershipStats | None,
@@ -852,7 +855,19 @@ class CausalFFTrimObserver:
         )
         if not stats.regimes or not stats.regimes.issubset(allowed_regimes):
             return "periodic_regime_changed"
-        disallowed_flags = stats.constraint_flags - {"saturated_low"}
+        negligible_power_delta = self._negligible_periodic_limit_power()
+        allowed_flags = {"saturated_low"}
+        if (
+            "output_limited" in stats.constraint_flags
+            and stats.max_command_limit_delta <= negligible_power_delta
+        ):
+            allowed_flags.add("output_limited")
+        if (
+            "timing_output" in stats.constraint_flags
+            and stats.max_pwm_delta <= negligible_power_delta
+        ):
+            allowed_flags.add("timing_output")
+        disallowed_flags = stats.constraint_flags - allowed_flags
         if disallowed_flags:
             return f"periodic_constraint_{sorted(disallowed_flags)[0]}"
         if len(stats.gain_generations) != 1:
@@ -879,6 +894,13 @@ class CausalFFTrimObserver:
         if projected_outdoor_range > FF_TRIM_TRANSFER_MAX_POWER_RANGE:
             return "periodic_outdoor_temperature_unstable"
         return None
+
+    def _negligible_periodic_limit_power(self) -> float:
+        """Return the power delta equivalent to a negligible cycle timing error."""
+        cycle_duration_s = self._cycle_min * 60.0
+        if cycle_duration_s <= 0.0:
+            return 0.0
+        return FF_TRIM_PERIODIC_NEGLIGIBLE_LIMIT_S / cycle_duration_s
 
     def invalidate(
         self,
@@ -1118,6 +1140,8 @@ class CausalFFTrimObserver:
         ki_values: list[float] = []
         residual_values: list[float] = []
         committed_values: list[float] = []
+        command_limit_deltas: list[float] = []
+        pwm_deltas: list[float] = []
         regimes: set[GovernanceRegime | str | None] = set()
         i_modes: set[str | None] = set()
         flags: set[str] = set()
@@ -1163,6 +1187,8 @@ class CausalFFTrimObserver:
             ki_values.append(item.ki)
             residual_values.append(item.linear_committed_power - model_power)
             committed_values.append(item.linear_committed_power)
+            command_limit_deltas.append(abs(item.u_cmd - item.u_limited))
+            pwm_deltas.append(abs(item.u_limited - item.linear_committed_power))
             regimes.add(item.regime)
             i_modes.add(item.i_mode)
             flags.update(item.constraint_flags)
@@ -1206,6 +1232,8 @@ class CausalFFTrimObserver:
             i_range=_range(i_values),
             i_drift=abs(i_values[-1] - i_values[0]),
             committed_range=_range(committed_values),
+            max_command_limit_delta=max(command_limit_deltas),
+            max_pwm_delta=max(pwm_deltas),
             ki_min=min(ki_values),
             i_sign_persistent=i_sign_persistent,
             regimes=frozenset(regimes),

@@ -27,6 +27,8 @@ All notable changes to this project will be documented in this file.
   activation and deactivation delays.
 - Preserve frozen switch command ownership across successive scheduler
   automatic PWM repeat quantizations without accepting unrelated cycles.
+- Allow periodic FF trim windows to use observed cycles with negligible
+  scheduler limiting, up to five equivalent cycle seconds.
 
 ## [0.3.8] 2026-08-18
 
