@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.4.0]
 
 - Add action service to pause and resume SmartPI thermal learning
   This can be usefull to trigger when a secondary heating system could
