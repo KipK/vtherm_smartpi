@@ -31,7 +31,7 @@ class CycleCommandProjection:
 
     requested_power: float
     clamped_power: float
-    cycle_duration_sec: int
+    cycle_duration_sec: float
     on_time_sec: int
     off_time_sec: int
     projected_power: float
@@ -90,6 +90,7 @@ class CommandOwnershipTracker:
         self._pending: CommandOwnershipSnapshot | None = None
         self._active: CommandOwnershipSnapshot | None = None
         self._last_bound: CommandOwnershipSnapshot | None = None
+        self._last_scheduler_projection: CycleCommandProjection | None = None
         self._last_binding = CommandOwnershipBinding(
             status=CommandOwnershipBindingStatus.NONE,
             snapshot=None,
@@ -177,18 +178,25 @@ class CommandOwnershipTracker:
                 off_time_sec=off_time_sec,
             )
 
-        projection = candidate.projection
-        if (
-            abs(float(on_time_sec) - projection.on_time_sec)
-            > OWNERSHIP_MATCH_EPSILON
-            or abs(float(off_time_sec) - projection.off_time_sec)
-            > OWNERSHIP_MATCH_EPSILON
-            or (
-                scheduler_realized_power is not None
-                and abs(float(scheduler_realized_power) - projection.projected_power)
-                > OWNERSHIP_MATCH_EPSILON
+        if status == CommandOwnershipBindingStatus.BOUND:
+            projections = (
+                candidate.projection,
+                project_switch_repeat_command(candidate.projection),
             )
-        ):
+        elif self._last_scheduler_projection is not None:
+            projections = (
+                self._last_scheduler_projection,
+                project_switch_repeat_command(self._last_scheduler_projection),
+            )
+        else:
+            projections = ()
+        matched_projection = self._match_realized_projection(
+            projections,
+            on_time_sec=on_time_sec,
+            off_time_sec=off_time_sec,
+            scheduler_realized_power=scheduler_realized_power,
+        )
+        if matched_projection is None:
             return self._reject(
                 "ownership_commit_mismatch",
                 snapshot=candidate,
@@ -200,7 +208,7 @@ class CommandOwnershipTracker:
 
         expected_actuator_power = candidate.expected_actuator_power
         if expected_actuator_power is None:
-            expected_actuator_power = projection.projected_power
+            expected_actuator_power = matched_projection.projected_power
         if realized_power is None:
             return self._reject(
                 "ownership_actuator_missing",
@@ -227,7 +235,11 @@ class CommandOwnershipTracker:
                 scheduler_realized_power=scheduler_realized_power,
             )
 
-        if projection.forced_by_timing or "timing" in candidate.constraint_flags:
+        if (
+            candidate.projection.forced_by_timing
+            or matched_projection.forced_by_timing
+            or "timing" in candidate.constraint_flags
+        ):
             return self._reject(
                 "scheduler_timing",
                 snapshot=candidate,
@@ -239,6 +251,7 @@ class CommandOwnershipTracker:
 
         self._active = candidate
         self._last_bound = candidate
+        self._last_scheduler_projection = matched_projection
         binding = CommandOwnershipBinding(
             status=status,
             snapshot=candidate,
@@ -254,10 +267,37 @@ class CommandOwnershipTracker:
         self._last_binding = binding
         return binding
 
+    @staticmethod
+    def _match_realized_projection(
+        projections: tuple[CycleCommandProjection, ...],
+        *,
+        on_time_sec: float,
+        off_time_sec: float,
+        scheduler_realized_power: float | None,
+    ) -> CycleCommandProjection | None:
+        """Return the one projected scheduler cycle matching the callback."""
+        for candidate in projections:
+            if (
+                abs(float(on_time_sec) - candidate.on_time_sec)
+                <= OWNERSHIP_MATCH_EPSILON
+                and abs(float(off_time_sec) - candidate.off_time_sec)
+                <= OWNERSHIP_MATCH_EPSILON
+                and (
+                    scheduler_realized_power is None
+                    or abs(
+                        float(scheduler_realized_power) - candidate.projected_power
+                    )
+                    <= OWNERSHIP_MATCH_EPSILON
+                )
+            ):
+                return candidate
+        return None
+
     def invalidate_active(self, reason: str = "ownership_discontinuity") -> None:
         """Invalidate reuse while preserving a request staged for the next cycle."""
         self._active = None
         self._last_bound = None
+        self._last_scheduler_projection = None
         if not self._pending_received:
             self._last_binding = CommandOwnershipBinding(
                 status=CommandOwnershipBindingStatus.REJECTED,
@@ -276,6 +316,7 @@ class CommandOwnershipTracker:
         self._pending = None
         self._active = None
         self._last_bound = None
+        self._last_scheduler_projection = None
         self._last_binding = CommandOwnershipBinding(
             status=(
                 CommandOwnershipBindingStatus.REJECTED
@@ -299,6 +340,7 @@ class CommandOwnershipTracker:
         """Reject one callback and prevent reuse of any older binding."""
         self._active = None
         self._last_bound = None
+        self._last_scheduler_projection = None
         binding = CommandOwnershipBinding(
             status=CommandOwnershipBindingStatus.REJECTED,
             snapshot=snapshot,
@@ -320,7 +362,7 @@ class CommandOwnershipTracker:
 
 def project_cycle_command(
     on_percent: float,
-    cycle_min: int,
+    cycle_min: float,
     minimal_activation_delay: int | None = 0,
     minimal_deactivation_delay: int | None = 0,
 ) -> CycleCommandProjection:
@@ -363,6 +405,26 @@ def project_cycle_command(
         off_time_sec=realized_off_time,
         projected_power=projected_power,
         forced_by_timing=forced_by_timing,
+    )
+
+
+def project_switch_repeat_command(
+    projection: CycleCommandProjection,
+    *,
+    minimal_activation_delay: int | None = 0,
+    minimal_deactivation_delay: int | None = 0,
+) -> CycleCommandProjection:
+    """Project the scheduler's automatic repeat of an accepted switch cycle.
+
+    The scheduler persists the first cycle's realized PWM ratio and submits that
+    ratio again when the cycle ends. Its independent integer conversion can
+    therefore change the reported OFF duration while preserving the ON time.
+    """
+    return project_cycle_command(
+        projection.projected_power,
+        cycle_min=projection.cycle_duration_sec / 60.0,
+        minimal_activation_delay=minimal_activation_delay,
+        minimal_deactivation_delay=minimal_deactivation_delay,
     )
 
 

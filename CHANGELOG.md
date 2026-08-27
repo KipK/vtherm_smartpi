@@ -25,6 +25,8 @@ All notable changes to this project will be documented in this file.
   thermostat, while retaining scheduler realization as independent evidence.
 - Synchronize SmartPI cycle projections with the scheduler effective minimum
   activation and deactivation delays.
+- Preserve frozen switch command ownership across successive scheduler
+  automatic PWM repeat quantizations without accepting unrelated cycles.
 
 ## [0.3.8] 2026-08-18
 

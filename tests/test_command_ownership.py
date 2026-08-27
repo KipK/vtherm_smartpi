@@ -11,6 +11,7 @@ from custom_components.vtherm_smartpi.smartpi.command_ownership import (
     CommandOwnershipSnapshot,
     CommandOwnershipTracker,
     project_cycle_command,
+    project_switch_repeat_command,
     project_valve_actuator_power,
 )
 
@@ -113,6 +114,124 @@ def test_legacy_cycle_helper_returns_projection_cycle_times() -> None:
         projection.off_time_sec,
         projection.forced_by_timing,
     )
+
+
+def test_switch_repeat_projection_matches_scheduler_double_quantization() -> None:
+    """An automatic repeat reprojects the first realized PWM ratio."""
+    direct = project_cycle_command(0.228005, cycle_min=2)
+
+    repeat = project_switch_repeat_command(direct)
+
+    assert (direct.on_time_sec, direct.off_time_sec) == (27, 92)
+    assert direct.projected_power == pytest.approx(0.225)
+    assert (repeat.on_time_sec, repeat.off_time_sec) == (27, 93)
+    assert repeat.projected_power == pytest.approx(0.225)
+
+
+def test_tracker_binds_reprojected_automatic_switch_repeat() -> None:
+    """A deferred switch request owns the scheduler's repeat callback."""
+    tracker = CommandOwnershipTracker()
+    direct = project_cycle_command(0.228005, cycle_min=2)
+    staged = tracker.stage(replace(_snapshot(0.228005), projection=direct))
+
+    binding = tracker.bind_started_cycle(
+        on_time_sec=27,
+        off_time_sec=93,
+        realized_power=0.225,
+        hvac_mode="heat",
+    )
+
+    assert binding.status == CommandOwnershipBindingStatus.BOUND
+    assert binding.snapshot is staged
+    assert binding.snapshot is not None
+    assert binding.snapshot.projection == direct
+    assert binding.snapshot.projection.requested_power == pytest.approx(0.228005)
+
+
+def test_tracker_reuses_reprojected_automatic_switch_repeat() -> None:
+    """A repeat without a new submission keeps the last proven snapshot."""
+    tracker = CommandOwnershipTracker()
+    direct = project_cycle_command(0.228005, cycle_min=2)
+    staged = tracker.stage(replace(_snapshot(0.228005), projection=direct))
+    tracker.bind_started_cycle(
+        on_time_sec=27,
+        off_time_sec=92,
+        realized_power=0.225,
+        hvac_mode="heat",
+    )
+    tracker.complete_active()
+
+    binding = tracker.bind_started_cycle(
+        on_time_sec=27,
+        off_time_sec=93,
+        realized_power=0.225,
+        hvac_mode="heat",
+    )
+
+    assert binding.status == CommandOwnershipBindingStatus.REUSED
+    assert binding.snapshot is staged
+
+
+def test_tracker_reuses_successive_scheduler_reprojections() -> None:
+    """A reused switch snapshot follows every exact scheduler re-projection."""
+    tracker = CommandOwnershipTracker()
+    direct = project_cycle_command(0.072223, cycle_min=3)
+    first_repeat = project_switch_repeat_command(direct)
+    second_repeat = project_switch_repeat_command(first_repeat)
+    staged = tracker.stage(replace(_snapshot(0.072223), projection=direct))
+
+    initial = tracker.bind_started_cycle(
+        on_time_sec=13,
+        off_time_sec=166,
+        realized_power=13 / 180,
+        hvac_mode="heat",
+    )
+    tracker.complete_active()
+    first_reuse = tracker.bind_started_cycle(
+        on_time_sec=12,
+        off_time_sec=167,
+        realized_power=12 / 180,
+        hvac_mode="heat",
+    )
+    tracker.complete_active()
+    second_reuse = tracker.bind_started_cycle(
+        on_time_sec=12,
+        off_time_sec=168,
+        realized_power=12 / 180,
+        hvac_mode="heat",
+    )
+
+    assert (direct.on_time_sec, first_repeat.on_time_sec, second_repeat.on_time_sec) == (
+        13,
+        12,
+        12,
+    )
+    assert (
+        direct.off_time_sec,
+        first_repeat.off_time_sec,
+        second_repeat.off_time_sec,
+    ) == (166, 167, 168)
+    assert initial.status == CommandOwnershipBindingStatus.BOUND
+    assert first_reuse.status == CommandOwnershipBindingStatus.REUSED
+    assert second_reuse.status == CommandOwnershipBindingStatus.REUSED
+    assert second_reuse.snapshot is staged
+
+
+def test_tracker_rejects_switch_off_duration_outside_direct_and_repeat() -> None:
+    """Only the exact scheduler repeat may differ from the direct projection."""
+    tracker = CommandOwnershipTracker()
+    direct = project_cycle_command(0.228005, cycle_min=2)
+    tracker.stage(replace(_snapshot(0.228005), projection=direct))
+
+    binding = tracker.bind_started_cycle(
+        on_time_sec=27,
+        off_time_sec=91,
+        realized_power=0.225,
+        hvac_mode="heat",
+    )
+
+    assert binding.status == CommandOwnershipBindingStatus.REJECTED
+    assert binding.reason == "ownership_commit_mismatch"
 
 
 def test_ownership_value_objects_keep_a_frozen_projection() -> None:
