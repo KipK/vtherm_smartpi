@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [0.4.0]
 
+- Reworked attributes schema and HA database recording rules.
+  Now it only records the "history" dict in normal mode and booth "live" and "history" dicts in debug mode.
+  This will prevent HA database to be bloated by smartpi diagnostics in non debug mode.
 - Add action service to pause and resume SmartPI thermal learning
   This can be usefull to trigger when a secondary heating system could
   bias the thermal model.
