@@ -292,7 +292,7 @@ Do not try to tune several parameters at once during the first learning period. 
 | **Release tau factor**         | Scales the integral release delay relative to the learned time constant.                          | `0.5`         |
 | **Lower hysteresis threshold** | Restart threshold during bootstrap learning.                                                      | `0.3°C`       |
 | **Upper hysteresis threshold** | Stop threshold during bootstrap learning.                                                         | `0.5°C`       |
-| **SmartPI debug mode**         | Publishes more detailed diagnostics.                                                              | `disabled`    |
+| **SmartPI debug mode**         | Records the complete live diagnostic payload for historical analysis.                             | `disabled`    |
 | **Valve curve linearization**  | Adapts SmartPI demand to non-linear radiator valves.                                              | `disabled`    |
 | **Minimum valve opening**      | First useful opening when linearization is enabled.                                               | `7%`          |
 | **Demand at knee**             | SmartPI demand corresponding to the valve slope change.                                           | `80%`         |
@@ -307,9 +307,11 @@ Enable it only on very slow thermal systems with long PWM cycles, where waiting 
 
 ## Diagnostics and Markdown card
 
-For a complete list of all diagnostic attributes in normal and debug modes, see the [SmartPI Diagnostics Guide](./diagnostics.md).
+For the diagnostic schema and Recorder profiles, see the [SmartPI Diagnostics Guide](./diagnostics.md).
 
-SmartPI publishes its diagnostics directly at the root of the attributes of the SmartPI diagnostic sensor entity.
+The SmartPI diagnostic sensor publishes a versioned envelope. Dashboards and
+Markdown cards read complete diagnostics from `attributes.live`; historical
+graphs read the stable eight-series contract from `attributes.history`.
 
 This is the main place to check:
 
@@ -317,19 +319,19 @@ This is the main place to check:
 - whether the model is considered reliable,
 - whether recalibration or degraded mode has been reported.
 
-The most useful block during learning is `ab_learning`.
+The most useful live block during learning is `live.learning`.
 
 Important fields:
 
 - `stage`: overall state such as `bootstrap`, `learning`, `monitoring`, or `degraded`,
 - `bootstrap_progress_percent`: bootstrap progress,
 - `bootstrap_status`: current bootstrap step,
-- `accepted_samples_a`: validated heating samples,
-- `accepted_samples_b`: validated cooling samples,
-- `target_samples`: target history size for the full A/B buffers,
+- `accepted_updates_a`: accepted heating-model updates,
+- `accepted_updates_b`: accepted heat-loss-model updates,
+- `history_target`: target history size for the A/B buffers,
 - `last_reason`: last learning accept or reject reason.
 
-Other useful blocks in normal mode:
+Other useful blocks under `live`:
 
 - `control`: current regulation phase and mode,
 - `power`: current and next cycle command information,
@@ -350,7 +352,10 @@ In normal mode, the `setpoint` block can show:
 - `landing_u_cap`: internal heating-demand cap applied during landing,
 - `landing_coast_required`: whether SmartPI is coasting because the model predicts enough stored heat.
 
-If SmartPI debug mode is enabled, the `debug` block adds more detailed internal data, including the landing prediction, target margin, release decision, and command before/after the landing cap.
+Advanced values used by the supplied card are always available under
+`live.analysis`. Debug mode does not add or remove published fields: it allows
+Home Assistant Recorder to retain the complete `live` block. In normal mode,
+Recorder retains only `history` while all live values remain visible.
 
 A Home Assistant Markdown card is also available to display SmartPI diagnostics in a simpler way in the dashboard.
 
@@ -378,7 +383,7 @@ Use this service to pause or resume thermal learning for one SmartPI thermostat.
 
 While learning is paused, regulation continues with the model already learned, but SmartPI does not collect A/B or dead-time observations. Pausing does not erase the learned parameters or dead-time history. SmartPI starts fresh observation windows when the setting changes, and the setting is preserved across Home Assistant restarts.
 
-The current setting is available as `specific_states.smartpi_learning_enabled` on the climate entity and as `ab_learning.enabled` in the published diagnostics.
+The current setting is available as `specific_states.smartpi_learning_enabled` on the climate entity and as `live.learning.enabled` in the diagnostic sensor attributes.
 
 ### `reset_smartpi_learning`
 

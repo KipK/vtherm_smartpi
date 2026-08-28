@@ -197,7 +197,7 @@ def test_calibration_heat_deadtime_survives_duplicate_calculate_before_cycle_com
 
 
 def test_attribute_exposure():
-    """Verify that SmartPI published and debug diagnostics are correctly exposed."""
+    """Verify that SmartPI canonical diagnostics are correctly exposed."""
     algo = create_smartpi()
     now_ts = time.time()
     algo.calibration_mgr.last_calibration_time = now_ts
@@ -210,12 +210,7 @@ def test_attribute_exposure():
     assert attrs["calibration"]["last_time"] == datetime.fromtimestamp(now_ts).isoformat()
     assert attrs["autocalib"]["state"] == AutoCalibState.WAITING_SNAPSHOT.value
     assert attrs["autocalib"]["model_degraded"] is False
-    assert "debug" in attrs
-    assert attrs["debug"]["calibration_state"] == SmartPICalibrationPhase.IDLE
-    assert attrs["debug"]["calibration_retry_count"] == 2
-    assert attrs["debug"]["last_calibration_time"] == datetime.fromtimestamp(now_ts).isoformat()
-    assert "autocalib_state" in attrs["debug"]
-    assert "autocalib_model_degraded" in attrs["debug"]
+    assert "debug" not in attrs
 
 
 # =============================================================================

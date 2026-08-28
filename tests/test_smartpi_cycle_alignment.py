@@ -423,16 +423,23 @@ async def test_smartpi_publishes_when_sensor_input_changes_mid_cycle():
     t.prop_algorithm = algo
     t.cycle_scheduler.is_cycle_running = True
 
-    with patch.object(handler, "_async_save", new_callable=AsyncMock):
+    with patch.object(handler, "_async_save", new_callable=AsyncMock), patch(
+        "custom_components.vtherm_smartpi.handler.async_dispatcher_send"
+    ) as dispatcher_send:
         await handler.control_heating(timestamp=None)
         assert handler.should_publish_intermediate() is True
+        dispatcher_send.assert_called_once()
 
+        dispatcher_send.reset_mock()
         await handler.control_heating(timestamp=None)
         assert handler.should_publish_intermediate() is False
+        dispatcher_send.assert_not_called()
 
+        dispatcher_send.reset_mock()
         t.current_temperature = 19.2
         await handler.control_heating(timestamp=None)
         assert handler.should_publish_intermediate() is True
+        dispatcher_send.assert_called_once()
 
 
 # We can test that by creating the handler, starting the timer, and seeing what it calls.

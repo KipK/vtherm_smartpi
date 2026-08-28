@@ -292,7 +292,7 @@ Pour démarrer simplement :
 | **Facteur release tau**              | Échelle du délai de relâchement intégral par rapport à la constante de temps apprise.                  | `0.5`             |
 | **Seuil bas d'hystérésis**           | Seuil de redémarrage pendant le bootstrap.                                                             | `0.3°C`           |
 | **Seuil haut d'hystérésis**          | Seuil d'arrêt pendant le bootstrap.                                                                    | `0.5°C`           |
-| **Mode debug SmartPI**               | Publie des diagnostics plus détaillés.                                                                 | `désactivé`       |
+| **Mode debug SmartPI**               | Enregistre les diagnostics live complets pour l'analyse historique.                                    | `désactivé`       |
 | **Linéarisation de courbe de vanne** | Adapte la demande SmartPI aux vannes de radiateur non linéaires.                                       | `désactivé`       |
 | **Ouverture minimale de vanne**      | Première ouverture utile lorsque la linéarisation est activée.                                         | `7%`              |
 | **Demande au coude**                 | Demande SmartPI correspondant au changement de pente de la vanne.                                      | `80%`             |
@@ -307,9 +307,12 @@ Activez cette option uniquement sur les systèmes thermiques à très forte iner
 
 ## Diagnostics et carte Markdown
 
-Pour obtenir la liste complète de tous les attributs de diagnostic en modes normal et debug, consultez le [Guide des Diagnostics SmartPI](./diagnostics.md).
+Pour le schéma des diagnostics et les profils Recorder, consultez le [Guide des Diagnostics SmartPI](./diagnostics.md).
 
-SmartPI publie ses diagnostics directement à la racine des attributs de l'entité capteur de diagnostic SmartPI.
+Le capteur de diagnostic SmartPI publie une enveloppe versionnée. Les dashboards
+et cartes Markdown lisent les diagnostics complets dans `attributes.live` ; les
+graphiques historiques lisent le contrat stable de huit séries dans
+`attributes.history`.
 
 C'est l'endroit principal à consulter pour savoir :
 
@@ -317,19 +320,19 @@ C'est l'endroit principal à consulter pour savoir :
 - si le modèle est considéré comme fiable,
 - si une recalibration ou un mode dégradé a été signalé.
 
-Le bloc le plus utile pendant l'apprentissage est `ab_learning`.
+Le bloc live le plus utile pendant l'apprentissage est `live.learning`.
 
 Champs importants :
 
 - `stage` : état global comme `bootstrap`, `learning`, `monitoring` ou `degraded`,
 - `bootstrap_progress_percent` : progression du bootstrap,
 - `bootstrap_status` : étape bootstrap en cours,
-- `accepted_samples_a` : échantillons de chauffe validés,
-- `accepted_samples_b` : échantillons de refroidissement validés,
-- `target_samples` : taille cible des buffers A/B complets,
+- `accepted_updates_a` : mises à jour acceptées du modèle de chauffe,
+- `accepted_updates_b` : mises à jour acceptées du modèle de déperdition,
+- `history_target` : taille cible des buffers A/B,
 - `last_reason` : dernière raison d'acceptation ou de rejet d'apprentissage.
 
-Autres blocs utiles en mode normal :
+Autres blocs utiles sous `live` :
 
 - `control` : phase et mode de régulation courants,
 - `power` : informations de commande du cycle courant et du suivant,
@@ -350,7 +353,11 @@ En mode normal, le bloc `setpoint` peut contenir :
 - `landing_u_cap` : cap de demande de chauffe interne appliqué pendant l'atterrissage,
 - `landing_coast_required` : indique si SmartPI laisse la pièce en roue libre parce que le modèle prédit assez de chaleur stockée.
 
-Si le mode debug SmartPI est activé, le bloc `debug` ajoute des informations internes plus détaillées, notamment la prédiction d'atterrissage, la marge cible, la décision de relâchement et la commande avant/après le cap d'atterrissage.
+Les valeurs avancées utilisées par la carte fournie sont toujours disponibles
+dans `live.analysis`. Le mode debug n'ajoute ni ne retire de champs publiés : il
+autorise le Recorder Home Assistant à conserver le bloc `live` complet. En mode
+normal, le Recorder conserve uniquement `history`, tandis que toutes les valeurs
+live restent visibles.
 
 Une carte Markdown Home Assistant est aussi disponible pour afficher plus simplement les diagnostics SmartPI dans le tableau de bord.
 
@@ -378,7 +385,7 @@ Utilisez ce service pour mettre en pause ou reprendre l'apprentissage thermique 
 
 Pendant la pause, la régulation continue avec le modèle déjà appris, mais SmartPI ne collecte plus d'observations A/B ni de temps mort. La pause n'efface ni les paramètres appris ni l'historique des temps morts. SmartPI repart avec des fenêtres d'observation vierges à chaque changement de ce réglage, qui est conservé après un redémarrage de Home Assistant.
 
-Le réglage courant est disponible dans `specific_states.smartpi_learning_enabled` sur l'entité climate et dans `ab_learning.enabled` dans les diagnostics publiés.
+Le réglage courant est disponible dans `specific_states.smartpi_learning_enabled` sur l'entité climate et dans `live.learning.enabled` dans les attributs du capteur de diagnostic.
 
 ### `reset_smartpi_learning`
 

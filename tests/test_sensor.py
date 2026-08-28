@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.vtherm_smartpi.const import (
     CONF_PROP_FUNCTION,
+    CONF_SMART_PI_DEBUG,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
@@ -22,7 +23,10 @@ from custom_components.vtherm_smartpi.const import (
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
 from custom_components.vtherm_smartpi.sensor import async_setup_entry
-from custom_components.vtherm_smartpi.sensor import SmartPIDiagnosticSensor
+from custom_components.vtherm_smartpi.sensor import (
+    SmartPIDiagnosticSensor,
+    SmartPIRecordedDiagnosticSensor,
+)
 
 VT_DOMAIN = "versatile_thermostat"
 
@@ -39,7 +43,18 @@ class DummySmartPI(SmartPI):
         return self._phase
 
     def get_published_diagnostics(self):
-        return {"control": {"phase": self.phase.value}}
+        return {
+            "control": {"phase": self.phase.value},
+            "temperature": {"indoor": 20.5},
+            "setpoint": {"filtered_setpoint": 21.0},
+            "power": {
+                "applied_percent": 30.0,
+                "command_percent": 35.0,
+                "pi_percent": 20.0,
+                "ff_percent": 15.0,
+            },
+            "model": {"a": 0.05, "b": 0.001},
+        }
 
 
 @pytest.mark.asyncio
@@ -99,6 +114,40 @@ async def test_global_entry_creates_only_default_bound_diagnostic_sensors(hass) 
     created_entities = async_add_entities.call_args.args[0]
     assert len(created_entities) == 1
     assert created_entities[0].unique_id == "smartpi_diag_vt-default"
+    assert type(created_entities[0]) is SmartPIDiagnosticSensor
+
+
+@pytest.mark.asyncio
+async def test_debug_entry_records_live_diagnostics(hass) -> None:
+    """A debug entry must use the sensor profile that records live diagnostics."""
+    vt_entry = MockConfigEntry(
+        domain=VT_DOMAIN,
+        unique_id="vt-debug",
+        data={CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI},
+    )
+    vt_entry.add_to_hass(hass)
+    plugin_entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=f"{DOMAIN}-vt-debug",
+        data={CONF_TARGET_VTHERM: "vt-debug"},
+        options={CONF_SMART_PI_DEBUG: True},
+    )
+    plugin_entry.add_to_hass(hass)
+    er.async_get(hass).async_get_or_create(
+        "climate",
+        VT_DOMAIN,
+        "vt-debug",
+        suggested_object_id="vt_debug",
+        config_entry=vt_entry,
+    )
+    async_add_entities = Mock()
+
+    await async_setup_entry(hass, plugin_entry, async_add_entities)
+
+    created_entities = async_add_entities.call_args.args[0]
+    assert len(created_entities) == 1
+    assert type(created_entities[0]) is SmartPIRecordedDiagnosticSensor
+    assert created_entities[0]._unrecorded_attributes == frozenset()
 
 
 @pytest.mark.asyncio
@@ -442,6 +491,42 @@ async def test_diagnostic_sensor_state_reflects_smartpi_phase(
     sensor._update_from_climate()
 
     assert sensor.native_value == expected_state
+
+
+def test_diagnostic_sensor_builds_stable_envelope_and_deduplicates(hass) -> None:
+    """The sensor must publish the v2 envelope only when its content changes."""
+    climate_entity_id = "climate.test_vtherm"
+    hass.states.async_set(climate_entity_id, "heat")
+    live = DummySmartPI(SmartPIPhase.STABLE)
+    hass.data["climate"] = SimpleNamespace(
+        entities=[
+            SimpleNamespace(
+                entity_id=climate_entity_id,
+                prop_algorithm=live,
+            )
+        ]
+    )
+    sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm")
+
+    assert sensor._update_from_climate() is True
+    assert sensor.extra_state_attributes == {
+        "schema_version": 2,
+        "live": live.get_published_diagnostics(),
+        "history": {
+            "temperature": {"indoor": 20.5},
+            "setpoint": {"filtered_setpoint": 21.0},
+            "power": {
+                "applied_percent": 30.0,
+                "command_percent": 35.0,
+                "pi_percent": 20.0,
+                "ff_percent": 15.0,
+            },
+            "model": {"a": 0.05, "b": 0.001},
+        },
+    }
+    assert sensor.force_update is False
+    assert sensor._unrecorded_attributes == frozenset({"live"})
+    assert sensor._update_from_climate() is False
 
 
 @pytest.mark.asyncio

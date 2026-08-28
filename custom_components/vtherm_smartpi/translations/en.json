@@ -15,7 +15,7 @@
           "smart_pi_use_ff3": "Use FF3",
           "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
-          "smart_pi_debug": "Debug mode",
+          "smart_pi_debug": "Record full diagnostics (debug)",
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
         }
       },
@@ -38,7 +38,7 @@
           "smart_pi_use_ff3": "Use FF3",
           "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
-          "smart_pi_debug": "Debug mode",
+          "smart_pi_debug": "Record full diagnostics (debug)",
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
         }
       },
@@ -74,7 +74,7 @@
           "smart_pi_use_ff3": "Use FF3",
           "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
-          "smart_pi_debug": "Debug mode",
+          "smart_pi_debug": "Record full diagnostics (debug)",
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
         }
       },

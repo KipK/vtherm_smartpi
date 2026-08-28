@@ -592,8 +592,8 @@ class SmartPIHandler:
                         "%s - AutoCalib: calibration requested by supervisor", t.name
                     )
 
-        # Dispatch an update signal to the diagnostic sensor so it records attributes for this cycle
-        async_dispatcher_send(t.hass, f"smartpi_diag_update_{t.unique_id}")
+        if self._should_publish_intermediate:
+            async_dispatcher_send(t.hass, f"smartpi_diag_update_{t.unique_id}")
 
     async def on_state_changed(self, changed: bool):
         """Handle state changes."""

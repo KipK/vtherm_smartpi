@@ -15,7 +15,7 @@
           "smart_pi_use_ff3": "Utiliser FF3",
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
-          "smart_pi_debug": "Mode debug",
+          "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
       },
@@ -38,7 +38,7 @@
           "smart_pi_use_ff3": "Utiliser FF3",
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
-          "smart_pi_debug": "Mode debug",
+          "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
       },
@@ -74,7 +74,7 @@
           "smart_pi_use_ff3": "Utiliser FF3",
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
-          "smart_pi_debug": "Mode debug",
+          "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
       },

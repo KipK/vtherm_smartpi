@@ -338,8 +338,102 @@ def _build_command_ownership(algo: SmartPI) -> Dict[str, Any]:
     }
 
 
+def _build_analysis_diagnostics(diag: Dict[str, Any]) -> Dict[str, Any]:
+    """Return advanced diagnostics that remain useful to live consumers."""
+    analysis = {
+        "control": {
+            "cycle_min": diag["cycle_min"],
+            "error_filtered": diag["error_filtered"],
+            "error_p": diag["error_p"],
+            "aw_du": diag["aw_du"],
+            "forced_by_timing": diag["forced_by_timing"],
+            "integral_guard_mode": diag["integral_guard_mode"],
+            "in_core_deadband": diag["in_core_deadband"],
+            "near_band_below_deg": diag["near_band_below_deg"],
+            "near_band_above_deg": diag["near_band_above_deg"],
+            "near_band_source": diag["near_band_source"],
+            "temperature_slope_h": diag["temperature_slope_h"],
+        },
+        "learning": {
+            "learn_ok_count": diag["learn_ok_count"],
+            "learn_skip_count": diag["learn_skip_count"],
+            "ff_warmup_ok_count": diag["ff_warmup_ok_count"],
+            "ff_warmup_cycles": diag["ff_warmup_cycles"],
+            "window_mean_power": diag["learn_u_avg"],
+            "window_power_cv": diag["learn_u_cv"],
+            "window_power_std": diag["learn_u_std"],
+        },
+        "trajectory": {
+            "start_setpoint": diag["trajectory_start_sp"],
+            "target_setpoint": diag["trajectory_target_sp"],
+            "tau_ref_min": diag["trajectory_tau_ref"],
+            "elapsed_s": diag["trajectory_elapsed_s"],
+            "phase": diag["trajectory_phase"],
+            "pending_target_change_braking": diag[
+                "trajectory_pending_target_change_braking"
+            ],
+            "braking_needed": diag["trajectory_braking_needed"],
+            "model_ready": diag["trajectory_model_ready"],
+            "remaining_cycle_min": diag["trajectory_remaining_cycle_min"],
+            "next_cycle_reference": diag["trajectory_next_cycle_u_ref"],
+            "bumpless_delta": diag["trajectory_bumpless_u_delta"],
+            "bumpless_ready": diag["trajectory_bumpless_ready"],
+        },
+        "landing": {
+            "setpoint_for_p_cap": diag["landing_sp_for_p_cap"],
+            "predicted_temperature": diag["landing_predicted_temperature"],
+            "predicted_rise": diag["landing_predicted_rise"],
+            "target_margin": diag["landing_target_margin"],
+            "release_allowed": diag["landing_release_allowed"],
+            "time_to_target_min": diag["landing_time_to_target_min"],
+            "release_blocked_by_slope": diag[
+                "landing_release_blocked_by_slope"
+            ],
+            "command_before_cap": diag["landing_u_cmd_before_cap"],
+            "command_after_cap": diag["landing_u_cmd_after_cap"],
+        },
+        "deadtime": {
+            "state": diag["deadtime_state"],
+            "last_power": diag["deadtime_last_power"],
+        },
+        "governance": {
+            "last_freeze_reason_gains": diag["last_freeze_reason_gains"],
+            "last_decision_gains": diag["last_decision_gains"],
+            "kp_source": diag["kp_source"],
+        },
+        "feedforward": {
+            "reason": diag["ff_reason"],
+            "u_ff1": diag["u_ff1"],
+            "u_ff2": diag["u_ff2"],
+            "u_ff3": diag["u_ff3"],
+            "u_ff_final": diag["u_ff_final"],
+            "u_ff_effective": diag["u_ff_eff"],
+            "ff2_authority": diag["ff2_authority"],
+            "ff2_frozen": diag["ff2_frozen"],
+            "ff2_freeze_reason": diag["ff2_freeze_reason"],
+            "ff2_trim_delta": diag["ff2_trim_delta"],
+            "ff3_raw_reason_disabled": diag["ff3_raw_reason_disabled"],
+            "ff3_selected_candidate": diag["ff3_selected_candidate"],
+            "ff3_horizon_cycles": diag["ff3_horizon_cycles"],
+            "ff3_deadtime_cycles": diag["ff3_deadtime_cycles"],
+            "ff3_horizon_capped": diag["ff3_horizon_capped"],
+            "ff3_action_sensitivity": diag["ff3_action_sensitivity"],
+            "ff3_prediction_quality": diag["ff3_prediction_quality"],
+            "ff3_authority_factor": diag["ff3_authority_factor"],
+            "ff3_disturbance_active": diag["ff3_disturbance_active"],
+            "ff3_disturbance_reason": diag["ff3_disturbance_reason"],
+            "ff3_disturbance_kind": diag["ff3_disturbance_kind"],
+            "ff3_residual_persistent": diag["ff3_residual_persistent"],
+            "ff3_dynamic_coherent": diag["ff3_dynamic_coherent"],
+        },
+    }
+    if pred := diag.get("pred"):
+        analysis["twin"] = pred
+    return analysis
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
-    """Return the compact SmartPI summary published in Home Assistant."""
+    """Return the canonical SmartPI live diagnostics."""
     diag = _build_full_diagnostics(algo)
 
     return {
@@ -369,8 +463,8 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "applied_percent": _ratio_to_percent(diag["u_applied"]),
         },
         "temperature": {
-            "sensor": diag["sensor_temperature"],
-            "ext_sensor": diag["ext_sensor_temperature"],
+            "indoor": diag["sensor_temperature"],
+            "outdoor": diag["ext_sensor_temperature"],
             "error": diag["error"],
             "integral_error": diag["integral_error"],
             "integral_mode": diag["i_mode"],
@@ -391,7 +485,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "a_stability_ratio": diag["diag_a_mad_over_med"],
             "b_stability_ratio": diag["diag_b_mad_over_med"],
         },
-        "ab_learning": {
+        "learning": {
             "enabled": algo.learning_enabled,
             "stage": _build_ab_learning_stage(algo, diag),
             "bootstrap_progress_percent": diag.get("bootstrap_progress"),
@@ -404,9 +498,6 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "accepted_updates_a": diag["learn_ok_count_a"],
             "accepted_updates_b": diag["learn_ok_count_b"],
             "learn_b_converged": diag["learn_b_converged"],
-            "accepted_samples_a": diag["learn_ok_count_a"],
-            "accepted_samples_b": diag["learn_ok_count_b"],
-            "target_samples": AB_HISTORY_SIZE,
             "last_reason": diag["learn_last_reason"],
             "a_drift_state": diag["a_drift_state"],
             "b_drift_state": diag["b_drift_state"],
@@ -423,7 +514,6 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "deadband_power_source": diag["deadband_power_source"],
             "deadband_p_mode": diag["deadband_p_mode"],
             "fftrim": {
-                "state": diag["fftrim_observer_state"],
                 "stationary": {
                     "state": diag["fftrim_observer_state"],
                     "window_duration_s": diag["fftrim_window_duration_s"],
@@ -438,91 +528,52 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
                         "fftrim_stationary_last_reject_reason"
                     ],
                 },
+                "periodic": {
+                    "state": diag["fftrim_periodic_state"],
+                    "window_duration_s": diag[
+                        "fftrim_periodic_window_duration_s"
+                    ],
+                    "target_duration_s": diag[
+                        "fftrim_periodic_target_duration_s"
+                    ],
+                    "measurement_count": diag[
+                        "fftrim_periodic_measurement_count"
+                    ],
+                    "amplitude_c": diag["fftrim_periodic_amplitude_c"],
+                    "closure_error_c": diag[
+                        "fftrim_periodic_closure_error_c"
+                    ],
+                    "last_reject_reason": diag[
+                        "fftrim_periodic_last_reject_reason"
+                    ],
+                },
                 "observation_mode": diag["fftrim_observation_mode"],
                 "last_reject_reason": diag["fftrim_last_reject_reason"],
                 "last_update_reason": diag["fftrim_last_update_reason"],
-                "stationary_last_reject_reason": diag[
-                    "fftrim_stationary_last_reject_reason"
-                ],
                 "last_result": diag["fftrim_last_result"],
                 "last_transaction": diag["fftrim_last_transaction"],
                 "windows_since_update": diag["fftrim_windows_since_update"],
-                "window_duration_s": diag["fftrim_window_duration_s"],
-                "window_target_duration_s": diag[
-                    "fftrim_window_target_duration_s"
-                ],
-                "measurement_count": diag["fftrim_measurement_count"],
-                "periodic_state": diag["fftrim_periodic_state"],
-                "periodic_window_duration_s": diag[
-                    "fftrim_periodic_window_duration_s"
-                ],
-                "periodic_target_duration_s": diag[
-                    "fftrim_periodic_target_duration_s"
-                ],
-                "periodic_measurement_count": diag[
-                    "fftrim_periodic_measurement_count"
-                ],
-                "periodic_amplitude_c": diag[
-                    "fftrim_periodic_amplitude_c"
-                ],
-                "periodic_closure_error_c": diag[
-                    "fftrim_periodic_closure_error_c"
-                ],
-                "periodic_last_reject_reason": diag[
-                    "fftrim_periodic_last_reject_reason"
-                ],
-                "alignment_delay_s": diag["fftrim_alignment_delay_s"],
-                "power_coverage_ratio": diag[
-                    "fftrim_power_coverage_ratio"
-                ],
-                "mean_causal_power": diag["fftrim_mean_causal_power"],
-                "mean_ff1": diag["fftrim_mean_ff1"],
-                "mean_temperature": diag["fftrim_mean_temperature"],
-                "mean_error": diag["fftrim_mean_error"],
-                "mean_slope_h": diag["fftrim_mean_slope_h"],
-                "observed_hold_power": diag[
-                    "fftrim_observed_hold_power"
-                ],
-                "target_trim": diag["fftrim_target_trim"],
-                "correction": diag["fftrim_correction"],
-                "mean_p_power": diag["fftrim_mean_p_power"],
-                "mean_i_power": diag["fftrim_mean_i_power"],
-                "mean_visible_ff_power": diag[
-                    "fftrim_mean_visible_ff_power"
-                ],
-                "mean_ki": diag["fftrim_mean_ki"],
-                "mean_delivery_residual": diag[
-                    "fftrim_mean_delivery_residual"
-                ],
-                "physical_power_deficit": diag[
-                    "fftrim_physical_power_deficit"
-                ],
-                "decomposed_correction": diag[
-                    "fftrim_decomposed_correction"
-                ],
-                "requested_trim_delta": diag[
-                    "fftrim_requested_trim_delta"
-                ],
-                "stored_trim_delta": diag["fftrim_stored_trim_delta"],
-                "applied_trim_delta": diag["fftrim_applied_trim_delta"],
-                "transferable_i_power": diag[
-                    "fftrim_transferable_i_power"
-                ],
-                "requested_i_transfer": diag[
-                    "fftrim_requested_i_transfer"
-                ],
-                "applied_i_transfer": diag["fftrim_applied_i_transfer"],
-                "net_command_delta": diag["fftrim_net_command_delta"],
-                "bumpless_transfer_state": diag[
-                    "fftrim_bumpless_transfer_state"
-                ],
-                "bumpless_transfer_reason": diag[
-                    "fftrim_bumpless_transfer_reason"
-                ],
-                "transfer_pending_engagement": diag[
-                    "fftrim_transfer_pending_engagement"
-                ],
-                "transfer_quality": diag["fftrim_transfer_quality"],
+                "transfer": {
+                    "requested_trim_delta": diag[
+                        "fftrim_requested_trim_delta"
+                    ],
+                    "stored_trim_delta": diag["fftrim_stored_trim_delta"],
+                    "applied_trim_delta": diag["fftrim_applied_trim_delta"],
+                    "transferable_i_power": diag[
+                        "fftrim_transferable_i_power"
+                    ],
+                    "requested_i_transfer": diag[
+                        "fftrim_requested_i_transfer"
+                    ],
+                    "applied_i_transfer": diag["fftrim_applied_i_transfer"],
+                    "net_command_delta": diag["fftrim_net_command_delta"],
+                    "state": diag["fftrim_bumpless_transfer_state"],
+                    "reason": diag["fftrim_bumpless_transfer_reason"],
+                    "pending_engagement": diag[
+                        "fftrim_transfer_pending_engagement"
+                    ],
+                    "quality": diag["fftrim_transfer_quality"],
+                },
                 "command_ownership": diag["command_ownership"],
             },
         },
@@ -530,6 +581,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "filtered_setpoint": diag["filtered_setpoint"],
             "trajectory_active": diag["setpoint_trajectory_active"],
             "trajectory_source": diag["trajectory_source"],
+            "boost_active": diag["setpoint_boost_active"],
             "landing_active": diag["landing_active"],
             "landing_reason": diag["landing_reason"],
             "landing_u_cap": diag["landing_u_cap"],
@@ -547,14 +599,13 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "retry_count": diag["calibration_retry_count"],
             "last_time": diag["last_calibration_time"],
         },
+        "analysis": _build_analysis_diagnostics(diag),
     }
 
 
 def build_debug_diagnostics(algo: SmartPI) -> Dict[str, Any]:
-    """Return published SmartPI blocks plus a nested debug payload."""
-    published = build_published_diagnostics(algo)
-    published["debug"] = _build_full_diagnostics(algo)
-    return published
+    """Return the canonical live diagnostics for compatibility callers."""
+    return build_published_diagnostics(algo)
 
 
 def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:

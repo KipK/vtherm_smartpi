@@ -53,7 +53,7 @@ def test_setpoint_boost_activates_on_setpoint_increase() -> None:
 
     assert smartpi.setpoint_boost_active is True
     assert smartpi.sp_mgr.prev_setpoint_for_boost == 19.0
-    assert smartpi.get_debug_diagnostics()["debug"]["setpoint_boost_active"] is True
+    assert smartpi.get_debug_diagnostics()["setpoint"]["boost_active"] is True
 
 
 def test_setpoint_boost_deactivates_when_error_small() -> None:

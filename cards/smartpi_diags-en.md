@@ -2,7 +2,8 @@
 {% set sensor_entity = 'sensor.smartpi_diagnostics' %}
 {% set entity_name = 'Simu' %}
 
-{% set spi = states[sensor_entity].attributes if states(sensor_entity) else none %}
+{% set attrs = states[sensor_entity].attributes if states(sensor_entity) else {} %}
+{% set spi = attrs.get('live', {}) %}
 
 {% if not spi or spi.get('control') is none %}
 <ha-alert alert-type="warning">No SmartPI data available for this entity. Check the sensor ID.</ha-alert>
@@ -12,7 +13,7 @@
 {% set power = spi.get('power', {}) %}
 {% set temp = spi.get('temperature', {}) %}
 {% set model = spi.get('model', {}) %}
-{% set learning = spi.get('ab_learning', {}) %}
+{% set learning = spi.get('learning', {}) %}
 {% set gov = spi.get('governance', {}) %}
 {% set ff = spi.get('feedforward', {}) %}
 {% set fftrim = ff.get('fftrim', {}) %}
@@ -20,8 +21,16 @@
 {% set setpoint = spi.get('setpoint', {}) %}
 {% set autocalib = spi.get('autocalib', {}) %}
 {% set calibration = spi.get('calibration', {}) %}
-{% set debug = spi.get('debug', {}) %}
-{% set has_debug = debug | count > 0 %}
+{% set analysis = spi.get('analysis', {}) %}
+{% set analysis_control = analysis.get('control', {}) %}
+{% set analysis_learning = analysis.get('learning', {}) %}
+{% set analysis_trajectory = analysis.get('trajectory', {}) %}
+{% set analysis_landing = analysis.get('landing', {}) %}
+{% set analysis_deadtime = analysis.get('deadtime', {}) %}
+{% set analysis_governance = analysis.get('governance', {}) %}
+{% set analysis_ff = analysis.get('feedforward', {}) %}
+{% set analysis_twin = analysis.get('twin', {}) %}
+{% set has_analysis = analysis | count > 0 %}
 
 {% set phase = control.get('phase', 'unknown') %}
 {% set mode = control.get('mode', 'unknown') %}
@@ -29,7 +38,7 @@
 {% set restart_reason = control.get('restart_reason', 'none') %}
 {% set kp = control.get('kp') %}
 {% set ki = control.get('ki') %}
-{% set t_in = temp.get('sensor') %}
+{% set t_in = temp.get('indoor') %}
 {% set t_set = state_attr(climate_entity, 'temperature') %}
 {% set c_attrs = states[climate_entity].attributes if states(climate_entity) else {} %}
 {% set t_ext = c_attrs.get('ext_current_temperature', c_attrs.get('specific_states', {}).get('ext_current_temperature')) %}
@@ -42,9 +51,9 @@
 
 {% set current_cycle = power.get('current_cycle_percent', 0) | float(0) %}
 {% set next_cycle = power.get('next_cycle_percent', 0) | float(0) %}
-{% set valve_linearization_enabled = power.get('valve_linearization_enabled', debug.get('valve_linearization_enabled', false)) %}
-{% set linear_current_cycle = power.get('linear_current_cycle_percent', debug.get('linear_committed_on_percent', current_cycle)) | float(0) %}
-{% set linear_next_cycle = power.get('linear_next_cycle_percent', debug.get('linear_on_percent', next_cycle)) | float(0) %}
+{% set valve_linearization_enabled = power.get('valve_linearization_enabled', false) %}
+{% set linear_current_cycle = power.get('linear_current_cycle_percent', current_cycle) | float(0) %}
+{% set linear_next_cycle = power.get('linear_next_cycle_percent', next_cycle) | float(0) %}
 {% set ff_pct = power.get('ff_percent', 0) | float(0) %}
 {% set pi_pct = power.get('pi_percent', 0) | float(0) %}
 {% set hold_pct = power.get('hold_percent', 0) | float(0) %}
@@ -55,8 +64,8 @@
 {% set tau_reliable = model.get('tau_reliable', false) %}
 {% set dt_heat = model.get('deadtime_heat_s') %}
 {% set dt_cool = model.get('deadtime_cool_s') %}
-{% set deadtime_heat_reliable = model.get('deadtime_heat_reliable', debug.get('deadtime_heat_reliable', false)) %}
-{% set deadtime_cool_reliable = model.get('deadtime_cool_reliable', debug.get('deadtime_cool_reliable', false)) %}
+{% set deadtime_heat_reliable = model.get('deadtime_heat_reliable', false) %}
+{% set deadtime_cool_reliable = model.get('deadtime_cool_reliable', false) %}
 
 {% set stage = learning.get('stage', 'unknown') %}
 {% set bootstrap_progress = learning.get('bootstrap_progress_percent') %}
@@ -68,9 +77,6 @@
 {% set history_target = learning.get('history_target', 0) | int(0) %}
 {% set accepted_updates_a = learning.get('accepted_updates_a', 0) | int(0) %}
 {% set accepted_updates_b = learning.get('accepted_updates_b', 0) | int(0) %}
-{% set samples_a = learning.get('accepted_samples_a', 0) | int(0) %}
-{% set samples_b = learning.get('accepted_samples_b', 0) | int(0) %}
-{% set target_samples = learning.get('target_samples', 0) | int(0) %}
 {% set last_reason = learning.get('last_reason', '—') %}
 {% set a_drift = learning.get('a_drift_state', '—') %}
 {% set b_drift = learning.get('b_drift_state', '—') %}
@@ -84,47 +90,49 @@
 {% set twin_status = ff.get('twin_status', 'unavailable') %}
 {% set deadband_source = ff.get('deadband_power_source', 'none') %}
 {% set fftrim_stationary = fftrim.get('stationary', {}) %}
+{% set fftrim_periodic = fftrim.get('periodic', {}) %}
+{% set fftrim_transfer = fftrim.get('transfer', {}) %}
 {% set fftrim_last_result = fftrim.get('last_result') or {} %}
 {% set fftrim_last_transaction = fftrim.get('last_transaction') or {} %}
-{% set fftrim_state = fftrim_stationary.get('state', fftrim.get('state')) %}
+{% set fftrim_state = fftrim_stationary.get('state') %}
 {% set fftrim_observation_mode = fftrim_last_result.get('observation_mode', fftrim.get('observation_mode')) %}
 {% set fftrim_last_result_reason = fftrim_last_result.get('reason') %}
-{% set fftrim_periodic_state = fftrim.get('periodic_state') %}
-{% set fftrim_periodic_window_duration_s = fftrim.get('periodic_window_duration_s') %}
-{% set fftrim_periodic_target_duration_s = fftrim.get('periodic_target_duration_s') %}
-{% set fftrim_periodic_measurement_count = fftrim.get('periodic_measurement_count') %}
-{% set fftrim_periodic_amplitude_c = fftrim.get('periodic_amplitude_c') %}
-{% set fftrim_periodic_closure_error_c = fftrim.get('periodic_closure_error_c') %}
-{% set fftrim_periodic_last_reject_reason = fftrim.get('periodic_last_reject_reason') %}
+{% set fftrim_periodic_state = fftrim_periodic.get('state') %}
+{% set fftrim_periodic_window_duration_s = fftrim_periodic.get('window_duration_s') %}
+{% set fftrim_periodic_target_duration_s = fftrim_periodic.get('target_duration_s') %}
+{% set fftrim_periodic_measurement_count = fftrim_periodic.get('measurement_count') %}
+{% set fftrim_periodic_amplitude_c = fftrim_periodic.get('amplitude_c') %}
+{% set fftrim_periodic_closure_error_c = fftrim_periodic.get('closure_error_c') %}
+{% set fftrim_periodic_last_reject_reason = fftrim_periodic.get('last_reject_reason') %}
 {% set fftrim_last_reject_reason = fftrim.get('last_reject_reason') %}
 {% set fftrim_last_update_reason = fftrim.get('last_update_reason') %}
 {% set fftrim_windows_since_update = fftrim.get('windows_since_update') %}
 {% set fftrim_window_duration_s = fftrim_stationary.get('window_duration_s', fftrim.get('window_duration_s')) %}
 {% set fftrim_window_target_duration_s = fftrim_stationary.get('window_target_duration_s', fftrim.get('window_target_duration_s')) %}
 {% set fftrim_measurement_count = fftrim_stationary.get('measurement_count', fftrim.get('measurement_count')) %}
-{% set fftrim_alignment_delay_s = fftrim.get('alignment_delay_s') %}
-{% set fftrim_power_coverage_ratio = fftrim.get('power_coverage_ratio') %}
-{% set fftrim_mean_causal_power = fftrim_last_result.get('mean_causal_power', fftrim.get('mean_causal_power')) %}
-{% set fftrim_mean_ff1 = fftrim_last_result.get('mean_ff1', fftrim.get('mean_ff1')) %}
-{% set fftrim_mean_temperature = fftrim.get('mean_temperature') %}
-{% set fftrim_mean_error = fftrim.get('mean_error') %}
-{% set fftrim_mean_slope_h = fftrim.get('mean_slope_h') %}
-{% set fftrim_observed_hold_power = fftrim.get('observed_hold_power') %}
-{% set fftrim_target_trim = fftrim.get('target_trim') %}
-{% set fftrim_correction = fftrim.get('correction') %}
-{% set fftrim_mean_p_power = fftrim.get('mean_p_power') %}
-{% set fftrim_mean_i_power = fftrim.get('mean_i_power') %}
-{% set fftrim_mean_delivery_residual = fftrim.get('mean_delivery_residual') %}
-{% set fftrim_physical_power_deficit = fftrim.get('physical_power_deficit') %}
-{% set fftrim_decomposed_correction = fftrim.get('decomposed_correction') %}
-{% set fftrim_requested_trim_delta = fftrim.get('requested_trim_delta') %}
-{% set fftrim_applied_trim_delta = fftrim.get('applied_trim_delta') %}
-{% set fftrim_applied_i_transfer = fftrim.get('applied_i_transfer') %}
-{% set fftrim_net_command_delta = fftrim.get('net_command_delta') %}
-{% set fftrim_transfer_state = fftrim.get('bumpless_transfer_state') %}
-{% set fftrim_transfer_reason = fftrim.get('bumpless_transfer_reason') %}
-{% set fftrim_transfer_pending = fftrim.get('transfer_pending_engagement', false) %}
-{% set fftrim_transfer_quality = fftrim.get('transfer_quality') %}
+{% set fftrim_alignment_delay_s = fftrim_last_result.get('alignment_delay_s', fftrim_stationary.get('alignment_delay_s')) %}
+{% set fftrim_power_coverage_ratio = fftrim_last_result.get('power_coverage_ratio') %}
+{% set fftrim_mean_causal_power = fftrim_last_result.get('mean_causal_power') %}
+{% set fftrim_mean_ff1 = fftrim_last_result.get('mean_ff1') %}
+{% set fftrim_mean_temperature = fftrim_last_result.get('mean_temperature') %}
+{% set fftrim_mean_error = fftrim_last_result.get('mean_error') %}
+{% set fftrim_mean_slope_h = fftrim_last_result.get('mean_slope_h') %}
+{% set fftrim_observed_hold_power = fftrim_last_result.get('observed_hold_power') %}
+{% set fftrim_target_trim = fftrim_last_result.get('target_trim') %}
+{% set fftrim_correction = fftrim_last_result.get('correction') %}
+{% set fftrim_mean_p_power = fftrim_last_result.get('mean_p_power') %}
+{% set fftrim_mean_i_power = fftrim_last_result.get('mean_i_power') %}
+{% set fftrim_mean_delivery_residual = fftrim_last_result.get('mean_delivery_residual') %}
+{% set fftrim_physical_power_deficit = fftrim_last_result.get('physical_power_deficit') %}
+{% set fftrim_decomposed_correction = fftrim_last_result.get('decomposed_correction') %}
+{% set fftrim_requested_trim_delta = fftrim_transfer.get('requested_trim_delta') %}
+{% set fftrim_applied_trim_delta = fftrim_transfer.get('applied_trim_delta') %}
+{% set fftrim_applied_i_transfer = fftrim_transfer.get('applied_i_transfer') %}
+{% set fftrim_net_command_delta = fftrim_transfer.get('net_command_delta') %}
+{% set fftrim_transfer_state = fftrim_transfer.get('state') %}
+{% set fftrim_transfer_reason = fftrim_transfer.get('reason') %}
+{% set fftrim_transfer_pending = fftrim_transfer.get('pending_engagement', false) %}
+{% set fftrim_transfer_quality = fftrim_transfer.get('quality') %}
 {% set fftrim_last_transaction_timestamp = fftrim_last_transaction.get('timestamp_utc') %}
 {% set fftrim_last_transaction_mode = fftrim_last_transaction.get('observation_mode') %}
 {% set fftrim_last_transaction_state = fftrim_last_transaction.get('state') %}
@@ -233,105 +241,103 @@
 {% set current_off_blk = [18 - current_ff_blk - current_pi_blk, 0] | max %}
 {% set power_bar = '█' * current_ff_blk ~ '░' * current_pi_blk ~ '·' * current_off_blk %}
 
-{% if has_debug %}
-{% set cycle_min = debug.get('cycle_min', '—') %}
-{% set sat = debug.get('sat', 'NO_SAT') %}
-{% set filt_sp = debug.get('filtered_setpoint', published_filtered_sp) %}
-{% set error_f = debug.get('error_filtered') %}
+{% if has_analysis %}
+{% set cycle_min = analysis_control.get('cycle_min', '—') %}
+{% set sat = control.get('saturation_state', 'NO_SAT') %}
+{% set filt_sp = published_filtered_sp %}
+{% set error_f = analysis_control.get('error_filtered') %}
 {% set err_display = error_f | float(error | float(0)) %}
-{% set ep = debug.get('error_p', 0) | float %}
-{% set u_pi = debug.get('u_pi', 0) | float %}
-{% set u_ff = debug.get('u_ff', 0) | float %}
-{% set on_pct = debug.get('on_percent', next_cycle) | float %}
-{% set u_cmd = debug.get('u_cmd', 0) | float %}
-{% set u_limited = debug.get('u_limited', 0) | float %}
-{% set u_applied = debug.get('u_applied', 0) | float %}
-{% set aw_du = debug.get('aw_du', 0) | float %}
-{% set u_pi_th = (debug.get('Kp', 0) | float * ep) + (debug.get('Ki', 0) | float * (integral_error | float(0))) %}
-{% set db_active = debug.get('in_deadband', false) %}
-{% set nb_active = debug.get('in_near_band', false) %}
-{% set in_dt = debug.get('in_deadtime_window', false) %}
-{% set forced_tm = debug.get('forced_by_timing', false) %}
-{% set boost = debug.get('boost_active', debug.get('setpoint_boost_active', false)) %}
-{% set hyst_guard = debug.get('hysteresis_thermal_guard', false) %}
-{% set integral_hold_active = debug.get('integral_hold_active', false) %}
-{% set integral_guard_active = debug.get('integral_guard_active', integral_guard_source_pub != 'none') %}
-{% set integral_guard_source = debug.get('integral_guard_source', integral_guard_source_pub) %}
-{% set integral_guard_mode = debug.get('integral_guard_mode', '—') %}
-{% set core_db_active = debug.get('in_core_deadband', false) %}
-{% set nb_below = debug.get('near_band_below_deg') %}
-{% set nb_above = debug.get('near_band_above_deg') %}
-{% set nb_src = debug.get('near_band_source', 'unknown') %}
-{% set tau_s = debug.get('tau_min') %}
-{% set learn_ok = debug.get('learn_ok_count', 0) | int %}
-{% set learn_skip = debug.get('learn_skip_count', 0) | int %}
-{% set ff_ok = debug.get('ff_warmup_ok_count', 0) | int %}
-{% set ff_cyc = debug.get('ff_warmup_cycles', 0) | int %}
-{% set traj_start_sp = debug.get('trajectory_start_sp') %}
-{% set traj_target_sp = debug.get('trajectory_target_sp') %}
-{% set traj_tau_ref = debug.get('trajectory_tau_ref') %}
-{% set traj_elapsed_s = debug.get('trajectory_elapsed_s') %}
-{% set traj_phase = debug.get('trajectory_phase') %}
-{% set traj_source = debug.get('trajectory_source', trajectory_source_pub) %}
-{% set traj_pending = debug.get('trajectory_pending_target_change_braking') %}
-{% set traj_braking_needed = debug.get('trajectory_braking_needed') %}
-{% set traj_model_ready = debug.get('trajectory_model_ready') %}
-{% set traj_remaining_cycle_min = debug.get('trajectory_remaining_cycle_min') %}
-{% set traj_next_cycle_u_ref = debug.get('trajectory_next_cycle_u_ref') %}
-{% set traj_bumpless_u_delta = debug.get('trajectory_bumpless_u_delta') %}
-{% set traj_bumpless_ready = debug.get('trajectory_bumpless_ready') %}
-{% set landing_sp_for_p_cap = debug.get('landing_sp_for_p_cap') %}
-{% set landing_predicted_temperature = debug.get('landing_predicted_temperature') %}
-{% set landing_predicted_rise = debug.get('landing_predicted_rise') %}
-{% set landing_target_margin = debug.get('landing_target_margin') %}
-{% set landing_release_allowed = debug.get('landing_release_allowed', true) %}
-{% set landing_coast_required = debug.get('landing_coast_required', landing_coast) %}
-{% set landing_time_to_target_min = debug.get('landing_time_to_target_min') %}
-{% set landing_release_blocked_by_slope = debug.get('landing_release_blocked_by_slope', false) %}
-{% set temperature_slope_h = debug.get('temperature_slope_h') %}
-{% set landing_u_cmd_before_cap = debug.get('landing_u_cmd_before_cap') %}
-{% set landing_u_cmd_after_cap = debug.get('landing_u_cmd_after_cap') %}
-{% set learn_u_avg = debug.get('learn_u_avg') %}
-{% set learn_u_cv = debug.get('learn_u_cv') %}
-{% set learn_u_std = debug.get('learn_u_std') %}
-{% set deadtime_heat_reliable = debug.get('deadtime_heat_reliable', false) %}
-{% set deadtime_cool_reliable = debug.get('deadtime_cool_reliable', false) %}
-{% set deadtime_state = debug.get('deadtime_state', '—') %}
-{% set deadtime_last_power = debug.get('deadtime_last_power') %}
-{% set deadtime_heat_start_time = debug.get('deadtime_heat_start_time') %}
-{% set deadtime_cool_start_time = debug.get('deadtime_cool_start_time') %}
-{% set t_freeze = debug.get('last_freeze_reason_thermal', debug.get('freeze_reason_thermal', 'none')) %}
-{% set g_freeze = debug.get('last_freeze_reason_gains', debug.get('freeze_reason_gains', 'none')) %}
-{% set g_dec_g = debug.get('last_decision_gains', debug.get('governance_decision_gains', 'unknown')) %}
-{% set kp_src = debug.get('kp_source', 'heuristic') %}
-{% set ff_raw = debug.get('ff_raw', 0) | float %}
-{% set ff_reason = debug.get('ff_reason', '—') %}
-{% set u_ff1 = debug.get('u_ff1', debug.get('u_ff_ab', 0)) | float %}
-{% set u_ff2 = debug.get('u_ff2', debug.get('u_ff_trim', 0)) | float %}
-{% set u_ff3 = debug.get('u_ff3', 0) | float %}
-{% set u_ff_final = debug.get('u_ff_final', debug.get('u_ff_eff', 0)) | float %}
-{% set u_ff_eff = debug.get('u_ff_eff', u_ff_final) | float %}
-{% set u_db_nominal = debug.get('u_db_nominal', u_ff_final) | float %}
-{% set ff2_authority = debug.get('ff2_authority') %}
-{% set ff2_frozen = debug.get('ff2_frozen', false) %}
-{% set ff2_freeze_reason = debug.get('ff2_freeze_reason', debug.get('trim_freeze_reason', 'none')) %}
-{% set ff2_trim_delta = debug.get('ff2_trim_delta', 0) | float %}
-{% set ff3_enabled = debug.get('ff3_enabled', false) %}
-{% set ff3_reason = debug.get('ff3_reason_disabled', '—') %}
-{% set ff3_raw_reason = debug.get('ff3_raw_reason_disabled', ff3_reason) %}
-{% set ff3_selected_candidate = debug.get('ff3_selected_candidate') %}
-{% set ff3_horizon = debug.get('ff3_horizon_cycles', 1) %}
-{% set ff3_deadtime_cycles = debug.get('ff3_deadtime_cycles', 0) %}
-{% set ff3_horizon_capped = debug.get('ff3_horizon_capped', false) %}
-{% set ff3_action_sensitivity = debug.get('ff3_action_sensitivity') %}
-{% set ff3_prediction_quality = debug.get('ff3_prediction_quality', 'unavailable') %}
-{% set ff3_authority_factor = debug.get('ff3_authority_factor') %}
-{% set ff3_disturbance_active = debug.get('ff3_disturbance_active', false) %}
-{% set ff3_disturbance_reason = debug.get('ff3_disturbance_reason', '—') %}
-{% set ff3_disturbance_kind = debug.get('ff3_disturbance_kind', 'none') %}
-{% set ff3_residual_persistent = debug.get('ff3_residual_persistent', false) %}
-{% set ff3_dynamic_coherent = debug.get('ff3_dynamic_coherent', false) %}
-{% set pred = debug.get('pred', {}) %}
+{% set ep = analysis_control.get('error_p', 0) | float %}
+{% set u_pi = (pi_pct / 100) | float %}
+{% set u_ff = (ff_pct / 100) | float %}
+{% set on_pct = (next_cycle / 100) | float %}
+{% set u_cmd = (power.get('command_percent', 0) / 100) | float %}
+{% set u_limited = (power.get('limited_percent', 0) / 100) | float %}
+{% set u_applied = (power.get('applied_percent', 0) / 100) | float %}
+{% set aw_du = analysis_control.get('aw_du', 0) | float %}
+{% set u_pi_th = (kp | float(0) * ep) + (ki | float(0) * (integral_error | float(0))) %}
+{% set db_active = control.get('in_deadband', false) %}
+{% set nb_active = control.get('in_near_band', false) %}
+{% set in_dt = control.get('in_deadtime_window', false) %}
+{% set forced_tm = analysis_control.get('forced_by_timing', false) %}
+{% set boost = setpoint.get('boost_active', false) %}
+{% set hyst_guard = false %}
+{% set integral_hold_active = hold_mode != 'none' %}
+{% set integral_guard_active = integral_guard_source_pub != 'none' %}
+{% set integral_guard_source = integral_guard_source_pub %}
+{% set integral_guard_mode = analysis_control.get('integral_guard_mode', '—') %}
+{% set core_db_active = analysis_control.get('in_core_deadband', false) %}
+{% set nb_below = analysis_control.get('near_band_below_deg') %}
+{% set nb_above = analysis_control.get('near_band_above_deg') %}
+{% set nb_src = analysis_control.get('near_band_source', 'unknown') %}
+{% set tau_s = model.get('tau_min') %}
+{% set learn_ok = analysis_learning.get('learn_ok_count', 0) | int %}
+{% set learn_skip = analysis_learning.get('learn_skip_count', 0) | int %}
+{% set ff_ok = analysis_learning.get('ff_warmup_ok_count', 0) | int %}
+{% set ff_cyc = analysis_learning.get('ff_warmup_cycles', 0) | int %}
+{% set traj_start_sp = analysis_trajectory.get('start_setpoint') %}
+{% set traj_target_sp = analysis_trajectory.get('target_setpoint') %}
+{% set traj_tau_ref = analysis_trajectory.get('tau_ref_min') %}
+{% set traj_elapsed_s = analysis_trajectory.get('elapsed_s') %}
+{% set traj_phase = analysis_trajectory.get('phase') %}
+{% set traj_source = trajectory_source_pub %}
+{% set traj_pending = analysis_trajectory.get('pending_target_change_braking') %}
+{% set traj_braking_needed = analysis_trajectory.get('braking_needed') %}
+{% set traj_model_ready = analysis_trajectory.get('model_ready') %}
+{% set traj_remaining_cycle_min = analysis_trajectory.get('remaining_cycle_min') %}
+{% set traj_next_cycle_u_ref = analysis_trajectory.get('next_cycle_reference') %}
+{% set traj_bumpless_u_delta = analysis_trajectory.get('bumpless_delta') %}
+{% set traj_bumpless_ready = analysis_trajectory.get('bumpless_ready') %}
+{% set landing_sp_for_p_cap = analysis_landing.get('setpoint_for_p_cap') %}
+{% set landing_predicted_temperature = analysis_landing.get('predicted_temperature') %}
+{% set landing_predicted_rise = analysis_landing.get('predicted_rise') %}
+{% set landing_target_margin = analysis_landing.get('target_margin') %}
+{% set landing_release_allowed = analysis_landing.get('release_allowed', true) %}
+{% set landing_coast_required = setpoint.get('landing_coast_required', false) %}
+{% set landing_time_to_target_min = analysis_landing.get('time_to_target_min') %}
+{% set landing_release_blocked_by_slope = analysis_landing.get('release_blocked_by_slope', false) %}
+{% set temperature_slope_h = analysis_control.get('temperature_slope_h') %}
+{% set landing_u_cmd_before_cap = analysis_landing.get('command_before_cap') %}
+{% set landing_u_cmd_after_cap = analysis_landing.get('command_after_cap') %}
+{% set learn_u_avg = analysis_learning.get('window_mean_power') %}
+{% set learn_u_cv = analysis_learning.get('window_power_cv') %}
+{% set learn_u_std = analysis_learning.get('window_power_std') %}
+{% set deadtime_state = analysis_deadtime.get('state', '—') %}
+{% set deadtime_last_power = analysis_deadtime.get('last_power') %}
+{% set deadtime_heat_start_time = none %}
+{% set deadtime_cool_start_time = none %}
+{% set t_freeze = gov.get('thermal_update_reason', 'none') %}
+{% set g_freeze = analysis_governance.get('last_freeze_reason_gains', 'none') %}
+{% set g_dec_g = analysis_governance.get('last_decision_gains', 'unknown') %}
+{% set kp_src = analysis_governance.get('kp_source', 'heuristic') %}
+{% set ff_reason = analysis_ff.get('reason', '—') %}
+{% set u_ff1 = analysis_ff.get('u_ff1', 0) | float %}
+{% set ff_raw = u_ff1 %}
+{% set u_ff2 = analysis_ff.get('u_ff2', 0) | float %}
+{% set u_ff3 = analysis_ff.get('u_ff3', 0) | float %}
+{% set u_ff_final = analysis_ff.get('u_ff_final', 0) | float %}
+{% set u_ff_eff = analysis_ff.get('u_ff_effective', u_ff_final) | float %}
+{% set u_db_nominal = u_ff_final %}
+{% set ff2_authority = analysis_ff.get('ff2_authority') %}
+{% set ff2_frozen = analysis_ff.get('ff2_frozen', false) %}
+{% set ff2_freeze_reason = analysis_ff.get('ff2_freeze_reason', 'none') %}
+{% set ff2_trim_delta = analysis_ff.get('ff2_trim_delta', 0) | float %}
+{% set ff3_enabled = ff3_status == 'active' %}
+{% set ff3_reason = ff3_status.split(':', 1)[1] if ':' in ff3_status else 'none' %}
+{% set ff3_raw_reason = analysis_ff.get('ff3_raw_reason_disabled', ff3_reason) %}
+{% set ff3_selected_candidate = analysis_ff.get('ff3_selected_candidate') %}
+{% set ff3_horizon = analysis_ff.get('ff3_horizon_cycles', 1) %}
+{% set ff3_deadtime_cycles = analysis_ff.get('ff3_deadtime_cycles', 0) %}
+{% set ff3_horizon_capped = analysis_ff.get('ff3_horizon_capped', false) %}
+{% set ff3_action_sensitivity = analysis_ff.get('ff3_action_sensitivity') %}
+{% set ff3_prediction_quality = analysis_ff.get('ff3_prediction_quality', 'unavailable') %}
+{% set ff3_authority_factor = analysis_ff.get('ff3_authority_factor') %}
+{% set ff3_disturbance_active = analysis_ff.get('ff3_disturbance_active', false) %}
+{% set ff3_disturbance_reason = analysis_ff.get('ff3_disturbance_reason', '—') %}
+{% set ff3_disturbance_kind = analysis_ff.get('ff3_disturbance_kind', 'none') %}
+{% set ff3_residual_persistent = analysis_ff.get('ff3_residual_persistent', false) %}
+{% set ff3_dynamic_coherent = analysis_ff.get('ff3_dynamic_coherent', false) %}
+{% set pred = analysis_twin %}
 {% set twin_t_hat = pred.get('twin_T_hat') %}
 {% set twin_t_pred = pred.get('twin_T_pred') %}
 {% set twin_innovation = pred.get('twin_innovation') %}
@@ -458,7 +464,7 @@
   'power_shedding': 'power shedding'
 }.get(restart_reason, restart_reason) %}
 
-{% set debug_integral_guard_label = {
+{% set analysis_integral_guard_label = {
   'none': 'none',
   'setpoint_change': 'setpoint change',
   'off_resume': 'off resume',
@@ -467,7 +473,7 @@
   'disturbance_recovery': 'disturbance recovery'
 }.get(integral_guard_source, integral_guard_source) %}
 
-{% set debug_trajectory_source_label = {
+{% set analysis_trajectory_source_label = {
   'none': 'none',
   'setpoint': 'setpoint',
   'disturbance': 'disturbance'
@@ -477,14 +483,14 @@
 ## 🏠 {{ entity_name }}
 
 {{ regime_icon }} **{{ regime | replace('_', ' ') | upper }}** · `{{ phase | upper }}`
-{%- if has_debug %} · {{ cycle_min }} min{% endif %}
+{%- if has_analysis %} · {{ cycle_min }} min{% endif %}
  · `{{ mode }}`
 {%- if trajectory_active %} · 🎯 trajectory{% endif %}
 {%- if landing_active %} · 🛬 landing{% if landing_coast %} (coast){% endif %}{% endif %}
 {%- if ff3_status == 'active' %} · 🔮 FF3{% endif %}
-{%- if has_debug and debug.get('in_deadband', false) %} · 💤 DB{% elif has_debug and debug.get('in_near_band', false) %} · 〰️ NB{% endif %}
+{%- if has_analysis and control.get('in_deadband', false) %} · 💤 DB{% elif has_analysis and control.get('in_near_band', false) %} · 〰️ NB{% endif %}
 {%- if autocalib_degraded %} · ⚠️ degraded model{% endif %}
-{%- if has_debug and twin_status == 'ok' %} · 🧠 TWIN{% endif %}
+{%- if has_analysis and twin_status == 'ok' %} · 🧠 TWIN{% endif %}
 
 ---
 
@@ -493,18 +499,18 @@
 | Metric | Value |
 |---|---:|
 | Room | {% if t_in is not none %}**{{ t_in | float | round(2) }}°C**{% else %}—{% endif %} |
-| Setpoint | {% if t_set is not none %}{{ t_set | float | round(2) }}°C{% else %}—{% endif %}{% set display_sp = filt_sp if has_debug else published_filtered_sp %}{% if display_sp is not none and (display_sp | float) != (t_set | float(0)) %} → **{{ display_sp | float | round(2) }}°C**{% endif %} |
+| Setpoint | {% if t_set is not none %}{{ t_set | float | round(2) }}°C{% else %}—{% endif %}{% set display_sp = filt_sp if has_analysis else published_filtered_sp %}{% if display_sp is not none and (display_sp | float) != (t_set | float(0)) %} → **{{ display_sp | float | round(2) }}°C**{% endif %} |
 | Outdoor | {% if t_ext is not none %}{{ t_ext }}°C{% else %}—{% endif %} |
-| Error | {% if error is not none %}`{{ '%+.2f' | format((error | float)) }}°C`{% else %}—{% endif %}{% if has_debug and error_f is not none %} → `{{ '%+.2f' | format(err_display) }}°C`{% endif %} |
+| Error | {% if error is not none %}`{{ '%+.2f' | format((error | float)) }}°C`{% else %}—{% endif %}{% if has_analysis and error_f is not none %} → `{{ '%+.2f' | format(err_display) }}°C`{% endif %} |
 | Integral | {% if integral_error is not none %}{{ integral_error | float | round(4) }}{% else %}—{% endif %} |
 | Mode I | `{{ integral_mode }}` |
 | I hold source | `{{ hold_source }}` |
 | Guard I | `{{ integral_guard_label }}` |
-{% if has_debug -%}
+{% if has_analysis -%}
 | Near-band | {{ nb_status }} · `{{ nb_src }}` |
 {% endif %}
 
-{% if has_debug %}
+{% if has_analysis %}
 `{{ bar_line }}`
 <small>Error ±2°C</small>
 {% endif %}
@@ -518,8 +524,8 @@
 | Active | {% if trajectory_active %}yes{% else %}no{% endif %} |
 | Source | `{{ trajectory_source_label }}` |
 | Filtered setpoint | {% if published_filtered_sp is not none %}{{ published_filtered_sp | float | round(2) }}°C{% else %}—{% endif %} |
-{% if has_debug -%}
-| Debug source | `{{ debug_trajectory_source_label }}` |
+{% if has_analysis -%}
+| Trajectory source | `{{ analysis_trajectory_source_label }}` |
 | Start | {% if traj_start_sp is not none %}{{ traj_start_sp | float | round(3) }}°C{% else %}—{% endif %} |
 | Target | {% if traj_target_sp is not none %}{{ traj_target_sp | float | round(3) }}°C{% else %}—{% endif %} |
 | `tau_ref` | {% if traj_tau_ref is not none %}{{ traj_tau_ref | float | round(3) }} min{% else %}—{% endif %} |
@@ -534,7 +540,7 @@
 | Bumpless ready | {% if traj_bumpless_ready is sameas true %}yes{% elif traj_bumpless_ready is sameas false %}no{% else %}—{% endif %} |
 {% endif %}
 
-{% if has_debug %}
+{% if has_analysis %}
 ### 🛬 Setpoint landing
 
 | Signal | Value |
@@ -559,7 +565,7 @@
 {% endif %}
 ### ⚡ Command
 
-{% if has_debug %}
+{% if has_analysis %}
 `{{ pwr_bar }}` **{{ (on_pct * 100) | round(1) }}%**
 <small>█ Effective FF · ░ PI · · stop</small>
 {% else %}
@@ -574,8 +580,8 @@
 | Feed-forward | {{ ff_pct | round(1) }}% |
 | PI | {{ pi_pct | round(1) }}% |
 | Hold | {{ hold_pct | round(1) }}% |
-| Hysteresis | `{{ hyst_state }}`{% if has_debug and hyst_guard %} · guard active{% endif %} |
-{% if not has_debug -%}
+| Hysteresis | `{{ hyst_state }}`{% if has_analysis and hyst_guard %} · guard active{% endif %} |
+{% if not has_analysis -%}
 | Restart | `{{ restart_reason }}` |
 {% endif -%}
 {% if landing_u_cap is not none -%}
@@ -587,7 +593,7 @@
 | Current cycle demand | {{ linear_current_cycle | round(1) }}% |
 | Current cycle adjusted | {{ current_cycle | round(1) }}% |
 {% endif -%}
-{% if has_debug -%}
+{% if has_analysis -%}
 | `u_cmd` | {{ (u_cmd * 100) | round(1) }}% |
 | `u_limited` | {{ (u_limited * 100) | round(1) }}% |
 | `u_applied` | {{ (u_applied * 100) | round(1) }}% |
@@ -605,13 +611,13 @@
 | `b` | {% if b is not none %}{{ b | float | round(6) }}{% else %}—{% endif %} |
 | AB Confidence | {{ ab_label }} |
 | `tau_reliable` | {% if tau_reliable %}✅{% else %}⏳{% endif %} |
-{% if not has_debug -%}
+{% if not has_analysis -%}
 | `deadtime_heat_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} · {% if deadtime_heat_reliable %}✅ reliable{% else %}⏳ learning{% endif %} |
 | `deadtime_cool_s` | {% if dt_cool is not none %}{{ dt_cool }} s{% else %}—{% endif %} · {% if deadtime_cool_reliable %}✅ reliable{% else %}⏳ learning{% endif %} |
 {% endif -%}
 | `Kp` | {% if kp is not none %}{{ kp | float | round(4) }}{% else %}—{% endif %} |
 | `Ki` | {% if ki is not none %}{{ ki | float | round(5) }}{% else %}—{% endif %} |
-{% if has_debug -%}
+{% if has_analysis -%}
 | `tau` | {% if tau_s is not none %}{{ tau_s | float | round(1) }} min{% else %}—{% endif %} |
 | `kp_source` | `{{ kp_src }}` |
 {% endif %}
@@ -630,7 +636,7 @@
 | Drift A/B | `{{ a_drift }}` / `{{ b_drift }}` |
 | Bootstrap | {% if bootstrap_status %}`{{ bootstrap_status }}`{% else %}—{% endif %} |
 | Last reason | `{{ last_reason | truncate(80, true, '…') }}` |
-{% if has_debug -%}
+{% if has_analysis -%}
 | Learn ok/skip | {{ learn_ok }} / {{ learn_skip }} |
 | `u_avg / cv / std` | {% if learn_u_avg is not none %}{{ learn_u_avg }}{% else %}—{% endif %} / {% if learn_u_cv is not none %}{{ learn_u_cv }}{% else %}—{% endif %} / {% if learn_u_std is not none %}{{ learn_u_std }}{% else %}—{% endif %} |
 {% endif %}
@@ -646,7 +652,7 @@
 | Thermal reason | `{{ thermal_reason }}` |
 | FF3 | `{{ ff3_status }}` |
 | Twin usable | {% if ff3_twin_usable %}yes{% else %}no{% endif %} |
-{% if not has_debug -%}
+{% if not has_analysis -%}
 | Twin status | `{{ twin_status }}` |
 {% endif -%}
 | Deadband source | `{{ deadband_source }}` |
@@ -705,7 +711,7 @@
 | Retries | {{ calibration_retry }} |
 | Last calibration | {% if calibration_last %}`{{ calibration_last }}`{% else %}—{% endif %} |
 
-{% if has_debug %}
+{% if has_analysis %}
 ---
 
 ### 🧷 Integral Protection
@@ -713,7 +719,7 @@
 | Signal | Value |
 |---|---|
 | Guard active | {% if integral_guard_active %}yes{% else %}no{% endif %} |
-| Guard source | `{{ debug_integral_guard_label }}` |
+| Guard source | `{{ analysis_integral_guard_label }}` |
 | Guard mode | `{{ integral_guard_mode }}` |
 | Restart cycle | `{{ restart_reason_label }}` |
 | Deadband | {% if db_active %}yes{% else %}no{% endif %} |
@@ -816,7 +822,7 @@
 | ETA power | {% if eta_u is not none %}{{ (eta_u | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | Auto reset | {% if twin_auto_reset %}yes{% else %}no{% endif %} · {{ twin_reset_count }} |
 {% else %}
-<ha-alert alert-type="info">The thermal twin is not yet usable or does not expose a 'pred' block.</ha-alert>
+<ha-alert alert-type="info">The thermal twin is not yet usable or does not expose analysis data.</ha-alert>
 {% endif %}
 {% endif %}
 

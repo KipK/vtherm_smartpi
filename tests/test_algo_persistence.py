@@ -150,16 +150,16 @@ def test_debug_learning_counters_are_runtime_scoped_after_load() -> None:
         debug_mode=True,
     )
 
-    debug = smartpi2.get_debug_diagnostics()["debug"]
-    assert debug["learn_ok_count"] == 0
-    assert debug["learn_skip_count"] == 0
+    analysis = smartpi2.get_debug_diagnostics()["analysis"]["learning"]
+    assert analysis["learn_ok_count"] == 0
+    assert analysis["learn_skip_count"] == 0
 
     smartpi2.est.learn_ok_count += 2
     smartpi2.est.learn_skip_count += 1
 
-    debug = smartpi2.get_debug_diagnostics()["debug"]
-    assert debug["learn_ok_count"] == 2
-    assert debug["learn_skip_count"] == 1
+    analysis = smartpi2.get_debug_diagnostics()["analysis"]["learning"]
+    assert analysis["learn_ok_count"] == 2
+    assert analysis["learn_skip_count"] == 1
 
 
 def test_restored_learned_model_publishes_confidence_before_active_cycle() -> None:
@@ -192,7 +192,7 @@ def test_restored_learned_model_publishes_confidence_before_active_cycle() -> No
     published = build_published_diagnostics(smartpi2)
 
     assert published["control"]["phase"] == "Stable"
-    assert published["ab_learning"]["stage"] == "monitoring"
+    assert published["learning"]["stage"] == "monitoring"
     assert published["model"]["confidence"] == "ab_ok"
 
 

@@ -3692,11 +3692,11 @@ class SmartPI:
         return build_diagnostics(self, self._debug_mode)
 
     def get_published_diagnostics(self) -> Dict[str, Any]:
-        """Return the compact SmartPI summary published as HA attributes."""
+        """Return the canonical SmartPI live diagnostics."""
         return build_published_diagnostics(self)
 
     def get_debug_diagnostics(self) -> Dict[str, Any] | None:
-        """Return the full debug diagnostics when debug mode is enabled."""
+        """Return canonical live diagnostics when debug recording is enabled."""
         if not self._debug_mode:
             return None
         return build_debug_diagnostics(self)

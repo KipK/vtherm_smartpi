@@ -272,7 +272,7 @@ $$
 
 Le cap résout la commande maximale qui garde la température prédite sous `target - LANDING_SAFETY_MARGIN_C`. Il est appliqué après le calcul PI normal et avant les contraintes douces, de sorte que `u_pi` reste le diagnostic PI brut tandis que `landing_u_cap` explique la réduction finale de commande.
 
-En mode normal, le bloc de diagnostic `setpoint` publie seulement :
+Le bloc canonique `live.setpoint` publie le résumé :
 
 - `filtered_setpoint`,
 - `trajectory_active`,
@@ -282,27 +282,15 @@ En mode normal, le bloc de diagnostic `setpoint` publie seulement :
 - `landing_u_cap`,
 - `landing_coast_required`.
 
-En mode debug, il ajoute les détails de trajectoire :
+Le même payload dans les deux modes expose les détails de trajectoire et
+d'atterrissage dans `live.analysis.trajectory` et `live.analysis.landing` :
 
-- `trajectory_start_sp`,
-- `trajectory_target_sp`,
-- `trajectory_tau_ref`,
-- `trajectory_elapsed_s`,
-- `trajectory_phase`,
-- `trajectory_pending_target_change_braking`,
-- `trajectory_braking_needed`,
-- `trajectory_model_ready`,
-- `trajectory_remaining_cycle_min`,
-- `trajectory_next_cycle_u_ref`,
-- `trajectory_bumpless_u_delta`,
-- `trajectory_bumpless_ready`,
-- `landing_sp_for_p_cap`,
-- `landing_predicted_temperature`,
-- `landing_predicted_rise`,
-- `landing_target_margin`,
-- `landing_release_allowed`,
-- `landing_u_cmd_before_cap`,
-- `landing_u_cmd_after_cap`.
+- `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` et `phase`,
+- `pending_target_change_braking`, `braking_needed` et `model_ready`,
+- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` et `bumpless_ready`,
+- `setpoint_for_p_cap`, `predicted_temperature`, `predicted_rise` et `target_margin`,
+- `release_allowed`, `time_to_target_min`, `release_blocked_by_slope`,
+- `command_before_cap` et `command_after_cap`.
 
 Le façonnage de référence reste limité à la branche P afin de préserver la lisibilité de la consigne brute côté intégrale et d’éviter de perturber l’apprentissage. Le cap d'atterrissage est un gouverneur de commande post-PI séparé pour les trajectoires de consigne en chauffage ; il ne réécrit pas l'intégrale et ne change pas la courbe de linéarisation de vanne.
 
@@ -447,7 +435,8 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `autocalib.py`         | supervision et déclenchement automatique                 |
 | `guards.py`            | `guard_cut` et `guard_kick`                              |
 | `thermal_twin_1r1c.py` | jumeau thermique et diagnostics prédictifs               |
-| `diagnostics.py`       | payload publié et payload debug                          |
+| `diagnostics.py`       | payload canonique des diagnostics live                  |
+| `diagnostic_history.py` | enveloppe versionnée et séries Recorder stables         |
 | `tint_filter.py`       | filtrage adaptatif de la température intérieure          |
 | `timestamp_utils.py`   | conversion monotonic / wall-clock                        |
 
@@ -544,15 +533,22 @@ linéaire du modèle.
 
 ### 5.5 Diagnostics publiés
 
-`diagnostics.py` expose trois niveaux :
+`diagnostics.py` expose les vues algorithmiques et live canoniques :
 
 - `build_diagnostics()` : version compacte ou complète selon `debug_mode`,
-- `build_published_diagnostics()` : résumé structuré destiné à `specific_states.smart_pi`,
-- `build_debug_diagnostics()` : résumé publié + sous-bloc `debug`.
+- `build_published_diagnostics()` : payload `live` canonique du capteur de diagnostic dédié,
+- `build_debug_diagnostics()` : accesseur de compatibilité qui renvoie le même payload canonique.
 
-Dans les diagnostics debug, `learn_ok_count` et `learn_skip_count` sont des compteurs d'exécution relatifs au processus Home Assistant courant. Les compteurs persistés du modèle restent internes et servent aux décisions de qualité du modèle et de warm-up.
+`diagnostic_history.py` enveloppe ce payload dans `schema_version`, `live` et le
+bloc stable de huit séries `history`. Les entités normales excluent `live` du
+Recorder ; la sous-classe debug l'enregistre directement. Le mode debug change
+uniquement la conservation et n'ajoute pas de second bloc de diagnostic.
 
-Quand le jumeau thermique est exploitable, un sous-bloc `pred` est ajouté au debug.
+`analysis.learning.learn_ok_count` et `learn_skip_count` sont des compteurs
+d'exécution relatifs au processus Home Assistant courant. Les compteurs
+persistés du modèle restent internes et servent aux décisions de qualité du
+modèle et de warm-up. Quand le jumeau thermique est exploitable, ses champs
+publics sont exposés sous `analysis.twin`.
 
 `feedforward.fftrim.command_ownership` expose le dernier état de rattachement,
 son motif de rejet, la séquence de requête, les puissances et durées

@@ -1180,6 +1180,23 @@ class TestLandingDiagnostics:
 
         published = build_published_diagnostics(algo)
 
+        assert set(published) == {
+            "control",
+            "power",
+            "temperature",
+            "model",
+            "learning",
+            "governance",
+            "feedforward",
+            "setpoint",
+            "autocalib",
+            "calibration",
+            "analysis",
+        }
+        assert "sensor" not in published["temperature"]
+        assert "accepted_samples_a" not in published["learning"]
+        assert "target_samples" not in published["learning"]
+
         assert published["power"]["current_cycle_percent"] == pytest.approx(25.0)
         assert published["power"]["next_cycle_percent"] == pytest.approx(50.0)
         assert published["power"]["linear_current_cycle_percent"] == pytest.approx(25.0)
@@ -1203,17 +1220,15 @@ class TestLandingDiagnostics:
         assert published["model"]["a_stability_ratio"] == pytest.approx(0.123)
         assert published["model"]["b_stability_ratio"] == pytest.approx(0.456)
 
-        assert published["ab_learning"]["stage"] == "bootstrap"
-        assert published["ab_learning"]["emea_samples_a"] == 3
-        assert published["ab_learning"]["emea_samples_b"] == 4
-        assert published["ab_learning"]["bootstrap_target_a"] == AB_MIN_SAMPLES_A
-        assert published["ab_learning"]["bootstrap_target_b"] == AB_MIN_SAMPLES_B
-        assert published["ab_learning"]["history_target"] == AB_HISTORY_SIZE
-        assert published["ab_learning"]["accepted_updates_a"] == 9
-        assert published["ab_learning"]["accepted_updates_b"] == 11
-        assert published["ab_learning"]["accepted_samples_a"] == 9
-        assert published["ab_learning"]["accepted_samples_b"] == 11
-        assert published["ab_learning"]["bootstrap_progress_percent"] == 50
+        assert published["learning"]["stage"] == "bootstrap"
+        assert published["learning"]["emea_samples_a"] == 3
+        assert published["learning"]["emea_samples_b"] == 4
+        assert published["learning"]["bootstrap_target_a"] == AB_MIN_SAMPLES_A
+        assert published["learning"]["bootstrap_target_b"] == AB_MIN_SAMPLES_B
+        assert published["learning"]["history_target"] == AB_HISTORY_SIZE
+        assert published["learning"]["accepted_updates_a"] == 9
+        assert published["learning"]["accepted_updates_b"] == 11
+        assert published["learning"]["bootstrap_progress_percent"] == 50
 
 
 class TestLandingNonConstraining:

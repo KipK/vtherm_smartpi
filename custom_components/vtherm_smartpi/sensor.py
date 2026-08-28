@@ -14,6 +14,7 @@ from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 
 from .const import (
     CONF_PROP_FUNCTION,
+    CONF_SMART_PI_DEBUG,
     CONF_TARGET_VTHERM,
     DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
@@ -21,6 +22,7 @@ from .const import (
     SIGNAL_SMARTPI_TARGET_UPDATED,
 )
 from .algo import SmartPI
+from .smartpi.diagnostic_history import build_diagnostic_attributes
 from .smartpi.device_link import cleanup_config_entry_devices, target_uses_smartpi
 from .smartpi.const import SmartPIPhase
 
@@ -148,12 +150,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             if not climate_entity_id:
                 continue
             tracked_unique_ids.add(target_unique_id)
+            debug_mode = entry.options.get(
+                CONF_SMART_PI_DEBUG,
+                entry.data.get(CONF_SMART_PI_DEBUG, False),
+            )
+            sensor_class = (
+                SmartPIRecordedDiagnosticSensor
+                if debug_mode
+                else SmartPIDiagnosticSensor
+            )
             new_entities.append(
-                SmartPIDiagnosticSensor(
-                    hass,
-                    climate_entity_id,
-                    target_unique_id,
-                )
+                sensor_class(hass, climate_entity_id, target_unique_id)
             )
 
         if new_entities:
@@ -215,9 +222,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    # Persist one history sample per SmartPI publication, even when the state
-    # stays "active" and the compact attributes happen to be unchanged.
-    _attr_force_update = True
+    _unrecorded_attributes = frozenset({"live"})
     _attr_icon = "mdi:chart-timeline"
 
     def __init__(
@@ -271,16 +276,16 @@ class SmartPIDiagnosticSensor(SensorEntity):
 
     @callback
     def _update_from_climate(self) -> bool:
-        """Extract SmartPI attributes from the running climate entity."""
+        """Refresh attributes and report whether the HA state changed."""
         state = self.hass.states.get(self._climate_entity_id)
         if not state:
-            return True
+            return False
 
         # We can grab the actual algorithm instance from the climate object directly
         # since it's instantiated there.
         component = self.hass.data.get(CLIMATE_DOMAIN)
         if not component:
-            return True
+            return False
 
         vtherm_entity = next(
             (
@@ -292,22 +297,30 @@ class SmartPIDiagnosticSensor(SensorEntity):
         )
 
         if not vtherm_entity:
-            return True
+            return False
 
         algo = getattr(vtherm_entity, "prop_algorithm", None)
         if not algo or not isinstance(algo, SmartPI):
             if not _is_smartpi_target(self.hass, self._unique_id_base):
                 _remove_stale_diagnostic_entity(self.hass, self._unique_id_base)
                 return False
-            self._attr_native_value = "inactive"
-            self._attr_extra_state_attributes = {}
-            return True
-
-        self._attr_native_value = _get_diagnostic_state(algo)
-        if getattr(algo, "_debug_mode", False):
-            self._attr_extra_state_attributes = (
-                algo.get_debug_diagnostics() or algo.get_published_diagnostics()
-            )
+            native_value = "inactive"
+            attributes = {}
         else:
-            self._attr_extra_state_attributes = algo.get_published_diagnostics()
-        return True
+            native_value = _get_diagnostic_state(algo)
+            live = algo.get_published_diagnostics()
+            attributes = build_diagnostic_attributes(live)
+
+        changed = (
+            self._attr_native_value != native_value
+            or self._attr_extra_state_attributes != attributes
+        )
+        self._attr_native_value = native_value
+        self._attr_extra_state_attributes = attributes
+        return changed
+
+
+class SmartPIRecordedDiagnosticSensor(SmartPIDiagnosticSensor):
+    """Diagnostic sensor whose live payload is retained by the recorder."""
+
+    _unrecorded_attributes = frozenset()

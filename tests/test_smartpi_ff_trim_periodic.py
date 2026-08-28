@@ -369,10 +369,12 @@ def test_admissible_result_survives_stationary_collection_and_rejection() -> Non
 
     published = build_published_diagnostics(algo)["feedforward"]["fftrim"]
 
-    assert published["state"] == "warming_up"
+    assert "state" not in published
+    assert "periodic_state" not in published
+    assert "mean_causal_power" not in published
+    assert published["stationary"]["state"] == "warming_up"
     assert published["stationary"]["window_duration_s"] == 0.0
-    assert published["alignment_delay_s"] is None
-    assert published["power_coverage_ratio"] == 0.0
+    assert published["stationary"]["alignment_delay_s"] is None
     assert published["last_result"]["observation_mode"] == "periodic"
     assert published["last_result"]["alignment_delay_s"] == 120.0
     assert published["last_result"]["power_coverage_ratio"] == 1.0
@@ -391,42 +393,36 @@ def test_admissible_result_survives_stationary_collection_and_rejection() -> Non
 
     collecting = build_published_diagnostics(algo)["feedforward"]["fftrim"]
 
-    assert collecting["state"] == "collecting"
     assert collecting["stationary"]["state"] == "collecting"
     assert collecting["stationary"]["measurement_count"] == 1
-    assert collecting["alignment_delay_s"] == 120.0
-    assert collecting["power_coverage_ratio"] == 0.0
+    assert collecting["stationary"]["alignment_delay_s"] == 120.0
     assert collecting["last_result"]["admissible"] is True
     assert collecting["last_result"]["observation_mode"] == "periodic"
     assert collecting["last_result"]["correction"] == pytest.approx(-0.01)
-    assert collecting["mean_causal_power"] == pytest.approx(0.04)
-    assert collecting["correction"] == pytest.approx(-0.01)
+    assert collecting["last_result"]["mean_causal_power"] == pytest.approx(0.04)
 
     algo._fftrim_observer.invalidate("stationary_context_rejected")
 
     rejected = build_published_diagnostics(algo)["feedforward"]["fftrim"]
 
-    assert rejected["state"] == "rejected"
-    assert rejected["window_duration_s"] == 0.0
+    assert rejected["stationary"]["state"] == "rejected"
     assert rejected["stationary"]["window_duration_s"] == 0.0
     assert (
-        rejected["stationary_last_reject_reason"]
+        rejected["stationary"]["last_reject_reason"]
         == "stationary_context_rejected"
     )
-    assert rejected["periodic_last_reject_reason"] == "cycle_not_closed"
+    assert rejected["periodic"]["last_reject_reason"] == "cycle_not_closed"
     assert rejected["last_result"]["admissible"] is True
     assert rejected["last_result"]["observation_mode"] == "periodic"
     assert rejected["last_result"]["measurement_count"] == 7
-    assert rejected["mean_causal_power"] == pytest.approx(0.04)
-    assert rejected["correction"] == pytest.approx(-0.01)
+    assert rejected["last_result"]["mean_causal_power"] == pytest.approx(0.04)
+    assert rejected["last_result"]["correction"] == pytest.approx(-0.01)
 
     algo._fftrim_observer.reset_runtime()
 
     reset = build_published_diagnostics(algo)["feedforward"]["fftrim"]
 
     assert reset["last_result"] is None
-    assert reset["mean_causal_power"] is None
-    assert reset["correction"] is None
 
 
 def test_applied_periodic_transaction_survives_live_rejection_until_reset() -> None:

@@ -153,4 +153,4 @@ def test_published_diagnostics_expose_learning_enabled() -> None:
 
     diagnostics = build_published_diagnostics(smartpi)
 
-    assert diagnostics["ab_learning"]["enabled"] is False
+    assert diagnostics["learning"]["enabled"] is False

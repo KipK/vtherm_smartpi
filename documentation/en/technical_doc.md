@@ -272,7 +272,7 @@ $$
 
 The cap solves the maximum command that keeps the predicted temperature below `target - LANDING_SAFETY_MARGIN_C`. It is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic while `landing_u_cap` explains the final command reduction.
 
-In normal mode, the `setpoint` diagnostic block publishes only:
+The canonical `live.setpoint` block publishes the summary:
 
 - `filtered_setpoint`,
 - `trajectory_active`,
@@ -282,27 +282,15 @@ In normal mode, the `setpoint` diagnostic block publishes only:
 - `landing_u_cap`,
 - `landing_coast_required`.
 
-In debug mode, it also exposes the trajectory details:
+The same payload in both modes exposes trajectory and landing details under
+`live.analysis.trajectory` and `live.analysis.landing`:
 
-- `trajectory_start_sp`,
-- `trajectory_target_sp`,
-- `trajectory_tau_ref`,
-- `trajectory_elapsed_s`,
-- `trajectory_phase`,
-- `trajectory_pending_target_change_braking`,
-- `trajectory_braking_needed`,
-- `trajectory_model_ready`,
-- `trajectory_remaining_cycle_min`,
-- `trajectory_next_cycle_u_ref`,
-- `trajectory_bumpless_u_delta`,
-- `trajectory_bumpless_ready`,
-- `landing_sp_for_p_cap`,
-- `landing_predicted_temperature`,
-- `landing_predicted_rise`,
-- `landing_target_margin`,
-- `landing_release_allowed`,
-- `landing_u_cmd_before_cap`,
-- `landing_u_cmd_after_cap`.
+- `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` and `phase`,
+- `pending_target_change_braking`, `braking_needed` and `model_ready`,
+- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` and `bumpless_ready`,
+- `setpoint_for_p_cap`, `predicted_temperature`, `predicted_rise` and `target_margin`,
+- `release_allowed`, `time_to_target_min`, `release_blocked_by_slope`,
+- `command_before_cap` and `command_after_cap`.
 
 The setpoint reference shaping remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed. The landing cap is a separate post-PI command governor for HEAT setpoint trajectories; it does not rewrite the integral and does not change the valve linearization curve.
 
@@ -439,7 +427,8 @@ The forced cycle is managed by `CalibrationManager`:
 | `autocalib.py`         | supervision and automatic triggering                        |
 | `guards.py`            | `guard_cut` and `guard_kick`                                |
 | `thermal_twin_1r1c.py` | thermal twin and predictive diagnostics                     |
-| `diagnostics.py`       | published payload and debug payload                         |
+| `diagnostics.py`       | canonical live diagnostic payload                           |
+| `diagnostic_history.py` | versioned envelope and stable Recorder series               |
 | `tint_filter.py`       | adaptive indoor-temperature filtering                       |
 | `timestamp_utils.py`   | monotonic / wall-clock conversion                           |
 
@@ -530,15 +519,21 @@ mapping.
 
 ### 5.5 Published diagnostics
 
-`diagnostics.py` exposes three levels:
+`diagnostics.py` exposes the algorithm and canonical live views:
 
 - `build_diagnostics()`: compact or full version depending on `debug_mode`,
-- `build_published_diagnostics()`: structured summary for `specific_states.smart_pi`,
-- `build_debug_diagnostics()`: published summary plus the `debug` sub-block.
+- `build_published_diagnostics()`: canonical `live` payload for the dedicated diagnostic sensor,
+- `build_debug_diagnostics()`: compatibility accessor returning that same canonical payload.
 
-In the debug diagnostics, `learn_ok_count` and `learn_skip_count` are runtime counters relative to the current Home Assistant process. Persisted model counters remain internal and are used for model quality and warm-up decisions.
+`diagnostic_history.py` wraps this payload in `schema_version`, `live` and the
+stable eight-series `history` block. Normal sensor entities exclude `live` from
+Recorder; the debug sensor subclass records it directly. Debug mode changes
+retention only and does not add a second diagnostic block.
 
-When the thermal twin is usable, a `pred` sub-block is added to debug diagnostics.
+`analysis.learning.learn_ok_count` and `learn_skip_count` are runtime counters
+relative to the current Home Assistant process. Persisted model counters remain
+internal and are used for model quality and warm-up decisions. When the thermal
+twin is usable, its public diagnostic fields are exposed under `analysis.twin`.
 
 `feedforward.fftrim.command_ownership` exposes the latest binding status,
 rejection reason, request sequence, requested/projected/realized powers and
