@@ -88,6 +88,7 @@ def _ownership(
     ff1: float = 0.4,
     u_p: float = 0.0,
     u_i: float = 0.1,
+    ki: float = 0.02,
     committed: float = 0.5,
     hvac_regime: GovernanceRegime = GovernanceRegime.DEAD_BAND,
     i_mode: str = "I:FREEZE(deadband)",
@@ -102,7 +103,7 @@ def _ownership(
         u_ff3=0.0,
         u_p=u_p,
         u_i=u_i,
-        ki=0.02,
+        ki=ki,
         gain_generation=1,
         u_cmd=command,
         u_limited=command,
@@ -230,7 +231,7 @@ def test_causal_observer_integrates_power_on_the_shifted_window() -> None:
     """Power before the measurements must be weighted after dead-time shift."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
     observer.start_applied_cycle(now_monotonic=0.0, linear_power=0.2)
-    observer.update_applied_power(now_monotonic=900.0, linear_power=0.8)
+    observer.update_applied_power(now_monotonic=300.0, linear_power=0.8)
     observer.complete_applied_cycle(
         now_monotonic=1800.0,
         realized_linear_power=None,
@@ -248,8 +249,37 @@ def test_causal_observer_integrates_power_on_the_shifted_window() -> None:
 
     assert result is not None
     assert result.admissible is True
-    assert result.mean_causal_power == pytest.approx(0.5)
+    assert result.mean_causal_power == pytest.approx(0.7)
     assert result.power_coverage_ratio == pytest.approx(1.0)
+
+
+def test_causal_observer_time_weights_irregular_temperature_samples() -> None:
+    """Temperature density must not turn the window mean into a sample mean."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    for timestamp, temperature in (
+        (120.0, 20.0),
+        (240.0, 20.2),
+        (1920.0, 20.2),
+    ):
+        observer.record_thermal_sample(
+            _sample(timestamp, temperature),
+            deadtime_s=120.0,
+            deadtime_reliable=True,
+        )
+
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.mean_temperature == pytest.approx(20.1933333333)
+    assert result.mean_temperature != pytest.approx((20.0 + 20.2 + 20.2) / 3.0)
 
 
 def test_causal_observer_uses_realized_switch_cycle_power() -> None:
@@ -461,6 +491,95 @@ def test_causal_observer_uses_ff1_from_aligned_ownership_window() -> None:
     assert result.mean_ff1 == pytest.approx(0.4)
     assert result.target_trim == pytest.approx(0.1)
     assert result.correction == pytest.approx(0.1)
+
+
+def test_causal_observer_time_weights_asynchronous_ownership() -> None:
+    """Ownership components must follow their unequal committed durations."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    observer.start_applied_cycle(
+        now_monotonic=0.0,
+        linear_power=0.2,
+        ownership=_ownership(
+            ff1=0.1,
+            u_p=0.02,
+            u_i=0.08,
+            ki=0.01,
+            committed=0.2,
+        ),
+    )
+    observer.update_applied_power(
+        now_monotonic=300.0,
+        linear_power=0.8,
+        ownership=_ownership(
+            ff1=0.4,
+            u_p=0.1,
+            u_i=0.3,
+            ki=0.03,
+            committed=0.8,
+        ),
+    )
+    observer.complete_applied_cycle(
+        now_monotonic=1800.0,
+        realized_linear_power=None,
+        use_valve_trace=True,
+    )
+    _record_samples(
+        observer,
+        (20.0, 20.0, 20.0, 20.0),
+        ff1=0.9,
+    )
+
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.mean_causal_power == pytest.approx(0.7)
+    assert result.mean_ff1 == pytest.approx(0.35)
+    assert result.mean_p_power == pytest.approx(0.0866666667)
+    assert result.mean_i_power == pytest.approx(0.2633333333)
+    assert result.mean_ki == pytest.approx(0.0266666667)
+    assert result.mean_delivery_residual == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    ("temperatures", "expected_slope_h"),
+    (
+        ((20.1, 20.0, 20.0, 20.0), -0.2),
+        ((20.0, 20.1, 20.0, 20.0), 0.0),
+    ),
+)
+def test_causal_observer_distinguishes_endpoint_from_interior_noise(
+    temperatures: tuple[float, ...],
+    expected_slope_h: float,
+) -> None:
+    """Only endpoint noise changes net slope; both patterns block transfer."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    _record_owned_switch_window(observer, _ownership())
+    _record_samples(
+        observer,
+        temperatures,
+        ff1=0.4,
+    )
+
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.mean_slope_h == pytest.approx(expected_slope_h)
+    assert result.transfer_eligible is False
+    assert result.transfer_reason == "transfer_temperature_noise"
 
 
 def test_causal_observer_never_attributes_proportional_power_to_integral() -> None:
