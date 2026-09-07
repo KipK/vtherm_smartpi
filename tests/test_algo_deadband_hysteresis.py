@@ -5,10 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from custom_components.vtherm_smartpi.algo import SmartPI
-from custom_components.vtherm_smartpi.hvac_mode import (
-    VThermHvacMode_COOL,
-    VThermHvacMode_HEAT,
-)
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.const import DEADBAND_HYSTERESIS
 
 from helpers import force_smartpi_stable_mode
@@ -58,7 +55,7 @@ def test_deadband_hysteresis_entry_and_exit() -> None:
         current_temp=19.7,
         ext_current_temp=10.0,
         slope=0,
-        hvac_mode=VThermHvacMode_COOL,
+        hvac_mode=VThermHvacMode_HEAT,
     )
     assert smartpi.in_deadband is False
 
