@@ -5,14 +5,13 @@ from dataclasses import dataclass
 from math import isfinite
 
 from .const import (
-    DEADBAND_EDGE_PERSISTENCE,
     KI_MIN,
     OVERSHOOT_I_CLAMP_EPS_C,
     SETPOINT_MODE_DELTA_C,
     TRAJECTORY_I_RUN_SCALE,
     clamp
 )
-from .deadband_output import deadband_proportional_error
+from .deadband_output import ProportionalState
 from .integral_guard import constrain_guarded_integral_delta
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
 
@@ -29,6 +28,24 @@ class IntegralPowerTransferResult:
     applied_power: float
     old_i_power: float
     new_i_power: float
+
+
+@dataclass(frozen=True, slots=True)
+class PIOutputSnapshot:
+    """Effective post-compute PI terms and this tick's pure P projection.
+
+    P persistence is captured before its evaluation so a projection replays
+    the same tick, rather than advancing the edge counter a second time.
+    """
+
+    kp: float
+    u_i: float
+    u_ff: float
+    p_state: ProportionalState
+
+    def project_p(self, error_p: float) -> float:
+        return self.p_state.project(error_p)[0] * self.kp
+
 
 class SmartPIController:
     """
@@ -70,6 +87,7 @@ class SmartPIController:
         self.integral_hold_mode: str = "none"
         self._deadband_edge_count: int = 0
         self._deadband_edge_sign: float | None = None
+        self._pi_output_snapshot: PIOutputSnapshot | None = None
 
         # Setpoint landing command cap (post-PI governor)
         self.u_cmd_before_cap: float | None = None
@@ -97,6 +115,7 @@ class SmartPIController:
         self.last_integral_hold_source = "none"
         self._deadband_edge_count = 0
         self._deadband_edge_sign = None
+        self._pi_output_snapshot = None
         self.u_cmd_before_cap = None
         self.u_cmd_cap = None
         self.hysteresis_state = "off"
@@ -109,6 +128,30 @@ class SmartPIController:
             return self.u_cmd
         self.u_cmd = clamp(self.u_cmd, 0.0, max(float(u_cap), 0.0))
         return self.u_cmd
+
+    def restore_proportional_reference(self, error_p: float) -> float:
+        """Replay P from the current input snapshot without integrating again.
+
+        The caller must prove that the restored request leaves PI protections
+        and downstream output limits nonbinding.
+        """
+        snapshot = self._pi_output_snapshot
+        if snapshot is None:
+            raise ValueError("proportional restoration requires a PI snapshot")
+        p_error, p_mode, p_count, p_sign = snapshot.p_state.project(error_p)
+        self.last_error_p = error_p
+        self.last_error_p_db = p_error
+        self.deadband_p_mode = p_mode
+        self._deadband_edge_count = p_count
+        self._deadband_edge_sign = p_sign
+        self.u_p = snapshot.kp * p_error
+        self.u_pi = self.u_p + snapshot.u_i
+        self.u_cmd = snapshot.u_i + snapshot.u_ff + self.u_p
+        return self.u_cmd
+
+    @property
+    def pi_output_snapshot(self) -> PIOutputSnapshot | None:
+        return self._pi_output_snapshot
 
     @property
     def integral_hold_active(self) -> bool:
@@ -287,28 +330,19 @@ class SmartPIController:
         if self.integral_hold_active and freeze_deadband:
             self.clear_integral_hold()
 
-        error_p_db, self.deadband_p_mode = deadband_proportional_error(
-            error_p=error_p,
+        p_state = ProportionalState(
             deadband_c=deadband_c,
             freeze_deadband=freeze_deadband,
             deadband_allow_p=deadband_allow_p,
+            edge_count=self._deadband_edge_count,
+            edge_sign=self._deadband_edge_sign,
         )
-        if self.deadband_p_mode in {"deadband_edge", "deadzone_edge"}:
-            edge_sign = 1.0 if error_p_db >= 0.0 else -1.0
-            if self._deadband_edge_sign == edge_sign:
-                self._deadband_edge_count += 1
-            else:
-                self._deadband_edge_sign = edge_sign
-                self._deadband_edge_count = 1
-            if (
-                self.deadband_p_mode == "deadband_edge"
-                and self._deadband_edge_count < DEADBAND_EDGE_PERSISTENCE
-            ):
-                error_p_db = 0.0
-                self.deadband_p_mode = "deadband_edge_pending"
-        else:
-            self._deadband_edge_count = 0
-            self._deadband_edge_sign = None
+        (
+            error_p_db,
+            self.deadband_p_mode,
+            self._deadband_edge_count,
+            self._deadband_edge_sign,
+        ) = p_state.project(error_p)
         self.last_error_p_db = error_p_db
         
         i_max = 2.0 / max(ki, KI_MIN)
@@ -397,6 +431,12 @@ class SmartPIController:
         self.u_i = ki * self.integral
         self.u_pi = u_pi
         self.u_ff = u_ff
+        self._pi_output_snapshot = PIOutputSnapshot(
+            kp=kp,
+            u_i=self.u_i,
+            u_ff=u_ff,
+            p_state=p_state,
+        )
 
         if freeze_deadband:
             # Explicit hold using Frozen PI: `u_ff + u_pi`.

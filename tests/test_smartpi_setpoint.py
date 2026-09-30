@@ -1,26 +1,18 @@
 """Tests for SmartPISetpointManager trajectory shaping."""
 
-from unittest.mock import MagicMock
-
 import pytest
 
-from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import (
-    AB_HISTORY_SIZE,
-    AB_MIN_SAMPLES_A,
-    AB_MIN_SAMPLES_B,
-    LANDING_NON_CONSTRAINING_PERSISTENCE,
-    LANDING_SAFETY_MARGIN_C,
     TRAJECTORY_COMPLETE_EPS_C,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     TrajectoryPhase,
 )
-from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
-from custom_components.vtherm_smartpi.smartpi.diagnostics import (
-    _build_full_diagnostics,
-    build_published_diagnostics,
-)
+from custom_components.vtherm_smartpi.smartpi.controller import PIOutputSnapshot
+from custom_components.vtherm_smartpi.smartpi.deadband_output import ProportionalState
 from custom_components.vtherm_smartpi.smartpi.setpoint import SmartPISetpointManager
+from custom_components.vtherm_smartpi.smartpi.reference_governor_runtime import (
+    ReferenceGovernorPhase,
+)
 from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
@@ -30,6 +22,10 @@ B_TEST = 0.02  # tau = 50 min
 A_TEST = 0.4
 EXT_TEST = 5.0
 DEADTIME_COOL_TEST_S = 240.0
+
+
+def snapshot() -> PIOutputSnapshot:
+    return PIOutputSnapshot(1.0, 0.0, 0.0, ProportionalState(0.05, False, False, 0, None))
 
 
 def _make_manager(enabled: bool = True) -> SmartPISetpointManager:
@@ -52,7 +48,7 @@ def _filter(
     u_ref: float = 1.0,
     next_u_ref: float = 0.0,
     cycle_min: float = 10.0,
-    ki: float | None = None,
+    temperature_slope_h: float | None = None,
 ):
     return manager.filter_setpoint(
         target_temp=target,
@@ -71,7 +67,7 @@ def _filter(
         cycle_min=cycle_min,
         remaining_cycle_min=remaining_cycle_min,
         now_monotonic=now,
-        ki=ki,
+        temperature_slope_h=temperature_slope_h,
     )
 
 
@@ -123,7 +119,7 @@ class TestTrajectoryActivation:
         assert manager.trajectory_start_setpoint == pytest.approx(21.0)
         assert manager.trajectory_target_setpoint < 21.0
 
-    def test_armed_setpoint_enters_landing_below_arming_threshold(self):
+    def test_armed_setpoint_enters_governance_below_arming_threshold(self):
         manager = _make_manager()
         _filter(manager, target=19.0, current=19.0, now=0.0)
         _filter(manager, target=21.0, current=19.0, now=60.0)
@@ -133,16 +129,157 @@ class TestTrajectoryActivation:
             target=21.0,
             current=20.92,
             now=120.0,
-            ki=0.0,
         )
 
         assert 21.0 - 20.92 < TRAJECTORY_ENABLE_ERROR_THRESHOLD
         assert result == pytest.approx(21.0)
         assert manager.trajectory_active is True
         assert manager.trajectory_source == "setpoint"
-        assert manager.landing_active is True
+        assert manager.reference_governor_authority_selected is True
+        assert manager.reference_governor_authority_pending is True
+        assert manager.governor_active is False
 
-    def test_small_disturbance_does_not_reuse_setpoint_landing_window(self):
+    @pytest.mark.parametrize(
+        (
+            "hvac_mode",
+            "initial_target",
+            "target",
+            "initial_current",
+            "pre_crossing",
+            "crossing",
+            "a",
+            "ext_temp",
+        ),
+        [
+            (
+                VThermHvacMode_HEAT,
+                21.0,
+                22.0,
+                21.0,
+                21.7,
+                22.01,
+                A_TEST,
+                20.0,
+            ),
+            (
+                VThermHvacMode_COOL,
+                24.0,
+                22.0,
+                24.0,
+                22.3,
+                21.99,
+                -A_TEST,
+                30.0,
+            ),
+        ],
+    )
+    def test_governed_episode_survives_target_crossing_until_handoff(
+        self,
+        hvac_mode,
+        initial_target,
+        target,
+        initial_current,
+        pre_crossing,
+        crossing,
+        a,
+        ext_temp,
+    ):
+        manager = _make_manager()
+        _filter(
+            manager,
+            target=initial_target,
+            current=initial_current,
+            now=0.0,
+            hvac_mode=hvac_mode,
+            a=a,
+            ext_temp=ext_temp,
+            next_u_ref=0.9,
+            temperature_slope_h=0.01,
+        )
+        _filter(
+            manager,
+            target=target,
+            current=initial_current,
+            now=60.0,
+            hvac_mode=hvac_mode,
+            a=a,
+            ext_temp=ext_temp,
+            next_u_ref=0.9,
+            temperature_slope_h=0.01,
+        )
+        _filter(
+            manager,
+            target=target,
+            current=pre_crossing,
+            now=120.0,
+            hvac_mode=hvac_mode,
+            a=a,
+            ext_temp=ext_temp,
+            next_u_ref=0.9,
+            temperature_slope_h=0.01,
+        )
+        governed = manager.resolve_reference_governor(
+            requested_u=0.9,
+            now_monotonic=120.0,
+            cycle_min=10.0,
+            pi_snapshot=snapshot(),
+        )
+
+        assert governed is not None
+        assert governed.phase is ReferenceGovernorPhase.GOVERNED
+
+        crossing_reference = _filter(
+            manager,
+            target=target,
+            current=crossing,
+            now=180.0,
+            hvac_mode=hvac_mode,
+            a=a,
+            ext_temp=ext_temp,
+            temperature_slope_h=0.01,
+            next_u_ref=0.9,
+        )
+
+        assert crossing_reference == pytest.approx(target)
+        assert manager.effective_setpoint == pytest.approx(target)
+        assert manager.trajectory_active is True
+        assert manager.reference_governor_authority_pending is True
+        first_handoff = manager.resolve_reference_governor(
+            requested_u=0.4,
+            now_monotonic=180.0,
+            cycle_min=10.0,
+            pi_snapshot=snapshot(),
+        )
+        assert first_handoff is not None
+        assert first_handoff.phase is ReferenceGovernorPhase.HANDOFF
+        assert first_handoff.handoff_ready is False
+
+        for now in (480.0, 780.0):
+            _filter(
+                manager,
+                target=target,
+                current=crossing,
+                now=now,
+                hvac_mode=hvac_mode,
+                a=a,
+                ext_temp=ext_temp,
+                temperature_slope_h=0.01,
+                next_u_ref=0.9,
+            )
+            result = manager.resolve_reference_governor(
+                requested_u=0.4,
+                now_monotonic=now,
+                cycle_min=10.0,
+                pi_snapshot=snapshot(),
+            )
+
+        assert result is not None
+        assert result.phase is ReferenceGovernorPhase.IDLE
+        assert result.handoff_ready is True
+        assert manager.trajectory_active is False
+        assert manager.governor_handoff_ready is True
+
+    def test_small_disturbance_does_not_reuse_setpoint_governance(self):
         manager = _make_manager()
         _filter(manager, target=21.0, current=21.0, now=0.0)
 
@@ -152,6 +289,7 @@ class TestTrajectoryActivation:
         assert result == pytest.approx(21.0)
         assert manager.trajectory_active is False
         assert manager.trajectory_source == "none"
+        assert manager.reference_governor_authority_decision is None
 
     def test_arms_on_significant_disturbance_without_setpoint_change(self):
         manager = _make_manager()
@@ -163,6 +301,39 @@ class TestTrajectoryActivation:
         assert manager.trajectory_active is True
         assert manager.trajectory_start_setpoint == pytest.approx(21.0)
         assert manager.trajectory_target_setpoint < 21.0
+        assert manager.reference_governor_authority_selected is False
+        assert manager.reference_governor_authority_pending is False
+
+    def test_authority_bypasses_invalid_model_on_active_setpoint_trajectory(self):
+        manager = _make_manager()
+        _filter(manager, target=21.0, current=21.0, now=0.0)
+        _filter(manager, target=22.0, current=21.0, now=60.0)
+        _filter(
+            manager,
+            target=22.0,
+            current=21.7,
+            now=120.0,
+            temperature_slope_h=0.01,
+        )
+
+        _filter(
+            manager,
+            target=22.0,
+            current=21.7,
+            now=180.0,
+            a=0.0,
+        )
+
+        assert manager.trajectory_active is True
+        assert manager.reference_governor_authority_selected is True
+        result = manager.resolve_reference_governor(
+            requested_u=0.5,
+            now_monotonic=180.0,
+            cycle_min=10.0,
+            pi_snapshot=snapshot(),
+        )
+        assert result is not None
+        assert result.kernel_decision.reason == "authority_invalid_model"
 
     def test_remaining_cycle_time_can_advance_braking_entry(self):
         manager = _make_manager()
@@ -630,7 +801,7 @@ class TestTrajectoryProgression:
         assert result <= 20.5
         assert manager.trajectory_phase in {TrajectoryPhase.RELEASE, TrajectoryPhase.IDLE}
 
-    def test_stops_when_target_is_reached(self):
+    def test_stops_after_target_is_reached_and_handoff_is_confirmed(self):
         manager = _make_manager()
         _filter(manager, target=19.0, current=19.0, now=0.0)
         _filter(manager, target=21.0, current=19.0, now=60.0)
@@ -639,8 +810,19 @@ class TestTrajectoryProgression:
         result = _filter(manager, target=21.0, current=21.0, now=180.0)
 
         assert result == 21.0
+        assert manager.trajectory_active is True
+        for now in (180.0, 480.0, 780.0):
+            _filter(manager, target=21.0, current=21.0, now=now)
+            decision = manager.resolve_reference_governor(
+                requested_u=0.0, now_monotonic=now, cycle_min=10.0,
+                pi_snapshot=snapshot(),
+            )
+            assert decision is not None
+            assert decision.handoff_ready is (now == 780.0)
+
         assert manager.trajectory_active is False
         assert manager.trajectory_phase == TrajectoryPhase.IDLE
+        assert manager.reference_governor_authority_decision.handoff_ready is True
 
     def test_demand_reduction_returns_to_passthrough(self):
         manager = _make_manager()
@@ -652,6 +834,7 @@ class TestTrajectoryProgression:
 
         assert result == 20.0
         assert manager.trajectory_active is False
+        assert manager.reference_governor_authority_decision is None
 
     def test_restarts_smoothly_on_further_demand_increase(self):
         manager = _make_manager()
@@ -681,6 +864,7 @@ class TestTrajectoryProgression:
 
         assert result == pytest.approx(23.0)
         assert manager.trajectory_active is True
+        assert manager.reference_governor_authority_selected is False
 
 
 class TestStatePersistence:
@@ -747,769 +931,4 @@ class TestReset:
         assert manager.effective_setpoint is None
         assert manager.trajectory_active is False
         assert manager.trajectory_phase == TrajectoryPhase.IDLE
-
-
-# ---------------------------------------------------------------------------
-# Setpoint landing tests (HEAT-only command-aware governor)
-# ---------------------------------------------------------------------------
-
-
-def _decision(manager, **overrides):
-    """Call _compute_landing_decision with sensible defaults plus overrides."""
-    kwargs = dict(
-        target_temp=25.0,
-        current_temp=24.75,
-        ext_current_temp=15.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        signed_error=0.25,
-        a=0.075,
-        b=0.0034,
-        u_ref=0.35,
-        u_ff_eff=0.39,
-        kp=1.45,
-        ki=0.0048,
-        integral=-43.0,
-        deadtime_cool_s=765.0,
-        deadtime_cool_reliable=True,
-        tau_reliable=True,
-        deadband_c=0.05,
-        remaining_cycle_min=1.0,
-        temperature_slope_h=0.5,
-    )
-    kwargs.update(overrides)
-    return manager._compute_landing_decision(**kwargs)
-
-
-class TestSetpointLanding:
-    @staticmethod
-    def _tracking_plateau_manager():
-        manager = _make_manager()
-        manager.load_state(
-            {
-                "last_user_target_temp": 25.0,
-                "filtered_setpoint": 25.0,
-                "effective_setpoint": 24.92,
-                "trajectory_active": True,
-                "trajectory_source": "setpoint",
-                "trajectory_phase": TrajectoryPhase.TRACKING.value,
-                "trajectory_start_setpoint": 25.0,
-                "trajectory_target_setpoint": 24.9,
-                "trajectory_tau_ref_min": 10.0,
-                "trajectory_current_setpoint": 24.92,
-            }
-        )
-        return manager
-
-    @staticmethod
-    def _tracking_plateau_step(
-        manager, now, *, slope=0.02, hvac_mode=VThermHvacMode_HEAT, current=24.92
-    ):
-        return manager.filter_setpoint(
-            target_temp=25.0,
-            current_temp=current,
-            hvac_mode=hvac_mode,
-            a=0.075,
-            b=0.0034,
-            ext_current_temp=15.0,
-            u_ref=1.0,
-            deadtime_cool_s=765.0,
-            deadtime_cool_reliable=True,
-            tau_reliable=True,
-            deadband_c=0.05,
-            kp=1.45,
-            next_cycle_u_ref=1.0,
-            cycle_min=2.0,
-            remaining_cycle_min=1.0,
-            now_monotonic=now,
-            u_ff_eff=0.39,
-            ki=0.0048,
-            integral=-43.0,
-            temperature_slope_h=slope,
-        )
-
-    def test_stable_tracking_plateau_enters_release_without_setpoint_jump(self):
-        manager = self._tracking_plateau_manager()
-        first = self._tracking_plateau_step(manager, 0.0)
-        self._tracking_plateau_step(manager, 60.0)
-        repeated = self._tracking_plateau_step(manager, 60.0)
-
-        assert manager.trajectory_phase == TrajectoryPhase.TRACKING
-        assert manager.landing_release_allowed is True
-        assert manager.landing_coast_required is False
-        assert repeated == pytest.approx(manager.effective_setpoint)
-
-        before = manager.effective_setpoint
-        transition = self._tracking_plateau_step(manager, 120.0)
-
-        assert first < 25.0
-        assert manager.trajectory_braking_needed is True
-        assert manager.trajectory_phase == TrajectoryPhase.RELEASE
-        assert manager.trajectory_target_setpoint == pytest.approx(25.0)
-        assert transition == pytest.approx(before)
-
-        self._tracking_plateau_step(manager, 180.0)
-        assert manager.trajectory_phase == TrajectoryPhase.RELEASE
-        assert manager.landing_reason == "residual_release"
-
-        final = self._tracking_plateau_step(manager, 720.0, current=24.96)
-        assert final == pytest.approx(25.0)
-        assert manager.trajectory_phase == TrajectoryPhase.IDLE
-
-    def test_fast_slope_interrupts_tracking_release_candidate(self):
-        manager = self._tracking_plateau_manager()
-        self._tracking_plateau_step(manager, 0.0)
-        self._tracking_plateau_step(manager, 60.0, slope=2.4)
-        self._tracking_plateau_step(manager, 120.0)
-
-        assert manager.trajectory_phase == TrajectoryPhase.TRACKING
-        assert manager._landing_tracking_release_count == 1
-
-    def test_tracking_release_candidate_accepts_decimal_residual_boundary(self):
-        manager = self._tracking_plateau_manager()
-        for now in (0.0, 60.0, 120.0):
-            self._tracking_plateau_step(manager, now, current=24.9)
-
-        assert 25.0 - 24.9 > LANDING_SAFETY_MARGIN_C + TRAJECTORY_COMPLETE_EPS_C
-        assert manager.trajectory_phase == TrajectoryPhase.RELEASE
-
-    def test_missing_temperature_resets_tracking_release_candidate(self):
-        manager = self._tracking_plateau_manager()
-        self._tracking_plateau_step(manager, 0.0)
-        manager.filter_setpoint(target_temp=25.0, current_temp=None)
-        self._tracking_plateau_step(manager, 120.0)
-
-        assert manager.trajectory_phase == TrajectoryPhase.TRACKING
-        assert manager._landing_tracking_release_count == 1
-
-    def test_cool_tracking_does_not_use_heat_landing_release(self):
-        manager = self._tracking_plateau_manager()
-        for now in (0.0, 60.0, 120.0):
-            self._tracking_plateau_step(
-                manager, now, hvac_mode=VThermHvacMode_COOL, current=25.08,
-            )
-
-        assert manager._landing_tracking_release_count == 0
-        assert manager.landing_reason == "cool_unsupported"
-
-    def test_landing_inactive_when_model_unreliable(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=25.0,
-            target_setpoint=25.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-
-        decision = _decision(manager, tau_reliable=False)
-
-        assert manager.landing_active is False
-        assert decision.active is False
-        assert decision.reason == "tau_unreliable"
-
-    def test_landing_inactive_outside_landing_band(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=25.0,
-            target_setpoint=25.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-
-        decision = _decision(manager, signed_error=0.80)
-
-        assert decision.active is False
-        assert decision.reason == "outside_landing_band"
-
-    def test_landing_cap_limits_sp_for_p_heat(self):
-        manager = _make_manager()
-        # Seed last user target.
-        _filter(
-            manager,
-            target=24.0,
-            current=24.0,
-            now=0.0,
-            a=0.075,
-            b=0.0034,
-            ext_temp=15.0,
-            deadtime_cool_s=765.0,
-            u_ref=1.0,
-        )
-        # Arm pending late braking via setpoint change (signed_error=0.5).
-        _filter(
-            manager,
-            target=25.0,
-            current=24.5,
-            now=60.0,
-            a=0.075,
-            b=0.0034,
-            ext_temp=15.0,
-            deadtime_cool_s=765.0,
-            u_ref=1.0,
-        )
-        # Same target, signed_error=0.40 — inside landing band; the model
-        # predicts enough rise for the setpoint trajectory to arm with
-        # source="setpoint", so the landing decision can be evaluated.
-        sp_for_p = manager.filter_setpoint(
-            target_temp=25.0,
-            current_temp=24.6,
-            hvac_mode=VThermHvacMode_HEAT,
-            a=0.075,
-            b=0.0034,
-            ext_current_temp=15.0,
-            u_ref=1.0,
-            deadtime_cool_s=765.0,
-            deadtime_cool_reliable=True,
-            tau_reliable=True,
-            deadband_c=0.05,
-            kp=1.45,
-            next_cycle_u_ref=1.0,
-            cycle_min=10.0,
-            remaining_cycle_min=1.0,
-            now_monotonic=120.0,
-            u_ff_eff=0.39,
-            ki=0.0048,
-            integral=-43.0,
-            temperature_slope_h=0.5,
-        )
-
-        assert manager.trajectory_source == "setpoint"
-        assert manager.landing_active is True
-        assert manager.landing_u_cap is not None
-        assert manager.landing_sp_for_p_cap is not None
-        assert sp_for_p <= manager.landing_sp_for_p_cap + 1e-9
-        assert manager.landing_release_allowed is False
-
-    def test_landing_coast_when_passive_prediction_reaches_margin(self):
-        # Passive cooling alone already overshoots the safety margin:
-        # current temperature is well above target, so the cap collapses to 0.
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=25.0,
-            target_setpoint=25.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-
-        decision = _decision(
-            manager,
-            target_temp=25.0,
-            current_temp=24.99,
-            ext_current_temp=24.99,
-            signed_error=0.01,
-            u_ref=1.0,
-        )
-
-        assert decision.active is True
-        assert decision.coast_required is True
-        assert decision.u_cap == pytest.approx(0.0)
-
-    def test_landing_releases_residual_error_in_release_phase(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=24.9,
-            target_setpoint=25.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(25.0, phase=TrajectoryPhase.RELEASE)
-
-        decision = _decision(
-            manager,
-            target_temp=25.0,
-            current_temp=24.92,
-            signed_error=0.08,
-            temperature_slope_h=None,
-        )
-
-        assert decision.active is False
-        assert decision.reason == "residual_release"
-
-    def test_landing_residual_boundary_includes_decimal_temperature_difference(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=21.9,
-            target_setpoint=22.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(22.0, phase=TrajectoryPhase.RELEASE)
-
-        decision = _decision(
-            manager,
-            target_temp=22.0,
-            current_temp=21.9,
-            signed_error=22.0 - 21.9,
-            temperature_slope_h=0.01,
-        )
-
-        assert 22.0 - 21.9 > LANDING_SAFETY_MARGIN_C + TRAJECTORY_COMPLETE_EPS_C
-        assert decision.active is False
-        assert decision.reason == "residual_release"
-
-    def test_landing_residual_boundary_rejects_materially_larger_error(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=21.9,
-            target_setpoint=22.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(22.0, phase=TrajectoryPhase.RELEASE)
-
-        decision = _decision(
-            manager,
-            target_temp=22.0,
-            current_temp=21.899999,
-            signed_error=22.0 - 21.899999,
-            temperature_slope_h=0.01,
-        )
-
-        assert decision.active is True
-        assert decision.reason == "cap"
-        assert decision.release_allowed is False
-
-    def test_landing_residual_release_is_sticky_until_demand_recovers(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=24.9,
-            target_setpoint=25.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(25.0, phase=TrajectoryPhase.RELEASE)
-
-        released = _decision(
-            manager,
-            target_temp=25.0,
-            current_temp=24.92,
-            signed_error=0.08,
-            temperature_slope_h=None,
-        )
-        still_released = _decision(
-            manager,
-            target_temp=25.0,
-            current_temp=24.96,
-            signed_error=0.04,
-            temperature_slope_h=0.5,
-        )
-        rearmed = _decision(
-            manager,
-            target_temp=25.0,
-            current_temp=24.69,
-            signed_error=0.31,
-            temperature_slope_h=0.5,
-        )
-
-        assert released.reason == "residual_release"
-        assert still_released.active is False
-        assert still_released.reason == "residual_release"
-        assert rearmed.active is True
-        assert rearmed.reason == "cap"
-
-    def test_landing_release_blocked_when_time_to_target_shorter_than_deadtime(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=28.0,
-            target_setpoint=28.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(28.0, phase=TrajectoryPhase.RELEASE)
-
-        decision = _decision(
-            manager,
-            target_temp=28.0,
-            current_temp=27.942,
-            signed_error=0.058,
-            temperature_slope_h=2.4,
-            deadtime_cool_s=765.0,
-        )
-
-        assert decision.active is True
-        assert decision.reason in ("cap", "coast")
-        assert decision.reason != "residual_release"
-        assert manager.landing_release_blocked_by_slope is True
-        assert manager.landing_time_to_target_min == pytest.approx(1.45)
-
-    def test_landing_release_allowed_when_time_to_target_longer_than_deadtime(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=23.5,
-            target_setpoint=23.5,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(23.5, phase=TrajectoryPhase.RELEASE)
-
-        decision = _decision(
-            manager,
-            target_temp=23.5,
-            current_temp=23.44,
-            signed_error=0.06,
-            temperature_slope_h=0.44,
-            deadtime_cool_s=252.0,
-        )
-
-        assert decision.active is True
-        assert decision.reason in ("cap", "coast")
-        assert manager.landing_release_allowed is True
-        assert manager.landing_release_blocked_by_slope is False
-        assert manager.landing_time_to_target_min == pytest.approx(8.1818, rel=1e-3)
-
-    def test_landing_release_still_allowed_when_slope_missing(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=25.0,
-            target_setpoint=25.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(25.0, phase=TrajectoryPhase.RELEASE)
-
-        decision = _decision(
-            manager,
-            target_temp=25.0,
-            current_temp=24.92,
-            signed_error=0.08,
-            temperature_slope_h=None,
-        )
-
-        assert decision.active is False
-        assert decision.reason == "residual_release"
-        assert manager.landing_release_blocked_by_slope is False
-        assert manager.landing_time_to_target_min is None
-
-    def test_landing_diagnostics_reset_outside_landing_band(self):
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=28.0,
-            target_setpoint=28.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(28.0, phase=TrajectoryPhase.RELEASE)
-
-        _decision(
-            manager,
-            target_temp=28.0,
-            current_temp=27.942,
-            signed_error=0.058,
-            temperature_slope_h=2.4,
-            deadtime_cool_s=765.0,
-        )
-        assert manager.landing_time_to_target_min is not None
-
-        decision = _decision(manager, signed_error=0.80)
-
-        assert decision.reason == "outside_landing_band"
-        assert manager.landing_time_to_target_min is None
-        assert manager.landing_release_blocked_by_slope is False
-
-    def test_landing_noop_for_cool(self):
-        manager = _make_manager()
-        # First seed the manager with a COOL passthrough state.
-        result_seed = _filter(
-            manager,
-            target=22.0,
-            current=23.0,
-            now=0.0,
-            hvac_mode=VThermHvacMode_COOL,
-        )
-        result = _filter(
-            manager,
-            target=22.0,
-            current=22.2,
-            now=60.0,
-            hvac_mode=VThermHvacMode_COOL,
-        )
-
-        assert result_seed == pytest.approx(22.0)
-        assert manager.landing_active is False
-
-        decision = _decision(
-            manager,
-            hvac_mode=VThermHvacMode_COOL,
-            target_temp=22.0,
-            current_temp=22.2,
-            signed_error=0.2,
-        )
-        assert decision.active is False
-        assert decision.reason == "cool_unsupported"
-        # COOL may keep its existing trajectory shaping; landing must not cap it.
-        assert 22.0 <= result <= 22.2
-        assert manager.landing_u_cap is None
-        assert manager.landing_sp_for_p_cap is None
-
-
-class TestControllerCommandCap:
-    def test_apply_command_cap_clamps_u_cmd_only(self):
-        controller = SmartPIController(name="test")
-        controller.u_cmd = 0.8
-        controller.u_pi = 0.6
-
-        capped = controller.apply_command_cap(0.2)
-
-        assert capped == pytest.approx(0.2)
-        assert controller.u_cmd == pytest.approx(0.2)
-        assert controller.u_cmd_before_cap == pytest.approx(0.8)
-        assert controller.u_cmd_cap == pytest.approx(0.2)
-        # u_pi must remain untouched — it is the raw PI diagnostic.
-        assert controller.u_pi == pytest.approx(0.6)
-
-
-class TestLandingDiagnostics:
-    @staticmethod
-    def _make_algo():
-        return SmartPI(
-            hass=MagicMock(),
-            cycle_min=10,
-            minimal_activation_delay=0,
-            minimal_deactivation_delay=0,
-            name="TestSmartPILandingDiag",
-        )
-
-    def test_full_debug_diagnostics_include_landing_keys(self):
-        algo = self._make_algo()
-        diag = _build_full_diagnostics(algo)
-
-        for key in (
-            "landing_active",
-            "landing_reason",
-            "landing_u_cap",
-            "landing_sp_for_p_cap",
-            "landing_predicted_temperature",
-            "landing_predicted_rise",
-            "landing_target_margin",
-            "landing_release_allowed",
-            "landing_coast_required",
-            "landing_time_to_target_min",
-            "landing_release_blocked_by_slope",
-            "landing_u_cmd_before_cap",
-            "landing_u_cmd_after_cap",
-        ):
-            assert key in diag, f"missing landing key in debug diagnostics: {key}"
-
-    def test_published_setpoint_only_exposes_essential_landing_fields(self):
-        algo = self._make_algo()
-        published = build_published_diagnostics(algo)
-
-        setpoint = published["setpoint"]
-        landing_keys = {k for k in setpoint if k.startswith("landing_")}
-        assert landing_keys == {
-            "landing_active",
-            "landing_reason",
-            "landing_u_cap",
-            "landing_coast_required",
-        }
-
-    def test_published_diagnostics_expose_dashboard_fields(self):
-        algo = self._make_algo()
-        algo._committed_on_percent = 0.25
-        algo._on_percent = 0.5
-        algo._last_u_pi = 0.125
-        algo._last_u_ff = 0.375
-        algo.ctl.u_hold = 0.0625
-        algo._last_u_cmd = 0.8
-        algo._last_u_limited = 0.7
-        algo._last_u_applied = 0.6
-        algo.ctl.last_sat = "NO_SAT"
-        algo.in_deadband = True
-        algo.in_near_band = True
-        algo.dt_est.deadtime_heat_reliable = True
-        algo.dt_est.deadtime_cool_reliable = False
-        algo.est.diag_a_mad_over_med = 0.123
-        algo.est.diag_b_mad_over_med = 0.456
-        algo.est.learn_ok_count_a = 9
-        algo.est.learn_ok_count_b = 11
-        algo.est.a_meas_hist.extend([1.0] * 3)
-        algo.est.b_meas_hist.extend([1.0] * 4)
-
-        published = build_published_diagnostics(algo)
-
-        assert set(published) == {
-            "control",
-            "power",
-            "temperature",
-            "model",
-            "learning",
-            "governance",
-            "feedforward",
-            "setpoint",
-            "autocalib",
-            "calibration",
-            "analysis",
-        }
-        assert "sensor" not in published["temperature"]
-        assert "accepted_samples_a" not in published["learning"]
-        assert "target_samples" not in published["learning"]
-
-        assert published["power"]["current_cycle_percent"] == pytest.approx(25.0)
-        assert published["power"]["next_cycle_percent"] == pytest.approx(50.0)
-        assert published["power"]["linear_current_cycle_percent"] == pytest.approx(25.0)
-        assert published["power"]["linear_next_cycle_percent"] == pytest.approx(50.0)
-        assert published["power"]["pi_percent"] == pytest.approx(12.5)
-        assert published["power"]["ff_percent"] == pytest.approx(37.5)
-        assert published["power"]["hold_percent"] == pytest.approx(6.2)
-        assert published["power"]["command_percent"] == pytest.approx(80.0)
-        assert published["power"]["limited_percent"] == pytest.approx(70.0)
-        assert published["power"]["applied_percent"] == pytest.approx(60.0)
-
-        assert published["control"]["saturation_state"] == "NO_SAT"
-        assert published["control"]["in_deadband"] is True
-        assert published["control"]["in_near_band"] is True
-        assert published["control"]["in_deadtime_window"] is False
-
-        assert published["model"]["tau_min"] is not None
-        assert published["model"]["confidence"] == "ab_bootstrap"
-        assert published["model"]["deadtime_heat_reliable"] is True
-        assert published["model"]["deadtime_cool_reliable"] is False
-        assert published["model"]["a_stability_ratio"] == pytest.approx(0.123)
-        assert published["model"]["b_stability_ratio"] == pytest.approx(0.456)
-
-        assert published["learning"]["stage"] == "bootstrap"
-        assert published["learning"]["emea_samples_a"] == 3
-        assert published["learning"]["emea_samples_b"] == 4
-        assert published["learning"]["bootstrap_target_a"] == AB_MIN_SAMPLES_A
-        assert published["learning"]["bootstrap_target_b"] == AB_MIN_SAMPLES_B
-        assert published["learning"]["history_target"] == AB_HISTORY_SIZE
-        assert published["learning"]["accepted_updates_a"] == 9
-        assert published["learning"]["accepted_updates_b"] == 11
-        assert published["learning"]["bootstrap_progress_percent"] == 50
-
-
-class TestLandingNonConstraining:
-    """Tests for the non-constraining cap exit path."""
-
-    @staticmethod
-    def _make_manager_in_release():
-        manager = _make_manager()
-        manager._trajectory_source = "setpoint"
-        manager._trajectory.start(
-            start_setpoint=25.0,
-            target_setpoint=25.0,
-            tau_ref_min=10.0,
-            now_monotonic=0.0,
-        )
-        manager._trajectory.set_target(25.0, phase=TrajectoryPhase.RELEASE)
-        return manager
-
-    def test_landing_non_constraining_release_is_sticky(self):
-        # With defaults: sp_for_p_cap ≈ 25.13. sp_for_p=24.9 is non-constraining.
-        manager = self._make_manager_in_release()
-
-        for i in range(LANDING_NON_CONSTRAINING_PERSISTENCE - 1):
-            d = _decision(
-                manager,
-                signed_error=0.08,
-                temperature_slope_h=0.3,
-                sp_for_p=24.9,
-            )
-            assert d.active is True, f"should still be active at step {i}"
-            assert d.reason == "cap"
-
-        d = _decision(
-            manager,
-            signed_error=0.08,
-            temperature_slope_h=0.3,
-            sp_for_p=24.9,
-        )
-        assert d.active is False
-        assert d.reason == "non_constraining_release"
-
-        # Sticky: next call should be residual_release (not re-engaging cap)
-        d = _decision(
-            manager,
-            signed_error=0.08,
-            temperature_slope_h=0.3,
-            sp_for_p=24.9,
-        )
-        assert d.active is False
-        assert d.reason == "residual_release"
-
-    def test_landing_non_constraining_release_rearms_on_significant_demand(self):
-        manager = self._make_manager_in_release()
-
-        for _ in range(LANDING_NON_CONSTRAINING_PERSISTENCE):
-            _decision(
-                manager,
-                signed_error=0.08,
-                temperature_slope_h=0.3,
-                sp_for_p=24.9,
-            )
-
-        assert manager._landing_residual_released is True
-
-        # signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD rearms the landing
-        d = _decision(
-            manager,
-            signed_error=TRAJECTORY_ENABLE_ERROR_THRESHOLD + 0.05,
-            sp_for_p=24.9,
-        )
-
-        assert manager._landing_residual_released is False
-        assert d.active is True
-        assert d.reason == "cap"
-
-    def test_landing_stays_active_when_cap_is_constraining(self):
-        # Increase u_ff_eff so sp_for_p_cap ≈ 24.97 < sp_for_p=25.0.
-        manager = self._make_manager_in_release()
-
-        for _ in range(LANDING_NON_CONSTRAINING_PERSISTENCE + 2):
-            d = _decision(manager, signed_error=0.08, u_ff_eff=0.62, sp_for_p=25.0)
-            assert d.active is True
-            assert d.reason == "cap"
-            assert manager._landing_non_constraining_count == 0
-
-    def test_landing_non_constraining_count_resets_outside_landing_band(self):
-        manager = self._make_manager_in_release()
-
-        d = _decision(
-            manager,
-            signed_error=0.08,
-            temperature_slope_h=0.3,
-            sp_for_p=24.9,
-        )
-        assert d.active is True
-        assert manager.landing_non_constraining_count == 1
-
-        d = _decision(
-            manager,
-            signed_error=0.8,
-            temperature_slope_h=0.3,
-            sp_for_p=24.9,
-        )
-
-        assert d.active is False
-        assert d.reason == "outside_landing_band"
-        assert manager.landing_non_constraining_count == 0
-
-    def test_landing_non_constraining_release_blocked_by_fast_slope(self):
-        manager = self._make_manager_in_release()
-
-        for _ in range(LANDING_NON_CONSTRAINING_PERSISTENCE + 1):
-            d = _decision(
-                manager,
-                signed_error=0.08,
-                temperature_slope_h=2.4,
-                deadtime_cool_s=765.0,
-                sp_for_p=24.9,
-            )
-            assert d.active is True
-            assert d.reason == "cap"
-            assert manager.landing_release_blocked_by_slope is True
-            assert manager.landing_non_constraining_count == 0
-
-
-# Reference the imported symbol so static analyzers do not flag it as unused.
-_ = LANDING_SAFETY_MARGIN_C
+        assert manager.reference_governor_authority_decision is None

@@ -23,6 +23,12 @@ from math import isfinite, sqrt
 from statistics import median
 from typing import Callable, Deque, Sequence
 
+from .causal_power_trace import (
+    AppliedPowerSegment,
+    CausalPowerTrace,
+    ControlOwnershipSegment,
+    ControlOwnershipSnapshot,
+)
 from .const import (
     GovernanceRegime,
     clamp,
@@ -74,45 +80,6 @@ class FFTrimPIEligibility:
 
     admissible: bool
     reason: str
-
-
-@dataclass(frozen=True)
-class AppliedPowerSegment:
-    """Linear power applied over one monotonic interval."""
-
-    start_monotonic: float
-    end_monotonic: float
-    linear_power: float
-
-
-@dataclass(frozen=True)
-class ControlOwnershipSnapshot:
-    """Control terms that own one physically committed command."""
-
-    u_ff1: float
-    trim_stored: float
-    u_ff_visible: float
-    u_ff3: float
-    u_p: float
-    u_i: float
-    ki: float
-    gain_generation: int
-    u_cmd: float
-    u_limited: float
-    linear_committed_power: float
-    regime: GovernanceRegime | str | None
-    i_mode: str | None
-    quality: str = "causal_full"
-    constraint_flags: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class ControlOwnershipSegment:
-    """One ownership snapshot over a monotonic physical interval."""
-
-    start_monotonic: float
-    end_monotonic: float
-    ownership: ControlOwnershipSnapshot
 
 
 @dataclass(frozen=True)
@@ -272,21 +239,14 @@ class _OwnershipStats:
 class CausalFFTrimObserver:
     """Estimate slow FF bias from causally aligned thermal windows."""
 
-    _POWER_HISTORY_MAX_S = 24.0 * 60.0 * 60.0
-    _MAX_CONTINUITY_GAP_S = 5.0
-
-    def __init__(self, cycle_min: float) -> None:
+    def __init__(
+        self,
+        cycle_min: float,
+        physical_trace: CausalPowerTrace | None = None,
+    ) -> None:
         self._cycle_min = max(float(cycle_min), 0.0)
-        self._power_segments: Deque[AppliedPowerSegment] = deque()
-        self._ownership_segments: Deque[ControlOwnershipSegment] = deque()
-        self._active_cycle_segments: list[AppliedPowerSegment] = []
-        self._active_ownership_segments: list[ControlOwnershipSegment] = []
-        self._active_power_start: float | None = None
-        self._active_linear_power: float | None = None
-        self._active_ownership_start: float | None = None
-        self._active_ownership: ControlOwnershipSnapshot | None = None
+        self._physical_trace = physical_trace or CausalPowerTrace()
         self._thermal_samples: list[FFTrimThermalSample] = []
-        self._last_measurement_id: str | None = None
         self._window_deadtime_s: float | None = None
         self._washout_until_monotonic: float = 0.0
         self.state: str = "warming_up"
@@ -300,40 +260,8 @@ class CausalFFTrimObserver:
         self._last_admissible_result: CausalFFTrimResult | None = None
 
     def record_applied_power(self, segment: AppliedPowerSegment) -> None:
-        """Append one non-overlapping segment in linear model space."""
-        start = float(segment.start_monotonic)
-        end = float(segment.end_monotonic)
-        power = clamp(float(segment.linear_power), 0.0, 1.0)
-        if not all(isfinite(value) for value in (start, end, power)) or end <= start:
-            return
-
-        if self._power_segments:
-            previous = self._power_segments[-1]
-            gap_s = start - previous.end_monotonic
-            if 0.0 < gap_s <= self._MAX_CONTINUITY_GAP_S:
-                previous = AppliedPowerSegment(
-                    previous.start_monotonic,
-                    start,
-                    previous.linear_power,
-                )
-                self._power_segments[-1] = previous
-            start = max(start, previous.end_monotonic)
-            if end <= start:
-                return
-            if (
-                abs(start - previous.end_monotonic) <= 1e-6
-                and abs(power - previous.linear_power) <= 1e-9
-            ):
-                self._power_segments[-1] = AppliedPowerSegment(
-                    previous.start_monotonic,
-                    end,
-                    power,
-                )
-                self._prune_power_history(end)
-                return
-
-        self._power_segments.append(AppliedPowerSegment(start, end, power))
-        self._prune_power_history(end)
+        """Compatibility wrapper for direct observer users."""
+        self._physical_trace.record_applied_power(segment)
 
     def start_applied_cycle(
         self,
@@ -341,14 +269,15 @@ class CausalFFTrimObserver:
         now_monotonic: float,
         linear_power: float,
         ownership: ControlOwnershipSnapshot | None = None,
+        quality: str = "unspecified",
     ) -> None:
-        """Start the transient trace for one physical scheduler cycle."""
-        self._active_cycle_segments.clear()
-        self._active_ownership_segments.clear()
-        self._active_power_start = float(now_monotonic)
-        self._active_linear_power = clamp(float(linear_power), 0.0, 1.0)
-        self._active_ownership_start = float(now_monotonic)
-        self._active_ownership = ownership
+        """Compatibility wrapper for direct observer users."""
+        self._physical_trace.start_applied_cycle(
+            now_monotonic=now_monotonic,
+            linear_power=linear_power,
+            ownership=ownership,
+            quality=quality,
+        )
 
     def update_applied_power(
         self,
@@ -356,37 +285,15 @@ class CausalFFTrimObserver:
         now_monotonic: float,
         linear_power: float,
         ownership: ControlOwnershipSnapshot | None = None,
+        quality: str = "unspecified",
     ) -> None:
-        """Record a physical valve-power change inside the active cycle."""
-        now = float(now_monotonic)
-        if (
-            self._active_power_start is not None
-            and self._active_linear_power is not None
-            and now > self._active_power_start
-        ):
-            self._active_cycle_segments.append(
-                AppliedPowerSegment(
-                    self._active_power_start,
-                    now,
-                    self._active_linear_power,
-                )
-            )
-        if (
-            self._active_ownership_start is not None
-            and self._active_ownership is not None
-            and now > self._active_ownership_start
-        ):
-            self._active_ownership_segments.append(
-                ControlOwnershipSegment(
-                    self._active_ownership_start,
-                    now,
-                    self._active_ownership,
-                )
-            )
-        self._active_power_start = now
-        self._active_linear_power = clamp(float(linear_power), 0.0, 1.0)
-        self._active_ownership_start = now
-        self._active_ownership = ownership
+        """Compatibility wrapper for direct observer users."""
+        self._physical_trace.update_applied_power(
+            now_monotonic=now_monotonic,
+            linear_power=linear_power,
+            ownership=ownership,
+            quality=quality,
+        )
 
     def complete_applied_cycle(
         self,
@@ -395,51 +302,12 @@ class CausalFFTrimObserver:
         realized_linear_power: float | None,
         use_valve_trace: bool,
     ) -> None:
-        """Commit either the valve trace or the realized cycle duty."""
-        cycle_end = float(now_monotonic)
-        cycle_start = self._active_power_start
-        cycle_power = self._active_linear_power
-        if cycle_start is None or cycle_end <= cycle_start:
-            self._clear_active_cycle()
-            return
-
-        if use_valve_trace:
-            if cycle_power is not None:
-                self._active_cycle_segments.append(
-                    AppliedPowerSegment(cycle_start, cycle_end, cycle_power)
-                )
-            for segment in self._active_cycle_segments:
-                self.record_applied_power(segment)
-        elif realized_linear_power is not None:
-            first_start = (
-                self._active_cycle_segments[0].start_monotonic
-                if self._active_cycle_segments
-                else cycle_start
-            )
-            self.record_applied_power(
-                AppliedPowerSegment(
-                    first_start,
-                    cycle_end,
-                    clamp(float(realized_linear_power), 0.0, 1.0),
-                )
-            )
-
-        if (
-            self._active_ownership_start is not None
-            and self._active_ownership is not None
-            and cycle_end > self._active_ownership_start
-        ):
-            self._active_ownership_segments.append(
-                ControlOwnershipSegment(
-                    self._active_ownership_start,
-                    cycle_end,
-                    self._active_ownership,
-                )
-            )
-        for segment in self._active_ownership_segments:
-            self._record_ownership_segment(segment)
-
-        self._clear_active_cycle()
+        """Compatibility wrapper for direct observer users."""
+        self._physical_trace.complete_applied_cycle(
+            now_monotonic=now_monotonic,
+            realized_linear_power=realized_linear_power,
+            use_valve_trace=use_valve_trace,
+        )
 
     def record_thermal_sample(
         self,
@@ -451,16 +319,11 @@ class CausalFFTrimObserver:
         """Store one fresh measurement or reject its full thermal context."""
         rejection = self._sample_rejection_reason(sample)
         if rejection is not None:
-            self._last_measurement_id = sample.measurement_id
             return self.invalidate(
                 rejection,
                 now_monotonic=sample.observed_monotonic,
                 washout_s=deadtime_s if deadtime_reliable else 0.0,
             )
-
-        if sample.measurement_id == self._last_measurement_id:
-            return None
-        self._last_measurement_id = sample.measurement_id
 
         if (
             not deadtime_reliable
@@ -479,7 +342,6 @@ class CausalFFTrimObserver:
             and abs(delay_s - self._window_deadtime_s)
             > max(1.0, 0.05 * self._window_deadtime_s)
         ):
-            self._last_measurement_id = sample.measurement_id
             return self.invalidate(
                 "deadtime_changed",
                 now_monotonic=sample.observed_monotonic,
@@ -527,12 +389,13 @@ class CausalFFTrimObserver:
             FF_TRIM_DEADTIME_WINDOW_FACTOR * delay_s,
         )
 
-        if not self._power_segments:
+        earliest_power_start = self._physical_trace.earliest_power_start
+        if earliest_power_start is None:
             self.state = "warming_up"
             self.last_reject_reason = "causal_power_not_covered"
             return None
 
-        earliest_observable = self._power_segments[0].start_monotonic + delay_s
+        earliest_observable = earliest_power_start + delay_s
         while (
             self._thermal_samples
             and self._thermal_samples[0].observed_monotonic < earliest_observable
@@ -605,11 +468,19 @@ class CausalFFTrimObserver:
         return self._last_admissible_result
 
     @property
+    def physical_trace(self) -> CausalPowerTrace:
+        """Return the neutral physical trace used by this observer."""
+        return self._physical_trace
+
+    @property
+    def _active_ownership_segments(self) -> tuple[ControlOwnershipSegment, ...]:
+        """Keep legacy test introspection read-only during trace extraction."""
+        return self._physical_trace.active_ownership_segments
+
+    @property
     def earliest_power_start(self) -> float | None:
         """Return the oldest physical-power timestamp still retained."""
-        if not self._power_segments:
-            return None
-        return self._power_segments[0].start_monotonic
+        return self._physical_trace.earliest_power_start
 
     def _evaluate_completed_window(
         self,
@@ -678,9 +549,14 @@ class CausalFFTrimObserver:
 
         causal_start = samples[0].observed_monotonic - delay_s
         causal_end = samples[-1].observed_monotonic - delay_s
-        mean_power, coverage = self._mean_causal_power(causal_start, causal_end)
+        trace_window = self._physical_trace.read_window(causal_start, causal_end)
+        mean_power = trace_window.mean_linear_power
+        coverage = trace_window.power_coverage_ratio
         if mean_power is None or coverage < FF_TRIM_MIN_POWER_COVERAGE:
-            if not self._power_segments or self._power_segments[-1].end_monotonic < causal_end:
+            if (
+                trace_window.last_committed_end_monotonic is None
+                or trace_window.last_committed_end_monotonic < causal_end
+            ):
                 return None
             return self._reject_completed_window(
                 "causal_power_not_covered",
@@ -690,7 +566,11 @@ class CausalFFTrimObserver:
                 observation_mode=observation_mode,
             )
 
-        ownership_stats = self._ownership_stats(causal_start, causal_end)
+        ownership_stats = self._ownership_stats(
+            causal_start,
+            causal_end,
+            segments=trace_window.ownership_segments,
+        )
         if observation_mode == "periodic":
             periodic_rejection = self._periodic_ownership_rejection_reason(
                 samples=samples,
@@ -939,13 +819,11 @@ class CausalFFTrimObserver:
         )
         self.state = "waiting_deadtime"
 
-    def reset_runtime(self) -> None:
+    def reset_runtime(self, *, reset_physical_trace: bool = True) -> None:
         """Clear transient observation state without changing persisted trim."""
-        self._power_segments.clear()
-        self._ownership_segments.clear()
-        self._clear_active_cycle()
+        if reset_physical_trace:
+            self._physical_trace.reset()
         self._thermal_samples.clear()
-        self._last_measurement_id = None
         self._window_deadtime_s = None
         self._washout_until_monotonic = 0.0
         self.state = "warming_up"
@@ -1077,23 +955,8 @@ class CausalFFTrimObserver:
         start: float,
         end: float,
     ) -> tuple[float | None, float]:
-        duration = end - start
-        if duration <= 0.0:
-            return None, 0.0
-        weighted_power = 0.0
-        covered = 0.0
-        for segment in self._power_segments:
-            overlap_start = max(start, segment.start_monotonic)
-            overlap_end = min(end, segment.end_monotonic)
-            if overlap_end <= overlap_start:
-                continue
-            overlap = overlap_end - overlap_start
-            weighted_power += overlap * segment.linear_power
-            covered += overlap
-        coverage = clamp(covered / duration, 0.0, 1.0)
-        if covered <= 0.0:
-            return None, coverage
-        return weighted_power / covered, coverage
+        window = self._physical_trace.read_window(start, end)
+        return window.mean_linear_power, window.power_coverage_ratio
 
     @staticmethod
     def _time_weighted_mean(
@@ -1115,6 +978,8 @@ class CausalFFTrimObserver:
         self,
         start: float,
         end: float,
+        *,
+        segments: Sequence[ControlOwnershipSegment] | None = None,
     ) -> _OwnershipStats | None:
         """Aggregate control ownership over the same causal power interval."""
         duration = end - start
@@ -1148,7 +1013,12 @@ class CausalFFTrimObserver:
         generations: set[int] = set()
         qualities: set[str] = set()
 
-        for segment in self._ownership_segments:
+        source_segments = (
+            segments
+            if segments is not None
+            else self._physical_trace.read_window(start, end).ownership_segments
+        )
+        for segment in source_segments:
             overlap_start = max(start, segment.start_monotonic)
             overlap_end = min(end, segment.end_monotonic)
             if overlap_end <= overlap_start:
@@ -1399,78 +1269,6 @@ class CausalFFTrimObserver:
             alignment_delay_s=None,
             power_coverage_ratio=0.0,
         )
-
-    def _prune_power_history(self, now_monotonic: float) -> None:
-        cutoff = now_monotonic - self._POWER_HISTORY_MAX_S
-        self._discard_power_before(cutoff)
-
-    def _discard_power_before(self, cutoff: float) -> None:
-        while (
-            self._power_segments
-            and self._power_segments[0].end_monotonic <= cutoff
-        ):
-            self._power_segments.popleft()
-        if (
-            self._power_segments
-            and self._power_segments[0].start_monotonic < cutoff
-            < self._power_segments[0].end_monotonic
-        ):
-            first = self._power_segments[0]
-            self._power_segments[0] = AppliedPowerSegment(
-                cutoff,
-                first.end_monotonic,
-                first.linear_power,
-            )
-        while (
-            self._ownership_segments
-            and self._ownership_segments[0].end_monotonic <= cutoff
-        ):
-            self._ownership_segments.popleft()
-        if (
-            self._ownership_segments
-            and self._ownership_segments[0].start_monotonic < cutoff
-            < self._ownership_segments[0].end_monotonic
-        ):
-            first_ownership = self._ownership_segments[0]
-            self._ownership_segments[0] = ControlOwnershipSegment(
-                cutoff,
-                first_ownership.end_monotonic,
-                first_ownership.ownership,
-            )
-
-    def _record_ownership_segment(self, segment: ControlOwnershipSegment) -> None:
-        """Append one non-overlapping ownership segment."""
-        start = float(segment.start_monotonic)
-        end = float(segment.end_monotonic)
-        if not isfinite(start) or not isfinite(end) or end <= start:
-            return
-        if self._ownership_segments:
-            previous = self._ownership_segments[-1]
-            start = max(start, previous.end_monotonic)
-            if end <= start:
-                return
-            if (
-                abs(start - previous.end_monotonic) <= 1e-6
-                and previous.ownership == segment.ownership
-            ):
-                self._ownership_segments[-1] = ControlOwnershipSegment(
-                    previous.start_monotonic,
-                    end,
-                    segment.ownership,
-                )
-                return
-        self._ownership_segments.append(
-            ControlOwnershipSegment(start, end, segment.ownership)
-        )
-
-    def _clear_active_cycle(self) -> None:
-        self._active_cycle_segments.clear()
-        self._active_ownership_segments.clear()
-        self._active_power_start = None
-        self._active_linear_power = None
-        self._active_ownership_start = None
-        self._active_ownership = None
-
 
 def evaluate_pi_eligibility_for_trim(
     regime: GovernanceRegime | str | None,

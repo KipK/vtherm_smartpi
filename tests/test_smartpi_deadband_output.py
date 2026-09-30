@@ -210,6 +210,35 @@ def test_controller_requires_persistent_deadband_edge_before_p_term():
     assert second == pytest.approx(0.375)
 
 
+def test_controller_snapshot_projects_pending_edge_without_advancing_persistence():
+    controller = SmartPIController("projection")
+    kwargs = dict(
+        error=0.10, error_p=0.10, kp=1.5, ki=0.05, u_ff=0.20,
+        dt_min=1.0, cycle_min=10.0, in_deadband=True, in_near_band=True,
+        integrator_hold=False, u_db_nominal=0.20,
+        hvac_mode=VThermHvacMode_HEAT, current_temp=20.0,
+        target_temp=20.10, is_tau_reliable=True, learn_ok_count_a=10,
+        deadband_c=0.10, core_deadband=True, deadband_allow_p=True,
+    )
+    controller.integral = 2.0
+    controller.compute_pwm(**kwargs)
+    first = controller.pi_output_snapshot
+
+    assert first is not None
+    assert first.u_i == pytest.approx(0.10)
+    assert first.u_ff == pytest.approx(0.20)
+    assert first.p_state.threshold == pytest.approx(0.075)
+    assert first.project_p(0.10) == 0.0
+    assert first.project_p(-0.10) == 0.0
+    assert controller._deadband_edge_count == 1
+
+    controller.compute_pwm(**kwargs)
+    second = controller.pi_output_snapshot
+    assert second is not None
+    assert second.project_p(0.10) == pytest.approx(1.5 * 0.025)
+    assert controller._deadband_edge_count == 2
+
+
 @pytest.mark.parametrize("sign", [1.0, -1.0])
 def test_controller_carries_edge_persistence_across_core_boundary(sign):
     """An outside edge sample prevents an artificial P drop on core entry."""

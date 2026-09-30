@@ -52,13 +52,13 @@ Le bloc `live` est organisé par responsabilité :
 | `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
 | `feedforward` | État FF3, source de bande morte et diagnostics FFTrim canoniques |
-| `setpoint` | Consigne filtrée, trajectoire, boost et résumé d'atterrissage |
+| `setpoint` | Consigne filtrée, trajectoire, boost et résumé du gouverneur de référence |
 | `autocalib` | État du superviseur de calibration automatique |
 | `calibration` | État, nombre d'essais et date de la dernière calibration |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
-`trajectory`, `landing`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
+`trajectory`, `reference_governor`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
 est disponible, `twin`.
 
 FFTrim utilise des blocs canoniques imbriqués :

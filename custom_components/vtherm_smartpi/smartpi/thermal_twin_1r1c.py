@@ -79,6 +79,7 @@ from collections import deque
 from math import exp, isfinite, log, sqrt
 
 from .const import clamp
+from .thermal_model import propagate_1r1c
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -406,8 +407,14 @@ class ThermalTwin1R1C:
         one_minus_alpha = 1.0 - alpha
 
         # ── PURE prediction (drives T_hat and d_raw) ──
-        t_eq_raw = text_used + (a / b) * u_eff
-        t_pred_pure = t_eq_raw + (t_prev - t_eq_raw) * alpha
+        t_pred_pure = propagate_1r1c(
+            temperature=t_prev,
+            external_temperature=text_used,
+            a=a,
+            b=b,
+            power=u_eff,
+            duration_min=actual_dt_min,
+        )
 
         # ── Innovation on pure model ──
         innovation_pure = float(tin_meas) - t_pred_pure
@@ -441,8 +448,15 @@ class ThermalTwin1R1C:
             self.d_hat_ema *= (1.0 - self.d_hat_relax) ** (actual_dt_s / self.dt_s)
 
         # ── CORRECTED prediction (diagnostics only) ──
-        t_eq_corr = text_used + (a * u_eff + self.d_hat_ema) / b
-        t_pred = t_eq_corr + (t_prev - t_eq_corr) * alpha
+        t_pred = propagate_1r1c(
+            temperature=t_prev,
+            external_temperature=text_used,
+            a=a,
+            b=b,
+            power=u_eff,
+            duration_min=actual_dt_min,
+            bias=self.d_hat_ema,
+        )
 
         # ── Innovation on corrected model (for RMSE, CUSUM) ──
         innovation = float(tin_meas) - t_pred

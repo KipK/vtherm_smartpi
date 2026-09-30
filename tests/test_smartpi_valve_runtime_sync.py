@@ -216,12 +216,14 @@ async def test_same_valve_power_binds_the_later_frozen_ownership() -> None:
         )
 
     assert algo._command_ownership.last_binding.status == CommandOwnershipBindingStatus.BOUND
-    assert algo._fftrim_observer._active_ownership is not None
-    assert algo._fftrim_observer._active_ownership.u_i == pytest.approx(frozen_i)
-    assert algo._fftrim_observer._active_ownership_segments[0].ownership.u_i == pytest.approx(
+    trace = algo._causal_power_trace
+    assert algo._fftrim_observer.physical_trace is trace
+    assert trace._active_ownership is not None
+    assert trace._active_ownership.u_i == pytest.approx(frozen_i)
+    assert trace.active_ownership_segments[0].ownership.u_i == pytest.approx(
         0.33
     )
-    assert algo._fftrim_observer._active_ownership.linear_committed_power == pytest.approx(
+    assert trace._active_ownership.linear_committed_power == pytest.approx(
         algo.valve_curve.invert(second_published_power)
     )
 

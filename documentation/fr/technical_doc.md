@@ -8,7 +8,8 @@ Le code actuel repose sur trois idées directrices :
 
 1. identifier un modèle thermique simple du premier ordre avec temps mort,
 2. adapter la commande PI à partir de ce modèle,
-3. geler ou limiter certaines adaptations quand le régime physique n'est pas jugé fiable.
+3. accepter ou rejeter chaque fenêtre d'apprentissage selon le régime physique
+   qui l'a produite.
 
 Ce document décrit le comportement réellement implémenté dans le code SmartPI actuel.
 
@@ -39,6 +40,11 @@ La constante de temps associée est :
 $$ \tau = \frac{1}{b} $$
 
 Le modèle est volontairement simple. Le temps mort est appris séparément et injecté dans les heuristiques de réglage et dans les protections.
+Pour les procédés physiques d'ordre supérieur, le `a` appris est donc un gain 1R1C
+effectif et local au régime d'exploitation représenté par les fenêtres acceptées,
+et non une constante physique unique de toute l'installation. Il doit être validé
+sur des conditions d'exploitation représentatives, et non réglé à partir d'un seul
+historique.
 
 ### 2.2 Chaîne de commande
 
@@ -97,6 +103,17 @@ Le code n'utilise plus de constante `WINDOW_MIN_MINUTES`. L'apprentissage repose
 
 - exige une température extérieure disponible,
 - respecte la gouvernance thermique sauf en calibration,
+- rejette ou réinitialise une fenêtre ON/`a` sur l'observation exacte du changement
+  de consigne utilisateur, afin qu'une fenêtre ne puisse pas couvrir les deux
+  régimes,
+- conserve l'éligibilité de la montée active initiale suivant cette observation
+  pour `a`, sous les garde-fous existants de temps mort, stabilité de puissance,
+  pente robuste, FF3 et gouvernance,
+- bloque l'apprentissage ON/`a` ordinaire dès le début du freinage tardif de la
+  trajectoire ou du gouverneur de référence, jusqu'à la fin du handoff,
+- conserve l'apprentissage passif OFF/`b` sous ses garde-fous physiques existants ;
+  la calibration conserve son contrat dédié et les réponses dues uniquement à une
+  perturbation ne sont pas bloquées par ce gate de consigne,
 - bloque la collecte en bootstrap tant que les temps morts requis ne sont pas fiables,
 - applique une pause après reprise (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - ancre le début de fenêtre après la fin du temps mort quand c'est nécessaire,
@@ -250,17 +267,28 @@ Le principe est le suivant :
 - la branche I continue d’utiliser la consigne brute,
 - la branche P reçoit `filtered_setpoint`,
 - la branche P conserve la consigne brute tant que la zone de freinage prédite n'est pas atteinte,
-- un changement de consigne significatif arme une seule fois le freinage tardif ; en chauffage, son déclenchement compare ensuite la hausse prédite à la distance restante jusqu'à `target - LANDING_SAFETY_MARGIN_C`, sans réappliquer le seuil d'armement,
+- un changement de consigne significatif arme une seule fois le freinage tardif ; HEAT et COOL utilisent ensuite les mêmes équations signées de fenêtre de freinage,
 - un déclenchement dû à une perturbation continue d'exiger le seuil d'écart significatif,
 - le modèle 1R1C appris, `deadtime_cool`, la latence restante du cycle et la puissance engagée sur le cycle servent à détecter cette zone de freinage,
-- une trajectoire de freinage tardif douce est ensuite appliquée près de la cible tout en conservant une demande proportionnelle minimale positive,
-- pour les trajectoires de consigne en chauffage, un cap d'atterrissage peut contraindre la commande interne après le calcul PI lorsque le modèle prédit que la chaleur stockée suffit à atteindre la cible,
+- une trajectoire de freinage tardif douce propose une référence P nominale indépendante près de la cible,
+- pour les trajectoires de consigne HEAT et COOL, le gouverneur de référence prédictif détermine une référence P admissible et peut contraindre la commande interne après le calcul PI,
 - lorsque le freinage n'est plus nécessaire, la référence filtrée remonte progressivement vers la consigne brute avant l'arrêt de la trajectoire,
 - pour une trajectoire issue d'un changement de consigne, l'entrée en phase `release` verrouille ensuite cette phase jusqu'à la fin de la trajectoire, sans retour vers `tracking`,
+- le franchissement de la consigne ne termine pas un épisode de consigne armé ; le
+  runtime continue de consommer les observations sans demande jusqu'à la
+  confirmation de son handoff,
+- la référence P reste bornée par la consigne brute pendant ce handoff : elle ne
+  dépasse jamais la cible en HEAT et ne descend jamais sous celle-ci en COOL,
 - `trajectory_active` indique si la trajectoire analytique est en cours,
-- la trajectoire se termine seulement lorsque le handoff reste bumpless, que la température mesurée est assez proche de la cible et que l'état d'atterrissage autorise le relâchement, ou lorsque les conditions de fiabilité ne sont plus réunies.
+- le gouverneur termine l'épisode seulement après que la contrainte est restée inactive pendant plusieurs évaluations séparées dans le temps et couvrant un cycle de contrôle ; un contexte invalide échoue en mode ouvert sans restaurer un ancien cap.
 
-Le cap d'atterrissage utilise la forme discrète du modèle 1R1C dans l'espace de commande interne linéaire :
+Le jumeau thermique, FF3, la prédiction d'entrée en freinage et le gouverneur
+partagent une fonction pure de propagation 1R1C à puissance constante. Chaque
+consommateur conserve ses horizons, sa politique de retard et ses validations.
+Le gouverneur utilise le modèle thermique nominal, sans correction estimée de
+perturbation.
+
+Le gouverneur utilise la forme discrète du modèle 1R1C dans l'espace de commande interne linéaire :
 
 $$
 \alpha = e^{-b \cdot h}
@@ -270,29 +298,39 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-Le cap résout la commande maximale qui garde la température prédite sous `target - LANDING_SAFETY_MARGIN_C`. Il est appliqué après le calcul PI normal et avant les contraintes douces, de sorte que `u_pi` reste le diagnostic PI brut tandis que `landing_u_cap` explique la réduction finale de commande.
+Les équations sont normalisées dans le sens de la demande active (`+1` en HEAT, `-1` en COOL). Une réserve dynamique est sélectionnée à partir de la pente mesurée et du déplacement prédit par le modèle, puis bornée par la politique et convertie en limite thermique. Le gouverneur résout la commande maximale respectant cette limite et inverse ce cap pour obtenir la référence P admissible. Le cap est appliqué après le calcul PI normal et avant les contraintes douces ; `u_pi` reste donc le diagnostic PI brut et l'anti-windup par tracking observe la commande réellement obtenue en aval.
+
+Les observations thermiques sont préparées avant le calcul PI. L'inversion de
+référence utilise un instantané immuable du gain proportionnel effectif, de la
+puissance intégrale et du feedforward après ce calcul. Sa projection P partage
+les règles de zone morte, d'autorisation du P et de persistance au bord du
+contrôleur, sans faire avancer son état une seconde fois. Des références
+produisant des commandes P équivalentes ne créent pas de contrainte de référence
+seule ; le plafond thermique de commande reste prioritaire.
 
 Le bloc canonique `live.setpoint` publie le résumé :
 
 - `filtered_setpoint`,
 - `trajectory_active`,
 - `trajectory_source`,
-- `landing_active`,
-- `landing_reason`,
-- `landing_u_cap`,
-- `landing_coast_required`.
+- `governor_active`,
+- `governor_phase`,
+- `governor_reason`,
+- `governor_command_cap`,
+- `governor_coast_required`.
 
 Le même payload dans les deux modes expose les détails de trajectoire et
-d'atterrissage dans `live.analysis.trajectory` et `live.analysis.landing` :
+du gouverneur dans `live.analysis.trajectory` et `live.analysis.reference_governor` :
 
 - `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` et `phase`,
 - `pending_target_change_braking`, `braking_needed` et `model_ready`,
 - `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` et `bumpless_ready`,
-- `setpoint_for_p_cap`, `predicted_temperature`, `predicted_rise` et `target_margin`,
-- `release_allowed`, `time_to_target_min`, `release_blocked_by_slope`,
+- `active`, `phase`, `reason`, `nominal_reference` et `admissible_reference`,
+- `command_cap`, `constraint_active`, `dynamic_reserve_c`, `predicted_terminal_temperature` et `target_bound`,
+- `coast_required` et `handoff_ready`,
 - `command_before_cap` et `command_after_cap`.
 
-Le façonnage de référence reste limité à la branche P afin de préserver la lisibilité de la consigne brute côté intégrale et d’éviter de perturber l’apprentissage. Le cap d'atterrissage est un gouverneur de commande post-PI séparé pour les trajectoires de consigne en chauffage ; il ne réécrit pas l'intégrale et ne change pas la courbe de linéarisation de vanne.
+Le façonnage de référence reste limité à la branche P afin de préserver la consigne brute côté intégrale et d'éviter de perturber l'apprentissage. Le cap post-PI ne réécrit pas l'intégrale et ne change pas la courbe de linéarisation de vanne.
 
 Le code actuel applique aussi une garde explicite sur la croissance positive de l'intégrale pendant les phases de rattrapage :
 
@@ -422,7 +460,7 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
 | `deadband.py`          | deadband et near-band                                    |
-| `setpoint.py`          | trajectoire analytique de consigne et cap d'atterrissage |
+| `setpoint.py`          | trajectoire analytique et orchestration du gouverneur signé |
 | `integral_guard.py`    | garde de croissance positive de l'intégrale              |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |

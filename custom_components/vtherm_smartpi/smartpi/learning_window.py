@@ -251,6 +251,8 @@ class LearningWindowManager:
         is_hysteresis: bool = False,
         hvac_mode: "VThermHvacMode | None" = None,
         target_temp: float | None = None,
+        a_learning_allowed: bool = True,
+        a_learning_block_reason: str | None = None,
     ) -> tuple[int, int]:
         """
         Update learning window and submit to estimator if conditions met.
@@ -275,6 +277,8 @@ class LearningWindowManager:
             deadtime_skip_count_b: Counter for cooling deadtime skips (returned).
             hvac_mode: Current HVAC mode.
             target_temp: Current target temperature.
+            a_learning_allowed: Whether ON/A learning is eligible.
+            a_learning_block_reason: Diagnostic reason when ON/A learning is blocked.
             
         Returns:
             Tuple of (deadtime_skip_count_a, deadtime_skip_count_b) for tracking.
@@ -327,6 +331,24 @@ class LearningWindowManager:
                 if self._active:
                     self.reset()
                 return deadtime_skip_count_a, deadtime_skip_count_b
+
+        # This gate only protects ON/A learning from contaminated setpoint
+        # transients. OFF/B learning must continue through the normal guards.
+        blocked_a_window = (
+            self._active and self._u_first is not None and self._u_first > U_ON_MIN
+        )
+        blocked_a_start = not self._active and u_active > U_ON_MIN
+        if (
+            not is_calibrating
+            and not a_learning_allowed
+            and (blocked_a_window or blocked_a_start)
+        ):
+            estimator.learn_skip_count += 1
+            estimator.learn_last_reason = (
+                a_learning_block_reason or "skip: setpoint transient"
+            )
+            self.reset()
+            return deadtime_skip_count_a, deadtime_skip_count_b
 
         # --- Bootstrap: require deadtime before A/B collection ---
         # During hysteresis, A uses the active response dead time and B uses
@@ -592,6 +614,21 @@ class LearningWindowManager:
         # --- Learning Submission ---
         u_eff = self._u_int / self._t_int_s
         dT_dt = dT / window_dt_min
+
+        # A window can start as passive and become active after power changes.
+        # Recheck the effective duty before submission so such a mixed window
+        # cannot bypass the transient gate.
+        if (
+            not is_calibrating
+            and not a_learning_allowed
+            and u_eff > U_ON_MIN
+        ):
+            estimator.learn_skip_count += 1
+            estimator.learn_last_reason = (
+                a_learning_block_reason or "skip: setpoint transient"
+            )
+            self.reset()
+            return deadtime_skip_count_a, deadtime_skip_count_b
 
         if u_eff < U_OFF_MAX:
             # OFF Learning

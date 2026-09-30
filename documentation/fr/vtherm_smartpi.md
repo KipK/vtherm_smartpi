@@ -248,7 +248,7 @@ Quand le modèle thermique devient fiable, SmartPI bascule dans son mode normal 
 
 Près de la température cible, SmartPI cherche à éviter les micro-corrections permanentes. Le résultat attendu est une régulation plus stable, avec moins de corrections inutiles qu'un TPI fixe.
 
-Lors d'une hausse de consigne en chauffage, le filtre de consigne utilise aussi le modèle appris pour gérer l'approche finale de la cible. La branche proportionnelle suit une référence filtrée, tandis que la consigne brute reste disponible pour la branche intégrale. Près de la cible, SmartPI peut plafonner la demande de chauffe interne quand le modèle prédit que la chaleur déjà injectée suffit à atteindre la consigne. Cet atterrissage aide la pièce à ralentir avant la cible au lieu de continuer à chauffer uniquement parce que le feed-forward ou l'état PI gelé reste positif.
+Lors d'un changement de consigne en HEAT ou COOL, le filtre de consigne utilise aussi le modèle appris pour gérer l'approche finale de la cible. La branche proportionnelle suit une référence gouvernée, tandis que la consigne brute reste disponible pour la branche intégrale. Près de la cible, SmartPI peut plafonner la demande interne quand le modèle prédit que l'énergie thermique déjà engagée suffit à atteindre la consigne. La réserve dynamique et le handoff confirmé dans le temps ralentissent l'approche sans maintenir la pièce à un écart fixe de la cible.
 
 Avec `FF3`, activé par défaut, SmartPI peut aussi appliquer une petite correction prédictive près de la consigne lorsqu'il détecte un contexte crédible de perturbation externe.
 
@@ -285,7 +285,7 @@ Pour démarrer simplement :
 | **Délai minimal d'activation**       | Durée minimale pendant laquelle le chauffage reste allumé une fois activé.                             | `0 s`             |
 | **Délai minimal de désactivation**   | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé.                          | `0 s`             |
 | **Deadband**                         | Zone de tolérance autour de la consigne.                                                               | `0.05°C`          |
-| **Filtre de consigne**               | Active le lissage de consigne proportionnel et l'atterrissage de chauffe près de la cible.             | `activé`          |
+| **Filtre de consigne**               | Active le lissage proportionnel et la gouvernance prédictive HEAT/COOL près de la cible.                | `activé`          |
 | **FF3**                              | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé`          |
 | **Autoriser P dans la deadband**     | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
 | **Autoriser le redémarrage PWM aux transitions de bande** | Permet à SmartPI de redémarrer le cycle PWM courant lors d'une entrée ou sortie de deadband ou de near-band. | `désactivé` |
@@ -339,7 +339,7 @@ Autres blocs utiles sous `live` :
 - `temperature` : température mesurée, erreur, état de l'intégrale,
 - `model` : `a`, `b`, niveau de confiance et temps morts appris,
 - `feedforward` : état du feed-forward et de FF3,
-- `setpoint` : informations de consigne filtrée et d'atterrissage,
+- `setpoint` : informations de consigne filtrée et du gouverneur de référence,
 - `autocalib` : état de la supervision automatique,
 - `calibration` : état d'une calibration forcée.
 
@@ -348,10 +348,11 @@ En mode normal, le bloc `setpoint` peut contenir :
 - `filtered_setpoint` : référence suivie par la branche proportionnelle,
 - `trajectory_active` : indique si une trajectoire de consigne est active,
 - `trajectory_source` : indique pourquoi la trajectoire est active,
-- `landing_active` : indique si l'atterrissage de chauffe est actif,
-- `landing_reason` : raison de l'état d'atterrissage,
-- `landing_u_cap` : cap de demande de chauffe interne appliqué pendant l'atterrissage,
-- `landing_coast_required` : indique si SmartPI laisse la pièce en roue libre parce que le modèle prédit assez de chaleur stockée.
+- `governor_active` : indique si le façonnage prédictif de référence ou de commande est actif,
+- `governor_phase` : phase courante `idle`, `governed` ou `handoff`,
+- `governor_reason` : raison de la dernière décision du gouverneur,
+- `governor_command_cap` : cap de demande interne HEAT/COOL,
+- `governor_coast_required` : indique si la prédiction impose une commande nulle.
 
 Les valeurs avancées utilisées par la carte fournie sont toujours disponibles
 dans `live.analysis`. Le mode debug n'ajoute ni ne retire de champs publiés : il
@@ -367,7 +368,7 @@ https://github.com/KipK/vtherm_smartpi/tree/master/cards
 
 SmartPI publie aussi le résumé `specific_states.smart_pi` et la référence d'entité `specific_states.regulation_diagnostics` sur l'entité thermostat. La [carte Lovelace Equinox](https://github.com/KipK/equinox) utilise ces attributs pour afficher un panel **Régulation** dédié depuis le menu de la carte climate.
 
-Avec Equinox, vous pouvez suivre la progression d'apprentissage SmartPI, la confiance du modèle, le détail de puissance, l'atterrissage de consigne, les graphes d'historique et les actions de maintenance disponibles sans copier la carte Markdown de diagnostics.
+Avec Equinox, vous pouvez suivre la progression d'apprentissage SmartPI, la confiance du modèle, le détail de puissance, la gouvernance de consigne, les graphes d'historique et les actions de maintenance disponibles sans copier la carte Markdown de diagnostics.
 
 ![Vue d'ensemble du panel de régulation SmartPI dans Equinox](https://github.com/KipK/equinox/raw/master/assets/screens/regul-overview.png)
 

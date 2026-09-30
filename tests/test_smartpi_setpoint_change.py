@@ -13,12 +13,8 @@ from unittest.mock import MagicMock, patch
 # Set up logging to catch the "extending window" message if needed
 logging.basicConfig(level=logging.DEBUG)
 
-def test_smartpi_setpoint_change_continues_learning():
-    """
-    Test that a setpoint change during an active learning window does NOT abort it.
-    The window continues; power-transition detection (u_active ≠ u_first) is the
-    real guard and will close the window if heating power actually changes.
-    """
+def test_smartpi_setpoint_change_restarts_a_learning_after_boundary():
+    """An A window cannot cross a setpoint change but can restart afterwards."""
     smart_pi = SmartPI(
         hass=MagicMock(),
         cycle_min=10,
@@ -32,8 +28,13 @@ def test_smartpi_setpoint_change_continues_learning():
     smart_pi.update_learning(1.0, 18.0, 5.0, 1.0)  # ON phase, 1 min
     assert smart_pi.learn_win_active
 
-    # Setpoint change mid-window: window should continue
+    # The exact change tick closes the old-regime A window.
     smart_pi.update_learning(1.0, 18.0, 5.0, 1.0, setpoint_changed=True)
+    assert not smart_pi.learn_win_active
+    assert smart_pi.est.learn_last_reason == "skip: setpoint transition"
+
+    # The following active-ascent observation can start a clean A window.
+    smart_pi.update_learning(1.0, 18.0, 5.0, 1.0, setpoint_changed=False)
     assert smart_pi.learn_win_active
     assert "setpoint change" not in smart_pi.est.learn_last_reason
 

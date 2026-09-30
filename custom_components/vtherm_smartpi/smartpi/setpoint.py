@@ -3,21 +3,9 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
-from math import exp, isclose
 from typing import Optional
 
 from .const import (
-    LANDING_ENABLE_ERROR_THRESHOLD_C,
-    LANDING_MIN_HORIZON_MIN,
-    LANDING_NON_CONSTRAINING_PERSISTENCE,
-    LANDING_TRACKING_RELEASE_PERSISTENCE,
-    LANDING_RELEASE_SLOPE_H,
-    LANDING_RELEASE_TIME_TO_DEADTIME_RATIO,
-    LANDING_RELEASE_TIME_TO_TARGET_EPS_MIN,
-    LANDING_SAFETY_MARGIN_C,
-    LANDING_TEMPERATURE_COMPARISON_EPS_C,
-    LANDING_U_EPS,
     SETPOINT_BOOST_THRESHOLD,
     SETPOINT_BOOST_ERROR_MIN,
     ServoPhase,
@@ -29,9 +17,14 @@ from .const import (
     TRAJECTORY_BUMPLESS_MAX_U_DELTA,
     TRAJECTORY_MIN_P_ERROR_RATIO,
     TRAJECTORY_RELEASE_TAU_FACTOR as DEFAULT_RELEASE_TAU_FACTOR,
-    clamp,
+)
+from .controller import PIOutputSnapshot
+from .reference_governor_authority import (
+    ReferenceGovernorAuthority,
+    ReferenceGovernorAuthorityDecision,
 )
 from .trajectory import SmartPITrajectoryGenerator
+from .thermal_model import propagate_1r1c
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL, VThermHvacMode_HEAT
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,34 +36,6 @@ def _signed_delta(value: float, reference: float, hvac_mode: VThermHvacMode | No
     if hvac_mode == VThermHvacMode_COOL:
         return -delta
     return delta
-
-
-def _is_within_landing_residual_zone(signed_error: float) -> bool:
-    """Return whether error is inside the inclusive landing release boundary."""
-    limit = LANDING_SAFETY_MARGIN_C + TRAJECTORY_COMPLETE_EPS_C
-    return signed_error < limit or isclose(
-        signed_error,
-        limit,
-        rel_tol=0.0,
-        abs_tol=LANDING_TEMPERATURE_COMPARISON_EPS_C,
-    )
-
-
-@dataclass(slots=True)
-class SetpointLandingDecision:
-    """Setpoint-response landing decision in internal linear command space."""
-
-    active: bool = False
-    reason: str = "inactive"
-    u_cap: float | None = None
-    sp_for_p_cap: float | None = None
-    predicted_temperature: float | None = None
-    predicted_rise: float | None = None
-    target_margin: float | None = None
-    coast_required: bool = False
-    release_allowed: bool = True
-    u_cmd_before_cap: float | None = None
-    u_cmd_after_cap: float | None = None
 
 
 class SmartPISetpointManager:
@@ -108,16 +73,15 @@ class SmartPISetpointManager:
         self._last_bumpless_u_delta: float | None = None
         self._last_bumpless_ready: bool | None = None
         self._trajectory_source: str = "none"
-
-        # HEAT landing decisions and release candidates are runtime-only.
-        self._landing_decision = SetpointLandingDecision()
-        self._landing_residual_released: bool = False
-        self._landing_non_constraining_count: int = 0
-        self._landing_time_to_target_min: float | None = None
-        self._landing_release_blocked_by_slope: bool = False
-        self._landing_tracking_release_since: float | None = None
-        self._landing_tracking_release_last: float | None = None
-        self._landing_tracking_release_count: int = 0
+        self._reference_governor_authority = ReferenceGovernorAuthority()
+        self._reference_governor_prepared_at: float | None = None
+        self._reference_governor_authority_decision: (
+            ReferenceGovernorAuthorityDecision | None
+        ) = None
+        self._reference_governor_authority_selected = False
+        self._reference_governor_authority_episode = False
+        self._governor_u_cmd_before_cap: float | None = None
+        self._governor_u_cmd_after_cap: float | None = None
 
     @property
     def trajectory_active(self) -> bool:
@@ -155,6 +119,14 @@ class SmartPISetpointManager:
         return self._pending_target_change_braking
 
     @property
+    def setpoint_landing_active(self) -> bool:
+        """Return whether an authoritative user setpoint landing is active."""
+        return (
+            self._reference_governor_authority_episode
+            and self._trajectory_source == "setpoint"
+        )
+
+    @property
     def trajectory_model_ready(self) -> bool:
         """Latest model readiness flag used by the trajectory manager."""
         return self._last_model_ready
@@ -189,62 +161,118 @@ class SmartPISetpointManager:
         """Source of the currently active trajectory."""
         return self._trajectory_source
 
-    # --- Setpoint landing properties ---
     @property
-    def landing_active(self) -> bool:
-        return self._landing_decision.active
+    def reference_governor_authority_decision(
+        self,
+    ) -> ReferenceGovernorAuthorityDecision | None:
+        """Return the latest authoritative post-PI governor decision."""
+        return self._reference_governor_authority_decision
 
     @property
-    def landing_reason(self) -> str:
-        return self._landing_decision.reason
+    def reference_governor_authority_pending(self) -> bool:
+        """Return whether this cycle has an authoritative context to resolve."""
+        return self._reference_governor_authority.pending_context is not None
 
     @property
-    def landing_u_cap(self) -> float | None:
-        return self._landing_decision.u_cap
+    def reference_governor_authority_selected(self) -> bool:
+        """Return whether this cycle uses the authoritative governor path."""
+        return self._reference_governor_authority_selected
 
     @property
-    def landing_sp_for_p_cap(self) -> float | None:
-        return self._landing_decision.sp_for_p_cap
+    def reference_governor_authority_nominal_reference(self) -> float | None:
+        """Return the independent nominal reference prepared for this cycle."""
+        context = self._reference_governor_authority.pending_context
+        return None if context is None else context.nominal_reference
 
     @property
-    def landing_predicted_temperature(self) -> float | None:
-        return self._landing_decision.predicted_temperature
+    def governor_active(self) -> bool:
+        """Return whether the authoritative governor shapes this episode."""
+        decision = self._reference_governor_authority_decision
+        return decision.shaping_active if decision is not None else False
 
     @property
-    def landing_predicted_rise(self) -> float | None:
-        return self._landing_decision.predicted_rise
+    def governor_phase(self) -> str:
+        """Return the authoritative runtime phase."""
+        decision = self._reference_governor_authority_decision
+        return decision.phase.value if decision is not None else "idle"
 
     @property
-    def landing_target_margin(self) -> float | None:
-        return self._landing_decision.target_margin
+    def governor_reason(self) -> str:
+        """Return the latest authoritative decision reason."""
+        decision = self._reference_governor_authority_decision
+        return decision.reason if decision is not None else "inactive"
 
     @property
-    def landing_coast_required(self) -> bool:
-        return self._landing_decision.coast_required
+    def governor_nominal_reference(self) -> float | None:
+        """Return the nominal reference evaluated by the governor."""
+        decision = self._reference_governor_authority_decision
+        return decision.kernel_decision.nominal_reference if decision is not None else None
 
     @property
-    def landing_release_allowed(self) -> bool:
-        return self._landing_decision.release_allowed
+    def governor_admissible_reference(self) -> float | None:
+        """Return the reference admitted by the authoritative runtime."""
+        decision = self._reference_governor_authority_decision
+        return decision.effective_reference if decision is not None else None
 
     @property
-    def landing_non_constraining_count(self) -> int:
-        return self._landing_non_constraining_count
+    def governor_command_cap(self) -> float | None:
+        """Return the authoritative command cap."""
+        decision = self._reference_governor_authority_decision
+        return decision.command_cap if decision is not None else None
 
     @property
-    def landing_time_to_target_min(self) -> float | None:
-        return self._landing_time_to_target_min
+    def governor_constraint_active(self) -> bool:
+        """Return whether the kernel detected an active thermal constraint."""
+        decision = self._reference_governor_authority_decision
+        return (
+            decision.kernel_decision.constraint_active
+            if decision is not None
+            else False
+        )
 
     @property
-    def landing_release_blocked_by_slope(self) -> bool:
-        return self._landing_release_blocked_by_slope
+    def governor_dynamic_reserve_c(self) -> float | None:
+        """Return the dynamic thermal reserve selected by the kernel."""
+        decision = self._reference_governor_authority_decision
+        return decision.kernel_decision.dynamic_reserve_c if decision is not None else None
 
     @property
-    def landing_u_cmd_before_cap(self) -> float | None:
-        return self._landing_decision.u_cmd_before_cap
+    def governor_predicted_terminal_temperature(self) -> float | None:
+        """Return the terminal temperature predicted by the kernel."""
+        decision = self._reference_governor_authority_decision
+        return (
+            decision.kernel_decision.predicted_terminal_temp
+            if decision is not None
+            else None
+        )
 
     @property
-    def landing_u_cmd_after_cap(self) -> float | None:
-        return self._landing_decision.u_cmd_after_cap
+    def governor_target_bound(self) -> float | None:
+        """Return the signed-mode thermal target bound."""
+        decision = self._reference_governor_authority_decision
+        return decision.kernel_decision.target_bound if decision is not None else None
+
+    @property
+    def governor_coast_required(self) -> bool:
+        """Return whether zero command is required by the kernel."""
+        decision = self._reference_governor_authority_decision
+        return decision.kernel_decision.coast_required if decision is not None else False
+
+    @property
+    def governor_handoff_ready(self) -> bool:
+        """Return whether the runtime completed its non-constraining handoff."""
+        decision = self._reference_governor_authority_decision
+        return decision.handoff_ready if decision is not None else False
+
+    @property
+    def governor_u_cmd_before_cap(self) -> float | None:
+        """Return the PI command observed before the governor cap."""
+        return self._governor_u_cmd_before_cap
+
+    @property
+    def governor_u_cmd_after_cap(self) -> float | None:
+        """Return the command emitted after the governor cap."""
+        return self._governor_u_cmd_after_cap
 
     # Legacy aliases kept for compatibility with older tests / consumers.
     @property
@@ -265,71 +293,17 @@ class SmartPISetpointManager:
             return None
         return abs(self.trajectory_target_setpoint - self.trajectory_start_setpoint)
 
-    @property
-    def servo_landing_zone(self) -> None:
-        return None
-
     def _reset_trajectory(self) -> None:
         """Reset the trajectory state only."""
         self._trajectory.reset()
         self._trajectory_source = "none"
-        self._landing_decision = SetpointLandingDecision()
-        self._landing_residual_released = False
-        self._landing_non_constraining_count = 0
-        self._reset_landing_tracking_release()
-        self._reset_landing_release_safety()
-
-    def _reset_landing_tracking_release(self) -> None:
-        self._landing_tracking_release_since = None
-        self._landing_tracking_release_last = None
-        self._landing_tracking_release_count = 0
-
-    def _landing_tracking_release_ready(
-        self,
-        *,
-        hvac_mode: VThermHvacMode | None,
-        signed_error: float,
-        temperature_slope_h: float | None,
-        now_monotonic: float,
-        cycle_min: float,
-    ) -> bool:
-        """Confirm a low-slope residual plateau before leaving tracking."""
-        # A single permissive landing decision can reflect a transient slope;
-        # require both repeated decisions and one full control cycle of dwell.
-        eligible = (
-            hvac_mode == VThermHvacMode_HEAT
-            and self.trajectory_phase == TrajectoryPhase.TRACKING
-            and self._trajectory_source == "setpoint"
-            and self._landing_decision.active
-            and self._landing_decision.release_allowed
-            and not self._landing_decision.coast_required
-            and not self._landing_release_blocked_by_slope
-            and signed_error > 0.0
-            and _is_within_landing_residual_zone(signed_error)
-            and cycle_min > 0.0
-            and temperature_slope_h is not None
-            and temperature_slope_h <= LANDING_RELEASE_SLOPE_H
-        )
-        if not eligible:
-            self._reset_landing_tracking_release()
-            return False
-
-        if self._landing_tracking_release_since is None:
-            self._landing_tracking_release_since = now_monotonic
-            self._landing_tracking_release_last = now_monotonic
-            self._landing_tracking_release_count = 1
-            return False
-        if now_monotonic <= self._landing_tracking_release_last:
-            # Repeated callbacks at one timestamp are not independent evidence.
-            return False
-
-        self._landing_tracking_release_last = now_monotonic
-        self._landing_tracking_release_count += 1
-        return (
-            self._landing_tracking_release_count >= LANDING_TRACKING_RELEASE_PERSISTENCE
-            and now_monotonic - self._landing_tracking_release_since
-            >= float(cycle_min) * 60.0
-        )
+        self._reference_governor_authority.reset()
+        self._reference_governor_prepared_at = None
+        self._reference_governor_authority_decision = None
+        self._reference_governor_authority_selected = False
+        self._reference_governor_authority_episode = False
+        self._governor_u_cmd_before_cap = None
+        self._governor_u_cmd_after_cap = None
 
     def _clear_pending_target_change_braking(self) -> None:
         """Forget any delayed braking request inherited from a setpoint increase."""
@@ -386,6 +360,11 @@ class SmartPISetpointManager:
 
     def load_state(self, state: dict):
         """Load state from persistence."""
+        self._reference_governor_authority.load_state()
+        self._reference_governor_prepared_at = None
+        self._reference_governor_authority_decision = None
+        self._reference_governor_authority_selected = False
+        self._reference_governor_authority_episode = False
         if not state:
             return
 
@@ -454,11 +433,14 @@ class SmartPISetpointManager:
             if total_horizon_min <= 0.0:
                 return None
 
-            alpha = 1.0 - exp(-b * total_horizon_min)
-            if alpha <= 0.0:
-                return None
-
-            predicted_change = (current_temp - ext_current_temp) * alpha
+            predicted_change = current_temp - propagate_1r1c(
+                temperature=current_temp,
+                external_temperature=ext_current_temp,
+                a=0.0,
+                b=b,
+                power=0.0,
+                duration_min=total_horizon_min,
+            )
             return predicted_change if predicted_change > 0.0 else None
 
         # Active mode: full 1R1C model (HEAT with a > 0, COOL with a < 0).
@@ -470,16 +452,26 @@ class SmartPISetpointManager:
         # The already committed command acts through the remaining cycle.
         current_horizon_min = max(float(horizon_min), 0.0)
         if current_horizon_min > 0.0:
-            alpha_current = exp(-b * current_horizon_min)
-            steady_state_temp = ext_current_temp + (a * max(float(u_ref), 0.0)) / b
-            predicted_temp = steady_state_temp + (predicted_temp - steady_state_temp) * alpha_current
+            predicted_temp = propagate_1r1c(
+                temperature=predicted_temp,
+                external_temperature=ext_current_temp,
+                a=a,
+                b=b,
+                power=max(float(u_ref), 0.0),
+                duration_min=current_horizon_min,
+            )
 
         # A queued next-cycle command can further change room temperature.
         next_horizon_min = max(float(next_horizon_min), 0.0)
         if next_horizon_min > 0.0:
-            alpha_next = exp(-b * next_horizon_min)
-            steady_state_next = ext_current_temp + (a * max(float(next_u_ref), 0.0)) / b
-            predicted_temp = steady_state_next + (predicted_temp - steady_state_next) * alpha_next
+            predicted_temp = propagate_1r1c(
+                temperature=predicted_temp,
+                external_temperature=ext_current_temp,
+                a=a,
+                b=b,
+                power=max(float(next_u_ref), 0.0),
+                duration_min=next_horizon_min,
+            )
 
         predicted_change = predicted_temp - current_temp
         # In COOL mode the temperature drops; return the demand-direction magnitude
@@ -561,14 +553,6 @@ class SmartPISetpointManager:
         self._last_bumpless_ready = u_delta <= TRAJECTORY_BUMPLESS_MAX_U_DELTA
         return self._last_bumpless_ready
 
-    def _is_setpoint_release_locked(self) -> bool:
-        """Return True when a setpoint trajectory must stay in release."""
-        return (
-            self.trajectory_active
-            and self._trajectory_source == "setpoint"
-            and self.trajectory_phase == TrajectoryPhase.RELEASE
-        )
-
     @staticmethod
     def _temperature_release_ready(
         *,
@@ -579,247 +563,69 @@ class SmartPISetpointManager:
         """Return True once the measured temperature is close enough to target."""
         return _signed_delta(target_temp, current_temp, hvac_mode) <= TRAJECTORY_COMPLETE_EPS_C
 
-    @staticmethod
-    def _predict_heat_temperature(
-        *,
-        current_temp: float,
-        ext_current_temp: float,
-        a: float,
-        b: float,
-        u_ref: float,
-        horizon_min: float,
-    ) -> tuple[float, float, float]:
-        """Return predicted temperature, passive term, and command gain."""
-        # T(h) = passive + gain_u * u for the first-order thermal model.
-        horizon = max(float(horizon_min), LANDING_MIN_HORIZON_MIN)
-        alpha = exp(-b * horizon)
-        passive = ext_current_temp + (current_temp - ext_current_temp) * alpha
-        gain_u = (a / b) * (1.0 - alpha)
-        predicted = passive + gain_u * max(float(u_ref), 0.0)
-        return predicted, passive, gain_u
-
-    def _reset_landing_release_safety(self) -> None:
-        self._landing_time_to_target_min = None
-        self._landing_release_blocked_by_slope = False
-
-    def _compute_landing_release_slope_safety(
-        self,
-        signed_error: float,
-        temperature_slope_h: float | None,
-        deadtime_cool_s: float | None,
-        deadtime_cool_reliable: bool,
-    ) -> tuple[bool, float | None]:
-        """Compare time to target at the measured slope with cooling dead time."""
-        if signed_error <= 0.0:
-            return True, None
-        if temperature_slope_h is None or temperature_slope_h <= 0.0:
-            return True, None
-        if (
-            not deadtime_cool_reliable
-            or deadtime_cool_s is None
-            or deadtime_cool_s <= 0.0
-        ):
-            return True, None
-
-        time_to_target_min = signed_error / temperature_slope_h * 60.0
-        deadtime_cool_min = deadtime_cool_s / 60.0
-        safe_threshold_min = max(
-            deadtime_cool_min * LANDING_RELEASE_TIME_TO_DEADTIME_RATIO,
-            LANDING_RELEASE_TIME_TO_TARGET_EPS_MIN,
-        )
-        return time_to_target_min >= safe_threshold_min, time_to_target_min
-
-    def _compute_landing_decision(
-        self,
-        *,
-        target_temp: float,
-        current_temp: float,
-        ext_current_temp: float | None,
-        hvac_mode: VThermHvacMode | None,
-        signed_error: float,
-        a: float,
-        b: float,
-        u_ref: float,
-        u_ff_eff: float,
-        kp: float | None,
-        ki: float | None,
-        integral: float,
-        deadtime_cool_s: float | None,
-        deadtime_cool_reliable: bool,
-        tau_reliable: bool,
-        deadband_c: float,
-        remaining_cycle_min: float,
-        temperature_slope_h: float | None,
-        sp_for_p: float | None = None,
-    ) -> SetpointLandingDecision:
-        """Compute the HEAT-only setpoint landing decision."""
-        def _inactive(reason: str) -> SetpointLandingDecision:
-            self._reset_landing_release_safety()
-            return SetpointLandingDecision(reason=reason)
-
-        if hvac_mode == VThermHvacMode_COOL:
-            self._landing_non_constraining_count = 0
-            return _inactive("cool_unsupported")
-        if signed_error <= 0.0:
-            self._landing_non_constraining_count = 0
-            return _inactive("target_reached")
-        if signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD:
-            # A renewed large demand may start a fresh landing after release.
-            self._landing_residual_released = False
-            self._landing_non_constraining_count = 0
-        if signed_error > LANDING_ENABLE_ERROR_THRESHOLD_C:
-            self._landing_non_constraining_count = 0
-            return _inactive("outside_landing_band")
-        if not tau_reliable:
-            self._landing_non_constraining_count = 0
-            return _inactive("tau_unreliable")
-        if (
-            not deadtime_cool_reliable
-            or deadtime_cool_s is None
-            or deadtime_cool_s <= 0.0
-        ):
-            self._landing_non_constraining_count = 0
-            return _inactive("deadtime_unreliable")
-        if ext_current_temp is None:
-            self._landing_non_constraining_count = 0
-            return _inactive("missing_ext_temp")
-        if a <= 0.0 or b <= 0.0:
-            self._landing_non_constraining_count = 0
-            return _inactive("invalid_model")
-        if kp is None or kp <= 0.0:
-            self._landing_non_constraining_count = 0
-            return _inactive("invalid_kp")
-        if ki is None:
-            self._landing_non_constraining_count = 0
-            return _inactive("invalid_ki")
-        if self._trajectory_source != "setpoint":
-            self._landing_non_constraining_count = 0
-            return _inactive("not_setpoint_trajectory")
-        if not self.trajectory_active:
-            self._landing_non_constraining_count = 0
-            return _inactive("trajectory_inactive")
-        if self._landing_residual_released:
-            # Keep the cap off for this trajectory once residual release wins.
-            return _inactive("residual_release")
-
-        slope_release_safe, time_to_target_min = self._compute_landing_release_slope_safety(
-            signed_error=signed_error,
-            temperature_slope_h=temperature_slope_h,
-            deadtime_cool_s=deadtime_cool_s,
-            deadtime_cool_reliable=deadtime_cool_reliable,
-        )
-        self._landing_time_to_target_min = time_to_target_min
-        self._landing_release_blocked_by_slope = not slope_release_safe
-        flat_enough = (
-            temperature_slope_h is None
-            or temperature_slope_h <= LANDING_RELEASE_SLOPE_H
-        )
-        time_safe = slope_release_safe and time_to_target_min is not None
-
-        if (
-            self.trajectory_phase == TrajectoryPhase.RELEASE
-            and _is_within_landing_residual_zone(signed_error)
-            and flat_enough
-        ):
-            # Only release phase can retire the cap on residual error alone.
-            self._landing_residual_released = True
-            return SetpointLandingDecision(reason="residual_release")
-
-        deadtime_cool_min = deadtime_cool_s / 60.0
-        h1 = max(float(remaining_cycle_min), 0.0)
-        h2 = max(deadtime_cool_min, LANDING_MIN_HORIZON_MIN)
-        target_margin = target_temp - LANDING_SAFETY_MARGIN_C
-
-        # Predict first with the committed power until the cycle boundary.
-        t_after_h1, _, _ = self._predict_heat_temperature(
-            current_temp=current_temp,
-            ext_current_temp=ext_current_temp,
-            a=a,
-            b=b,
-            u_ref=u_ref,
-            horizon_min=h1,
-        )
-
-        # Solve for the next command that reaches the margin after cooling
-        # dead time. If even zero power exceeds it, coasting is required.
-        _, passive, gain_u = self._predict_heat_temperature(
-            current_temp=t_after_h1,
-            ext_current_temp=ext_current_temp,
-            a=a,
-            b=b,
-            u_ref=0.0,
-            horizon_min=h2,
-        )
-
-        if gain_u <= 0.0:
-            self._landing_non_constraining_count = 0
-            return _inactive("invalid_gain")
-
-        raw_cap = (target_margin - passive) / gain_u
-        u_cap = clamp(raw_cap, 0.0, 1.0)
-        coast_required = raw_cap <= LANDING_U_EPS
-        predicted_temperature = passive + gain_u * u_cap
-        predicted_rise = predicted_temperature - current_temp
-
-        # Translate the command cap into a P-reference cap using the current
-        # FF and integral contributions; the actual command is capped in algo.
-        integral_term = float(ki) * float(integral)
-        available_p = u_cap - float(u_ff_eff) - integral_term
-        error_p_db_cap = max(available_p / float(kp), 0.0)
-        if error_p_db_cap <= LANDING_U_EPS:
-            raw_error_p_cap = 0.0
-        else:
-            raw_error_p_cap = max(deadband_c, 0.0) + error_p_db_cap
-        sp_for_p_cap = current_temp + raw_error_p_cap
-
-        slope_ok = (
-            temperature_slope_h is not None
-            and temperature_slope_h <= LANDING_RELEASE_SLOPE_H
-        )
-
-        reason = "coast" if coast_required else "cap"
-
-        residual_zone = _is_within_landing_residual_zone(signed_error)
-        release_allowed = (
-            not coast_required
-            and residual_zone
-            and (slope_ok or time_safe)
-        )
-        if sp_for_p is not None:
-            # In release, retire a cap that no longer changes the P reference.
-            if (
-                reason == "cap"
-                and residual_zone
-                and self.trajectory_phase == TrajectoryPhase.RELEASE
-                and (flat_enough or time_safe)
-                and sp_for_p <= sp_for_p_cap
-            ):
-                self._landing_non_constraining_count += 1
-                if self._landing_non_constraining_count >= LANDING_NON_CONSTRAINING_PERSISTENCE:
-                    self._landing_residual_released = True
-                    self._landing_non_constraining_count = 0
-                    return SetpointLandingDecision(reason="non_constraining_release")
-            else:
-                self._landing_non_constraining_count = 0
-
-        return SetpointLandingDecision(
-            active=True,
-            reason=reason,
-            u_cap=u_cap,
-            sp_for_p_cap=sp_for_p_cap,
-            predicted_temperature=predicted_temperature,
-            predicted_rise=predicted_rise,
-            target_margin=target_margin,
-            coast_required=coast_required,
-            release_allowed=release_allowed,
-        )
-
-    def record_landing_command_cap(
+    def record_reference_governor_command(
         self, before: float | None, after: float | None
     ) -> None:
-        """Record command values around the setpoint landing cap."""
-        self._landing_decision.u_cmd_before_cap = before
-        self._landing_decision.u_cmd_after_cap = after
+        """Record command values around the authoritative governor cap."""
+        self._governor_u_cmd_before_cap = before
+        self._governor_u_cmd_after_cap = after
+
+    def resolve_reference_governor(
+        self,
+        *,
+        requested_u: float,
+        now_monotonic: float,
+        cycle_min: float,
+        pi_snapshot: PIOutputSnapshot,
+    ) -> ReferenceGovernorAuthorityDecision | None:
+        """Resolve the prepared governor context with the true PI request."""
+        self._reference_governor_prepared_at = None
+        result = self._reference_governor_authority.resolve(
+            requested_u=requested_u,
+            now_monotonic=now_monotonic,
+            cycle_min=cycle_min,
+            pi_snapshot=pi_snapshot,
+        )
+        if result is None:
+            return None
+
+        self._reference_governor_authority_decision = result
+        if result.handoff_ready:
+            target = self._last_user_target_temp
+            if target is not None:
+                # Completion belongs to the governor. Clear the nominal
+                # trajectory only after its non-constraining handoff proof.
+                self.set_passthrough(target)
+                self._reference_governor_authority_decision = result
+        return result
+
+    def _authoritative_reference_for_cycle(
+        self,
+        *,
+        nominal_reference: float,
+        current_temp: float,
+        hvac_mode: VThermHvacMode | None,
+    ) -> float:
+        """Apply the previous admissible reference without mutating the profile."""
+        decision = self._reference_governor_authority_decision
+        if decision is None or not decision.shaping_active:
+            return nominal_reference
+        direction = -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0
+        nominal_error = max(
+            direction * (nominal_reference - current_temp),
+            0.0,
+        )
+        if nominal_error <= 0.0:
+            return nominal_reference
+        admissible_error = direction * (
+            decision.effective_reference - current_temp
+        )
+        minimum_error = min(TRAJECTORY_COMPLETE_EPS_C, nominal_error)
+        bounded_error = min(
+            max(admissible_error, minimum_error),
+            nominal_error,
+        )
+        return current_temp + direction * bounded_error
 
     def filter_setpoint(
         self,
@@ -841,9 +647,6 @@ class SmartPISetpointManager:
         now_monotonic: float | None = None,
         allow_disturbance_trigger: bool = True,
         *,
-        u_ff_eff: float = 0.0,
-        ki: float | None = None,
-        integral: float = 0.0,
         temperature_slope_h: float | None = None,
     ) -> float:
         """Return SP_for_P for the proportional path.
@@ -852,13 +655,18 @@ class SmartPISetpointManager:
         The proportional path keeps the raw setpoint until the predicted
         braking zone is reached, then applies a smooth late-braking trajectory.
         """
+        self._reference_governor_prepared_at = None
         if not self.enabled:
             self._clear_pending_target_change_braking()
             self.set_passthrough(target_temp)
             return target_temp
 
+        self._reference_governor_authority_selected = False
         if current_temp is None:
-            self._reset_landing_tracking_release()
+            self._reference_governor_authority.reset()
+            self._reference_governor_authority_decision = None
+            self._governor_u_cmd_before_cap = None
+            self._governor_u_cmd_after_cap = None
             return self.effective_setpoint if self.effective_setpoint is not None else target_temp
 
         if now_monotonic is None:
@@ -870,9 +678,9 @@ class SmartPISetpointManager:
         self._last_next_cycle_u_ref = max(float(next_cycle_u_ref), 0.0)
         self._last_bumpless_u_delta = None
         self._last_bumpless_ready = None
-        # Diagnostics reflect this calculation, even if a prior cap was active.
-        self._landing_decision = SetpointLandingDecision()
-        self._reset_landing_release_safety()
+        # Command diagnostics are refreshed after the PI request is resolved.
+        self._governor_u_cmd_before_cap = None
+        self._governor_u_cmd_after_cap = None
 
         if self.filtered_setpoint is None:
             self.filtered_setpoint = target_temp
@@ -902,8 +710,19 @@ class SmartPISetpointManager:
             self.set_passthrough(target_temp)
             return target_temp
 
-        # Already at or beyond target in the active direction.
-        if signed_error <= 0.0:
+        # Keep an armed setpoint episode alive long enough for the runtime
+        # to observe no_positive_demand and complete its HANDOFF sequence.
+        preserve_governor_episode = (
+            signed_error <= 0.0
+            and self._reference_governor_authority_episode
+            and self._trajectory_source == "setpoint"
+            and self.trajectory_active
+            and self._reference_governor_authority.runtime.armed
+        )
+
+        # Already at or beyond target in the active direction. A disarmed or
+        # invalid episode remains fail-safe passthrough.
+        if signed_error <= 0.0 and not preserve_governor_episode:
             self._clear_pending_target_change_braking()
             self.set_passthrough(target_temp)
             return target_temp
@@ -965,16 +784,9 @@ class SmartPISetpointManager:
                 )
             else:
                 # A significant target change has already passed the arming
-                # threshold. In HEAT, its entry window is the remaining
-                # distance to the landing margin, not the original target
-                # error. COOL keeps the regular braking window because the
-                # landing cap does not support it.
+                # threshold. The signed model uses the same braking window in
+                # HEAT and COOL; the governor owns the thermal reserve.
                 setpoint_entry_error = signed_error
-                if hvac_mode != VThermHvacMode_COOL:
-                    setpoint_entry_error = max(
-                        signed_error - LANDING_SAFETY_MARGIN_C,
-                        0.0,
-                    )
                 setpoint_braking_window = (
                     self._pending_target_change_braking
                     and setpoint_entry_error <= braking_gap
@@ -1007,15 +819,18 @@ class SmartPISetpointManager:
         self._last_braking_needed = braking_needed
 
         if not self.trajectory_active and not braking_needed:
-            self._reset_landing_tracking_release()
             self.effective_setpoint = target_temp
             return target_temp
 
         entering_release = False
-        release_locked = self._is_setpoint_release_locked()
+        release_locked = (
+            self.trajectory_active
+            and self._trajectory_source == "setpoint"
+            and self.trajectory_phase == TrajectoryPhase.RELEASE
+        )
         if not self.trajectory_active and braking_needed and tau_brake_min is not None:
             # Remember whether the trajectory responds to a user target or
-            # a disturbance; only the former receives the HEAT landing cap.
+            # a disturbance; only the former enters the reference governor.
             trajectory_source = (
                 "setpoint"
                 if self._pending_target_change_braking
@@ -1028,16 +843,24 @@ class SmartPISetpointManager:
                 now_monotonic=now_monotonic,
             )
             self._trajectory_source = trajectory_source
+            self._reference_governor_authority_episode = (
+                trajectory_source == "setpoint"
+                and hvac_mode in (VThermHvacMode_HEAT, VThermHvacMode_COOL)
+            )
             self._clear_pending_target_change_braking()
         elif self.trajectory_active:
-            if release_locked:
-                # Once a setpoint response starts releasing, do not resume
-                # braking because of a later model prediction.
-                trajectory_phase = TrajectoryPhase.RELEASE
-            else:
-                trajectory_phase = (
-                    TrajectoryPhase.TRACKING if braking_needed else TrajectoryPhase.RELEASE
+            # A setpoint trajectory progresses monotonically through its
+            # phases. The governor handles later constraint variations without
+            # sending the nominal profile back from release to tracking.
+            trajectory_phase = (
+                TrajectoryPhase.RELEASE
+                if release_locked
+                else (
+                    TrajectoryPhase.TRACKING
+                    if braking_needed
+                    else TrajectoryPhase.RELEASE
                 )
+            )
             entering_release = (
                 trajectory_phase == TrajectoryPhase.RELEASE
                 and self.trajectory_phase != TrajectoryPhase.RELEASE
@@ -1072,13 +895,11 @@ class SmartPISetpointManager:
                 self._trajectory_source = "disturbance"
 
         if not self.trajectory_active:
-            self._reset_landing_tracking_release()
             self.effective_setpoint = target_temp
             return target_temp
 
         sp_for_p = self._trajectory.update(now_monotonic=now_monotonic)
         if sp_for_p is None:
-            self._reset_landing_tracking_release()
             self.effective_setpoint = target_temp
             return target_temp
 
@@ -1087,57 +908,58 @@ class SmartPISetpointManager:
             and _signed_delta(sp_for_p, current_temp, hvac_mode) <= 0.0
         ):
             # Keep the P reference on the demand side of the measured room
-            # temperature during the final approach.
+            # temperature during the final approach, without crossing the
+            # user target.
             sp_for_p = current_temp + TRAJECTORY_COMPLETE_EPS_C
             if hvac_mode == VThermHvacMode_COOL:
                 sp_for_p = current_temp - TRAJECTORY_COMPLETE_EPS_C
+                sp_for_p = max(sp_for_p, target_temp)
+            else:
+                sp_for_p = min(sp_for_p, target_temp)
             self._trajectory.current_setpoint = sp_for_p
 
-        self._landing_decision = self._compute_landing_decision(
-            target_temp=target_temp,
-            current_temp=current_temp,
-            ext_current_temp=ext_current_temp,
-            hvac_mode=hvac_mode,
-            signed_error=signed_error,
-            a=a,
-            b=b,
-            u_ref=u_ref,
-            u_ff_eff=u_ff_eff,
-            kp=kp,
-            ki=ki,
-            integral=integral,
-            deadtime_cool_s=deadtime_cool_s,
-            deadtime_cool_reliable=deadtime_cool_reliable,
-            tau_reliable=tau_reliable,
-            deadband_c=deadband_c,
-            remaining_cycle_min=remaining_cycle_min,
-            temperature_slope_h=temperature_slope_h,
-            sp_for_p=sp_for_p,
-        )
         if (
-            self._landing_decision.active
-            and self._landing_decision.sp_for_p_cap is not None
+            self._trajectory_source == "setpoint"
+            and hvac_mode in (VThermHvacMode_HEAT, VThermHvacMode_COOL)
         ):
-            # The generator must remember the capped value for its next step.
-            sp_for_p = min(sp_for_p, self._landing_decision.sp_for_p_cap)
-            self._trajectory.current_setpoint = sp_for_p
-
-        if self._landing_tracking_release_ready(
-            hvac_mode=hvac_mode,
-            signed_error=signed_error,
-            temperature_slope_h=temperature_slope_h,
-            now_monotonic=now_monotonic,
-            cycle_min=cycle_min,
-        ):
-            # Keep this cycle's capped reference; the release target takes
-            # effect on the next generator update.
-            current_tau_ref = self._trajectory.tau_ref_min or deadtime_cool_min or 1e-6
-            self._trajectory.set_target(
-                target_temp,
-                tau_ref_min=max(current_tau_ref * self._release_tau_factor, 1e-6),
-                phase=TrajectoryPhase.RELEASE,
+            self._reference_governor_authority_episode = True
+        if self._reference_governor_authority_episode:
+            authority_context = self._reference_governor_authority.prepare(
+                target_temp=target_temp,
+                nominal_reference=sp_for_p,
+                current_temp=current_temp,
+                hvac_mode=hvac_mode,
+                trajectory_active=self.trajectory_active,
+                trajectory_source=self._trajectory_source,
+                a=a,
+                b=b,
+                ext_temp=ext_current_temp,
+                committed_u=u_ref,
+                remaining_cycle_min=remaining_cycle_min,
+                stop_deadtime_s=deadtime_cool_s,
+                measured_slope_h=temperature_slope_h,
+                model_reliable=tau_reliable,
+                deadtime_reliable=deadtime_cool_reliable,
+                now_monotonic=now_monotonic,
             )
-            self._reset_landing_tracking_release()
+            self._reference_governor_authority_selected = True
+            self._reference_governor_prepared_at = now_monotonic
+        if self._reference_governor_authority_selected:
+            # The profile remains an independent nominal proposal. The
+            # previous post-PI decision supplies this cycle's P reference;
+            # this cycle's true PI request will resolve the next decision.
+            if authority_context.bypass_reason is None:
+                sp_for_p = self._authoritative_reference_for_cycle(
+                    nominal_reference=sp_for_p,
+                    current_temp=current_temp,
+                    hvac_mode=hvac_mode,
+                )
+            if hvac_mode == VThermHvacMode_COOL:
+                sp_for_p = max(sp_for_p, target_temp)
+            elif hvac_mode == VThermHvacMode_HEAT:
+                sp_for_p = min(sp_for_p, target_temp)
+            self.effective_setpoint = sp_for_p
+            return sp_for_p
 
         # Finish only when both the room and P reference are near the target
         # and the handoff cannot create a large proportional output step.
@@ -1159,7 +981,6 @@ class SmartPISetpointManager:
                 deadband_c=deadband_c,
                 kp=kp,
             )
-            and self._landing_decision.release_allowed
         ):
             self._clear_pending_target_change_braking()
             self.set_passthrough(target_temp)

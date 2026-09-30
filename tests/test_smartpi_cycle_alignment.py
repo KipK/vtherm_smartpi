@@ -137,11 +137,11 @@ async def test_switch_callback_uses_frozen_ownership_not_live_control():
         algo._command_ownership.last_binding.status
         == CommandOwnershipBindingStatus.BOUND
     )
-    assert algo._fftrim_observer._active_ownership is not None
-    assert algo._fftrim_observer._active_ownership.u_i == pytest.approx(frozen_i)
-    assert "committed_mismatch" not in (
-        algo._fftrim_observer._active_ownership.constraint_flags
-    )
+    trace = algo._causal_power_trace
+    assert algo._fftrim_observer.physical_trace is trace
+    assert trace._active_ownership is not None
+    assert trace._active_ownership.u_i == pytest.approx(frozen_i)
+    assert "committed_mismatch" not in trace._active_ownership.constraint_flags
 
 
 @pytest.mark.asyncio

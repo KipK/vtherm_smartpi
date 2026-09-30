@@ -91,12 +91,8 @@ def test_heartbeat_learning_trigger_on_slope_quality():
     assert not smartpi.learn_win_active
     assert "learned" in smartpi.est.learn_last_reason or "skip" in smartpi.est.learn_last_reason
 
-def test_learning_continues_on_setpoint_change():
-    """Verify window is NOT reset on setpoint change — it continues.
-
-    Power-transition detection (u_active ≠ u_first) is the real guard;
-    a blind reset on setpoint change would discard valid in-flight data.
-    """
+def test_learning_rejects_change_tick_and_reopens_during_ascent():
+    """Reject the causal change tick, then allow A during early ascent."""
     smartpi = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0, name="TestHB_Reset")
     # Simulate deadtimes already learned so the bootstrap gate does not block A/B collection
     smartpi.dt_est.deadtime_heat_reliable = True
@@ -108,11 +104,14 @@ def test_learning_continues_on_setpoint_change():
     smartpi.update_learning(1.0, 19.0, 10.0, 1.0)
     assert smartpi.learn_win_active
 
-    # Change setpoint: window should continue
+    # The exact change tick cannot belong to a window spanning two regimes.
     smartpi.update_learning(1.0, 19.0, 10.0, 1.0, setpoint_changed=True)
+    assert not smartpi.learn_win_active
+    assert smartpi.est.learn_last_reason == "skip: setpoint transition"
 
+    # Once the change tick has passed, the strong ascent is valid A excitation.
+    smartpi.update_learning(1.0, 19.0, 10.0, 1.0, setpoint_changed=False)
     assert smartpi.learn_win_active
-    assert "setpoint change" not in smartpi.est.learn_last_reason
 
 def test_heartbeat_integration_in_calculate():
     """Verify calculate() calls update_learning()."""

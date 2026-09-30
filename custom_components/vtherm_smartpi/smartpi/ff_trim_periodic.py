@@ -42,7 +42,6 @@ class PeriodicFFTrimObserver:
     def __init__(self, cycle_min: float) -> None:
         self._cycle_min = max(float(cycle_min), 0.0)
         self._thermal_samples: list[FFTrimThermalSample] = []
-        self._last_measurement_id: str | None = None
         self._window_deadtime_s: float | None = None
         self._washout_until_monotonic = 0.0
         self.state = "warming_up"
@@ -62,10 +61,6 @@ class PeriodicFFTrimObserver:
         deadtime_reliable: bool,
     ) -> None:
         """Record one distinct sample when the periodic context is usable."""
-        if sample.measurement_id == self._last_measurement_id:
-            return
-        self._last_measurement_id = sample.measurement_id
-
         rejection = self._sample_rejection_reason(sample)
         if rejection is not None:
             self.invalidate(
@@ -277,7 +272,6 @@ class PeriodicFFTrimObserver:
     def reset_runtime(self) -> None:
         """Clear all transient periodic observation state."""
         self._thermal_samples.clear()
-        self._last_measurement_id = None
         self._window_deadtime_s = None
         self._washout_until_monotonic = 0.0
         self.state = "warming_up"

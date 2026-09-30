@@ -8,7 +8,8 @@ The current codebase is built around three guiding ideas:
 
 1. identify a simple first-order thermal model with dead time,
 2. adapt the PI command from that model,
-3. freeze or limit some adaptations when the physical regime is not considered reliable.
+3. admit or reject each learning window according to the physical regime that
+   generated it.
 
 This document describes the behavior that is actually implemented in the current SmartPI code.
 
@@ -39,6 +40,10 @@ The associated time constant is:
 $$ \tau = \frac{1}{b} $$
 
 The model is intentionally simple. Dead time is learned separately and injected into tuning heuristics and protections.
+For higher-order physical plants, the learned `a` is therefore an effective local
+1R1C gain over the operating regime represented by the accepted windows, not a
+unique physical constant of the whole installation. It must be validated across
+representative operating conditions rather than tuned from a single history.
 
 ### 2.2 Command chain
 
@@ -97,6 +102,15 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
 
 - requires outdoor temperature to be available,
 - obeys thermal governance except during calibration,
+- rejects or resets an ON/`a` window on the exact observation where the user
+  setpoint changes, so a window cannot span the old and new regimes,
+- keeps early active ascent after that observation eligible for `a` under the
+  existing dead-time, power-stability, robust-slope, FF3, and governance guards,
+- blocks ordinary ON/`a` learning once late-braking trajectory/reference-governor
+  control starts and until handoff is complete,
+- keeps passive OFF/`b` learning under its existing physical guards; calibration
+  keeps its dedicated learning contract and disturbance-only responses are not
+  blocked by this setpoint gate,
 - blocks bootstrap collection until the required dead times are reliable,
 - applies a post-resume pause (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - anchors the window start after the dead-time end when needed,
@@ -250,17 +264,26 @@ The principle is:
 - the I branch keeps using the raw setpoint,
 - the P branch receives `filtered_setpoint`,
 - the P branch keeps the raw setpoint until the predicted braking zone is reached,
-- a significant setpoint change arms late braking once; in HEAT, its subsequent entry compares the predicted rise with the distance to `target - LANDING_SAFETY_MARGIN_C`, without reapplying the arming threshold,
+- a significant setpoint change arms late braking once; HEAT and COOL then use the same signed braking-window equations,
 - disturbance-triggered entry continues to require the significant-gap threshold,
 - the exact learned 1R1C model, `deadtime_cool`, the remaining cycle latency, and the committed cycle power are used to detect the braking zone,
-- a smooth late-braking trajectory is then applied near the target while preserving a minimum positive proportional demand,
-- for HEAT setpoint trajectories, a landing cap can constrain the internal command after PI computation when the model predicts that stored heat is enough to reach the target,
+- a smooth late-braking trajectory proposes an independent nominal P reference near the target,
+- for HEAT and COOL setpoint trajectories, the predictive reference governor derives an admissible P reference and can constrain the internal command after PI computation,
 - when braking is no longer needed, the filtered reference returns progressively to the raw target before the trajectory stops,
 - for a trajectory triggered by a setpoint change, entering the `release` phase keeps that phase locked until the trajectory ends, with no return to `tracking`,
+- crossing the target does not terminate an armed setpoint episode; the runtime
+  keeps consuming no-demand observations until its handoff is confirmed,
+- the P reference remains bounded by the raw target during that handoff: it
+  never exceeds the target in HEAT and never falls below it in COOL,
 - `trajectory_active` indicates whether the analytical trajectory is running,
-- the trajectory ends only once the handoff remains bumpless, the measured temperature is close enough to the target, and the landing state allows release, or when the reliability conditions are no longer met.
+- the governor ends the episode only after the constraint remains inactive for repeated, time-separated evaluations spanning a control cycle; invalid context fails open without restoring a stale cap.
 
-The landing cap uses the discrete 1R1C form in internal linear command space:
+The thermal twin, FF3, braking-entry prediction and governor share a pure
+constant-power 1R1C propagation function. Each consumer retains its own horizons,
+delay policy and input validation. The governor uses the nominal thermal model,
+without an estimated disturbance correction.
+
+The governor uses the discrete 1R1C form in internal linear command space:
 
 $$
 \alpha = e^{-b \cdot h}
@@ -270,29 +293,38 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-The cap solves the maximum command that keeps the predicted temperature below `target - LANDING_SAFETY_MARGIN_C`. It is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic while `landing_u_cap` explains the final command reduction.
+The equations are normalized in the active demand direction (`+1` for HEAT, `-1` for COOL). A dynamic reserve is selected from measured-slope and model-travel evidence, bounded by policy, and converted into a thermal target bound. The governor solves the maximum command that respects this bound and inverts that cap into the admissible P reference. The cap is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic and tracking anti-windup observes the realized downstream command.
+
+Thermal observations are prepared before PI evaluation. Reference inversion
+uses an immutable snapshot of the effective proportional gain, integral power
+and feedforward after that evaluation. Its P projection shares the controller's
+deadband, P allowance and edge-persistence rules without advancing controller
+state a second time. References producing equivalent P commands do not create
+a reference-only constraint; the thermal command cap still takes precedence.
 
 The canonical `live.setpoint` block publishes the summary:
 
 - `filtered_setpoint`,
 - `trajectory_active`,
 - `trajectory_source`,
-- `landing_active`,
-- `landing_reason`,
-- `landing_u_cap`,
-- `landing_coast_required`.
+- `governor_active`,
+- `governor_phase`,
+- `governor_reason`,
+- `governor_command_cap`,
+- `governor_coast_required`.
 
-The same payload in both modes exposes trajectory and landing details under
-`live.analysis.trajectory` and `live.analysis.landing`:
+The same payload in both modes exposes trajectory and governor details under
+`live.analysis.trajectory` and `live.analysis.reference_governor`:
 
 - `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` and `phase`,
 - `pending_target_change_braking`, `braking_needed` and `model_ready`,
 - `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` and `bumpless_ready`,
-- `setpoint_for_p_cap`, `predicted_temperature`, `predicted_rise` and `target_margin`,
-- `release_allowed`, `time_to_target_min`, `release_blocked_by_slope`,
+- `active`, `phase`, `reason`, `nominal_reference` and `admissible_reference`,
+- `command_cap`, `constraint_active`, `dynamic_reserve_c`, `predicted_terminal_temperature` and `target_bound`,
+- `coast_required` and `handoff_ready`,
 - `command_before_cap` and `command_after_cap`.
 
-The setpoint reference shaping remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed. The landing cap is a separate post-PI command governor for HEAT setpoint trajectories; it does not rewrite the integral and does not change the valve linearization curve.
+Setpoint reference shaping remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed. The post-PI cap does not rewrite the integral and does not change the valve linearization curve.
 
 The current code also applies an explicit guard on positive integral growth during catch-up phases:
 
@@ -415,7 +447,7 @@ The forced cycle is managed by `CalibrationManager`:
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis                  |
 | `deadband.py`          | deadband and near-band                                      |
-| `setpoint.py`          | analytical setpoint trajectory and HEAT landing cap         |
+| `setpoint.py`          | analytical setpoint trajectory and signed reference-governor orchestration |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
 | `command_ownership.py` | frozen command projection and scheduler binding tracker     |

@@ -306,25 +306,6 @@ def test_causal_observer_uses_realized_switch_cycle_power() -> None:
     assert result.mean_causal_power == pytest.approx(0.4)
 
 
-def test_causal_observer_deduplicates_temperature_measurements() -> None:
-    """A heartbeat cannot count the same VT sensor measurement twice."""
-    observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
-
-    observer.record_thermal_sample(
-        _sample(120.0, 20.0, measurement_id="sensor-1"),
-        deadtime_s=120.0,
-        deadtime_reliable=True,
-    )
-    observer.record_thermal_sample(
-        _sample(720.0, 20.1, measurement_id="sensor-1"),
-        deadtime_s=120.0,
-        deadtime_reliable=True,
-    )
-
-    assert observer.diagnostics["measurement_count"] == 1
-
-
 def test_generic_recalculation_without_measurement_id_keeps_window() -> None:
     """A VT recalculation without sensor metadata must preserve observations."""
     algo = SmartPI(
@@ -349,6 +330,42 @@ def test_generic_recalculation_without_measurement_id_keeps_window() -> None:
         ext_current_temp=10.0,
         hvac_mode=VThermHvacMode_HEAT,
         setpoint_changed=False,
+    )
+
+    assert algo._fftrim_observer.diagnostics == diagnostics_before
+
+
+def test_repeated_measurement_identity_does_not_reapply_trim_gates() -> None:
+    """A heartbeat with the same sensor identity cannot reject a live window."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=5.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI",
+    )
+    acquired = algo._thermal_measurements.observe(
+        now_monotonic=120.0,
+        measurement_id="sensor-1",
+        indoor_temperature=20.0,
+        outside_temperature=10.0,
+    )
+    assert acquired is not None
+    algo._fftrim_observer.record_thermal_sample(
+        _sample(120.0, 20.0, measurement_id="sensor-1"),
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+    diagnostics_before = dict(algo._fftrim_observer.diagnostics)
+
+    algo._record_fftrim_thermal_measurement(
+        now_monotonic=180.0,
+        measurement_id="sensor-1",
+        current_temp=20.1,
+        target_temp=21.0,
+        ext_current_temp=None,
+        hvac_mode=VThermHvacMode_HEAT,
+        setpoint_changed=True,
     )
 
     assert algo._fftrim_observer.diagnostics == diagnostics_before

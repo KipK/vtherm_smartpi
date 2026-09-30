@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, exp, isfinite
+from math import ceil, isfinite
 
 from .const import (
     FF3_MAX_HORIZON_CYCLES,
@@ -11,6 +11,7 @@ from .const import (
     FF3_RESPONSE_LOOKAHEAD_CYCLES,
     clamp,
 )
+from .thermal_model import propagate_1r1c
 from .thermal_twin_1r1c import ThermalTwin1R1C
 
 
@@ -94,9 +95,15 @@ def predict_ff3_open_loop(
                 u_eff = uv
             else:
                 break
-        alpha = exp(-b * dt_min)
-        t_eq = ext_temp + ((a * u_eff + d_hat_ema) / b)
-        temperature = t_eq + ((temperature - t_eq) * alpha)
+        temperature = propagate_1r1c(
+            temperature=temperature,
+            external_temperature=ext_temp,
+            a=a,
+            b=b,
+            power=u_eff,
+            duration_min=dt_min,
+            bias=d_hat_ema,
+        )
         if not isfinite(temperature):
             return FF3OpenLoopPrediction([], [], current_temp, "invalid_prediction")
         temperatures.append(temperature)

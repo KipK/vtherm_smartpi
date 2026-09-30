@@ -224,17 +224,12 @@ TRAJECTORY_BRAKE_RELEASE_HYST_C = 0.10   # Extra signed-error margin to keep an 
 TRAJECTORY_I_RUN_SCALE = 0.20            # Reduce free integral growth while the late-braking trajectory is still tracking
 TRAJECTORY_RELEASE_TAU_FACTOR = 0.5      # Make the return to the raw target faster than braking while staying smooth
 TRAJECTORY_BUMPLESS_MAX_U_DELTA = 0.03   # Maximum allowed proportional command step when releasing trajectory
-# Setpoint landing cap (HEAT-only, internal linear command space [0, 1])
-LANDING_SAFETY_MARGIN_C = 0.05
-LANDING_ENABLE_ERROR_THRESHOLD_C = 0.40
-LANDING_RELEASE_SLOPE_H = 0.12
-LANDING_RELEASE_TIME_TO_DEADTIME_RATIO = 1.0
-LANDING_RELEASE_TIME_TO_TARGET_EPS_MIN = 1e-6
-LANDING_MIN_HORIZON_MIN = 1e-6
-LANDING_U_EPS = 1e-6
-LANDING_TEMPERATURE_COMPARISON_EPS_C = 1e-9
-LANDING_NON_CONSTRAINING_PERSISTENCE = 3
-LANDING_TRACKING_RELEASE_PERSISTENCE = 3
+# Signed setpoint reference-governor policy.
+REFERENCE_GOVERNOR_RESERVE_SELECTOR = "slope"
+REFERENCE_GOVERNOR_RHO_MARGIN = 1.0
+REFERENCE_GOVERNOR_MARGIN_MAX_C = 0.05
+REFERENCE_GOVERNOR_COMMAND_EPSILON = 1e-6
+REFERENCE_GOVERNOR_REFERENCE_EPSILON_C = 1e-9
 INTEGRAL_GUARD_RELEASE_ERROR_RATIO = 2.0 # Release positive-I guard only once the residual error is close to deadband scale
 INTEGRAL_GUARD_RELEASE_SLOPE_RATIO = 0.35 # Release positive-I guard when the signed recovery slope has collapsed enough
 INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H = 0.12 # Absolute signed-slope floor (°C/h) below which stabilization may be accepted

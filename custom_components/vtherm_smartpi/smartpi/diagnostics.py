@@ -379,18 +379,23 @@ def _build_analysis_diagnostics(diag: Dict[str, Any]) -> Dict[str, Any]:
             "bumpless_delta": diag["trajectory_bumpless_u_delta"],
             "bumpless_ready": diag["trajectory_bumpless_ready"],
         },
-        "landing": {
-            "setpoint_for_p_cap": diag["landing_sp_for_p_cap"],
-            "predicted_temperature": diag["landing_predicted_temperature"],
-            "predicted_rise": diag["landing_predicted_rise"],
-            "target_margin": diag["landing_target_margin"],
-            "release_allowed": diag["landing_release_allowed"],
-            "time_to_target_min": diag["landing_time_to_target_min"],
-            "release_blocked_by_slope": diag[
-                "landing_release_blocked_by_slope"
+        "reference_governor": {
+            "active": diag["governor_active"],
+            "phase": diag["governor_phase"],
+            "reason": diag["governor_reason"],
+            "nominal_reference": diag["governor_nominal_reference"],
+            "admissible_reference": diag["governor_admissible_reference"],
+            "command_cap": diag["governor_command_cap"],
+            "constraint_active": diag["governor_constraint_active"],
+            "dynamic_reserve_c": diag["governor_dynamic_reserve_c"],
+            "predicted_terminal_temperature": diag[
+                "governor_predicted_terminal_temperature"
             ],
-            "command_before_cap": diag["landing_u_cmd_before_cap"],
-            "command_after_cap": diag["landing_u_cmd_after_cap"],
+            "target_bound": diag["governor_target_bound"],
+            "coast_required": diag["governor_coast_required"],
+            "handoff_ready": diag["governor_handoff_ready"],
+            "command_before_cap": diag["governor_u_cmd_before_cap"],
+            "command_after_cap": diag["governor_u_cmd_after_cap"],
         },
         "deadtime": {
             "state": diag["deadtime_state"],
@@ -582,10 +587,11 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "trajectory_active": diag["setpoint_trajectory_active"],
             "trajectory_source": diag["trajectory_source"],
             "boost_active": diag["setpoint_boost_active"],
-            "landing_active": diag["landing_active"],
-            "landing_reason": diag["landing_reason"],
-            "landing_u_cap": diag["landing_u_cap"],
-            "landing_coast_required": diag["landing_coast_required"],
+            "governor_active": diag["governor_active"],
+            "governor_phase": diag["governor_phase"],
+            "governor_reason": diag["governor_reason"],
+            "governor_command_cap": diag["governor_command_cap"],
+            "governor_coast_required": diag["governor_coast_required"],
         },
         "autocalib": {
             "state": diag["autocalib_state"],
@@ -927,44 +933,45 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             if algo.sp_mgr.trajectory_bumpless_u_delta is not None else None
         ),
         "trajectory_bumpless_ready": algo.sp_mgr.trajectory_bumpless_ready,
-        # Setpoint landing (HEAT-only)
-        "landing_active": algo.sp_mgr.landing_active,
-        "landing_reason": algo.sp_mgr.landing_reason,
-        "landing_u_cap": (
-            round(algo.sp_mgr.landing_u_cap, 6)
-            if algo.sp_mgr.landing_u_cap is not None else None
+        # Signed HEAT/COOL setpoint reference governor
+        "governor_active": algo.sp_mgr.governor_active,
+        "governor_phase": algo.sp_mgr.governor_phase,
+        "governor_reason": algo.sp_mgr.governor_reason,
+        "governor_nominal_reference": (
+            round(algo.sp_mgr.governor_nominal_reference, 3)
+            if algo.sp_mgr.governor_nominal_reference is not None else None
         ),
-        "landing_sp_for_p_cap": (
-            round(algo.sp_mgr.landing_sp_for_p_cap, 3)
-            if algo.sp_mgr.landing_sp_for_p_cap is not None else None
+        "governor_admissible_reference": (
+            round(algo.sp_mgr.governor_admissible_reference, 3)
+            if algo.sp_mgr.governor_admissible_reference is not None else None
         ),
-        "landing_predicted_temperature": (
-            round(algo.sp_mgr.landing_predicted_temperature, 3)
-            if algo.sp_mgr.landing_predicted_temperature is not None else None
+        "governor_command_cap": (
+            round(algo.sp_mgr.governor_command_cap, 6)
+            if algo.sp_mgr.governor_command_cap is not None else None
         ),
-        "landing_predicted_rise": (
-            round(algo.sp_mgr.landing_predicted_rise, 3)
-            if algo.sp_mgr.landing_predicted_rise is not None else None
+        "governor_constraint_active": algo.sp_mgr.governor_constraint_active,
+        "governor_dynamic_reserve_c": (
+            round(algo.sp_mgr.governor_dynamic_reserve_c, 3)
+            if algo.sp_mgr.governor_dynamic_reserve_c is not None else None
         ),
-        "landing_target_margin": (
-            round(algo.sp_mgr.landing_target_margin, 3)
-            if algo.sp_mgr.landing_target_margin is not None else None
+        "governor_predicted_terminal_temperature": (
+            round(algo.sp_mgr.governor_predicted_terminal_temperature, 3)
+            if algo.sp_mgr.governor_predicted_terminal_temperature is not None
+            else None
         ),
-        "landing_release_allowed": algo.sp_mgr.landing_release_allowed,
-        "landing_coast_required": algo.sp_mgr.landing_coast_required,
-        "landing_non_constraining_count": algo.sp_mgr.landing_non_constraining_count,
-        "landing_time_to_target_min": (
-            round(algo.sp_mgr.landing_time_to_target_min, 3)
-            if algo.sp_mgr.landing_time_to_target_min is not None else None
+        "governor_target_bound": (
+            round(algo.sp_mgr.governor_target_bound, 3)
+            if algo.sp_mgr.governor_target_bound is not None else None
         ),
-        "landing_release_blocked_by_slope": algo.sp_mgr.landing_release_blocked_by_slope,
-        "landing_u_cmd_before_cap": (
-            round(algo.sp_mgr.landing_u_cmd_before_cap, 6)
-            if algo.sp_mgr.landing_u_cmd_before_cap is not None else None
+        "governor_coast_required": algo.sp_mgr.governor_coast_required,
+        "governor_handoff_ready": algo.sp_mgr.governor_handoff_ready,
+        "governor_u_cmd_before_cap": (
+            round(algo.sp_mgr.governor_u_cmd_before_cap, 6)
+            if algo.sp_mgr.governor_u_cmd_before_cap is not None else None
         ),
-        "landing_u_cmd_after_cap": (
-            round(algo.sp_mgr.landing_u_cmd_after_cap, 6)
-            if algo.sp_mgr.landing_u_cmd_after_cap is not None else None
+        "governor_u_cmd_after_cap": (
+            round(algo.sp_mgr.governor_u_cmd_after_cap, 6)
+            if algo.sp_mgr.governor_u_cmd_after_cap is not None else None
         ),
         # Resume skip
         "learning_resume_ts": int(algo.learning_resume_ts) if algo.learning_resume_ts else None,
