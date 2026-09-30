@@ -311,7 +311,7 @@ For the diagnostic schema and Recorder profiles, see the [SmartPI Diagnostics Gu
 
 The SmartPI diagnostic sensor publishes a versioned envelope. Dashboards and
 Markdown cards read complete diagnostics from `attributes.live`; historical
-graphs read the stable eight-series contract from `attributes.history`.
+graphs read the stable eleven-series contract from `attributes.history`.
 
 This is the main place to check:
 

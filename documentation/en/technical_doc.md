@@ -558,7 +558,7 @@ mapping.
 - `build_debug_diagnostics()`: compatibility accessor returning that same canonical payload.
 
 `diagnostic_history.py` wraps this payload in `schema_version`, `live` and the
-stable eight-series `history` block. Normal sensor entities exclude `live` from
+stable eleven-series `history` block. Normal sensor entities exclude `live` from
 Recorder; the debug sensor subclass records it directly. Debug mode changes
 retention only and does not add a second diagnostic block.
 

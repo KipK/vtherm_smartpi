@@ -311,7 +311,7 @@ Pour le schéma des diagnostics et les profils Recorder, consultez le [Guide des
 
 Le capteur de diagnostic SmartPI publie une enveloppe versionnée. Les dashboards
 et cartes Markdown lisent les diagnostics complets dans `attributes.live` ; les
-graphiques historiques lisent le contrat stable de huit séries dans
+graphiques historiques lisent le contrat stable de onze séries dans
 `attributes.history`.
 
 C'est l'endroit principal à consulter pour savoir :

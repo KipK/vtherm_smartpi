@@ -26,18 +26,32 @@ Debug mode records both `live` and `history`. The content is not duplicated
 inside `history`: the historical contract remains identical in both modes.
 Debug mode therefore changes retention, not publication.
 
-The `history` block contains these eight series:
+The `history` block contains these eleven series:
 
 | Path under `history` | Meaning |
 |---|---|
 | `temperature.indoor` | Indoor temperature |
 | `setpoint.filtered_setpoint` | Filtered control setpoint |
-| `power.applied_percent` | Physically applied power |
+| `setpoint.nominal_reference` | Nominal profile reference evaluated by the governor |
+| `power.applied_percent` | Applied command after output constraints |
 | `power.command_percent` | Requested command before actuator effects |
 | `power.pi_percent` | PI contribution |
 | `power.ff_percent` | Feed-forward contribution |
+| `power.governor_cap_percent` | Governor command ceiling, in % |
+| `power.before_governor_cap_percent` | PI request before the cap is applied, in % |
 | `model.a` | Learned heating gain |
 | `model.b` | Learned heat-loss coefficient |
+
+The nominal reference is recorded to 0.01 °C, and the cap and pre-cap request
+to 0.1 %. These three fields extend schema v2; their sources remain under
+`live.analysis.reference_governor`. An absent reference or cap is `null`,
+not zero. A genuinely zero cap is 0 %. After braking ends, the pre-cap request
+may remain available while the nominal reference and cap disappear.
+
+The pre-cap request already uses the filtered P reference; it is not a PI
+simulation on the user setpoint. The applied command does not measure delivered
+heat. Charts must break the cap curve at `null` and tolerate missing fields
+from older versions.
 
 ## Live diagnostics
 

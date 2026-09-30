@@ -578,7 +578,7 @@ linéaire du modèle.
 - `build_debug_diagnostics()` : accesseur de compatibilité qui renvoie le même payload canonique.
 
 `diagnostic_history.py` enveloppe ce payload dans `schema_version`, `live` et le
-bloc stable de huit séries `history`. Les entités normales excluent `live` du
+bloc stable de onze séries `history`. Les entités normales excluent `live` du
 Recorder ; la sous-classe debug l'enregistre directement. Le mode debug change
 uniquement la conservation et n'ajoute pas de second bloc de diagnostic.
 
