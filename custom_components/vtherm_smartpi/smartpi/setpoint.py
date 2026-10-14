@@ -265,6 +265,24 @@ class SmartPISetpointManager:
         return decision.handoff_ready if decision is not None else False
 
     @property
+    def governor_prediction_shortfall_c(self) -> float | None:
+        """Return the last matured signed shortfall between cap promise and measurement."""
+        evidence = self._reference_governor_authority.last_falsification
+        return evidence.last_shortfall_c if evidence is not None else None
+
+    @property
+    def governor_falsification_count(self) -> int:
+        """Return the run of consecutive matured shortfalls beyond tolerance."""
+        evidence = self._reference_governor_authority.last_falsification
+        return evidence.consecutive_shortfalls if evidence is not None else 0
+
+    @property
+    def governor_falsification_span_s(self) -> float:
+        """Return the duration covered by the current shortfall run, in seconds."""
+        evidence = self._reference_governor_authority.last_falsification
+        return evidence.shortfall_span_s if evidence is not None else 0.0
+
+    @property
     def governor_u_cmd_before_cap(self) -> float | None:
         """Return the PI command observed before the governor cap."""
         return self._governor_u_cmd_before_cap

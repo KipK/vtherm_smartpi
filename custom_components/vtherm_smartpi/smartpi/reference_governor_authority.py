@@ -18,6 +18,10 @@ from .const import (
     REFERENCE_GOVERNOR_RHO_MARGIN,
 )
 from .controller import PIOutputSnapshot
+from .governor_falsification import (
+    GovernorPredictionFalsification,
+    PredictionFalsificationDecision,
+)
 from .reference_governor import (
     ReferenceGovernorDecision,
     ReferenceGovernorInput,
@@ -80,6 +84,13 @@ class ReferenceGovernorAuthority:
         self._runtime = ReferenceGovernorRuntime()
         self._pending_context: ReferenceGovernorAuthorityContext | None = None
         self._episode_target: float | None = None
+        self._falsification = GovernorPredictionFalsification()
+        self._last_falsification: PredictionFalsificationDecision | None = None
+
+    @property
+    def last_falsification(self) -> PredictionFalsificationDecision | None:
+        """Return the falsification evidence published by the last resolution."""
+        return self._last_falsification
 
     @property
     def pending_context(self) -> ReferenceGovernorAuthorityContext | None:
@@ -162,12 +173,15 @@ class ReferenceGovernorAuthority:
             target_changed = self._episode_target != target
             if target_changed:
                 self._episode_target = target
+                self._falsification.reset()
             if bypass_reason is not None:
                 self._runtime.reset()
+                self._falsification.reset()
             elif target_changed or self._runtime.target_temp is None:
                 self._runtime.arm(target, self._finite(now_monotonic) or 0.0)
         elif bypass_reason is not None:
             self._runtime.reset()
+            self._falsification.reset()
         return context
 
     def resolve(
@@ -204,6 +218,7 @@ class ReferenceGovernorAuthority:
                 "authority_missing_pi_snapshot", context.nominal_reference, now_monotonic
             )
 
+        deadband_c = max(self._finite(pi_snapshot.p_state.deadband_c) or 0.0, 0.0)
         kernel_decision = evaluate_reference_governor(
             ReferenceGovernorInput(
                 target_temp=context.target_temp,
@@ -229,9 +244,29 @@ class ReferenceGovernorAuthority:
                 prediction_horizon_min=context.stop_deadtime_s / 60.0,
                 command_comparison_epsilon=REFERENCE_GOVERNOR_COMMAND_EPSILON,
                 reference_comparison_epsilon_c=REFERENCE_GOVERNOR_REFERENCE_EPSILON_C,
+                tolerance_c=deadband_c,
             ),
         )
-        runtime_decision = self._runtime.consume(kernel_decision, now_monotonic, cycle)
+        # A matured promise is falsified only beyond both the controller
+        # deadband and the governor's own maximum dynamic reserve.
+        falsification = self._falsification.observe(
+            decision=kernel_decision,
+            hvac_mode=context.hvac_mode,
+            target_temp=context.target_temp,
+            current_temp=context.current_temp,
+            measured_slope_h=context.measured_slope_h,
+            remaining_cycle_min=context.remaining_cycle_min,
+            stop_deadtime_s=context.stop_deadtime_s,
+            now_monotonic=now_monotonic,
+            cycle_min=cycle,
+            tolerance_c=max(deadband_c, REFERENCE_GOVERNOR_MARGIN_MAX_C),
+        )
+        self._last_falsification = falsification
+        if falsification.retire:
+            self._falsification.reset()
+            runtime_decision = self._runtime.retire(kernel_decision, falsification.reason)
+        else:
+            runtime_decision = self._runtime.consume(kernel_decision, now_monotonic, cycle)
         return self._result(kernel_decision, runtime_decision)
 
     def reset(self) -> None:
@@ -239,6 +274,8 @@ class ReferenceGovernorAuthority:
         self._pending_context = None
         self._episode_target = None
         self._runtime.reset()
+        self._falsification.reset()
+        self._last_falsification = None
 
     def load_state(self, state: object | None = None) -> None:
         """Clear all transient state at a load boundary; nothing is restored."""
@@ -306,6 +343,8 @@ class ReferenceGovernorAuthority:
     ) -> ReferenceGovernorAuthorityDecision:
         """Reset runtime and publish a no-cap result for invalid context."""
         self._runtime.reset()
+        self._falsification.reset()
+        self._last_falsification = None
         decision = ReferenceGovernorDecision(
             active=False,
             reason=reason,

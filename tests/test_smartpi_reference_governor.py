@@ -600,3 +600,49 @@ def test_frozen_or_pending_p_cannot_invent_reference_constraint(mode, a, externa
         )
         assert decision.command_cap is not None
         assert decision.admissible_reference == pytest.approx(base.nominal_reference)
+
+
+@pytest.mark.parametrize("mode,a,external", [
+    (VThermHvacMode_HEAT, 0.4, 10.0),
+    (VThermHvacMode_COOL, -0.4, 30.0),
+])
+def test_tolerance_moves_the_bound_beyond_the_target_in_the_demand_direction(
+    mode, a, external,
+) -> None:
+    direction = 1.0 if mode == VThermHvacMode_HEAT else -1.0
+    governor_input = ReferenceGovernorInput(
+        target_temp=21.0, nominal_reference=21.0, current_temp=21.0 - direction * 1.0,
+        ext_temp=external, hvac_mode=mode, a=a, b=0.02,
+        committed_u=1.0, next_cycle_u=1.0, remaining_cycle_min=0.0,
+        cycle_min=10.0, stop_deadtime_s=300.0, measured_slope_h=0.0,
+        pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
+    )
+    strict = evaluate_reference_governor(
+        governor_input,
+        ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9),
+    )
+    tolerant = evaluate_reference_governor(
+        governor_input,
+        ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9, tolerance_c=0.05),
+    )
+    assert strict.target_bound is not None and tolerant.target_bound is not None
+    assert tolerant.target_bound - strict.target_bound == pytest.approx(direction * 0.05)
+    assert tolerant.dynamic_reserve_c == strict.dynamic_reserve_c
+    assert tolerant.command_cap is not None and strict.command_cap is not None
+    # More admissible travel means more demand-direction power in both modes.
+    assert tolerant.command_cap > strict.command_cap
+
+
+def test_negative_tolerance_fails_closed() -> None:
+    invalid = evaluate_reference_governor(
+        ReferenceGovernorInput(
+            target_temp=21.0, nominal_reference=21.0, current_temp=20.0,
+            ext_temp=10.0, hvac_mode=VThermHvacMode_HEAT, a=0.4, b=0.02,
+            committed_u=1.0, next_cycle_u=1.0, remaining_cycle_min=0.0,
+            cycle_min=10.0, stop_deadtime_s=300.0, measured_slope_h=0.0,
+            pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
+        ),
+        ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9, tolerance_c=-0.01),
+    )
+    assert invalid.reason == "invalid_tolerance"
+    assert invalid.command_cap is None

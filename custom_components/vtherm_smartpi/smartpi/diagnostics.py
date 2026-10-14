@@ -396,6 +396,9 @@ def _build_analysis_diagnostics(diag: Dict[str, Any]) -> Dict[str, Any]:
             "handoff_ready": diag["governor_handoff_ready"],
             "command_before_cap": diag["governor_u_cmd_before_cap"],
             "command_after_cap": diag["governor_u_cmd_after_cap"],
+            "prediction_shortfall_c": diag["governor_prediction_shortfall_c"],
+            "falsification_count": diag["governor_falsification_count"],
+            "falsification_span_s": diag["governor_falsification_span_s"],
         },
         "deadtime": {
             "state": diag["deadtime_state"],
@@ -973,6 +976,12 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             round(algo.sp_mgr.governor_u_cmd_after_cap, 6)
             if algo.sp_mgr.governor_u_cmd_after_cap is not None else None
         ),
+        "governor_prediction_shortfall_c": (
+            round(algo.sp_mgr.governor_prediction_shortfall_c, 3)
+            if algo.sp_mgr.governor_prediction_shortfall_c is not None else None
+        ),
+        "governor_falsification_count": algo.sp_mgr.governor_falsification_count,
+        "governor_falsification_span_s": round(algo.sp_mgr.governor_falsification_span_s, 1),
         # Resume skip
         "learning_resume_ts": int(algo.learning_resume_ts) if algo.learning_resume_ts else None,
         # Anti-windup tracking diagnostics

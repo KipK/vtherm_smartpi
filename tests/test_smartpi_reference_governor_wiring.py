@@ -16,6 +16,9 @@ from custom_components.vtherm_smartpi.smartpi.controller import PIOutputSnapshot
 from custom_components.vtherm_smartpi.smartpi.causal_power_trace import AppliedPowerSegment
 from custom_components.vtherm_smartpi.smartpi.const import TrajectoryPhase
 from custom_components.vtherm_smartpi.smartpi.deadband_output import ProportionalState
+from custom_components.vtherm_smartpi.smartpi.reference_governor import (
+    ReferenceGovernorDecision,
+)
 from custom_components.vtherm_smartpi.smartpi.reference_governor_runtime import (
     ReferenceGovernorPhase,
 )
@@ -350,7 +353,25 @@ def _non_episode_state(case):
     })
 
 
-def test_converged_late_release_still_has_a_cap_below_its_i_ff_floor(late_release_contract):
+def _enter_governed(case, now):
+    """Record one constraining decision so the plateau can hand off."""
+    runtime = case.smartpi.sp_mgr._reference_governor_authority.runtime
+    governed = runtime.consume(
+        ReferenceGovernorDecision(
+            active=True, reason="cap", nominal_reference=case.target,
+            admissible_reference=case.current, command_cap=0.25,
+            predicted_terminal_temp=case.target, target_bound=case.target,
+            reserve_candidates=None, dynamic_reserve_c=0.0,
+            constraint_active=True, coast_required=False,
+        ),
+        now, case.smartpi._cycle_min,
+    )
+    assert governed.phase is ReferenceGovernorPhase.GOVERNED
+
+
+def test_converged_late_release_cap_tolerates_the_deadband_above_its_i_ff_floor(
+    late_release_contract,
+):
     case = late_release_contract
     manager = case.smartpi.sp_mgr
     reference, projected_request, decision = _late_release_observation(case, case.now)
@@ -360,59 +381,62 @@ def test_converged_late_release_still_has_a_cap_below_its_i_ff_floor(late_releas
     assert manager.trajectory_elapsed_s == 12672.0
     assert manager.reference_governor_authority_nominal_reference is None
     assert decision is not None
-    assert decision.kernel_decision.nominal_reference == case.target
-    assert decision.phase is ReferenceGovernorPhase.GOVERNED
-    assert decision.reason == "cap"
+    kernel = decision.kernel_decision
+    assert kernel.nominal_reference == case.target
+    assert kernel.reason == "unconstrained"
+    assert kernel.constraint_active is False
+    assert decision.command_cap is None
     assert decision.handoff_ready is False
-    assert decision.command_cap is not None
     assert case.pi.u_i + case.pi.u_ff == pytest.approx(0.298872531)
     assert projected_request == pytest.approx(0.311478696, abs=1e-9)
-    assert case.pi.u_i + case.pi.u_ff > decision.command_cap
-    assert projected_request > decision.command_cap
-    assert decision.kernel_decision.admissible_reference == pytest.approx(case.current)
+    # The bound tolerates the 0.05 C deadband beyond the target, so the cap
+    # stays above both the I+FF floor and the raw request.
+    assert kernel.target_bound == pytest.approx(case.target + case.direction * 0.05)
+    assert kernel.command_cap is not None
+    assert kernel.command_cap > projected_request
+    assert kernel.command_cap > case.pi.u_i + case.pi.u_ff
+    assert kernel.admissible_reference == pytest.approx(case.target)
+    assert manager.governor_falsification_count == 0
 
 
-def test_retiring_only_late_release_episode_removes_authority_and_keeps_adjacent_state(
+def test_converged_late_release_hands_off_after_one_unconstrained_cycle(
     late_release_contract,
 ):
     case = late_release_contract
     smartpi = case.smartpi
     manager = smartpi.sp_mgr
     _late_release_observation(case, case.now)
-    reference_with_episode, projected_with_episode, governed = _late_release_observation(
-        case, case.now + 10.0)
-    assert governed is not None and governed.command_cap is not None
-    assert manager.trajectory_phase is TrajectoryPhase.RELEASE
-    assert manager._trajectory.current_setpoint == case.target
-    assert case.direction * (reference_with_episode - case.current) < 0.07 - 1e-9
-    assert projected_with_episode == pytest.approx(0.305875956, abs=1e-9)
+    _enter_governed(case, case.now + 1.0)
     before = _non_episode_state(case)
     snapshot_identity = smartpi.ctl.pi_output_snapshot
     trace_identity = smartpi._causal_power_trace
 
-    # This is the sole intervention. In particular, no OFF/resume or composite
-    # SmartPI reset runs. The next observation is exactly the one above.
-    manager.set_passthrough(case.target)
-    raw_reference, projected_without_episode, decision = _late_release_observation(
-        case, case.now + 10.0)
+    _, first_request, waiting = _late_release_observation(case, case.now + 10.0)
+    _, _, still_waiting = _late_release_observation(case, case.now + 20.0)
+    _, _, complete = _late_release_observation(case, case.now + 10.0 + 240.0)
 
-    assert raw_reference == case.target
-    assert decision is None
+    assert waiting is not None and waiting.phase is ReferenceGovernorPhase.HANDOFF
+    assert waiting.command_cap is None
+    assert first_request == pytest.approx(0.311478696, abs=1e-9)
+    assert still_waiting is not None and still_waiting.handoff_ready is False
+    assert complete is not None and complete.handoff_ready is True
+    assert complete.reason == "handoff_complete"
     assert not manager.trajectory_active
-    assert not manager.reference_governor_authority_pending
-    assert not manager.reference_governor_authority_selected
     assert not manager._reference_governor_authority_episode
     assert not manager._reference_governor_authority.runtime.armed
     assert manager.governor_command_cap is None
     assert manager.governor_phase == "idle"
-    assert projected_without_episode > projected_with_episode
+
+    raw_reference, projected_without_episode, decision = _late_release_observation(
+        case, case.now + 260.0)
+    assert raw_reference == case.target
+    assert decision is None
     assert projected_without_episode == pytest.approx(0.311478696, abs=1e-9)
-    assert projected_without_episode > governed.command_cap
     assert smartpi.ctl.pi_output_snapshot is snapshot_identity
     assert smartpi._causal_power_trace is trace_identity
     assert _non_episode_state(case) == before
     # The comparison concerns pure snapshot projections, not actual delivered
-    # power, future temperature, or safe automatic retirement of this episode.
+    # power or future temperature.
 
 
 def test_resetting_only_authority_runtime_rearms_the_retained_manager_episode(
@@ -433,8 +457,9 @@ def test_resetting_only_authority_runtime_rearms_the_retained_manager_episode(
                         manager.trajectory_phase, manager.trajectory_source)
     assert manager._reference_governor_authority.runtime.armed
     assert decision is not None
-    assert decision.phase is ReferenceGovernorPhase.GOVERNED
-    assert decision.command_cap is not None
+    assert decision.phase is ReferenceGovernorPhase.IDLE
+    assert decision.kernel_decision.reason == "unconstrained"
+    assert decision.command_cap is None
 
 
 def test_late_release_signed_mirror_preserves_kernel_cap_and_snapshot_projection():
@@ -444,8 +469,11 @@ def test_late_release_signed_mirror_preserves_kernel_cap_and_snapshot_projection
     _, cool_projection, cool_decision = _late_release_observation(cool, cool.now)
 
     assert heat_decision is not None and cool_decision is not None
-    assert heat_decision.phase is cool_decision.phase is ReferenceGovernorPhase.GOVERNED
-    assert heat_decision.command_cap == pytest.approx(cool_decision.command_cap, abs=1e-12)
+    assert heat_decision.phase is cool_decision.phase is ReferenceGovernorPhase.IDLE
+    assert heat_decision.kernel_decision.command_cap == pytest.approx(
+        cool_decision.kernel_decision.command_cap, abs=1e-12)
     assert heat_projection == pytest.approx(cool_projection, abs=1e-12)
     assert heat_decision.effective_reference + cool_decision.effective_reference == pytest.approx(
+        2.0 * heat.target, abs=1e-12)
+    assert heat_decision.kernel_decision.target_bound + cool_decision.kernel_decision.target_bound == pytest.approx(
         2.0 * heat.target, abs=1e-12)

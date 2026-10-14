@@ -277,6 +277,7 @@ The principle is:
   never exceeds the target in HEAT and never falls below it in COOL,
 - `trajectory_active` indicates whether the analytical trajectory is running,
 - the governor ends the episode only after the constraint remains inactive for repeated, time-separated evaluations spanning a control cycle; invalid context fails open without restoring a stale cap.
+- the governor also retires its episode when its own terminal prediction is falsified: while a cap is active, each prediction is compared with the room temperature measured once the stop dead time has elapsed; when the room repeatedly stays short of the promise by more than the deadband and the maximum dynamic reserve, over at least the stop dead time plus one cycle, without rising in the demand direction, the cap fails open with reason `prediction_falsified_below_target` and the raw PI request is restored.
 
 The thermal twin, FF3, braking-entry prediction and governor share a pure
 constant-power 1R1C propagation function. Each consumer retains its own horizons,
@@ -293,7 +294,7 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-The equations are normalized in the active demand direction (`+1` for HEAT, `-1` for COOL). A dynamic reserve is selected from measured-slope and model-travel evidence, bounded by policy, and converted into a thermal target bound. The governor solves the maximum command that respects this bound and inverts that cap into the admissible P reference. The cap is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic and tracking anti-windup observes the realized downstream command.
+The equations are normalized in the active demand direction (`+1` for HEAT, `-1` for COOL). A dynamic reserve is selected from measured-slope and model-travel evidence, bounded by policy, and converted into a thermal target bound. The bound tolerates the controller deadband beyond the target in the demand direction and subtracts the dynamic reserve, so the cap never demands a tighter landing from the nominal model than the band the controller already accepts. The governor solves the maximum command that respects this bound and inverts that cap into the admissible P reference. The cap is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic and tracking anti-windup observes the realized downstream command.
 
 Thermal observations are prepared before PI evaluation. Reference inversion
 uses an immutable snapshot of the effective proportional gain, integral power
@@ -322,7 +323,8 @@ The same payload in both modes exposes trajectory and governor details under
 - `active`, `phase`, `reason`, `nominal_reference` and `admissible_reference`,
 - `command_cap`, `constraint_active`, `dynamic_reserve_c`, `predicted_terminal_temperature` and `target_bound`,
 - `coast_required` and `handoff_ready`,
-- `command_before_cap` and `command_after_cap`.
+- `command_before_cap` and `command_after_cap`,
+- `prediction_shortfall_c`, `falsification_count` and `falsification_span_s`.
 
 Setpoint reference shaping remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed. The post-PI cap does not rewrite the integral and does not change the valve linearization curve.
 

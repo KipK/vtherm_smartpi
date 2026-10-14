@@ -281,6 +281,7 @@ Le principe est le suivant :
   dépasse jamais la cible en HEAT et ne descend jamais sous celle-ci en COOL,
 - `trajectory_active` indique si la trajectoire analytique est en cours,
 - le gouverneur termine l'épisode seulement après que la contrainte est restée inactive pendant plusieurs évaluations séparées dans le temps et couvrant un cycle de contrôle ; un contexte invalide échoue en mode ouvert sans restaurer un ancien cap.
+- le gouverneur retire aussi son épisode lorsque sa propre prédiction terminale est falsifiée : tant qu'un cap est actif, chaque prédiction est comparée à la température mesurée une fois le temps mort d'arrêt écoulé ; lorsque la pièce reste de façon répétée en deçà de la promesse de plus que la deadband et la réserve dynamique maximale, pendant au moins le temps mort d'arrêt plus un cycle, sans monter dans le sens de la demande, le cap s'ouvre avec la raison `prediction_falsified_below_target` et la demande PI brute est restaurée.
 
 Le jumeau thermique, FF3, la prédiction d'entrée en freinage et le gouverneur
 partagent une fonction pure de propagation 1R1C à puissance constante. Chaque
@@ -298,7 +299,7 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-Les équations sont normalisées dans le sens de la demande active (`+1` en HEAT, `-1` en COOL). Une réserve dynamique est sélectionnée à partir de la pente mesurée et du déplacement prédit par le modèle, puis bornée par la politique et convertie en limite thermique. Le gouverneur résout la commande maximale respectant cette limite et inverse ce cap pour obtenir la référence P admissible. Le cap est appliqué après le calcul PI normal et avant les contraintes douces ; `u_pi` reste donc le diagnostic PI brut et l'anti-windup par tracking observe la commande réellement obtenue en aval.
+Les équations sont normalisées dans le sens de la demande active (`+1` en HEAT, `-1` en COOL). Une réserve dynamique est sélectionnée à partir de la pente mesurée et du déplacement prédit par le modèle, puis bornée par la politique et convertie en limite thermique. Cette limite tolère la deadband du contrôleur au-delà de la cible dans le sens de la demande et retranche la réserve dynamique : le cap n'exige jamais du modèle nominal un atterrissage plus précis que la bande déjà acceptée par le contrôleur. Le gouverneur résout la commande maximale respectant cette limite et inverse ce cap pour obtenir la référence P admissible. Le cap est appliqué après le calcul PI normal et avant les contraintes douces ; `u_pi` reste donc le diagnostic PI brut et l'anti-windup par tracking observe la commande réellement obtenue en aval.
 
 Les observations thermiques sont préparées avant le calcul PI. L'inversion de
 référence utilise un instantané immuable du gain proportionnel effectif, de la
@@ -328,7 +329,8 @@ du gouverneur dans `live.analysis.trajectory` et `live.analysis.reference_govern
 - `active`, `phase`, `reason`, `nominal_reference` et `admissible_reference`,
 - `command_cap`, `constraint_active`, `dynamic_reserve_c`, `predicted_terminal_temperature` et `target_bound`,
 - `coast_required` et `handoff_ready`,
-- `command_before_cap` et `command_after_cap`.
+- `command_before_cap` et `command_after_cap`,
+- `prediction_shortfall_c`, `falsification_count` et `falsification_span_s`.
 
 Le façonnage de référence reste limité à la branche P afin de préserver la consigne brute côté intégrale et d'éviter de perturber l'apprentissage. Le cap post-PI ne réécrit pas l'intégrale et ne change pas la courbe de linéarisation de vanne.
 

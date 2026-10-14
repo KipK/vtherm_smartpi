@@ -390,3 +390,49 @@ def test_reset_and_load_state_clear_all_runtime_evidence() -> None:
     assert after_load.command_cap is None
     assert after_load.phase is ReferenceGovernorPhase.IDLE
     assert runtime.armed is False
+
+
+def test_retire_completes_an_armed_episode_without_restoring_a_cap() -> None:
+    runtime = ReferenceGovernorRuntime()
+    runtime.arm(22.0, 0.0)
+    governed = runtime.consume(constrained(), 1.0, 10.0)
+    assert governed.phase is ReferenceGovernorPhase.GOVERNED
+
+    retired = runtime.retire(constrained(), "prediction_falsified_below_target")
+
+    assert retired.phase is ReferenceGovernorPhase.IDLE
+    assert retired.handoff_ready is True
+    assert retired.shaping_active is False
+    assert retired.command_cap is None
+    assert retired.reason == "prediction_falsified_below_target"
+    assert retired.effective_reference == 22.0
+    assert runtime.armed is False
+    assert runtime.target_temp == 22.0
+
+    # The same target cannot re-arm the retired episode by itself.
+    after = runtime.consume(constrained(), 2.0, 10.0)
+    assert after.phase is ReferenceGovernorPhase.IDLE
+    assert after.command_cap is None
+    assert after.reason == "disarmed"
+
+    runtime.arm(22.5, 3.0)
+    rearmed = runtime.consume(constrained(), 4.0, 10.0)
+    assert rearmed.phase is ReferenceGovernorPhase.GOVERNED
+
+
+def test_retire_on_a_disarmed_runtime_publishes_ordinary_output() -> None:
+    runtime = ReferenceGovernorRuntime()
+    output = runtime.retire(constrained(), "prediction_falsified_below_target")
+    assert output.phase is ReferenceGovernorPhase.IDLE
+    assert output.handoff_ready is False
+    assert output.reason == "disarmed"
+
+
+def test_retire_rejects_invalid_arguments() -> None:
+    runtime = ReferenceGovernorRuntime()
+    runtime.arm(22.0, 0.0)
+    with pytest.raises(TypeError):
+        runtime.retire(None, "reason")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        runtime.retire(constrained(), "")
+    assert runtime.armed is True

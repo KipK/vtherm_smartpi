@@ -65,6 +65,10 @@ class ReferenceGovernorPolicy:
     prediction_horizon_min: float
     command_comparison_epsilon: float
     reference_comparison_epsilon_c: float
+    # Accepted terminal precision beyond the target in the demand direction.
+    # The controller already tolerates this band, so the cap must not demand
+    # a tighter landing than the deadband from a nominal model.
+    tolerance_c: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -574,6 +578,7 @@ def evaluate_reference_governor(
         policy.prediction_horizon_min,
         policy.command_comparison_epsilon,
         policy.reference_comparison_epsilon_c,
+        policy.tolerance_c,
     )
     normalized_fields = tuple(_finite(value) for value in numeric_fields)
     if any(value is None for value in normalized_fields):
@@ -594,6 +599,7 @@ def evaluate_reference_governor(
         prediction_horizon,
         command_comparison_epsilon,
         reference_comparison_epsilon_c,
+        tolerance_c,
     ) = normalized_fields
     if any(
         value < 0.0 or value > 1.0
@@ -612,6 +618,8 @@ def evaluate_reference_governor(
         )
     ):
         return _invalid_decision(governor_input, "invalid_horizon")
+    if tolerance_c < 0.0:
+        return _invalid_decision(governor_input, "invalid_tolerance")
     if not _valid_pi_snapshot(governor_input.pi_snapshot):
         return _invalid_decision(governor_input, "invalid_pi_snapshot")
     model = normalize_model(governor_input.a, governor_input.b, governor_input.hvac_mode)
@@ -682,7 +690,9 @@ def evaluate_reference_governor(
     if selected_reserve is None:
         return _invalid_decision(governor_input, "unsupported_reserve_selector")
     direction = model.direction
-    target_bound = target_temp - direction * selected_reserve
+    # The bound tolerates the accepted terminal band beyond the target and
+    # keeps the dynamic reserve for stored thermal energy.
+    target_bound = target_temp + direction * (tolerance_c - selected_reserve)
 
     gain_prediction = _predict_two_segments(
         current_temp=current_temp,

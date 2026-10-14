@@ -323,3 +323,107 @@ def test_authority_result_is_immutable_and_carries_both_evidence_layers() -> Non
     assert result.runtime_evidence is result.runtime_decision
     with pytest.raises(FrozenInstanceError):
         result.command_cap = None
+
+
+def test_bound_tolerates_the_snapshot_deadband_beyond_the_target() -> None:
+    authority = ReferenceGovernorAuthority()
+    prepare(authority)
+    result = resolve(authority, 0.90, 1.0, 10.0)
+
+    kernel = result.kernel_decision
+    assert kernel.target_bound == pytest.approx(20.5 + 0.05 - kernel.dynamic_reserve_c)
+
+    cool = ReferenceGovernorAuthority()
+    prepare(
+        cool, hvac_mode=VThermHvacMode_COOL, target_temp=19.5, nominal_reference=19.6,
+        current_temp=20.0, a=-0.4, ext_temp=30.0,
+    )
+    cool_result = cool.resolve(0.90, 1.0, 10.0, snapshot())
+    cool_kernel = cool_result.kernel_decision
+    assert cool_kernel.target_bound == pytest.approx(19.5 - 0.05 + cool_kernel.dynamic_reserve_c)
+
+
+def _plateau_step(authority: ReferenceGovernorAuthority, now: float, *, slope: float = 0.0):
+    """Observe a room stuck at 20.0 C while the cap keeps promising its bound."""
+    prepare(authority, now_monotonic=now, measured_slope_h=slope)
+    return resolve(authority, 0.90, now, 10.0)
+
+
+def test_falsified_prediction_retires_the_governed_episode() -> None:
+    authority = ReferenceGovernorAuthority()
+    now = 0.0
+    result = _plateau_step(authority, now)
+    assert result.phase is ReferenceGovernorPhase.GOVERNED
+    assert result.kernel_decision.predicted_terminal_temp == pytest.approx(
+        result.kernel_decision.target_bound
+    )
+
+    while not result.handoff_ready and now < 3600.0:
+        now += 60.0
+        result = _plateau_step(authority, now)
+
+    evidence = authority.last_falsification
+    assert result.handoff_ready is True
+    assert result.phase is ReferenceGovernorPhase.IDLE
+    assert result.command_cap is None
+    assert result.reason == "prediction_falsified_below_target"
+    assert result.kernel_decision.reason == "cap"
+    assert evidence is not None and evidence.retire is True
+    assert evidence.last_shortfall_c == pytest.approx(
+        result.kernel_decision.predicted_terminal_temp - 20.0
+    )
+    assert evidence.shortfall_span_s >= 300.0 + 600.0
+    # First promise matures at 300 s; the run must then span the dead time
+    # plus one ten-minute cycle.
+    assert now == pytest.approx(1200.0)
+    assert authority.runtime.armed is False
+
+    after = _plateau_step(authority, now + 60.0)
+    assert after.phase is ReferenceGovernorPhase.IDLE
+    assert after.command_cap is None
+    assert after.handoff_ready is False
+    assert authority.runtime.armed is False
+
+
+def test_rising_room_keeps_the_cap_despite_shortfalls() -> None:
+    authority = ReferenceGovernorAuthority()
+    now = 0.0
+    result = _plateau_step(authority, now, slope=0.5)
+    while now < 1800.0:
+        now += 60.0
+        result = _plateau_step(authority, now, slope=0.5)
+    evidence = authority.last_falsification
+    assert result.phase is ReferenceGovernorPhase.GOVERNED
+    assert result.command_cap is not None
+    assert evidence is not None and evidence.retire is False
+    assert evidence.reason == "slope_blocks_retirement"
+
+
+def test_changed_target_bypass_and_reset_clear_falsification_evidence() -> None:
+    authority = ReferenceGovernorAuthority()
+    now = 0.0
+    for _ in range(8):
+        _plateau_step(authority, now)
+        now += 60.0
+    assert authority.last_falsification is not None
+    assert authority.last_falsification.consecutive_shortfalls >= 1
+
+    prepare(authority, now_monotonic=now, target_temp=20.6, nominal_reference=20.5)
+    changed = resolve(authority, 0.90, now, 10.0)
+    assert changed.phase is ReferenceGovernorPhase.GOVERNED
+    assert authority.last_falsification.consecutive_shortfalls == 0
+
+    for _ in range(8):
+        now += 60.0
+        prepare(authority, now_monotonic=now, target_temp=20.6, nominal_reference=20.5)
+        resolve(authority, 0.90, now, 10.0)
+    assert authority.last_falsification.consecutive_shortfalls >= 1
+
+    prepare(authority, now_monotonic=now + 60.0, trajectory_source="disturbance")
+    bypassed = resolve(authority, 0.90, now + 60.0, 10.0)
+    assert bypassed.command_cap is None
+    assert authority.last_falsification is None
+
+    _plateau_step(authority, now + 120.0)
+    authority.reset()
+    assert authority.last_falsification is None

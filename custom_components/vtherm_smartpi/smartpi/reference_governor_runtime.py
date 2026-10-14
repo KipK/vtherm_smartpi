@@ -106,6 +106,37 @@ class ReferenceGovernorRuntime:
         self._last_monotonic = now
         self._handoff_times = ()
 
+    def retire(
+        self,
+        kernel_decision: ReferenceGovernorDecision,
+        reason: str,
+    ) -> ReferenceGovernorRuntimeDecision:
+        """Complete an armed episode on caller-owned falsification evidence.
+
+        Retirement publishes the same non-constraining completion as a
+        time-confirmed handoff: nominal reference, no cap, ``handoff_ready``.
+        The target stays recorded so the same target cannot re-arm the
+        retired episode.  A disarmed runtime publishes its ordinary output.
+        """
+        if not isinstance(kernel_decision, ReferenceGovernorDecision):
+            raise TypeError("kernel_decision must be ReferenceGovernorDecision")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("reason must be a non-empty string")
+        if not self._armed:
+            return self._disarmed(kernel_decision)
+        self._phase = ReferenceGovernorPhase.IDLE
+        self._armed = False
+        self._handoff_times = ()
+        return self._output(
+            kernel_decision,
+            phase=ReferenceGovernorPhase.IDLE,
+            effective_reference=self._raw_reference(kernel_decision),
+            command_cap=None,
+            shaping_active=False,
+            handoff_ready=True,
+            reason=reason,
+        )
+
     def reset(self) -> None:
         """Clear all transient state without creating persisted state."""
         self._phase = ReferenceGovernorPhase.IDLE
