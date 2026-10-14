@@ -243,9 +243,9 @@ def test_smartpi_diagnostics_expose_ab_drift_fields():
         name="TestSmartPIDriftDiag",
     )
 
-    diag = smartpi.get_diagnostics()
+    learning = smartpi.get_published_diagnostics()["learning"]
 
-    assert "a_drift_state" in diag
-    assert "b_drift_state" in diag
-    assert "a_drift_buffer_count" in diag
-    assert "b_drift_buffer_count" in diag
+    assert "a_drift_state" in learning
+    assert "b_drift_state" in learning
+    assert len(smartpi.est.a_drift.drift_buffer) == 0
+    assert len(smartpi.est.b_drift.drift_buffer) == 0

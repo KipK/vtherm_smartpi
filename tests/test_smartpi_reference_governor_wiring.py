@@ -228,7 +228,8 @@ def test_smartpi_calculate_resolves_with_effective_post_compute_terms(
         smartpi.Kp = 1.25
         smartpi.Ki = 0.05
         smartpi.integral = 2.0
-        return 0.2, False
+        # Governance hold keeps the integrator frozen for this cycle.
+        return 0.2, True
 
     seen = []
     original_resolve = smartpi.sp_mgr.resolve_reference_governor
@@ -243,7 +244,7 @@ def test_smartpi_calculate_resolves_with_effective_post_compute_terms(
 
     smartpi.calculate(
         target_temp=target, current_temp=20.0, ext_current_temp=external,
-        hvac_mode=mode, slope=0.0, integrator_hold=True,
+        hvac_mode=mode, slope=0.0,
     )
 
     assert len(seen) == 1

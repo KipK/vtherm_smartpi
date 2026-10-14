@@ -121,12 +121,12 @@ def test_heartbeat_integration_in_calculate():
     smartpi.update_learning = MagicMock()
     
     # First run (dt=0) -> No call
-    smartpi.calculate(20, 19, 10, 0, VThermHvacMode_HEAT)
+    smartpi.calculate(target_temp=20, current_temp=19, ext_current_temp=10, slope=0, hvac_mode=VThermHvacMode_HEAT)
     smartpi.update_learning.assert_not_called()
     
     # Second run (dt > 0)
     with patch("custom_components.vtherm_smartpi.algo.time.monotonic") as mock_time:
         mock_time.return_value = smartpi._last_calculate_time + 60.0
-        smartpi.calculate(20, 19, 10, 0, VThermHvacMode_HEAT)
+        smartpi.calculate(target_temp=20, current_temp=19, ext_current_temp=10, slope=0, hvac_mode=VThermHvacMode_HEAT)
         
     smartpi.update_learning.assert_called_once()

@@ -160,8 +160,9 @@ def test_calculate_checks_release_after_pi_before_resolving_authority(monkeypatc
     monkeypatch.setattr(rt, "_manage_setpoint", lambda *args, **kwargs: (
         case.target, False, inputs["error"], inputs["error_p"], case.target,
     ))
+    # Governance hold drives the integrator hold through the public cycle.
     monkeypatch.setattr(rt, "_apply_gains_and_ff", lambda *args, **kwargs: (
-        case.pi.u_ff, False,
+        case.pi.u_ff, True,
     ))
     events = []
     compute = rt.ctl.compute_pwm
@@ -192,7 +193,7 @@ def test_calculate_checks_release_after_pi_before_resolving_authority(monkeypatc
     rt.calculate(
         target_temp=case.target, current_temp=case.current,
         ext_current_temp=case.external, hvac_mode=case.mode,
-        slope=-0.45, integrator_hold=True,
+        slope=-0.45,
     )
 
     assert [event for event, _ in events] == ["compute", "release", "resolve"]

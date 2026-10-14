@@ -36,7 +36,7 @@ class TestSmartPiHysteresisDeadtimeWindow:
         
         # 1. Start heating
         # Target 20, Current 19 -> ON
-        pi.calculate(20.0, 19.0, 10.0, 0.0, VThermHvacMode_HEAT)
+        pi.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=10.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
         
         # Verify we are in Hysteresis
         assert pi.phase == SmartPIPhase.HYSTERESIS
@@ -69,7 +69,7 @@ class TestSmartPiHysteresisDeadtimeWindow:
         
         # 1. Start Cooling
         # Target 20, Current 21 -> ON (Cooling)
-        pi.calculate(20.0, 21.0, 10.0, 0.0, VThermHvacMode_COOL)
+        pi.calculate(target_temp=20.0, current_temp=21.0, ext_current_temp=10.0, slope=0.0, hvac_mode=VThermHvacMode_COOL)
         
         assert pi.phase == SmartPIPhase.HYSTERESIS
         assert pi.on_percent > 0.0
@@ -136,15 +136,15 @@ def test_smartpi_cool_hysteresis_uses_mirrored_thresholds():
 
     pi = SmartPI(MagicMock(), 10.0, 0, 0, "test_pi_cool_hyst", hysteresis_on=HYST_ON, hysteresis_off=HYST_OFF)
 
-    pi.calculate(20.0, 20.3, 30.0, 0.0, VThermHvacMode_COOL)
+    pi.calculate(target_temp=20.0, current_temp=20.3, ext_current_temp=30.0, slope=0.0, hvac_mode=VThermHvacMode_COOL)
     assert pi.phase == SmartPIPhase.HYSTERESIS
     assert pi.ctl.hysteresis_state == "on"
     assert pi.on_percent == 1.0
 
-    pi.calculate(20.0, 19.6, 30.0, 0.0, VThermHvacMode_COOL)
+    pi.calculate(target_temp=20.0, current_temp=19.6, ext_current_temp=30.0, slope=0.0, hvac_mode=VThermHvacMode_COOL)
     assert pi.ctl.hysteresis_state == "band"
     assert pi.on_percent == 1.0
 
-    pi.calculate(20.0, 19.5, 30.0, 0.0, VThermHvacMode_COOL)
+    pi.calculate(target_temp=20.0, current_temp=19.5, ext_current_temp=30.0, slope=0.0, hvac_mode=VThermHvacMode_COOL)
     assert pi.ctl.hysteresis_state == "off"
     assert pi.on_percent == 0.0

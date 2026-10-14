@@ -111,7 +111,7 @@ def test_smartpi_feedforward_uses_raw_setpoint_when_trajectory_is_active():
             now_monotonic=1200.0,
         )
 
-    e_p, _ = smart_pi._update_control_context(
+    e_p = smart_pi._update_control_context(
         error_i=error_i,
         hvac_mode=VThermHvacMode_HEAT,
         current_temp=current_temp,

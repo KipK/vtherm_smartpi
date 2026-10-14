@@ -97,7 +97,7 @@ def test_learning_resume_deadline_is_not_restored(clock: _Clock) -> None:
     )
     algo.learn_win.set_learning_resume_ts(clock.mono + 600.0)
     state = algo.save_state()
-    assert state["learning_resume_ts"] == pytest.approx(clock.wall + 600.0)
+    assert state["lw_state"]["learning_resume_ts"] == pytest.approx(clock.wall + 600.0)
 
     _restart(clock, downtime_s=60.0, mono_after_boot=1.0)
     restored = SmartPI(

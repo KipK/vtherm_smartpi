@@ -43,7 +43,6 @@ def create_smartpi():
         max_on_percent=1.0,
         deadband_c=0.1,
         use_setpoint_filter=True,
-        debug_mode=True,
     )
     # Bypass initial learning by filling history
     algo.est.a_meas_hist = [1.0] * 35
@@ -204,7 +203,7 @@ def test_attribute_exposure():
     algo.calibration_mgr._calibration_state = SmartPICalibrationPhase.IDLE
     algo.autocalib._retry_count = 2
 
-    attrs = algo.get_debug_diagnostics()
+    attrs = algo.get_published_diagnostics()
     assert attrs["calibration"]["state"] == SmartPICalibrationPhase.IDLE
     assert attrs["calibration"]["retry_count"] == 2
     assert attrs["calibration"]["last_time"] == datetime.fromtimestamp(now_ts).isoformat()
@@ -216,10 +215,10 @@ def test_attribute_exposure():
 def test_published_calibration_retry_count_follows_autocalib():
     """calibration.retry_count is fed from the AutoCalibTrigger counter."""
     algo = create_smartpi()
-    assert algo.get_debug_diagnostics()["calibration"]["retry_count"] == 0
+    assert algo.get_published_diagnostics()["calibration"]["retry_count"] == 0
 
     algo.autocalib._retry_count = 2
-    assert algo.get_debug_diagnostics()["calibration"]["retry_count"] == 2
+    assert algo.get_published_diagnostics()["calibration"]["retry_count"] == 2
 
 
 def test_calibration_manager_loads_state_with_legacy_retry_key():

@@ -21,7 +21,6 @@ def _make_boost_smartpi(name: str) -> SmartPI:
         minimal_activation_delay=0,
         minimal_deactivation_delay=0,
         name=name,
-        debug_mode=True,
     )
     force_smartpi_stable_mode(smartpi)
     return smartpi
@@ -53,7 +52,7 @@ def test_setpoint_boost_activates_on_setpoint_increase() -> None:
 
     assert smartpi.setpoint_boost_active is True
     assert smartpi.sp_mgr.prev_setpoint_for_boost == 19.0
-    assert smartpi.get_debug_diagnostics()["setpoint"]["boost_active"] is True
+    assert smartpi.get_published_diagnostics()["setpoint"]["boost_active"] is True
 
 
 def test_setpoint_boost_deactivates_when_error_small() -> None:

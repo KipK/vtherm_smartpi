@@ -147,17 +147,16 @@ def test_debug_learning_counters_are_runtime_scoped_after_load() -> None:
         minimal_deactivation_delay=0,
         name="TestSmartPI2",
         saved_state=smartpi1.save_state(),
-        debug_mode=True,
     )
 
-    analysis = smartpi2.get_debug_diagnostics()["analysis"]["learning"]
+    analysis = smartpi2.get_published_diagnostics()["analysis"]["learning"]
     assert analysis["learn_ok_count"] == 0
     assert analysis["learn_skip_count"] == 0
 
     smartpi2.est.learn_ok_count += 2
     smartpi2.est.learn_skip_count += 1
 
-    analysis = smartpi2.get_debug_diagnostics()["analysis"]["learning"]
+    analysis = smartpi2.get_published_diagnostics()["analysis"]["learning"]
     assert analysis["learn_ok_count"] == 2
     assert analysis["learn_skip_count"] == 1
 

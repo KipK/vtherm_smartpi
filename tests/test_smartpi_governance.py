@@ -34,7 +34,6 @@ def make_smartpi(**kwargs):
         minimal_activation_delay=0,
         minimal_deactivation_delay=0,
         name="TestGov",
-        debug_mode=True,
     )
     defaults.update(kwargs)
     return SmartPI(**defaults)
@@ -377,20 +376,17 @@ class TestGovernanceDiagnostics:
     """Test that governance fields appear in diagnostics."""
 
     def test_diagnostics_contain_governance_keys(self):
-        """get_diagnostics() should expose all governance fields."""
+        """Published diagnostics should expose the governance fields."""
         spi = make_smartpi()
-        diag = spi.get_diagnostics()
+        governance = spi.get_published_diagnostics()["governance"]
 
         expected_keys = [
-            "governance_regime",
-            "governance_cycle_regimes",
-            "last_freeze_reason_thermal",
-            "last_freeze_reason_gains",
-            "last_decision_thermal",
-            "last_decision_gains",
+            "regime",
+            "thermal_update_decision",
+            "thermal_update_reason",
         ]
         for key in expected_keys:
-            assert key in diag, f"Missing diagnostic key: {key}"
+            assert key in governance, f"Missing diagnostic key: {key}"
 
     def test_diagnostics_values_after_calculate(self):
         """Governance diagnostics should reflect actual state after calculate."""
@@ -408,10 +404,9 @@ class TestGovernanceDiagnostics:
             hvac_mode=VThermHvacMode_HEAT,
         )
 
-        diag = spi.get_diagnostics()
-        assert diag["governance_regime"] in [r.value for r in GovernanceRegime]
-        assert isinstance(diag["governance_cycle_regimes"], list)
-        assert len(diag["governance_cycle_regimes"]) > 0
+        governance = spi.get_published_diagnostics()["governance"]
+        assert governance["regime"] in [r.value for r in GovernanceRegime]
+        assert len(spi.gov.cycle_regimes) > 0
 
 
 # =====================================================================

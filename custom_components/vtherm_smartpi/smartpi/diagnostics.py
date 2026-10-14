@@ -25,122 +25,6 @@ from .const import (
 if TYPE_CHECKING:
     from ..algo import SmartPI
 
-ESSENTIAL_KEYS = {
-    "phase",
-    "regulation_mode",
-    "hysteresis_state",
-    "on_percent",
-    "error",
-    "a",
-    "b",
-    "u_pi",
-    "u_ff",
-    "u_hold",
-    "Kp",
-    "Ki",
-    "integral_error",
-    "governance_regime",
-    "last_decision_thermal",
-    # Bootstrap / Learning (Always published)
-    "bootstrap_progress",
-    "bootstrap_state",
-    "a_drift_state",
-    "b_drift_state",
-    "a_drift_buffer_count",
-    "b_drift_buffer_count",
-    "a_drift_last_reason",
-    "b_drift_last_reason",
-    # Deadtimes (Always published)
-    "deadtime_heat_s",
-    "deadtime_cool_s",
-    # AutoCalibTrigger §6.1
-    "autocalib_last_trigger_ts",
-    "autocalib_next_check_ts",
-    "autocalib_snapshot_age_h",
-    # Sensor temperature
-    "sensor_temperature",
-    "ext_sensor_temperature",
-    # Adaptive T_int filter
-    "t_int_clean",
-    # FFv2 essential keys
-    "u_ff1",
-    "u_ff2",
-    "u_ff_final",
-    "u_ff3",
-    "u_db_nominal",
-    "u_ff_eff",
-    "ff3_enabled",
-    "ff3_reason_disabled",
-    "ff3_raw_reason_disabled",
-    "ff3_horizon_cycles",
-    "ff3_deadtime_cycles",
-    "ff3_horizon_capped",
-    "ff3_action_sensitivity",
-    "ff3_prediction_quality",
-    "ff3_authority_factor",
-    "twin_status",
-    "ff3_twin_usable",
-    "ab_confidence_state",
-    "deadband_power_source",
-    "deadband_p_mode",
-    "ff2_trim_delta",
-    "fftrim_last_reject_reason",
-    "fftrim_stationary_last_reject_reason",
-    "fftrim_last_result",
-    "fftrim_last_transaction",
-    "fftrim_last_update_reason",
-    "fftrim_cycles_since_update",
-    "fftrim_windows_since_update",
-    "fftrim_observation_mode",
-    "fftrim_observer_state",
-    "fftrim_window_duration_s",
-    "fftrim_window_target_duration_s",
-    "fftrim_measurement_count",
-    "fftrim_stationary_alignment_delay_s",
-    "fftrim_periodic_state",
-    "fftrim_periodic_window_duration_s",
-    "fftrim_periodic_target_duration_s",
-    "fftrim_periodic_measurement_count",
-    "fftrim_periodic_amplitude_c",
-    "fftrim_periodic_closure_error_c",
-    "fftrim_periodic_last_reject_reason",
-    "fftrim_alignment_delay_s",
-    "fftrim_power_coverage_ratio",
-    "fftrim_mean_causal_power",
-    "fftrim_mean_ff1",
-    "fftrim_mean_temperature",
-    "fftrim_mean_error",
-    "fftrim_mean_slope_h",
-    "fftrim_observed_hold_power",
-    "fftrim_target_trim",
-    "fftrim_correction",
-    "fftrim_mean_p_power",
-    "fftrim_mean_i_power",
-    "fftrim_mean_visible_ff_power",
-    "fftrim_mean_ki",
-    "fftrim_mean_delivery_residual",
-    "fftrim_physical_power_deficit",
-    "fftrim_decomposed_correction",
-    "fftrim_requested_trim_delta",
-    "fftrim_stored_trim_delta",
-    "fftrim_applied_trim_delta",
-    "fftrim_transferable_i_power",
-    "fftrim_requested_i_transfer",
-    "fftrim_applied_i_transfer",
-    "fftrim_net_command_delta",
-    "fftrim_bumpless_transfer_state",
-    "fftrim_bumpless_transfer_reason",
-    "fftrim_transfer_pending_engagement",
-    "fftrim_transfer_quality",
-    "integral_hold_active",
-    "integral_hold_mode",
-    "integral_hold_source",
-    "restart_reason",
-    # Setpoint trajectory
-    "filtered_setpoint",
-    "setpoint_trajectory_active",
-}
-
 
 def _effective_ff3_reason_disabled(algo: SmartPI) -> str:
     """Return an FF3 disabled reason consistent with the current runtime state."""
@@ -612,11 +496,6 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     }
 
 
-def build_debug_diagnostics(algo: SmartPI) -> Dict[str, Any]:
-    """Return the canonical live diagnostics for compatibility callers."""
-    return build_published_diagnostics(algo)
-
-
 def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the complete SmartPI diagnostics payload."""
     fftrim_last_result = _build_fftrim_result(
@@ -704,8 +583,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ),
         # 2DOF/scheduling
         "near_band_deg": round(algo.near_band_deg, 3),
-        "sign_flip_leak": round(algo.sign_flip_leak, 3),
-        "sign_flip_active": algo.sign_flip_active,
         # Output
         "u_ff": round(algo.u_ff, 6),
         "ff_raw": round(algo._last_ff_raw, 6),
@@ -1102,13 +979,3 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         }
 
     return diag
-
-
-def build_diagnostics(algo: SmartPI, debug_mode: bool = False) -> Dict[str, Any]:
-    """Return diagnostic information for the SmartPI algorithm API."""
-    if debug_mode:
-        return _build_full_diagnostics(algo)
-
-    diag = _build_full_diagnostics(algo)
-
-    return {k: v for k, v in diag.items() if k in ESSENTIAL_KEYS}

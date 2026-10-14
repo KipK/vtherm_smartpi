@@ -205,7 +205,7 @@ def test_disabled_learning_blocks_stable_deadtime_updates() -> None:
     smartpi.set_learning_enabled(False)
     smartpi.dt_est.update = MagicMock()
 
-    smartpi.calculate(20.0, 19.0, 10.0, 0.0, VThermHvacMode_HEAT)
+    smartpi.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=10.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
 
     smartpi.dt_est.update.assert_not_called()
 
@@ -216,7 +216,7 @@ def test_disabled_learning_blocks_hysteresis_deadtime_updates() -> None:
     smartpi.set_learning_enabled(False)
     smartpi.dt_est.update = MagicMock()
 
-    smartpi.calculate(20.0, 19.0, 10.0, 0.0, VThermHvacMode_HEAT)
+    smartpi.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=10.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
 
     assert smartpi.on_percent > 0.0
     smartpi.dt_est.update.assert_not_called()

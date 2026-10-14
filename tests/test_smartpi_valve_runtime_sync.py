@@ -241,7 +241,7 @@ async def test_valve_feedback_is_projected_to_linear_state() -> None:
     assert algo.committed_on_percent == pytest.approx(0.15)
     assert algo.linear_committed_on_percent == pytest.approx(0.8)
     assert algo.u_prev == pytest.approx(0.8)
-    assert algo.linear_u_applied == pytest.approx(0.8)
+    assert algo._last_u_applied == pytest.approx(0.8)
 
 
 @pytest.mark.asyncio

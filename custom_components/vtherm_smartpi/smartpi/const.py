@@ -151,8 +151,6 @@ OVERSHOOT_I_CLAMP_EPS_C = 0.04  # Guard band below setpoint where integral canno
 AW_TRACK_TAU_S = 120.0        # floor (s) on the tracking time constant, which otherwise follows Ti = Kp/Ki
 AW_TRACK_MAX_DELTA_I = 5.0    # safety clamp on integral correction per minute (scaled by elapsed time)
 
-# Skip cycles after resume from interruption (window, etc.)
-SKIP_CYCLES_AFTER_RESUME = 1
 LEARNING_PAUSE_RESUME_MIN = 20  # Pause learning after resume (window close, etc.) to allow stabilization. NB: Corrected duplication in original file comments
 
 # Periodic recalculation interval (seconds) for SmartPI
@@ -230,7 +228,6 @@ B_STABILITY_MAD_RATIO_MAX = 0.60   # MAD(b) / median(b)
 AB_HISTORY_SIZE = 31      # Keep last 31 (ODD) values
 AB_MIN_SAMPLES_B = 8      # Min samples for b publication (OFF phase)
 AB_MIN_SAMPLES_A = 6      # Min samples for a publication (ON phase)
-AB_MIN_SAMPLES_A_CONVERGED = 6  # Min samples for a publication once b converged
 AB_MAD_SIGMA_MULT = 3.0   # Outlier rejection threshold (sigma)
 
 AB_MAD_K = 1.4826         # Sigma scaling factor for MAD

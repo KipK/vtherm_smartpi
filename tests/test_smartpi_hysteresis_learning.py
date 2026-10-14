@@ -78,7 +78,7 @@ class TestSmartPiIntegration:
         assert pi.phase == SmartPIPhase.HYSTERESIS
         
         # Call calculate
-        pi.calculate(20.0, 19.0, 10.0, 0.0, VThermHvacMode_HEAT)
+        pi.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=10.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
         
         # Verify update was called with is_hysteresis=True
         pi.dt_est.update.assert_called()
@@ -106,7 +106,7 @@ class TestSmartPiIntegration:
         assert pi.phase == SmartPIPhase.STABLE
         
         # Call calculate
-        pi.calculate(20.0, 19.0, 10.0, 0.0, VThermHvacMode_HEAT)
+        pi.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=10.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
         
         # Verify update was called
         pi.dt_est.update.assert_called()

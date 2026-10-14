@@ -7,7 +7,6 @@ from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import AB_HISTORY_SIZE
 from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
 from custom_components.vtherm_smartpi.smartpi.diagnostics import (
-    build_diagnostics,
     build_published_diagnostics,
 )
 from custom_components.vtherm_smartpi.smartpi.integral_guard import IntegralGuardSource
@@ -21,7 +20,6 @@ def make_smartpi(**kwargs):
         minimal_activation_delay=0,
         minimal_deactivation_delay=0,
         name="TestIntegralHold",
-        debug_mode=True,
     )
     defaults.update(kwargs)
     return SmartPI(**defaults)
@@ -91,7 +89,6 @@ class TestIntegralHoldDuringDeadtime:
         )
         assert mock_pwm.call_args.kwargs["integrator_hold_source"] == "deadtime"
         assert pi.ctl.last_integral_hold_source == "deadtime"
-        assert build_diagnostics(pi)["integral_hold_source"] == "deadtime"
         assert (
             build_published_diagnostics(pi)["temperature"][
                 "integral_hold_source"

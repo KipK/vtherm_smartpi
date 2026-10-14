@@ -151,10 +151,10 @@ async def test_setpoint_change_flags_ownership_until_next_cycle_boundary():
         name="setpoint-flag",
     )
     force_smartpi_stable_mode(algo)
-    algo.calculate(20.0, 19.8, 5.0, 0.0, VThermHvacMode_HEAT)
+    algo.calculate(target_temp=20.0, current_temp=19.8, ext_current_temp=5.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
     assert algo._setpoint_changed_in_cycle is False
 
-    algo.calculate(21.0, 19.8, 5.0, 0.0, VThermHvacMode_HEAT)
+    algo.calculate(target_temp=21.0, current_temp=19.8, ext_current_temp=5.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
     assert algo._setpoint_changed_in_cycle is True
 
     _configure_switch_ownership_context(algo, power=0.5)
@@ -539,7 +539,7 @@ async def test_smartpi_frozen_power_snapshot():
     # Target=20, Cur=19 -> Error=1. Proportional part active.
     algo.target_temperature = 20.0
     algo.integral = 10.0 # Force a positive integral to ensure u_applied > 0
-    algo.calculate(20.0, 19.0, 5.0, 0.0, VThermHvacMode_HEAT)
+    algo.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=5.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
 
     # Capture the result
     first_u = algo._on_percent
@@ -553,7 +553,7 @@ async def test_smartpi_frozen_power_snapshot():
     # 3. Second Calculate (T=1 min, conditions changed)
     # Change Setpoint to huge value to force 100% power
     algo.target_temperature = 25.0
-    algo.calculate(25.0, 19.0, 5.0, 0.0, VThermHvacMode_HEAT)
+    algo.calculate(target_temp=25.0, current_temp=19.0, ext_current_temp=5.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
 
     second_u = algo._on_percent
     assert second_u > first_u # Should surely increase
@@ -596,7 +596,7 @@ async def test_smartpi_reboot_discards_active_window():
 
     # Check DISCARD of window
     assert algo.learn_win_active is False
-    assert algo.learn_win_start_ts is None
+    assert algo.learn_win.start_ts is None
     assert algo.learn_u_int == 0.0
 
 
@@ -667,7 +667,7 @@ async def test_smartpi_power_stability_abort():
     )
 
     assert algo.learn_win_active is True
-    assert algo.learn_u_first == 0.5
+    assert algo.learn_win.u_first == 0.5
     # Reason could be "window start" or "extending window" depending on dT checks
     # Here dT=0 so it extends.
     assert "extending" in algo.est.learn_last_reason or "window" in algo.est.learn_last_reason
@@ -767,4 +767,4 @@ async def test_smartpi_resume_from_off_resets_cycle():
 
     # Verify learning window was also reset
     assert algo.learn_win_active is False
-    assert algo.learn_win_start_ts is None
+    assert algo.learn_win.start_ts is None

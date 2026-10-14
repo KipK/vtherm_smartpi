@@ -66,16 +66,13 @@ from .smartpi.const import (
     MAX_STEP_PER_MINUTE,
     SETPOINT_BOOST_RATE,
     SETPOINT_MODE_DELTA_C,
-    SKIP_CYCLES_AFTER_RESUME,
     SMARTPI_RECALC_INTERVAL_SEC,
     LEARNING_PAUSE_RESUME_MIN,
     PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN,
     HYST_UPPER_C,
     HYST_LOWER_C,
     DEFAULT_DEADBAND_C,
-    AB_HISTORY_SIZE,
     AB_MIN_SAMPLES_A,
-    AB_MIN_SAMPLES_A_CONVERGED,
     AB_MIN_SAMPLES_B,
     DEFAULT_NEAR_BAND_DEG,
     CALIBRATION_TIMEOUT_MIN,
@@ -91,7 +88,7 @@ from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
 from .smartpi.deadtime_estimator import DeadTimeEstimator
 from .smartpi.ab_estimator import ABEstimator
 from .smartpi.thermal_twin_1r1c import ThermalTwin1R1C
-from .smartpi.diagnostics import build_diagnostics, build_published_diagnostics, build_debug_diagnostics
+from .smartpi.diagnostics import build_published_diagnostics
 from .smartpi.governance import SmartPIGovernance
 from .smartpi.setpoint import SmartPISetpointManager
 from .smartpi.guards import SmartPIGuards
@@ -148,7 +145,6 @@ from .smartpi.const import (
     ENABLE_ADAPTIVE_TINT_FILTER,
 )
 from .smartpi.timestamp_utils import (
-    convert_monotonic_to_wall_ts,
     elapsed_wall_minutes,
     normalize_wall_timestamp,
 )
@@ -164,7 +160,7 @@ class SmartPI:
     Public API
     ----------
     - calculate(...): compute the next duty-cycle command in [0,1]
-    - get_diagnostics(): return a dict of key internal values for UI/attributes
+    - get_published_diagnostics(): return the nested live diagnostics tree
     - update_learning(...): feed learning data (slope and previously applied u)
 
     Design intent
@@ -190,28 +186,21 @@ class SmartPI:
         ff_warmup_ok_count: int = 30,
         ff_warmup_cycles: int = 6,
         # --- Setpoint trajectory shaping knobs ---
-        setpoint_weight_b: float = 0.3,
         near_band_deg: float = DEFAULT_NEAR_BAND_DEG,
-        sign_flip_leak: float = 0.40,
-        sign_flip_leak_cycles: int = 3,
-        sign_flip_band_mult: float = 2.0,
         use_setpoint_filter: bool = True,
         use_ff3: bool = False,
         hysteresis_on: float = HYST_LOWER_C,
         hysteresis_off: float = HYST_UPPER_C,
         release_tau_factor: float = 0.5,
         deadband_allow_p: bool = False,
-        debug_mode: bool = False,
         enable_valve_linearization: bool = False,
         valve_curve_params: ValveCurveParams | None = None,
     ) -> None:
-        self._hass = hass
         self._name = name
         self._cycle_min = cycle_min
         self._hyst_on = hysteresis_on
         self._hyst_off = hysteresis_off
         self._deadband_allow_p = bool(deadband_allow_p)
-        self._debug_mode = debug_mode
         self.valve_curve = build_valve_curve(
             enable_valve_linearization,
             valve_curve_params,
@@ -230,12 +219,7 @@ class SmartPI:
         self._cycles_since_reset: int = 0
 
         # 2DOF / scheduling parameters
-        self.setpoint_weight_b = clamp(float(setpoint_weight_b), 0.0, 1.0)
         self.near_band_deg = max(float(near_band_deg), 0.0)
-        self.sign_flip_leak = clamp(float(sign_flip_leak), 0.0, 1.0)
-        self.sign_flip_leak_cycles = max(int(sign_flip_leak_cycles), 0)
-        self.sign_flip_band_mult = max(float(sign_flip_band_mult), 0.0)
-        self._use_setpoint_filter = use_setpoint_filter
         self._use_ff3 = bool(use_ff3)
 
         # --- Sub-Systems ---
@@ -264,7 +248,6 @@ class SmartPI:
         self._committed_on_percent: float = 0.0
         self._actuator_on_percent: float = 0.0
         self._actuator_committed_on_percent: float = 0.0
-        self._last_actuator_applied: float = 0.0
 
         # Diagnostics / status
         self._last_error: float = 0.0
@@ -300,7 +283,6 @@ class SmartPI:
         self._last_ff3_action_sensitivity: float = 0.0
         self._last_ff3_raw_reason_disabled: str = "config_disabled"
         self._tau_reliable: bool = False
-        self._sign_flip_active: bool = False
         self._last_integral_guard_mode: str = "off"
 
         # Track last time calculate() was executed for dt-based integration
@@ -308,12 +290,6 @@ class SmartPI:
         # Wall-clock time of the last valid active regulation tick. OFF saves
         # preserve this value so prolonged inactivity remains measurable.
         self._last_active_wall_ts: float | None = None
-        # Accumulated time for cycle counting (used for FF warm-up)
-        self._accumulated_dt: float = 0.0
-
-        # Timestamp for robust learning dt calculation
-        self._learn_last_ts: float | None = None
-
         # Track last target temp for learning invalidation
         self._last_target_temp = None
 
@@ -333,10 +309,6 @@ class SmartPI:
         # Helper to distinguish Startup (Init) from Resume (OFF->ON)
         # We want to pause learning on Resume, but NOT on Startup/Reboot
         self._startup_grace_period: bool = True
-        # Anti-windup deadtime transition guard: True when the previous cycle had
-        # integrator hold due to deadtime window. Used to block AW on the first
-        # cycle after exiting the window (avoids massive catch-up correction).
-        self._prev_deadtime_hold: bool = False
 
         # Tracking anti-windup diagnostics
         self._last_u_cmd: float = 0.0       # command after [0,1] clamp
@@ -370,11 +342,8 @@ class SmartPI:
         # --- Dead Time (L) Support ---
         self.dt_est = DeadTimeEstimator()
         # --- Thermal Twin 1R1C (diagnostics-only) ---
-        self.twin = ThermalTwin1R1C(
-            dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1
-        )
+        self.twin = self._new_thermal_twin()
         self._last_twin_diag: dict = {}
-        self._heat_request_prev: bool = False
         self._t_heat_episode_start: float | None = None
         self._t_cool_episode_start: float | None = None
         self._deadtime_skip_count_a: int = 0
@@ -400,7 +369,6 @@ class SmartPI:
         self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
         self._fftrim_observation_mode = "stationary"
         self._ab_confidence = ABConfidence()
-        self._recovery_hold_armed: bool = False
         self._last_restart_reason: str = "none"
         self._resume_deadtime_hold_source: IntegralGuardSource = IntegralGuardSource.NONE
         self._resume_deadtime_hold_started: bool = False
@@ -432,17 +400,37 @@ class SmartPI:
     #                                                                      #
     ########################################################################
 
+    @staticmethod
+    def _new_thermal_twin() -> ThermalTwin1R1C:
+        """Create the diagnostics-only thermal twin with its fixed settings."""
+        return ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
+
+    def _reset_ff3_runtime(self, reason: str) -> None:
+        """Clear the FF3 cycle command and its last decision, disabled for `reason`."""
+        self._u_ff3_cycle = 0.0
+        self._u_ff3_pending = 0.0
+        self._ff3_active_cycle = False
+        self._ff3_pending_active = False
+        self._last_ff3_enabled = False
+        self._last_ff3_reason_disabled = reason
+        self._last_ff3_candidate_scores = []
+        self._last_ff3_selected_candidate = 0.0
+        self._last_ff3_horizon_cycles = 1
+        self._last_ff3_prediction_quality = "unavailable"
+        self._last_ff3_authority_factor = 0.0
+        self._last_ff3_deadtime_cycles = 0
+        self._last_ff3_horizon_capped = False
+        self._last_ff3_action_sensitivity = 0.0
+        self._last_ff3_raw_reason_disabled = reason
+
     def reset_learning(self) -> None:
         """Reset all learned parameters to defaults."""
         self.est.reset()
         self._session_learn_ok_count_base = self.est.learn_ok_count
         self._session_learn_skip_count_base = self.est.learn_skip_count
-        if self.ctl:
-            self.ctl.reset()
-        if self.sp_mgr:
-            self.sp_mgr.reset()
-        if self.gov:
-            self.gov.reset()
+        self.ctl.reset()
+        self.sp_mgr.reset()
+        self.gov.reset()
 
         self._last_error = 0.0
         self._last_error_p = 0.0
@@ -453,32 +441,17 @@ class SmartPI:
         self._last_ff_raw = 0.0
         self._last_ff_reason = "ff_none"
         self._last_u_ff3 = 0.0
-        self._u_ff3_cycle = 0.0
-        self._u_ff3_pending = 0.0
-        self._ff3_active_cycle = False
-        self._ff3_pending_active = False
-        self._last_ff3_enabled = False
-        self._last_ff3_reason_disabled = "reset"
-        self._last_ff3_candidate_scores = []
-        self._last_ff3_selected_candidate = 0.0
-        self._last_ff3_horizon_cycles = 1
+        self._reset_ff3_runtime("reset")
         self._last_ff3_disturbance_active = False
         self._last_ff3_disturbance_reason = "none"
         self._last_ff3_disturbance_kind = "none"
         self._last_ff3_residual_persistent = False
         self._last_ff3_dynamic_coherent = False
-        self._last_ff3_prediction_quality = "unavailable"
-        self._last_ff3_authority_factor = 0.0
-        self._last_ff3_deadtime_cycles = 0
-        self._last_ff3_horizon_capped = False
-        self._last_ff3_action_sensitivity = 0.0
-        self._last_ff3_raw_reason_disabled = "reset"
         self._last_u_cmd = 0.0
         self._last_u_limited = 0.0
         self._last_u_applied = 0.0
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
-        self._last_actuator_applied = 0.0
         self._last_aw_du = 0.0
         self._last_ff_trim_delta = 0.0
         self._last_fftrim_cycle_admissible = False
@@ -503,12 +476,10 @@ class SmartPI:
         self._pending_bumpless_quality = "unavailable"
         self._e_filt = None
         self._cycles_since_reset = 0
-        self._accumulated_dt = 0.0
 
         # Reset learning states
         self._last_calculate_time = None
         self._last_active_wall_ts = None
-        self._learn_last_ts = None
         self._last_target_temp = None
         self._last_current_temp = None
         self._last_ext_temp = None
@@ -520,40 +491,28 @@ class SmartPI:
         self.tint_filter.reset()
 
         # Reset Thermal Twin
-        self.twin = ThermalTwin1R1C(
-            dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1
-        )
+        self.twin = self._new_thermal_twin()
         self._last_twin_diag = {}
 
         # Reset Dead Time Estimator
         self.dt_est.reset()
-        self._heat_request_prev = False
         self._t_heat_episode_start = None
         self._t_cool_episode_start = None
         self._deadtime_skip_count_a = 0
         self._deadtime_skip_count_b = 0
 
-        if self.gov:
-            self.gov.reset()
-
         # Reset guard manager
         self.guards.reset(keep_counts=True)
 
         # Reset new component managers (Phase 2.5 refactoring)
-        if self.learn_win:
-            self.learn_win.reset_all()
-        if self.deadband_mgr:
-            self.deadband_mgr.reset()
-        if self.calibration_mgr:
-            self.calibration_mgr.reset()
-        if self.gain_scheduler:
-            self.gain_scheduler.reset()
-        if self.integral_guard:
-            self.integral_guard.reset()
+        self.learn_win.reset_all()
+        self.deadband_mgr.reset()
+        self.calibration_mgr.reset()
+        self.gain_scheduler.reset()
+        self.integral_guard.reset()
         self._ff_trim.reset()
         self._reset_causal_observation_runtime()
         self._ab_confidence.reset()
-        self._recovery_hold_armed = False
         self._last_restart_reason = "none"
         self._resume_deadtime_hold_source = IntegralGuardSource.NONE
         self._resume_deadtime_hold_started = False
@@ -582,14 +541,6 @@ class SmartPI:
         self.gain_scheduler.ki = value
 
     @property
-    def _current_governance_regime(self) -> str:
-        return self.gov.regime.value if hasattr(self.gov.regime, 'value') else str(self.gov.regime)
-
-    @_current_governance_regime.setter
-    def _current_governance_regime(self, value: str):
-        self.gov.regime = GovernanceRegime(value) if isinstance(value, str) else value
-
-    @property
     def phase(self) -> SmartPIPhase:
         if self.calibration_mgr.state != SmartPICalibrationPhase.IDLE:
             return SmartPIPhase.CALIBRATION
@@ -615,37 +566,6 @@ class SmartPI:
         if self.phase != SmartPIPhase.HYSTERESIS:
             return self.autocalib.force_manual_trigger(time.time(), self)
         return None
-
-    def notify_resume_after_interruption(self, skip_cycles: int = None) -> None:
-        """Notify SmartPI that the thermostat is resuming after an interruption.
-
-        This is called when the thermostat resumes after a window close event
-        or similar interruption. It sets a deadline before which learning is ignored.
-
-        Args:
-            skip_cycles: Legacy argument (count of cycles). Converted to duration approx.
-        """
-        if skip_cycles is None:
-            skip_cycles = SKIP_CYCLES_AFTER_RESUME
-
-        # Robust conversion: assume at least 15 min per cycle equivalent if cycle_min is small,
-        # or use cycle_min. This is a heuristic.
-        duration_min = float(skip_cycles) * max(self._cycle_min, 15.0)
-        self.learn_win.set_learning_resume_ts(time.monotonic() + (duration_min * 60.0))
-
-        # Also reset the learning timestamp to avoid using stale dt
-        self._learn_last_ts = None
-
-        # Compute wall-clock time for logging/diagnostics
-        try:
-            # Just for logging
-            resume_dt_log = datetime.now().timestamp() + (duration_min * 60.0)
-            resume_dt_iso = datetime.fromtimestamp(resume_dt_log).isoformat()
-        except (ValueError, TypeError, OverflowError) as e:
-            _LOGGER.warning("Could not format resume time for logging: %s", e)
-            resume_dt_iso = "unknown"
-
-        _LOGGER.info("%s - SmartPI notified of resume after interruption, skipping learning until (approx) %s", self._name, resume_dt_iso)
 
     # ------------------------------
     # Learning entry point
@@ -693,7 +613,6 @@ class SmartPI:
         self._learning_enabled = enabled
         self._reset_learning_window()
         self.dt_est.reset_observation(self._committed_on_percent)
-        self._heat_request_prev = False
         self._t_heat_episode_start = None
         self._t_cool_episode_start = None
         _LOGGER.info(
@@ -1111,8 +1030,7 @@ class SmartPI:
         if self._setpoint_changed_in_cycle:
             flags.append("setpoint_changed")
         if (
-            self._recovery_hold_armed
-            or self._resume_deadtime_hold_source != IntegralGuardSource.NONE
+            self._resume_deadtime_hold_source != IntegralGuardSource.NONE
             or self._resume_deadtime_hold_started
         ):
             flags.append("recovery")
@@ -1530,8 +1448,7 @@ class SmartPI:
         if self._setpoint_changed_in_cycle:
             return "application_setpoint_changed"
         if (
-            self._recovery_hold_armed
-            or self._resume_deadtime_hold_source != IntegralGuardSource.NONE
+            self._resume_deadtime_hold_source != IntegralGuardSource.NONE
             or self._resume_deadtime_hold_started
         ):
             return "application_recovery"
@@ -1750,7 +1667,6 @@ class SmartPI:
         )
         self._sync_actuator_on_percent()
         self._sync_actuator_committed_on_percent()
-        self._last_actuator_applied = self._to_actuator_power(self._last_u_applied)
 
     def _sync_actuator_on_percent(self) -> None:
         """Refresh the actuator command from the current linear command."""
@@ -1770,7 +1686,6 @@ class SmartPI:
     def _set_committed_actuator_output(self, actuator_power: float) -> float:
         """Commit an actuator command and return its linear equivalent."""
         self._actuator_committed_on_percent = clamp(actuator_power, 0.0, 1.0)
-        self._last_actuator_applied = self._actuator_committed_on_percent
         linear_power = self._to_linear_power(self._actuator_committed_on_percent)
         self._committed_on_percent = linear_power
         self.u_prev = linear_power
@@ -1784,7 +1699,6 @@ class SmartPI:
         self._last_u_applied = self._on_percent
         self._sync_actuator_on_percent()
         self._sync_actuator_committed_on_percent()
-        self._last_actuator_applied = self._actuator_committed_on_percent
 
     @property
     def on_percent(self) -> float:
@@ -1836,15 +1750,6 @@ class SmartPI:
         return self._last_u_pi
 
     @property
-    def kp_reel(self) -> float:
-        """Return the actual Kp used for calculation (after near-band adjustment)."""
-        return self.Kp
-    @property
-    def ki_reel(self) -> float:
-        """Return the actual Ki used for calculation (after near-band adjustment)."""
-        return self.Ki
-
-    @property
     def tau_min(self) -> float:
         return self.est.tau_reliability().tau_min
 
@@ -1881,16 +1786,8 @@ class SmartPI:
         return self.gov.last_decision_thermal.value
 
     @property
-    def freeze_reason_thermal(self) -> str:
-        return self.gov.last_freeze_reason_thermal.value
-
-    @property
     def last_decision_gains(self) -> str:
         return self.gov.last_decision_gains.value
-
-    @property
-    def freeze_reason_gains(self) -> str:
-        return self.gov.last_freeze_reason_gains.value
 
     @property
     def bootstrap_progress(self) -> int | None:
@@ -1915,10 +1812,10 @@ class SmartPI:
         Detailed state message for the bootstrap process.
         Returns None if not in Hysteresis phase.
 
-        Three steps:
+        Two steps:
           step1: waiting for deadtimes (A/B collection blocked per mode)
           step2: both deadtimes acquired, collecting initial emeas (<AB_MIN_SAMPLES_A/B)
-          step3: full thermal model learning in progress
+        The HYSTERESIS phase ends once both sample targets are reached.
         """
         if self.phase != SmartPIPhase.HYSTERESIS:
             return None
@@ -1941,16 +1838,7 @@ class SmartPI:
             return " ".join(parts)
 
         # Step 2: both deadtimes acquired, collecting initial emeas
-        b_converged = self.est.b_converged_for_a()
-        min_a = AB_MIN_SAMPLES_A_CONVERGED if b_converged else AB_MIN_SAMPLES_A
-        b_target = AB_MIN_SAMPLES_B
-        if nb_a < min_a or nb_b < AB_MIN_SAMPLES_B:
-            return f"step2 - collecting emeas: A:{nb_a}/{min_a} B:{nb_b}/{b_target}"
-
-        # Step 3: full thermal model learning
-        ok_a = self.est.learn_ok_count_a
-        ok_b = self.est.learn_ok_count_b
-        return f"step3 - learning thermal model: A:{ok_a}/{AB_HISTORY_SIZE} B:{ok_b}/{AB_HISTORY_SIZE}"
+        return f"step2 - collecting emeas: A:{nb_a}/{AB_MIN_SAMPLES_A} B:{nb_b}/{AB_MIN_SAMPLES_B}"
 
     @property
     def last_i_mode(self) -> str:
@@ -2015,10 +1903,6 @@ class SmartPI:
         return self._e_filt if self._e_filt is not None else 0.0
 
     @property
-    def sign_flip_active(self) -> bool:
-        return self._sign_flip_active
-
-    @property
     def guard_cut_active(self) -> bool:
         return self.guards.guard_cut_active
 
@@ -2058,11 +1942,6 @@ class SmartPI:
     @property
     def u_applied(self) -> float:
         return self._to_actuator_power(self._last_u_applied)
-
-    @property
-    def linear_u_applied(self) -> float:
-        """Return the latest applied power in the internal linear command space."""
-        return self._last_u_applied
 
     @property
     def aw_du(self) -> float:
@@ -2114,46 +1993,21 @@ class SmartPI:
     @property
     def learn_win_active(self) -> bool:
         """Return True if a learning window is currently active."""
-        return self.learn_win.active if self.learn_win else False
-
-    @property
-    def learn_win_start_ts(self) -> float | None:
-        """Return the monotonic timestamp when the current window started."""
-        return self.learn_win.start_ts if self.learn_win else None
-
-    @property
-    def learn_T_int_start(self) -> float:
-        """Return the indoor temperature at window start."""
-        return self.learn_win.T_int_start if self.learn_win else 0.0
-
-    @property
-    def learn_T_ext_start(self) -> float:
-        """Return the outdoor temperature at window start."""
-        return self.learn_win.T_ext_start if self.learn_win else 0.0
+        return self.learn_win.active
 
     @property
     def learn_u_int(self) -> float:
         """Return the accumulated power integral (u * dt)."""
-        return self.learn_win.u_int if self.learn_win else 0.0
+        return self.learn_win.u_int
 
     @property
     def learn_t_int_s(self) -> float:
         """Return the accumulated time integral in seconds."""
-        return self.learn_win.t_int_s if self.learn_win else 0.0
-
-    @property
-    def learn_u_first(self) -> float | None:
-        """Return the first power value in the window (for consistency check)."""
-        return self.learn_win.u_first if self.learn_win else None
+        return self.learn_win.t_int_s
 
     @property
     def setpoint_boost_active(self) -> bool:
         return self.sp_mgr.boost_active
-
-    @property
-    def cycle_start_dt(self) -> str | None:
-        """Return the start time of the current cycle (owned by CycleScheduler)."""
-        return None
 
     @property
     def in_deadtime_window(self) -> bool:
@@ -2406,26 +2260,19 @@ class SmartPI:
         state = {
             "version": 2,
             "learning_enabled": self._learning_enabled,
-            "on_percent": self._on_percent,
-            "last_target_temp": self._last_target_temp,
             "last_active_wall_ts": self._last_active_wall_ts,
-            "last_calibration_time": self.calibration_mgr.last_calibration_time,
-            "cycles_since_reset": self._cycles_since_reset,
-            "accumulated_dt": self._accumulated_dt,
             "deadtime_skip_count_a": self._deadtime_skip_count_a,
             "deadtime_skip_count_b": self._deadtime_skip_count_b,
-            "learning_resume_ts": convert_monotonic_to_wall_ts(self.learn_win.learning_resume_ts),
-            "learning_start_date": self._learning_start_date.isoformat() if self._learning_start_date else None,
             "est_state": self.est.save_state(),
             "dt_est_state": self.dt_est.save_state(),
             "gov_state": self.gov.save_state(),
             "ctl_state": self.ctl.save_state(),
-            "sp_mgr_state": self.sp_mgr.save_state() if hasattr(self.sp_mgr, "save_state") else {},
+            "sp_mgr_state": self.sp_mgr.save_state(),
             # Component states
-            "lw_state": self.learn_win.save_state() if hasattr(self.learn_win, "save_state") else {},
-            "db_state": self.deadband_mgr.save_state() if hasattr(self.deadband_mgr, "save_state") else {},
-            "cal_state": self.calibration_mgr.save_state() if hasattr(self.calibration_mgr, "save_state") else {},
-            "gs_state": self.gain_scheduler.save_state() if hasattr(self.gain_scheduler, "save_state") else {},
+            "lw_state": self.learn_win.save_state(),
+            "db_state": self.deadband_mgr.save_state(),
+            "cal_state": self.calibration_mgr.save_state(),
+            "gs_state": self.gain_scheduler.save_state(),
             "twin_state": self.twin.save_state(),
             "guards_state": self.guards.save_state(),
             "ac_state": self.autocalib.save_state(),
@@ -2470,8 +2317,6 @@ class SmartPI:
         self.reset_command_ownership("ownership_discontinuity")
         self._reset_causal_observation_runtime()
         self._last_u_applied = 0.0
-        self._last_actuator_applied = 0.0
-        self._recovery_hold_armed = False
         self._last_restart_reason = "none"
         self._resume_deadtime_hold_source = IntegralGuardSource.NONE
         self._resume_deadtime_hold_started = False
@@ -2481,13 +2326,12 @@ class SmartPI:
         # Load main algorithm scalars
         self._deadtime_skip_count_a = int(state.get("deadtime_skip_count_a", 0))
         self._deadtime_skip_count_b = int(state.get("deadtime_skip_count_b", 0))
-        self._accumulated_dt = float(state.get("accumulated_dt", 0.0))
         self._last_active_wall_ts = normalize_wall_timestamp(
             state.get("last_active_wall_ts")
         )
-        # The learning_resume_ts from the previous session must NOT be carried over:
+        # A learning resume deadline from the previous session must NOT be carried over:
         # _startup_grace_period handles the post-restart freeze for exactly one cycle.
-        # Keeping a stale resume-ts (e.g., the 20-min OFF-resume value) would overwrite
+        # Keeping a stale deadline (e.g., the 20-min OFF-resume value) would overwrite
         # the learn_win ts on the second tick via update_learning() and block learning
         # for the full 20 minutes after every restart.
         self.learn_win.set_learning_resume_ts(None)
@@ -2508,7 +2352,6 @@ class SmartPI:
 
         # Instant FF on reboot when model is well-learned:
         # skip the time_scale ramp by pre-setting _cycles_since_reset.
-        # Safety: cycle 1 skips bumpless (is_first_run), cycle 2+ has stable FF (d_uff≈0).
         tau_info = self.est.tau_reliability()
         self._ab_confidence.evaluate(
             tau_reliable=tau_info.reliable,
@@ -2559,28 +2402,13 @@ class SmartPI:
             self._set_linear_output(0.0)
             self._committed_on_percent = 0.0
             self._actuator_committed_on_percent = 0.0
-            self._u_ff3_cycle = 0.0
-            self._u_ff3_pending = 0.0
-            self._ff3_active_cycle = False
-            self._ff3_pending_active = False
-            self._last_ff3_enabled = False
-            self._last_ff3_reason_disabled = "hvac_off"
-            self._last_ff3_candidate_scores = []
-            self._last_ff3_selected_candidate = 0.0
-            self._last_ff3_horizon_cycles = 1
-            self._last_ff3_prediction_quality = "unavailable"
-            self._last_ff3_authority_factor = 0.0
-            self._last_ff3_deadtime_cycles = 0
-            self._last_ff3_horizon_capped = False
-            self._last_ff3_action_sensitivity = 0.0
-            self._last_ff3_raw_reason_disabled = self._last_ff3_reason_disabled
+            self._reset_ff3_runtime("hvac_off")
             self._invalidate_fftrim_context(
                 "hvac_off",
                 now_monotonic=time.monotonic(),
                 hvac_mode=self._last_hvac_mode,
             )
             self._last_u_applied = 0.0
-            self._last_actuator_applied = 0.0
             self.ctl.u_prev = 0.0
             self._last_u_cmd = 0.0
             self._last_u_pi = 0.0
@@ -2591,10 +2419,8 @@ class SmartPI:
             self._output_initialized = True
             self._last_calculate_time = None
             self._current_cycle_start_monotonic = None
-            self._prev_deadtime_hold = False
             self._t_heat_episode_start = None
             self._t_cool_episode_start = None
-            self._recovery_hold_armed = False
             self._resume_deadtime_hold_source = IntegralGuardSource.NONE
             self._resume_deadtime_hold_started = False
             self._last_restart_reason = (
@@ -2609,28 +2435,13 @@ class SmartPI:
             self._set_linear_output(0.0)
             self._committed_on_percent = 0.0
             self._actuator_committed_on_percent = 0.0
-            self._u_ff3_cycle = 0.0
-            self._u_ff3_pending = 0.0
-            self._ff3_active_cycle = False
-            self._ff3_pending_active = False
-            self._last_ff3_enabled = False
-            self._last_ff3_reason_disabled = "power_shedding"
-            self._last_ff3_candidate_scores = []
-            self._last_ff3_selected_candidate = 0.0
-            self._last_ff3_horizon_cycles = 1
-            self._last_ff3_prediction_quality = "unavailable"
-            self._last_ff3_authority_factor = 0.0
-            self._last_ff3_deadtime_cycles = 0
-            self._last_ff3_horizon_capped = False
-            self._last_ff3_action_sensitivity = 0.0
-            self._last_ff3_raw_reason_disabled = self._last_ff3_reason_disabled
+            self._reset_ff3_runtime("power_shedding")
             self._invalidate_fftrim_context(
                 "power_shedding",
                 now_monotonic=time.monotonic(),
                 hvac_mode=hvac_mode,
             )
             self._last_u_applied = 0.0
-            self._last_actuator_applied = 0.0
             self._t_heat_episode_start = None
             self._t_cool_episode_start = None
             self.ctl.u_prev = 0.0
@@ -2645,7 +2456,6 @@ class SmartPI:
             self._output_initialized = True
             self._last_calculate_time = None
             self._current_cycle_start_monotonic = None
-            self._recovery_hold_armed = False
             self._resume_deadtime_hold_source = IntegralGuardSource.NONE
             self._resume_deadtime_hold_started = False
             self._last_restart_reason = "power_shedding"
@@ -2685,7 +2495,6 @@ class SmartPI:
                 )
             elif self._last_restart_reason in {"off", "window", "power_shedding"}:
                 resumed_from_off = True
-                self._recovery_hold_armed = False
                 if self._last_restart_reason == "window":
                     resume_guard_source = IntegralGuardSource.WINDOW_RESUME
                 elif self._last_restart_reason == "power_shedding":
@@ -2910,8 +2719,7 @@ class SmartPI:
         ext_current_temp: float | None,
         error_p: float,
         dt_min: float = 0.0,
-        include_band_state: bool = False,
-    ) -> tuple[float, bool] | tuple[float, bool, bool]:
+    ) -> float:
         """Update tau reliability, error weighting, and deadband state.
 
         Args:
@@ -2919,9 +2727,7 @@ class SmartPI:
             error_p: Filtered setpoint error (SP_for_P - y) — returned as e_p for P term.
 
         Returns:
-            Tuple of (e_p, was_in_deadband) by default.
-            When include_band_state=True, returns
-            (e_p, was_in_deadband, was_in_near_band).
+            e_p, the error used by the P term.
         """
         tau_info = self.est.tau_reliability()
         self._tau_reliable = tau_info.reliable
@@ -2937,8 +2743,6 @@ class SmartPI:
         self._last_error_p = e_p
 
         # Deadband update uses raw setpoint error (physical distance from target)
-        was_in_deadband = self.deadband_mgr.in_deadband
-        was_in_near_band = self.deadband_mgr.in_near_band
         self.deadband_mgr.update(
             error=error_i,
             near_band_error=self._e_filt if self._e_filt is not None else error_i,
@@ -2952,10 +2756,7 @@ class SmartPI:
             deadband_c=self.deadband_c,
         )
 
-        if include_band_state:
-            return e_p, was_in_deadband, was_in_near_band
-
-        return e_p, was_in_deadband
+        return e_p
 
     def _apply_gains_and_ff(
         self,
@@ -2967,7 +2768,6 @@ class SmartPI:
         current_temp: float,
         e_p: float,
         slope_h: float | None = None,
-        is_first_run: bool = False,
         setpoint_changed: bool = False,
         cycle_boundary: bool = False,
         startup_first_run: bool = False,
@@ -3204,46 +3004,22 @@ class SmartPI:
         _LOGGER.debug("%s - Terminal braking released with raw P", self._name)
         return u_cmd
 
-    def calculate(  # pylint: disable=keyword-arg-before-vararg
+    def calculate(
         self,
         target_temp: float | None,
         current_temp: float | None,
         ext_current_temp: float | None = None,
         hvac_mode: VThermHvacMode | None = None,
         slope: float | None = None,
-        integrator_hold: bool = False,
         power_shedding: bool = False,
         cycle_boundary: bool = False,
         off_reason: str | None = None,
         temperature_measure_id: Any | None = None,
-        *args,
-        **_kwargs,
     ) -> float:
         """
         Compute the next duty-cycle command.
         """
-        integrator_hold_source = "external" if integrator_hold else "none"
         self.ctl.last_integral_hold_source = "none"
-
-        def _is_hvac_mode_like(value: Any) -> bool:
-            """Return True when a value looks like a VTherm HVAC mode object."""
-            return value is not None and str(value) in {
-                str(VThermHvacMode_OFF),
-                str(VThermHvacMode_HEAT),
-                str(VThermHvacMode_COOL),
-            }
-
-        # Compatibility handling for old signature: calculate(t, c, dt_min, now, hvac_mode)
-        # In old calls: ext_current_temp=dt_min, hvac_mode=now, slope=hvac_mode
-        if _is_hvac_mode_like(slope) and not _is_hvac_mode_like(hvac_mode):
-            # old call: positional args were (target, current, ext, slope_float, hvac_mode)
-            # hvac_mode param received the slope float (or None), slope param received the VThermHvacMode
-            _slope_val = hvac_mode  # save the float (or None) that landed in hvac_mode
-            hvac_mode = slope       # move VThermHvacMode to its proper param
-            slope = _slope_val if isinstance(_slope_val, (int, float)) else None
-        elif hvac_mode is None and len(args) > 0 and _is_hvac_mode_like(args[0]):
-            # another old call variant
-            hvac_mode = args[0]
 
         self._last_temperature_slope_h = float(slope) if isinstance(slope, (int, float)) else None
 
@@ -3258,7 +3034,6 @@ class SmartPI:
             mode_changed = previous_mode is not None and str(hvac_mode) != str(previous_mode)
             if mode_changed:
                 self.ctl.reset()
-                self._recovery_hold_armed = False
                 self._ff_trim.clear_pending()
                 self._ff_trim.clear_last_transaction()
                 _LOGGER.info(
@@ -3277,10 +3052,7 @@ class SmartPI:
                 self._cycles_since_reset = 0
                 self._session_learn_ok_count_base = self.est.learn_ok_count
                 self._session_learn_skip_count_base = self.est.learn_skip_count
-                self.twin = ThermalTwin1R1C(
-                    dt_s=SMARTPI_RECALC_INTERVAL_SEC,
-                    gamma=0.1,
-                )
+                self.twin = self._new_thermal_twin()
                 self._last_twin_diag = {}
                 _LOGGER.info(
                     "%s - HVAC signed-model migration: reset mode-dependent A, FF trim and twin state",
@@ -3349,7 +3121,6 @@ class SmartPI:
                 block_positive=(signed_sp_delta >= 0.0),
             )
             self.gov.on_cycle_start()
-            self._recovery_hold_armed = False
             self._resume_deadtime_hold_source = IntegralGuardSource.NONE
             self._resume_deadtime_hold_started = False
             # Large changes restart the error history; the integral is preserved.
@@ -3425,7 +3196,6 @@ class SmartPI:
                 now_monotonic=now,
                 hvac_mode=hvac_mode,
             )
-            self._recovery_hold_armed = False
             self.ctl.clear_integral_hold()
             self._calculate_forced_calibration(target_temp, current_temp, hvac_mode)
             self._output_initialized = True
@@ -3473,14 +3243,13 @@ class SmartPI:
             return
 
         # --- 6. Control Context & Deadband ---
-        e_p, _was_in_deadband, _was_in_near_band = self._update_control_context(
+        e_p = self._update_control_context(
             error_i,
             hvac_mode,
             current_temp,
             ext_current_temp,
             error_p,
             dt_min,
-            include_band_state=True,
         )
         in_deadband_now = self.deadband_mgr.in_deadband
         in_core_deadband = self._tau_reliable and abs(error_i) < max(self.deadband_c, 0.0)
@@ -3514,9 +3283,8 @@ class SmartPI:
             self._disable_ff3_for_next_cycle_in_deadband()
 
         # --- 6b. Integral freeze during deadtime window ---
-        if self.in_deadtime_window:
-            integrator_hold = True
-            integrator_hold_source = "deadtime"
+        integrator_hold = self.in_deadtime_window
+        integrator_hold_source = "deadtime" if integrator_hold else "none"
 
         # --- 7. Governance Decision ---
         # Capture previous regime before update (for FFv2 bumpless and diagnostics)
@@ -3546,12 +3314,11 @@ class SmartPI:
             current_temp,
             e_p,
             slope,
-            resumed_from_off,
             setpoint_changed=setpoint_changed,
             cycle_boundary=cycle_boundary,
             startup_first_run=startup_first_run,
         )
-        # Apply explicit hold (parameter) or governance hold
+        # Combine the deadtime hold with the governance hold
         if gov_hold and not integrator_hold:
             if (
                 self.gov.regime == GovernanceRegime.DEAD_BAND
@@ -3633,11 +3400,8 @@ class SmartPI:
         u_final = self.update_timing_constraints(self.u_prev, u_limited)
         self._set_linear_output(u_final)
         self._last_u_applied = u_final
-        self._last_actuator_applied = self._actuator_on_percent
 
         # --- 13. Store the candidate output only (AW tracking deferred to on_cycle_completed) ---
-        prev_deadtime_hold = self._prev_deadtime_hold
-        self._prev_deadtime_hold = self.in_deadtime_window
         self.ctl.finalize_cycle(u_limited, u_final)
 
         # --- 14. Update State & Diagnostics ---
@@ -3762,16 +3526,6 @@ class SmartPI:
                 _LOGGER.debug("%s - DeadTime: Cooling episode stopped", self._name)
             self._t_cool_episode_start = None
 
-    def get_diagnostics(self) -> Dict[str, Any]:
-        """Return diagnostic information (suitable for attributes/UI)."""
-        return build_diagnostics(self, self._debug_mode)
-
     def get_published_diagnostics(self) -> Dict[str, Any]:
         """Return the canonical SmartPI live diagnostics."""
         return build_published_diagnostics(self)
-
-    def get_debug_diagnostics(self) -> Dict[str, Any] | None:
-        """Return canonical live diagnostics when debug recording is enabled."""
-        if not self._debug_mode:
-            return None
-        return build_debug_diagnostics(self)

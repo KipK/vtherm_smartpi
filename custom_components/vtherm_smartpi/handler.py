@@ -32,7 +32,6 @@ from .const import (
     CONF_SMART_PI_RELEASE_TAU_FACTOR,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
     CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
-    CONF_SMART_PI_DEBUG,
     CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
     CONF_SMART_PI_MIN_VALVE,
     CONF_SMART_PI_KNEE_DEMAND,
@@ -109,7 +108,6 @@ class SmartPIHandler:
         release_tau_factor = entry[CONF_SMART_PI_RELEASE_TAU_FACTOR]
         deadband_allow_p = entry[CONF_SMART_PI_DEADBAND_ALLOW_P]
         self._allow_pwm_cycle_force = entry[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE]
-        debug_mode = entry.get(CONF_SMART_PI_DEBUG, False)
         self._valve_linearization_configured = entry[CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION]
         valve_mode_enabled = bool(getattr(t.cycle_scheduler, "is_valve_mode", False))
         valve_linearization_enabled = (
@@ -144,7 +142,6 @@ class SmartPIHandler:
             hysteresis_off=hyst_off,
             release_tau_factor=release_tau_factor,
             deadband_allow_p=deadband_allow_p,
-            debug_mode=debug_mode,
             enable_valve_linearization=valve_linearization_enabled,
             valve_curve_params=self._valve_curve_params,
         )

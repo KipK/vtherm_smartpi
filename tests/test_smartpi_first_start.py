@@ -152,11 +152,11 @@ class TestSmartPIHysteresisPhase:
             name="TestSmartPI_Diag"
         )
         
-        diag = smartpi.get_diagnostics()
+        control = smartpi.get_published_diagnostics()["control"]
         
-        assert diag["phase"] == SmartPIPhase.HYSTERESIS
-        assert diag["regulation_mode"] == "hysteresis"
-        assert "hysteresis_state" in diag
+        assert control["phase"] == SmartPIPhase.HYSTERESIS
+        assert control["mode"] == "hysteresis"
+        assert "hysteresis_state" in control
 
     def test_reboot_clears_transient_guard_and_trajectory_state(self):
         """A reboot must not restore active transient SmartPI recovery states."""
@@ -244,10 +244,10 @@ class TestSmartPIPhaseTransition:
             smartpi.est.a_meas_hist.append(0.01)
             smartpi.est.b_meas_hist.append(0.001)
         
-        diag = smartpi.get_diagnostics()
+        control = smartpi.get_published_diagnostics()["control"]
         
-        assert diag["phase"] == SmartPIPhase.STABLE
-        assert diag["regulation_mode"] == "smartpi"
+        assert control["phase"] == SmartPIPhase.STABLE
+        assert control["mode"] == "smartpi"
 
 
 @patch("custom_components.vtherm_smartpi.algo.time.monotonic")

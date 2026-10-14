@@ -37,7 +37,6 @@ class DummySmartPI(SmartPI):
 
     def __init__(self, phase: SmartPIPhase) -> None:
         self._phase = phase
-        self._debug_mode = False
 
     @property
     def phase(self) -> SmartPIPhase:
