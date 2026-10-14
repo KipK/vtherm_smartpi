@@ -68,7 +68,7 @@ Le bloc `live` est organisé par responsabilité :
 | `feedforward` | État FF3, source de bande morte et diagnostics FFTrim canoniques |
 | `setpoint` | Consigne filtrée, trajectoire, boost et résumé du gouverneur de référence |
 | `autocalib` | État du superviseur de calibration automatique |
-| `calibration` | État, nombre d'essais et date de la dernière calibration |
+| `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,

@@ -217,9 +217,11 @@
 
 {% set hold_mode_label = {
   'none': 'aucun',
-  'servo_recovery': 'servo recovery',
-  'resume_recovery': 'resume recovery',
-  'disturbance_recovery': 'disturbance recovery'
+  'setpoint_change': 'changement de consigne',
+  'off_resume': 'reprise OFF',
+  'window_resume': 'reprise fenêtre',
+  'power_shedding_resume': 'reprise après délestage',
+  'disturbance_recovery': 'rattrapage perturbation'
 }.get(hold_mode, hold_mode) %}
 
 {% set integral_guard_label = {

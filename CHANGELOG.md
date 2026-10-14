@@ -7,6 +7,34 @@ All notable changes to this project will be documented in this file.
 - Fix AutoCalib event payloads: `entity_id` now carries the climate entity id
   (fixing the "Invalid entity ID" recorder warning) and the thermostat name is
   in `name`. Automations that read the name from `entity_id` must read `name`.
+- Turning the thermostat OFF during the PWM off phase now cancels the running cycle.
+- An options change reloads only the affected thermostats, once. Disabled SmartPI
+  entries are ignored (thermostats fall back to the enabled defaults entry or to
+  built-in defaults), and the defaults entry can be recreated after deletion.
+  SmartPI services stay registered when a plugin entry is reloaded.
+- Changing between HEAT and COOL across a restart now resets the integral learned
+  on the other mode, and skipped ticks (missing sensor, guard cut) no longer
+  integrate the error over the skipped period.
+- SmartPI state is written at most every five minutes (and on shutdown, service
+  calls and removal) instead of on every control pass.
+- Restart now restores the temperature histories and the calibration timeout;
+  dead time detection in progress is not resumed.
+- Learning slopes are computed on raw temperature measurements instead of the
+  filtered temperature, which avoids biased early slow slopes.
+- The `a` and `b` drift detectors number their candidates separately, so a genuine
+  drift on one channel is no longer blocked by measurements of the other.
+- SmartPI services use the standard entity target (Versatile Thermostat climates
+  only) and raise a validation error when no SmartPI thermostat matches.
+- COOL uses the passive (rise) dead time for braking, trajectory floor, governor
+  stop delay and thermal twin power-off delay.
+- COOL bootstrap hysteresis mirrors HEAT: cooling starts at setpoint + on
+  threshold and stops at setpoint - off threshold.
+- A setpoint change during a cycle is flagged in command ownership, and the
+  feed-forward trim refuses a bumpless transfer for that cycle.
+- `calibration.retry_count` now publishes the AutoCalib retry counter, and
+  `analysis.feedforward.reason` no longer reports `ff_ab_fallback`.
+- Release of stable HEAT setpoint landing plateaus after cycle confirmation, terminal braking release and a more tolerant reference governor cap.
+- Internal cleanup of dead code.
 
 ## [0.4.0]
 

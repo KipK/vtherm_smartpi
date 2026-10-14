@@ -217,8 +217,10 @@
 
 {% set hold_mode_label = {
   'none': 'none',
-  'servo_recovery': 'servo recovery',
-  'resume_recovery': 'resume recovery',
+  'setpoint_change': 'setpoint change',
+  'off_resume': 'OFF resume',
+  'window_resume': 'window resume',
+  'power_shedding_resume': 'power shedding resume',
   'disturbance_recovery': 'disturbance recovery'
 }.get(hold_mode, hold_mode) %}
 

@@ -82,7 +82,6 @@ Rules effectively coded:
 
 - `AB_MIN_SAMPLES_B = 8`,
 - `AB_MIN_SAMPLES_A = 6`,
-- `AB_MIN_SAMPLES_A_CONVERGED = 6`,
 - `AB_A_SOFT_GATE_MIN_B = 8`.
 
 SmartPI leaves `HYSTERESIS` once `b` has 8 measurements and `a` has
@@ -204,17 +203,18 @@ In COOL, $a < 0$ and therefore $k_{ff} < 0$. When outdoors is warmer than the
 setpoint, the two negative differences correctly produce positive cooling
 power.
 
-`warmup_scale` is not a simple on/off switch. It depends on:
+`warmup_scale` is not a simple on/off switch. It is the product of:
 
 - the number of valid learning episodes,
-- the number of cycles since reset,
-- the reliability of `tau`.
+- the number of cycles since reset.
+
+$k_{ff}$ is zero, and therefore $u_{ff1}$ is zero, whenever the model is not
+ready (not enough `a` and `b` measurements), `tau` is not reliable, or the sign
+of `a` does not match the active mode.
 
 This is combined with:
 
-- `u_ff2`: slow `FFTrim` correction,
-- `ABConfidence`: confidence policy for `a/b`,
-- fallback in `AB_BAD` mode to a zero feed-forward after `AB_BAD_PERSIST_CYCLES = 3`.
+- `u_ff2`: slow `FFTrim` correction, frozen while `ABConfidence` is `AB_DEGRADED` or `AB_BAD`.
 
 ### 4.3 FF3
 
@@ -534,16 +534,9 @@ The current payload from `SmartPI.save_state()` notably contains:
 {
     "version": 2,
     "learning_enabled": ...,
-    "on_percent": ...,
-    "last_target_temp": ...,
     "last_active_wall_ts": ...,
-    "last_calibration_time": ...,
-    "cycles_since_reset": ...,
-    "accumulated_dt": ...,
     "deadtime_skip_count_a": ...,
     "deadtime_skip_count_b": ...,
-    "learning_resume_ts": ...,
-    "learning_start_date": ...,
     "est_state": {...},
     "dt_est_state": {...},
     "gov_state": {...},
@@ -554,7 +547,6 @@ The current payload from `SmartPI.save_state()` notably contains:
     "cal_state": {...},
     "gs_state": {...},
     "twin_state": {...},
-    "integral_guard_state": {...},
     "guards_state": {...},
     "ac_state": {...},
     "ff_v2_trim": {...},
@@ -584,14 +576,13 @@ mapping.
 
 `diagnostics.py` exposes the algorithm and canonical live views:
 
-- `build_diagnostics()`: compact or full version depending on `debug_mode`,
-- `build_published_diagnostics()`: canonical `live` payload for the dedicated diagnostic sensor,
-- `build_debug_diagnostics()`: compatibility accessor returning that same canonical payload.
+- `SmartPI.get_published_diagnostics()`: returns the canonical `live` payload for the dedicated diagnostic sensor,
+- `build_published_diagnostics()`: the function that builds that payload.
 
 `diagnostic_history.py` wraps this payload in `schema_version`, `live` and the
 stable eleven-series `history` block. Normal sensor entities exclude `live` from
-Recorder; the debug sensor subclass records it directly. Debug mode changes
-retention only and does not add a second diagnostic block.
+Recorder; the debug sensor subclass records it directly. The debug option only selects the sensor class that is recorded; it does not
+add a second diagnostic block.
 
 `analysis.learning.learn_ok_count` and `learn_skip_count` are runtime counters
 relative to the current Home Assistant process. Persisted model counters remain
@@ -615,7 +606,6 @@ the learning decision.
 | `AB_HISTORY_SIZE`              | `31`   |
 | `AB_MIN_SAMPLES_B`             | `8`    |
 | `AB_MIN_SAMPLES_A`             | `6`    |
-| `AB_MIN_SAMPLES_A_CONVERGED`   | `6`    |
 | `AB_A_SOFT_GATE_MIN_B`         | `8`    |
 | `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
 | `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
@@ -668,7 +658,6 @@ the learning decision.
 | `AUTOCALIB_EXIT_NEW_OBS_MIN`      | `1`    |
 | `FF_TRIM_RHO`                     | `0.15` |
 | `FF_TRIM_LAMBDA`                  | `0.05` |
-| `AB_BAD_PERSIST_CYCLES`           | `3`    |
 | `FF3_DELTA_U`                     | `0.05` |
 | `FF3_MAX_AUTHORITY`               | `0.20` |
 | `FF3_NEARBAND_GAIN`               | `0.50` |

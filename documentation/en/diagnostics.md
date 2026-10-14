@@ -68,7 +68,7 @@ The `live` block is organized by responsibility:
 | `feedforward` | FF3 status, dead-band source and canonical FFTrim diagnostics |
 | `setpoint` | Filtered setpoint, trajectory, boost and reference-governor summary |
 | `autocalib` | Automatic calibration supervisor state |
-| `calibration` | Calibration state, retry count and last completion time |
+| `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
 
 `analysis` groups the advanced live values into `control`, `learning`,

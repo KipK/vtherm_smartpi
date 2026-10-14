@@ -83,7 +83,6 @@ Règles effectivement codées :
 
 - `AB_MIN_SAMPLES_B = 8`,
 - `AB_MIN_SAMPLES_A = 6`,
-- `AB_MIN_SAMPLES_A_CONVERGED = 6`,
 - `AB_A_SOFT_GATE_MIN_B = 8`.
 
 SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 8 mesures et `a` de
@@ -207,17 +206,16 @@ En COOL, $a < 0$ et donc $k_{ff} < 0$. Lorsque l'extérieur est plus chaud que
 la consigne, les deux différences négatives produisent bien une puissance de
 refroidissement positive.
 
-Le `warmup_scale` n'est pas un simple interrupteur. Il dépend :
+Le `warmup_scale` n'est pas un simple interrupteur. Il est le produit :
 
 - du nombre d'apprentissages valides,
-- du nombre de cycles depuis reset,
-- de la fiabilité de `tau`.
+- du nombre de cycles depuis reset.
+
+$k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (pas assez de mesures de `a` et de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
 
 À cela s'ajoutent :
 
-- `u_ff2` : correction lente `FFTrim`,
-- `ABConfidence` : politique de confiance sur `a/b`,
-- repli en mode `AB_BAD` vers un feed-forward nul après `AB_BAD_PERSIST_CYCLES = 3`.
+- `u_ff2` : correction lente `FFTrim`, gelée tant que `ABConfidence` vaut `AB_DEGRADED` ou `AB_BAD`.
 
 ### 4.3 FF3
 
@@ -552,16 +550,9 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
 {
     "version": 2,
     "learning_enabled": ...,
-    "on_percent": ...,
-    "last_target_temp": ...,
     "last_active_wall_ts": ...,
-    "last_calibration_time": ...,
-    "cycles_since_reset": ...,
-    "accumulated_dt": ...,
     "deadtime_skip_count_a": ...,
     "deadtime_skip_count_b": ...,
-    "learning_resume_ts": ...,
-    "learning_start_date": ...,
     "est_state": {...},
     "dt_est_state": {...},
     "gov_state": {...},
@@ -572,7 +563,6 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "cal_state": {...},
     "gs_state": {...},
     "twin_state": {...},
-    "integral_guard_state": {...},
     "guards_state": {...},
     "ac_state": {...},
     "ff_v2_trim": {...},
@@ -603,14 +593,12 @@ linéaire du modèle.
 
 `diagnostics.py` expose les vues algorithmiques et live canoniques :
 
-- `build_diagnostics()` : version compacte ou complète selon `debug_mode`,
-- `build_published_diagnostics()` : payload `live` canonique du capteur de diagnostic dédié,
-- `build_debug_diagnostics()` : accesseur de compatibilité qui renvoie le même payload canonique.
+- `SmartPI.get_published_diagnostics()` : renvoie le payload `live` canonique du capteur de diagnostic dédié,
+- `build_published_diagnostics()` : la fonction qui construit ce payload.
 
 `diagnostic_history.py` enveloppe ce payload dans `schema_version`, `live` et le
 bloc stable de onze séries `history`. Les entités normales excluent `live` du
-Recorder ; la sous-classe debug l'enregistre directement. Le mode debug change
-uniquement la conservation et n'ajoute pas de second bloc de diagnostic.
+Recorder ; la sous-classe debug l'enregistre directement. Le mode debug ne fait que sélectionner la classe de capteur enregistrée ; il n'ajoute pas de second bloc de diagnostic.
 
 `analysis.learning.learn_ok_count` et `learn_skip_count` sont des compteurs
 d'exécution relatifs au processus Home Assistant courant. Les compteurs
@@ -635,7 +623,6 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `AB_HISTORY_SIZE`              | `31`   |
 | `AB_MIN_SAMPLES_B`             | `8`    |
 | `AB_MIN_SAMPLES_A`             | `6`    |
-| `AB_MIN_SAMPLES_A_CONVERGED`   | `6`    |
 | `AB_A_SOFT_GATE_MIN_B`         | `8`    |
 | `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
 | `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
@@ -688,7 +675,6 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `AUTOCALIB_EXIT_NEW_OBS_MIN`      | `1`    |
 | `FF_TRIM_RHO`                     | `0.15` |
 | `FF_TRIM_LAMBDA`                  | `0.05` |
-| `AB_BAD_PERSIST_CYCLES`           | `3`    |
 | `FF3_DELTA_U`                     | `0.05` |
 | `FF3_MAX_AUTHORITY`               | `0.20` |
 | `FF3_NEARBAND_GAIN`               | `0.50` |
