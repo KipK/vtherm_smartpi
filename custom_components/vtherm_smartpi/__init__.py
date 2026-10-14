@@ -18,10 +18,7 @@ from vtherm_api.vtherm_api import VThermAPI
 
 from .const import (
     ATTR_LEARNING_ENABLED,
-    CONF_PROP_FUNCTION,
     CONF_TARGET_VTHERM,
-    DATA_FACTORY_REGISTERED,
-    DATA_SERVICES_REGISTERED,
     DOMAIN,
     PROP_FUNCTION_SMART_PI,
     SERVICE_FORCE_SMARTPI_CALIBRATION,
@@ -31,52 +28,25 @@ from .const import (
 )
 from .factory import SmartPIHandlerFactory
 
-VT_DOMAIN = "versatile_thermostat"
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 _LOGGER = get_vtherm_logger(__name__)
-DATA_SKIP_FULL_RELOAD = "skip_full_reload"
 
 
-def _ensure_domain_data(hass: HomeAssistant) -> dict[str, Any]:
-    """Return the plugin data storage in hass."""
-    return hass.data.setdefault(DOMAIN, {})
-
-
-def _register_factory(hass: HomeAssistant) -> bool:
+def _register_factory(hass: HomeAssistant) -> None:
     """Register the SmartPI factory in the shared VT API."""
-    data = _ensure_domain_data(hass)
-    if data.get(DATA_FACTORY_REGISTERED) is True:
-        return True
-
     api = VThermAPI.get_vtherm_api(hass)
     if api is None:
         _LOGGER.warning("Unable to register SmartPI factory because VThermAPI is unavailable")
-        return False
+        return
 
     factory = SmartPIHandlerFactory()
-    existing_factory = api.get_prop_algorithm(factory.name)
-    if existing_factory is None:
+    if api.get_prop_algorithm(factory.name) is None:
         api.register_prop_algorithm(factory)
-
-    data[DATA_FACTORY_REGISTERED] = True
-    return True
-
-
-def _unregister_factory(hass: HomeAssistant) -> None:
-    """Unregister the SmartPI factory from the shared VT API."""
-    api = VThermAPI.get_vtherm_api(hass)
-    if api is not None:
-        api.unregister_prop_algorithm(PROP_FUNCTION_SMART_PI)
-    _ensure_domain_data(hass)[DATA_FACTORY_REGISTERED] = False
 
 
 def _register_services(hass: HomeAssistant) -> None:
     """Register SmartPI services on the plugin domain."""
-    data = _ensure_domain_data(hass)
-    if data.get(DATA_SERVICES_REGISTERED) is True:
-        return
-
     async def _call_on_vtherms(call, method_name: str, *args) -> None:
         entity_ids = set(await service_helper.async_extract_entity_ids(call))
 
@@ -170,28 +140,6 @@ def _register_services(hass: HomeAssistant) -> None:
         _handle_reset_integral,
     )
 
-    data[DATA_SERVICES_REGISTERED] = True
-
-
-def _unregister_services(hass: HomeAssistant) -> None:
-    """Unregister SmartPI services from the plugin domain."""
-    hass.services.async_remove(DOMAIN, SERVICE_RESET_SMARTPI_LEARNING)
-    hass.services.async_remove(DOMAIN, SERVICE_SET_SMARTPI_LEARNING)
-    hass.services.async_remove(DOMAIN, SERVICE_FORCE_SMARTPI_CALIBRATION)
-    hass.services.async_remove(DOMAIN, SERVICE_RESET_SMARTPI_INTEGRAL)
-    _ensure_domain_data(hass)[DATA_SERVICES_REGISTERED] = False
-
-
-async def _reload_smartpi_vtherms(hass: HomeAssistant) -> None:
-    """Reload VT entries that currently target the SmartPI proportional function."""
-    reload_tasks = [
-        hass.config_entries.async_reload(entry.entry_id)
-        for entry in hass.config_entries.async_entries(VT_DOMAIN)
-        if entry.data.get(CONF_PROP_FUNCTION) == PROP_FUNCTION_SMART_PI
-    ]
-    if reload_tasks:
-        await asyncio.gather(*reload_tasks)
-
 
 def _get_dedicated_target_unique_ids(hass: HomeAssistant) -> set[str]:
     """Return VT unique ids that have a dedicated SmartPI config entry."""
@@ -262,11 +210,8 @@ from homeassistant.const import Platform
 PLATFORMS = [Platform.SENSOR]
 
 
-async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload affected VT entries when plugin options change."""
-    _ensure_domain_data(hass)[f"{DATA_SKIP_FULL_RELOAD}_{entry.entry_id}"] = True
-    await hass.config_entries.async_reload(entry.entry_id)
-
+async def _reload_affected_vtherms(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the VT entries whose effective SmartPI configuration depends on the entry."""
     target_unique_id = entry.data.get(CONF_TARGET_VTHERM)
     if target_unique_id:
         await _reload_smartpi_vtherms_for_target(hass, target_unique_id)
@@ -275,36 +220,29 @@ async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None
     await _reload_smartpi_vtherms_using_defaults(hass)
 
 
+async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the plugin entry; its setup reloads the affected VT entries."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up vtherm_smartpi from a config entry."""
-    data = _ensure_domain_data(hass)
-    data[entry.entry_id] = entry.entry_id
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
-    _register_factory(hass)
-    _register_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    skip_full_reload = data.pop(f"{DATA_SKIP_FULL_RELOAD}_{entry.entry_id}", False)
     # Only reload VT entries when HA is already running (live install/update).
     # During initial startup, VT handles deferred algorithm init via async_startup
     # which fires after EVENT_HOMEASSISTANT_STARTED — reloading here would force
     # entity re-creation before the recorder has restored previous states.
-    if hass.state == CoreState.running and not skip_full_reload:
-        await _reload_smartpi_vtherms(hass)
+    if hass.state == CoreState.running:
+        await _reload_affected_vtherms(hass, entry)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a vtherm_smartpi config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if not unload_ok:
-        return False
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    data = _ensure_domain_data(hass)
-    data.pop(entry.entry_id, None)
 
-    if not [key for key in data if key not in (DATA_FACTORY_REGISTERED, DATA_SERVICES_REGISTERED)]:
-        _unregister_factory(hass)
-        _unregister_services(hass)
-
-    await _reload_smartpi_vtherms(hass)
-    return True
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the VT entries that were using the removed entry, now absent from the registry."""
+    await _reload_affected_vtherms(hass, entry)
