@@ -497,6 +497,10 @@ class SmartPIHandler:
             setattr(t, "_off_time_sec", int(t.cycle_min * 60))
             if t.is_device_active:
                 await t.async_underlying_entity_turn_off()
+            elif t.cycle_scheduler and t.cycle_scheduler.is_cycle_running:
+                # The master scheduler may still hold a pending heat cycle while
+                # the physical device is already in its OFF phase.
+                await t.cycle_scheduler.cancel_cycle()
         else:
             on_percent = t.prop_algorithm.on_percent if t.prop_algorithm else 0.0
 
