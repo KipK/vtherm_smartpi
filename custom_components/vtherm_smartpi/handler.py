@@ -19,7 +19,6 @@ from .smartpi.const import (
     SmartPIPhase,
     SmartPICalibrationPhase,
     SmartPICalibrationResult,
-    NEAR_BAND_HYSTERESIS_C,
 )
 from .const import (
     CONF_TARGET_VTHERM,
@@ -42,6 +41,7 @@ from .const import (
     DEFAULT_OPTIONS,
     DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
+    diag_update_signal,
     EventType,
     SIGNAL_SMARTPI_TARGET_UPDATED,
 )
@@ -88,8 +88,8 @@ class SmartPIHandler:
         # Use the thermostat's cycle_min property directly for consistency
         # (base_thermostat reads CONF_CYCLE_MIN in __init__)
         cycle_min = t.cycle_min
-        minimal_activation_delay = entry.get(CONF_MINIMAL_ACTIVATION_DELAY, 0)
-        minimal_deactivation_delay = entry.get(CONF_MINIMAL_DEACTIVATION_DELAY, 0)
+        minimal_activation_delay = entry[CONF_MINIMAL_ACTIVATION_DELAY]
+        minimal_deactivation_delay = entry[CONF_MINIMAL_DEACTIVATION_DELAY]
         max_on_percent = getattr(t, "max_on_percent", None)
 
         # Update thermostat attributes directly (like TPIHandler)
@@ -101,25 +101,16 @@ class SmartPIHandler:
         )
 
         # SmartPI specific
-        deadband = entry.get(CONF_SMART_PI_DEADBAND, 0.05)
-        use_setpoint_filter = entry.get(CONF_SMART_PI_USE_SETPOINT_FILTER, True)
-        use_ff3 = entry.get(
-            CONF_SMART_PI_USE_FF3,
-            DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3],
-        )
-        hyst_on = entry.get(CONF_SMART_PI_HYSTERESIS_ON, 0.3)
-        hyst_off = entry.get(CONF_SMART_PI_HYSTERESIS_OFF, 0.5)
-        release_tau_factor = entry.get(CONF_SMART_PI_RELEASE_TAU_FACTOR, 0.5)
-        deadband_allow_p = entry.get(CONF_SMART_PI_DEADBAND_ALLOW_P, False)
-        self._allow_pwm_cycle_force = entry.get(
-            CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
-            DEFAULT_OPTIONS[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE],
-        )
+        deadband = entry[CONF_SMART_PI_DEADBAND]
+        use_setpoint_filter = entry[CONF_SMART_PI_USE_SETPOINT_FILTER]
+        use_ff3 = entry[CONF_SMART_PI_USE_FF3]
+        hyst_on = entry[CONF_SMART_PI_HYSTERESIS_ON]
+        hyst_off = entry[CONF_SMART_PI_HYSTERESIS_OFF]
+        release_tau_factor = entry[CONF_SMART_PI_RELEASE_TAU_FACTOR]
+        deadband_allow_p = entry[CONF_SMART_PI_DEADBAND_ALLOW_P]
+        self._allow_pwm_cycle_force = entry[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE]
         debug_mode = entry.get(CONF_SMART_PI_DEBUG, False)
-        self._valve_linearization_configured = entry.get(
-            CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
-            False,
-        )
+        self._valve_linearization_configured = entry[CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION]
         valve_mode_enabled = bool(getattr(t.cycle_scheduler, "is_valve_mode", False))
         valve_linearization_enabled = (
             self._valve_linearization_configured
@@ -127,30 +118,10 @@ class SmartPIHandler:
         )
         try:
             self._valve_curve_params = ValveCurveParams(
-                min_valve=float(
-                    entry.get(
-                        CONF_SMART_PI_MIN_VALVE,
-                        DEFAULT_OPTIONS[CONF_SMART_PI_MIN_VALVE],
-                    )
-                ),
-                knee_demand=float(
-                    entry.get(
-                        CONF_SMART_PI_KNEE_DEMAND,
-                        DEFAULT_OPTIONS[CONF_SMART_PI_KNEE_DEMAND],
-                    )
-                ),
-                knee_valve=float(
-                    entry.get(
-                        CONF_SMART_PI_KNEE_VALVE,
-                        DEFAULT_OPTIONS[CONF_SMART_PI_KNEE_VALVE],
-                    )
-                ),
-                max_valve=float(
-                    entry.get(
-                        CONF_SMART_PI_MAX_VALVE,
-                        DEFAULT_OPTIONS[CONF_SMART_PI_MAX_VALVE],
-                    )
-                ),
+                min_valve=float(entry[CONF_SMART_PI_MIN_VALVE]),
+                knee_demand=float(entry[CONF_SMART_PI_KNEE_DEMAND]),
+                knee_valve=float(entry[CONF_SMART_PI_KNEE_VALVE]),
+                max_valve=float(entry[CONF_SMART_PI_MAX_VALVE]),
             )
         except (TypeError, ValueError) as err:
             _LOGGER.error("%s - Invalid SmartPI valve curve parameters: %s", t, err)
@@ -212,11 +183,6 @@ class SmartPIHandler:
 
         return config, entry_to_apply
 
-    def _get_effective_config(self) -> dict:
-        """Return the merged SmartPI configuration for the thermostat."""
-        config, _ = self._resolve_effective_config()
-        return config
-
     async def async_added_to_hass(self):
         """Load persistent data."""
         t = self._thermostat
@@ -231,13 +197,6 @@ class SmartPIHandler:
 
     async def async_startup(self):
         """Startup actions."""
-        # Initialize the cycle start state if possible to enable first-cycle learning
-        t = self._thermostat
-        if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
-            # Check availability of sensors
-            if t.current_temperature is not None and t.current_outdoor_temperature is not None:
-                _LOGGER.debug("%s - SmartPI startup: ready for cycle management", t)
-
         # Check if we need to start the periodic recalculation timer
         await self.on_state_changed(True)
 
@@ -301,12 +260,7 @@ class SmartPIHandler:
         """Project one request from the effective scheduler timing inputs."""
         t = self._thermostat
         scheduler = t.cycle_scheduler
-        cycle_duration_sec = getattr(scheduler, "_cycle_duration_sec", None)
-        cycle_min = (
-            float(cycle_duration_sec) / 60.0
-            if isinstance(cycle_duration_sec, (int, float)) and cycle_duration_sec > 0
-            else t.cycle_min
-        )
+        cycle_min = t.cycle_min
         minimal_activation_delay = getattr(
             scheduler,
             "min_activation_delay",
@@ -381,7 +335,6 @@ class SmartPIHandler:
     async def control_heating(self, timestamp=None, force=False):
         """Control heating using SmartPI."""
         t = self._thermostat
-        from datetime import datetime
         from .smartpi.guards import GuardAction
 
         algo = t.prop_algorithm if isinstance(t.prop_algorithm, SmartPI) else None
@@ -588,7 +541,7 @@ class SmartPIHandler:
                     )
 
         if self._should_publish_intermediate:
-            async_dispatcher_send(t.hass, f"smartpi_diag_update_{t.unique_id}")
+            async_dispatcher_send(t.hass, diag_update_signal(t.unique_id))
 
     async def on_state_changed(self, changed: bool):
         """Handle state changes."""
@@ -715,7 +668,7 @@ class SmartPIHandler:
             )
             self.update_attributes()
             t.async_write_ha_state()
-            async_dispatcher_send(t.hass, f"smartpi_diag_update_{t.unique_id}")
+            async_dispatcher_send(t.hass, diag_update_signal(t.unique_id))
             await self._async_save()
 
     async def service_force_smartpi_calibration(self):

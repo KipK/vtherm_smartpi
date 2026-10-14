@@ -68,6 +68,12 @@ PROP_FUNCTION_SMART_PI = "smartpi"
 SIGNAL_SMARTPI_TARGET_UPDATED = "vtherm_smartpi_target_updated"
 DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX = "smartpi_diag"
 
+
+def diag_update_signal(unique_id: str) -> str:
+    """Return the dispatcher signal refreshing the diagnostic sensors of a VTherm."""
+    return f"smartpi_diag_update_{unique_id}"
+
+
 SERVICE_RESET_SMARTPI_LEARNING = "reset_smartpi_learning"
 SERVICE_SET_SMARTPI_LEARNING = "set_smartpi_learning"
 SERVICE_FORCE_SMARTPI_CALIBRATION = "force_smartpi_calibration"

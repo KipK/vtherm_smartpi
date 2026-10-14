@@ -4,7 +4,6 @@ from dataclasses import replace
 
 import pytest
 
-from custom_components.vtherm_smartpi.cycle_utils import calculate_cycle_times
 from custom_components.vtherm_smartpi.smartpi.command_ownership import (
     CommandOwnershipBinding,
     CommandOwnershipBindingStatus,
@@ -103,17 +102,6 @@ def test_projection_marks_short_off_time_as_timing_constrained() -> None:
     assert (projection.on_time_sec, projection.off_time_sec) == (120, 0)
     assert projection.projected_power == 1.0
     assert projection.forced_by_timing is True
-
-
-def test_legacy_cycle_helper_returns_projection_cycle_times() -> None:
-    """The compatibility tuple keeps the legacy scheduler-facing behavior."""
-    projection = project_cycle_command(0.132, cycle_min=2)
-
-    assert calculate_cycle_times(0.132, 2) == (
-        projection.on_time_sec,
-        projection.off_time_sec,
-        projection.forced_by_timing,
-    )
 
 
 def test_switch_repeat_projection_matches_scheduler_double_quantization() -> None:

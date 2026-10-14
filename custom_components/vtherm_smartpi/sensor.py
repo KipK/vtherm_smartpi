@@ -20,6 +20,7 @@ from .const import (
     DOMAIN,
     PROP_FUNCTION_SMART_PI,
     SIGNAL_SMARTPI_TARGET_UPDATED,
+    diag_update_signal,
 )
 from .algo import SmartPI
 from .smartpi.diagnostic_history import build_diagnostic_attributes
@@ -115,16 +116,16 @@ def _get_default_target_unique_ids(hass: HomeAssistant) -> list[str]:
     return target_unique_ids
 
 
+_DIAGNOSTIC_STATE_BY_PHASE = {
+    SmartPIPhase.HYSTERESIS: "bootstrap_hysteresis",
+    SmartPIPhase.CALIBRATION: "calibration",
+    SmartPIPhase.STABLE: "stable",
+}
+
+
 def _get_diagnostic_state(algo: SmartPI) -> str:
     """Return the top-level diagnostic state for the SmartPI sensor."""
-    phase = algo.phase
-    if phase == SmartPIPhase.HYSTERESIS:
-        return "bootstrap_hysteresis"
-    if phase == SmartPIPhase.CALIBRATION:
-        return "calibration"
-    if phase == SmartPIPhase.STABLE:
-        return "stable"
-    return str(phase).lower().replace(" ", "_")
+    return _DIAGNOSTIC_STATE_BY_PHASE[algo.phase]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
@@ -240,6 +241,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
         self._attr_native_value = "unknown"
         self._attr_extra_state_attributes = {}
         self._unsub = None
+        self._unsub_diag = None
 
         self.device_entry = async_entity_id_to_device(hass, climate_entity_id)
 
@@ -249,7 +251,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
             self.hass, [self._climate_entity_id], self._async_climate_changed
         )
         self._unsub_diag = async_dispatcher_connect(
-            self.hass, f"smartpi_diag_update_{self._unique_id_base}", self._async_force_update
+            self.hass, diag_update_signal(self._unique_id_base), self._async_force_update
         )
         self._update_from_climate()
 
@@ -258,7 +260,7 @@ class SmartPIDiagnosticSensor(SensorEntity):
         if self._unsub:
             self._unsub()
             self._unsub = None
-        if hasattr(self, '_unsub_diag') and self._unsub_diag:
+        if self._unsub_diag:
             self._unsub_diag()
             self._unsub_diag = None
 
