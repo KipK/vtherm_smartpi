@@ -363,3 +363,48 @@ def test_smartpi_outlier_rejection():
 
     # Model should still be close to true_b (not corrupted by solar outlier)
     assert 0.0015 < est.b < 0.0030, f"b should remain stable after solar event, got {est.b}"
+
+
+def _restart_with_saved_heat_integral(hvac_mode):
+    """Restore a HEAT state with a non-zero integral and run the first tick."""
+    from custom_components.vtherm_smartpi.algo import SmartPI
+
+    source = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="restart-source",
+    )
+    source.est.ensure_hvac_mode(VThermHvacMode_HEAT)
+    source.integral = 5.0
+
+    restored = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="restart-restored",
+        saved_state=source.save_state(),
+    )
+    assert restored.integral == 5.0
+    assert restored.est.model_hvac_mode == "heat"
+
+    # Missing sensor stops the tick right after the HVAC transition block.
+    restored.calculate(target_temp=None, current_temp=None, hvac_mode=hvac_mode)
+    return restored
+
+
+def test_restart_into_other_hvac_mode_resets_persisted_integral():
+    """A HEAT integral restored after reboot must not drive a COOL controller."""
+    restored = _restart_with_saved_heat_integral(VThermHvacMode_COOL)
+
+    assert restored.integral == 0.0
+    assert restored.est.model_hvac_mode == "cool"
+
+
+def test_restart_into_same_hvac_mode_keeps_persisted_integral():
+    """A reboot without HVAC mode change must keep the persisted integral."""
+    restored = _restart_with_saved_heat_integral(VThermHvacMode_HEAT)
+
+    assert restored.integral == 5.0

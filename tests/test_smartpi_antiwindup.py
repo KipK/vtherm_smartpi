@@ -345,3 +345,57 @@ def test_no_integral_init_on_sat_exit():
     assert algo.ctl.integral == 0.0, (
         "Integral must stay at 0 on SAT_HI exit (natural post-conditional-integration)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Conditional integration across a non-owned command interval
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("override", ["guard_cut", "missing_sensor"])
+def test_resume_after_override_does_not_integrate_gap(override):
+    """The integrator must not advance over a guard cut or missing sensor gap."""
+    from unittest.mock import patch
+
+    from custom_components.vtherm_smartpi.smartpi.const import (
+        AB_MIN_SAMPLES_A,
+        AB_MIN_SAMPLES_B,
+    )
+
+    algo = make_algo(integral=0.0, i_mode="I:RUN")
+    # Enough model samples to leave the hysteresis phase and run the PI.
+    algo.est.a = 0.02
+    algo.est.b = 0.002
+    algo.est.a_meas_hist.extend([0.02] * AB_MIN_SAMPLES_A)
+    algo.est.b_meas_hist.extend([0.002] * AB_MIN_SAMPLES_B)
+    clock = [10_000.0]
+    target, current = 20.0, 19.0
+    error = abs(target - current)
+
+    with patch(
+        "custom_components.vtherm_smartpi.algo.time.monotonic",
+        side_effect=lambda: clock[0],
+    ):
+        algo.calculate(target_temp=target, current_temp=current,
+                       ext_current_temp=5.0, hvac_mode=VThermHvacMode_HEAT)
+        assert algo.ctl.last_i_mode == "I:RUN"
+
+        # About 40 minutes during which the PI does not own the command.
+        for _ in range(8):
+            clock[0] += 300.0
+            if override == "guard_cut":
+                algo.guards._guard_cut_active = True
+                algo.calculate(target_temp=target, current_temp=current,
+                               ext_current_temp=5.0, hvac_mode=VThermHvacMode_HEAT)
+            else:
+                algo.calculate(target_temp=target, current_temp=None,
+                               ext_current_temp=5.0, hvac_mode=VThermHvacMode_HEAT)
+        algo.guards._guard_cut_active = False
+
+        before = algo.integral
+        clock[0] += 60.0
+        algo.calculate(target_temp=target, current_temp=current,
+                       ext_current_temp=5.0, hvac_mode=VThermHvacMode_HEAT)
+
+    assert algo.ctl.last_i_mode == "I:RUN"
+    assert abs(algo.integral - before) <= error * algo._cycle_min
+    assert algo.integral == pytest.approx(before)
