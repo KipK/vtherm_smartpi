@@ -122,7 +122,6 @@ def compute_ff3(
     a: float,
     b: float,
     deadtime_heat_s: float | None,
-    deadtime_cool_s: float | None,
     twin_disabled_reason: str = "twin_not_reliable",
     disturbance_context_active: bool = True,
     disturbance_context_reason: str = "none",

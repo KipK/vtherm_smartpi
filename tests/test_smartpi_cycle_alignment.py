@@ -145,6 +145,47 @@ async def test_switch_callback_uses_frozen_ownership_not_live_control():
 
 
 @pytest.mark.asyncio
+async def test_setpoint_change_flags_ownership_until_next_cycle_boundary():
+    """A setpoint change during the cycle is tagged until the next cycle starts."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="setpoint-flag",
+    )
+    force_smartpi_stable_mode(algo)
+    algo.calculate(20.0, 19.8, 5.0, 0.0, VThermHvacMode_HEAT)
+    assert algo._setpoint_changed_in_cycle is False
+
+    algo.calculate(21.0, 19.8, 5.0, 0.0, VThermHvacMode_HEAT)
+    assert algo._setpoint_changed_in_cycle is True
+
+    _configure_switch_ownership_context(algo, power=0.5)
+    algo.stage_cycle_command(
+        project_cycle_command(0.5, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+
+    await algo.on_cycle_started(60, 60, 0.5, VThermHvacMode_HEAT)
+
+    bound = algo._command_ownership.last_binding
+    assert bound.status == CommandOwnershipBindingStatus.BOUND
+    assert "setpoint_changed" in bound.snapshot.constraint_flags
+    assert algo._setpoint_changed_in_cycle is False
+
+    algo.stage_cycle_command(
+        project_cycle_command(0.5, cycle_min=2),
+        VThermHvacMode_HEAT,
+    )
+    await algo.on_cycle_started(60, 60, 0.5, VThermHvacMode_HEAT)
+
+    bound = algo._command_ownership.last_binding
+    assert bound.status == CommandOwnershipBindingStatus.BOUND
+    assert "setpoint_changed" not in bound.snapshot.constraint_flags
+
+
+@pytest.mark.asyncio
 async def test_published_ownership_diagnostics_report_bound_and_rejected_cycles():
     """Published diagnostics retain the request and callback evidence."""
     algo = SmartPI(

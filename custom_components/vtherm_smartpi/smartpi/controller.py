@@ -257,27 +257,31 @@ class SmartPIController:
         target_temp: float,
         current_temp: float,
         hvac_mode: VThermHvacMode,
-        hyst_upper: float,
-        hyst_lower: float
+        hyst_off: float,
+        hyst_on: float
     ) -> float:
-        """Simple hysteresis control."""
+        """Simple hysteresis control.
+
+        HEAT: ON at SP - hyst_on, OFF at SP + hyst_off.
+        COOL (exact mirror): ON at SP + hyst_on, OFF at SP - hyst_off.
+        """
         on_percent = 0.0
         
         if hvac_mode == VThermHvacMode_COOL:
-            if current_temp <= target_temp - hyst_lower:
+            if current_temp <= target_temp - hyst_off:
                 on_percent = 0.0
                 self.hysteresis_state = "off"
-            elif current_temp >= target_temp + hyst_upper:
+            elif current_temp >= target_temp + hyst_on:
                 on_percent = 1.0
                 self.hysteresis_state = "on"
             else:
                 self.hysteresis_state = "band"
                 on_percent = None  # No change
         else: # HEAT
-            if current_temp >= target_temp + hyst_upper:
+            if current_temp >= target_temp + hyst_off:
                 on_percent = 0.0
                 self.hysteresis_state = "off"
-            elif current_temp <= target_temp - hyst_lower:
+            elif current_temp <= target_temp - hyst_on:
                 on_percent = 1.0
                 self.hysteresis_state = "on"
             else:

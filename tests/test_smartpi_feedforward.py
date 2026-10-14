@@ -522,7 +522,6 @@ class TestFF3:
             a=0.02,
             b=0.002,
             deadtime_heat_s=0.0,
-            deadtime_cool_s=0.0,
         )
         assert result.enabled is False
         assert result.u_ff3_applied == pytest.approx(0.0)
@@ -558,7 +557,6 @@ class TestFF3:
             a=0.02,
             b=0.002,
             deadtime_heat_s=0.0,
-            deadtime_cool_s=0.0,
         )
         assert result.enabled is False
         assert result.u_ff3_applied == pytest.approx(0.0)
@@ -595,7 +593,6 @@ class TestFF3:
             a=0.02,
             b=0.002,
             deadtime_heat_s=0.0,
-            deadtime_cool_s=0.0,
             disturbance_context_active=False,
             disturbance_context_reason="trajectory_setpoint_active",
         )
@@ -635,7 +632,6 @@ class TestFF3:
             a=0.02,
             b=0.002,
             deadtime_heat_s=0.0,
-            deadtime_cool_s=0.0,
         )
         assert result.enabled is False
         assert result.reason_disabled == "twin_warming_up"
@@ -680,7 +676,6 @@ class TestFF3:
             a=0.02,
             b=0.002,
             deadtime_heat_s=0.0,
-            deadtime_cool_s=0.0,
         )
         candidate_u = [item["u"] for item in result.candidate_scores]
         assert len(candidate_u) == 9
@@ -716,7 +711,6 @@ class TestFF3:
             a=0.02,
             b=0.002,
             deadtime_heat_s=900.0,
-            deadtime_cool_s=0.0,
         )
         assert result.horizon_cycles == 4
         assert len(result.candidate_scores) == 9
@@ -750,7 +744,6 @@ class TestFF3:
             a=0.02,
             b=0.002,
             deadtime_heat_s=900.0,
-            deadtime_cool_s=0.0,
         )
         assert abs(result.u_ff3_raw) <= FF3_MAX_AUTHORITY + 1e-9
         assert result.u_ff3_applied == pytest.approx(result.u_ff3_raw * FF3_NEARBAND_GAIN)
@@ -781,7 +774,6 @@ class TestFF3:
             b=0.004,
             u_base=0.6,
             deadtime_heat_s=1800.0,
-            deadtime_cool_s=0.0,
             is_calibrating=False,
             power_shedding=False,
             setpoint_changed=False,
@@ -858,7 +850,6 @@ class TestFF3:
             a=0.0,
             b=0.002,
             deadtime_heat_s=0.0,
-            deadtime_cool_s=0.0,
         )
 
         assert result.selected_candidate == pytest.approx(u_base)
@@ -893,7 +884,6 @@ class TestFF3:
             a=0.08,
             b=0.004,
             deadtime_heat_s=1800.0,
-            deadtime_cool_s=0.0,
             authority_factor=0.5,
         )
 

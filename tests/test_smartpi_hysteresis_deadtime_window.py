@@ -83,3 +83,68 @@ class TestSmartPiHysteresisDeadtimeWindow:
         assert has_cool_start, "SmartPI should have _t_cool_episode_start"
         
         assert pi._t_cool_episode_start is not None, "_t_cool_episode_start should be set when cooling starts"
+
+
+HYST_ON = 0.3
+HYST_OFF = 0.5
+
+
+@pytest.mark.parametrize(
+    ("current_temp", "expected_out", "expected_state"),
+    [
+        (19.7, 1.0, "on"),     # SP - hyst_on
+        (19.8, None, "band"),
+        (20.4, None, "band"),
+        (20.5, 0.0, "off"),    # SP + hyst_off
+    ],
+)
+def test_calculate_hysteresis_heat_thresholds(current_temp, expected_out, expected_state):
+    """HEAT: ON at SP - hyst_on, OFF at SP + hyst_off."""
+    from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
+
+    ctl = SmartPIController("test_hyst_heat")
+    out = ctl.calculate_hysteresis(20.0, current_temp, VThermHvacMode_HEAT, HYST_OFF, HYST_ON)
+
+    assert out == expected_out
+    assert ctl.hysteresis_state == expected_state
+
+
+@pytest.mark.parametrize(
+    ("current_temp", "expected_out", "expected_state"),
+    [
+        (20.3, 1.0, "on"),     # SP + hyst_on
+        (20.2, None, "band"),
+        (19.6, None, "band"),
+        (19.5, 0.0, "off"),    # SP - hyst_off
+    ],
+)
+def test_calculate_hysteresis_cool_mirrors_heat(current_temp, expected_out, expected_state):
+    """COOL mirrors HEAT: ON at SP + hyst_on, OFF at SP - hyst_off."""
+    from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL
+    from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
+
+    ctl = SmartPIController("test_hyst_cool")
+    out = ctl.calculate_hysteresis(20.0, current_temp, VThermHvacMode_COOL, HYST_OFF, HYST_ON)
+
+    assert out == expected_out
+    assert ctl.hysteresis_state == expected_state
+
+
+def test_smartpi_cool_hysteresis_uses_mirrored_thresholds():
+    """SmartPI wiring: COOL starts at SP + hysteresis_on and stops at SP - hysteresis_off."""
+    from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL
+
+    pi = SmartPI(MagicMock(), 10.0, 0, 0, "test_pi_cool_hyst", hysteresis_on=HYST_ON, hysteresis_off=HYST_OFF)
+
+    pi.calculate(20.0, 20.3, 30.0, 0.0, VThermHvacMode_COOL)
+    assert pi.phase == SmartPIPhase.HYSTERESIS
+    assert pi.ctl.hysteresis_state == "on"
+    assert pi.on_percent == 1.0
+
+    pi.calculate(20.0, 19.6, 30.0, 0.0, VThermHvacMode_COOL)
+    assert pi.ctl.hysteresis_state == "band"
+    assert pi.on_percent == 1.0
+
+    pi.calculate(20.0, 19.5, 30.0, 0.0, VThermHvacMode_COOL)
+    assert pi.ctl.hysteresis_state == "off"
+    assert pi.on_percent == 0.0
