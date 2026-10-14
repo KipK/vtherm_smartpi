@@ -76,7 +76,7 @@ def test_deadline_helpers_still_expire(clock: _Clock) -> None:
 
 def test_calibration_start_time_round_trip_across_restart(clock: _Clock) -> None:
     mgr = CalibrationManager("test")
-    mgr.start_calibration(now=clock.mono - 300.0, is_manual=True)
+    mgr.start_calibration(now=clock.mono - 300.0)
     state = mgr.save_state()
     assert state["calibration_start_time"] == pytest.approx(clock.wall - 300.0)
 

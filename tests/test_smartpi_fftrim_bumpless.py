@@ -279,15 +279,11 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
     algo._last_u_applied = 0.5
     algo._set_linear_output(0.5)
     algo._last_ff_result = FFResult(
-        ff_raw=0.4,
         u_ff1=0.4,
         u_ff2=0.0,
         u_ff_final=0.4,
         u_ff3=0.0,
-        u_db_nominal=0.4,
-        u_ff_ab=0.4,
         u_ff_trim=0.0,
-        u_ff_base=0.4,
         u_ff_eff=0.4,
         ff_reason="ff_none",
     )

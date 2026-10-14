@@ -2,9 +2,9 @@
 Feed-Forward A,B Confidence Policy for Smart-PI.
 
 Evaluates the reliability of the thermal model parameters a,b and determines:
-  - Whether u_ff_ab should be used normally (AB_OK).
+  - Whether u_ff1 should be used normally (AB_OK).
   - Whether u_ff_trim should be slowed / frozen (AB_DEGRADED).
-  - Whether the controller should fall back to a conservative pure-PI mode (AB_BAD).
+  - Whether the model is unreliable (AB_BAD).
 
 This class consumes existing reliability signals — it does not recompute them.
 """
@@ -14,7 +14,6 @@ import logging
 
 from .const import (
     ABConfidenceState,
-    AB_BAD_PERSIST_CYCLES,
     AB_CONFIDENCE_MIN_SAMPLES_A,
     AB_CONFIDENCE_MIN_SAMPLES_B,
 )
@@ -23,11 +22,10 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class ABConfidence:
-    """Tracks a,b model confidence and manages fallback policy."""
+    """Tracks a,b model confidence."""
 
     def __init__(self) -> None:
         self.state: ABConfidenceState = ABConfidenceState.AB_BOOTSTRAP
-        self._bad_cycle_count: int = 0
 
     def evaluate(
         self,
@@ -57,11 +55,6 @@ class ABConfidence:
         else:
             new_state = ABConfidenceState.AB_BAD
 
-        if new_state == ABConfidenceState.AB_BAD:
-            self._bad_cycle_count += 1
-        else:
-            self._bad_cycle_count = 0
-
         if self.state != new_state:
             _LOGGER.debug(
                 "ABConfidence: %s → %s (tau_reliable=%s, ok_a=%d, ok_b=%d)",
@@ -75,21 +68,5 @@ class ABConfidence:
         self.state = new_state
         return self.state
 
-    def get_ff_fallback(self) -> float | None:
-        """Return fallback FF value when a,b are unreliable, or None if no fallback.
-
-        In the refactored architecture there is no empirical hold fallback anymore:
-        after sustained AB_BAD we simply fall back to a conservative zero-FF mode
-        and let the PI absorb the residual error.
-        """
-        if self.state != ABConfidenceState.AB_BAD:
-            return None
-
-        if self._bad_cycle_count < AB_BAD_PERSIST_CYCLES:
-            return None
-
-        return 0.0
-
     def reset(self) -> None:
         self.state = ABConfidenceState.AB_BOOTSTRAP
-        self._bad_cycle_count = 0

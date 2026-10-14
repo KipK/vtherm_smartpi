@@ -71,10 +71,6 @@ class GainScheduler:
         self._ki = KI_SAFE
         self._kp_source = "safe"
         self._ki_source = "safe"
-        
-        # Previous values for freeze/soft-freeze logic
-        self._prev_kp = KP_SAFE
-        self._prev_ki = KI_SAFE
 
     def reset(self) -> None:
         """Reset gains to safe defaults."""
@@ -82,8 +78,6 @@ class GainScheduler:
         self._ki = KI_SAFE
         self._kp_source = "safe"
         self._ki_source = "safe"
-        self._prev_kp = KP_SAFE
-        self._prev_ki = KI_SAFE
         _LOGGER.debug("%s: GainScheduler reset to safe defaults", self._name)
 
     def calculate(
@@ -169,25 +163,20 @@ class GainScheduler:
             kp_taper = NEAR_BAND_TAPER_KP_MIN + (1.0 - NEAR_BAND_TAPER_KP_MIN) * ratio
             ki_taper = NEAR_BAND_TAPER_KI_MIN + (1.0 - NEAR_BAND_TAPER_KI_MIN) * ratio
             kp = clamp(kp * kp_taper, KP_MIN, KP_MAX)
-            ki = clamp(min(ki * ki_taper, ki), KI_MIN, KI_MAX)
+            ki = clamp(ki * ki_taper, KI_MIN, KI_MAX)
             # Mark source as near-band adjusted
             kp_source = f"{kp_source}_nearband"
             ki_source = f"{ki_source}_nearband"
         
-        # Apply Governance Freeze
-        if governance_decision == GovernanceDecision.HARD_FREEZE:
-            kp = self._prev_kp
-            ki = self._prev_ki
-            kp_source = "frozen"
-            ki_source = "frozen"
-        elif governance_decision == GovernanceDecision.FREEZE:
-            kp = self._prev_kp
-            ki = self._prev_ki
+        # Apply Governance Freeze against the previously applied gains
+        if governance_decision in (GovernanceDecision.HARD_FREEZE, GovernanceDecision.FREEZE):
+            kp = self._kp
+            ki = self._ki
             kp_source = "frozen"
             ki_source = "frozen"
         elif governance_decision == GovernanceDecision.SOFT_FREEZE_DOWN:
-            kp = min(kp, self._prev_kp)
-            ki = min(ki, self._prev_ki)
+            kp = min(kp, self._kp)
+            ki = min(ki, self._ki)
             kp_source = f"{kp_source}_softfreeze"
             ki_source = f"{ki_source}_softfreeze"
         
@@ -196,8 +185,6 @@ class GainScheduler:
         self._ki = ki
         self._kp_source = kp_source
         self._ki_source = ki_source
-        self._prev_kp = kp
-        self._prev_ki = ki
         
         return GainResult(
             kp=kp,
@@ -217,11 +204,9 @@ class GainScheduler:
         
         if "kp" in state and state["kp"] is not None:
             self._kp = float(state["kp"])
-            self._prev_kp = self._kp
             
         if "ki" in state and state["ki"] is not None:
             self._ki = float(state["ki"])
-            self._prev_ki = self._ki
             
         if "kp_source" in state and state["kp_source"] is not None:
             self._kp_source = state["kp_source"]
@@ -282,13 +267,3 @@ class GainScheduler:
     def ki_source(self) -> str:
         """Source description for current Ki value."""
         return self._ki_source
-
-    @property
-    def prev_kp(self) -> float:
-        """Previous proportional gain (for freeze logic)."""
-        return self._prev_kp
-
-    @property
-    def prev_ki(self) -> float:
-        """Previous integral gain (for freeze logic)."""
-        return self._prev_ki

@@ -133,11 +133,8 @@ def test_smartpi_feedforward_uses_raw_setpoint_when_trajectory_is_active():
             e_p=e_p,
         )
 
-    assert compute_ff_mock.call_count == 2
-    assert all(
-        call.kwargs["target_temp_ff"] == pytest.approx(target_temp)
-        for call in compute_ff_mock.call_args_list
-    )
+    compute_ff_mock.assert_called_once()
+    assert compute_ff_mock.call_args.kwargs["target_temp_ff"] == pytest.approx(target_temp)
 
 
 def test_smartpi_late_braking_stays_armed_after_positive_setpoint_change():

@@ -145,15 +145,11 @@ async def test_handler_passes_projected_valve_power_to_mid_cycle_binding(
 def _configure_valve_ownership_context(algo: SmartPI, power: float) -> None:
     """Set one complete frozen decomposition for a valve command."""
     algo._last_ff_result = FFResult(
-        ff_raw=0.3,
         u_ff1=0.3,
         u_ff2=0.0,
         u_ff_final=0.3,
         u_ff3=0.0,
-        u_db_nominal=0.3,
-        u_ff_ab=0.3,
         u_ff_trim=0.0,
-        u_ff_base=0.3,
         u_ff_eff=0.3,
         ff_reason="ff_none",
     )

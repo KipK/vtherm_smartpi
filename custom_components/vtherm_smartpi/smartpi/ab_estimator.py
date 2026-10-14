@@ -49,10 +49,7 @@ from .const import (
     AB_DRIFT_RECENTER_MAX_CYCLES,
     AB_DRIFT_RECENTER_STEP_MAX_FACTOR,
     AB_DRIFT_SEQ_GAP_MAX,
-    AB_MIN_POINTS_FOR_PUBLISH_A,
-    AB_MIN_POINTS_FOR_PUBLISH_B,
     AB_MIN_SAMPLES_A,
-    AB_MIN_SAMPLES_A_CONVERGED,
     AB_MIN_SAMPLES_B,
     AB_VAL_TOLERANCE,
     AB_WMED_ALPHA,
@@ -223,38 +220,6 @@ class ABEstimator:
         return reset_required and had_mode_dependent_state
 
     # ---------- Robust helpers (Static) ----------
-
-    @staticmethod
-    def _mad(values):
-        if len(values) < 2:
-            return None
-        med = statistics.median(values)
-        try:
-            return statistics.median(abs(v - med) for v in values)
-        except statistics.StatisticsError:
-            return None
-
-    def _get_window(self, history: Deque[float]):
-        """
-        Get the learning window subset according to step logic.
-        - The window size grows progressively up to the max size.
-        """
-        return list(history)
-
-    @staticmethod
-    def _ols_slope(x: list[float], y: list[float]) -> float | None:
-        """Ordinary Least Squares slope estimator."""
-        n = len(x)
-        if n < 2:
-            return None
-        sx = sum(x)
-        sy = sum(y)
-        sxx = sum(xi * xi for xi in x)
-        sxy = sum(xi * yi for xi, yi in zip(x, y))
-        denom = n * sxx - sx * sx
-        if abs(denom) < 1e-15:
-            return None
-        return (n * sxy - sx * sy) / denom
 
     @staticmethod
     def robust_dTdt_per_min(
@@ -570,23 +535,15 @@ class ABEstimator:
         param_name: str,
         history: Deque[float],
         value: float,
-        default_value: float,
     ) -> float:
         """Append a real measurement and publish the aggregated parameter."""
 
         history.append(value)
-        min_points_for_publish = (
-            AB_MIN_POINTS_FOR_PUBLISH_A
-            if param_name == "a"
-            else AB_MIN_POINTS_FOR_PUBLISH_B
-        )
         new_value, ab_diag = ab_publish(
             history,
             plateau_n=AB_WMED_PLATEAU_N,
             alpha=AB_WMED_ALPHA,
             r=AB_WMED_R,
-            min_points_for_publish=min_points_for_publish,
-            default_value=default_value,
         )
         self.diag_ab_bootstrap = ab_diag.get("ab_bootstrap", False)
         self.diag_ab_points = ab_diag.get("ab_points", len(history))
@@ -670,7 +627,6 @@ class ABEstimator:
                 param_name="b",
                 history=self.b_meas_hist,
                 value=b_meas,
-                default_value=self.B_INIT,
             )
             new_b = clamp(new_b, self.B_MIN, self.B_MAX)
 
@@ -698,11 +654,7 @@ class ABEstimator:
                 )
                 return
 
-            min_a_samples = (
-                AB_MIN_SAMPLES_A_CONVERGED
-                if self.b_converged_for_a()
-                else AB_MIN_SAMPLES_A
-            )
+            min_a_samples = AB_MIN_SAMPLES_A
 
             a_meas = (dTdt + self.b * delta) / u
             if mode_sign * a_meas <= 0:
@@ -744,7 +696,6 @@ class ABEstimator:
                 param_name="a",
                 history=self.a_meas_hist,
                 value=a_meas,
-                default_value=mode_sign * abs(self.A_INIT),
             )
             new_a = mode_sign * clamp(abs(new_a), self.A_MIN, self.A_MAX)
 
@@ -771,7 +722,7 @@ class ABEstimator:
             return TauReliability(reliable=False, tau_min=9999.0)
 
         med_b = statistics.median(self._b_hat_hist)
-        mad_b = self._mad(self._b_hat_hist)
+        mad_b = robust_mad(list(self._b_hat_hist))
 
         if mad_b is None or med_b <= 0:
             return TauReliability(reliable=False, tau_min=9999.0)
@@ -803,7 +754,7 @@ class ABEstimator:
         if med_b <= 0:
             return False
 
-        mad_b = self._mad(recent)
+        mad_b = robust_mad(recent)
         if mad_b is None:
             return False
 

@@ -62,11 +62,10 @@ from .smartpi.const import (
     GovernanceDecision,
     SmartPICalibrationPhase,
     TrajectoryPhase,
-    KP_SAFE,
-    KI_SAFE,
     KI_MIN,
     MAX_STEP_PER_MINUTE,
     SETPOINT_BOOST_RATE,
+    SETPOINT_MODE_DELTA_C,
     SKIP_CYCLES_AFTER_RESUME,
     SMARTPI_RECALC_INTERVAL_SEC,
     LEARNING_PAUSE_RESUME_MIN,
@@ -190,7 +189,6 @@ class SmartPI:
         # --- Feed-forward (FF) progressive enablement ("smart warm-up") ---
         ff_warmup_ok_count: int = 30,
         ff_warmup_cycles: int = 6,
-        ff_scale_unreliable_max: float = 0.30,
         # --- Setpoint trajectory shaping knobs ---
         setpoint_weight_b: float = 0.3,
         near_band_deg: float = DEFAULT_NEAR_BAND_DEG,
@@ -229,7 +227,6 @@ class SmartPI:
         # FF progressive enablement
         self.ff_warmup_ok_count = max(int(ff_warmup_ok_count), 1)
         self.ff_warmup_cycles = max(int(ff_warmup_cycles), 1)
-        self.ff_scale_unreliable_max = clamp(float(ff_scale_unreliable_max), 0.0, 1.0)
         self._cycles_since_reset: int = 0
 
         # 2DOF / scheduling parameters
@@ -423,10 +420,6 @@ class SmartPI:
         if saved_state:
             self.load_state(saved_state)
 
-        # Legacy attributes for tests
-        self._prev_kp = self.Kp
-        self._prev_ki = self.Ki
-
         _LOGGER.debug("%s - SmartPI initialized", self._name)
 
     # ------------------------------
@@ -511,8 +504,6 @@ class SmartPI:
         self._e_filt = None
         self._cycles_since_reset = 0
         self._accumulated_dt = 0.0
-        self._prev_kp = KP_SAFE
-        self._prev_ki = KI_SAFE
 
         # Reset learning states
         self._last_calculate_time = None
@@ -1479,7 +1470,6 @@ class SmartPI:
             u_ff2=plan.new_trim,
             u_ff_trim=plan.new_trim,
             u_ff_final=new_visible_ff,
-            u_db_nominal=new_visible_ff,
             u_ff_eff=new_visible_ff,
         )
         self.ctl.u_cmd = clamp(
@@ -2303,19 +2293,11 @@ class SmartPI:
                 "I:RESET",
                 "I:BLEED",
                 "I:OVERRIDE",
+                "I:HOLD",
             )
         ):
             self._last_aw_du = 0.0
             return
-
-        if i_mode.startswith("I:HOLD"):
-            if self.ctl.integral_hold_mode not in {
-                "servo_recovery",
-                "resume_recovery",
-                "disturbance_recovery",
-            }:
-                self._last_aw_du = 0.0
-                return
 
         # Reference = what the PI model would have commanded within valid physical bounds [0, 1]
         u_model = self.ctl.u_ff + (self.Kp * self.ctl.last_error_p_db + self.Ki * self.ctl.integral)
@@ -2444,7 +2426,6 @@ class SmartPI:
             "db_state": self.deadband_mgr.save_state() if hasattr(self.deadband_mgr, "save_state") else {},
             "cal_state": self.calibration_mgr.save_state() if hasattr(self.calibration_mgr, "save_state") else {},
             "gs_state": self.gain_scheduler.save_state() if hasattr(self.gain_scheduler, "save_state") else {},
-            "integral_guard_state": self.integral_guard.save_state() if hasattr(self.integral_guard, "save_state") else {},
             "twin_state": self.twin.save_state(),
             "guards_state": self.guards.save_state(),
             "ac_state": self.autocalib.save_state(),
@@ -2480,7 +2461,6 @@ class SmartPI:
         self.deadband_mgr.load_state(state.get("db_state", {}))
         self.calibration_mgr.load_state(state.get("cal_state", {}))
         self.gain_scheduler.load_state(state.get("gs_state", {}))
-        self.integral_guard.load_state(state.get("integral_guard_state", {}))
         self.integral_guard.reset()
         self.sp_mgr.clear_runtime_transients()
         self.ctl.clear_integral_hold()
@@ -2751,7 +2731,6 @@ class SmartPI:
         hvac_mode: VThermHvacMode,
         slope_h: float | None,
         setpoint_changed: bool,
-        power_shedding: bool,
         startup_first_run: bool,
         u_base: float,
     ) -> float:
@@ -2783,8 +2762,6 @@ class SmartPI:
             disturbance_context_reason=ff3_context.reason,
             authority_factor=ff3_context.authority_factor,
             prediction_quality=ff3_context.prediction_quality,
-            is_calibrating=(self.calibration_state != SmartPICalibrationPhase.IDLE),
-            power_shedding=power_shedding,
             setpoint_changed=setpoint_changed,
             startup_first_run=startup_first_run,
             last_sat=self.ctl.last_sat,
@@ -2993,7 +2970,6 @@ class SmartPI:
         is_first_run: bool = False,
         setpoint_changed: bool = False,
         cycle_boundary: bool = False,
-        power_shedding: bool = False,
         startup_first_run: bool = False,
     ) -> tuple[float, bool]:
         """Calculate gains and feedforward, and handles integrator hold.
@@ -3033,13 +3009,12 @@ class SmartPI:
                 self._name, old_ki, new_ki, self.ctl.integral
             )
 
-        # --- FFv2: AB confidence & fallback ---
+        # --- FFv2: AB confidence ---
         self._ab_confidence.evaluate(
             tau_reliable=self._tau_reliable,
             learn_ok_count_a=self.est.learn_ok_count_a,
             learn_ok_count_b=self.est.learn_ok_count_b,
         )
-        ab_fallback = self._ab_confidence.get_ff_fallback()
 
         # --- FFv2: compute signed k_ff from the active mono-mode model ---
         model_ready = (
@@ -3057,8 +3032,7 @@ class SmartPI:
             k_ff = 0.0
         learn_scale = clamp(self.est.learn_ok_count / float(self.ff_warmup_ok_count), 0.0, 1.0)
         time_scale = clamp(self._cycles_since_reset / float(self.ff_warmup_cycles), 0.0, 1.0)
-        reliable_cap = 1.0 if self._tau_reliable else self.ff_scale_unreliable_max
-        warmup_scale = clamp(reliable_cap * learn_scale * time_scale, 0.0, 1.0)
+        warmup_scale = clamp(learn_scale * time_scale, 0.0, 1.0)
 
         # Save previous FF state before computing the new FFResult
         prev_ff_result = self._last_ff_result
@@ -3070,12 +3044,6 @@ class SmartPI:
             ext_temp=ext_current_temp,
             warmup_scale=warmup_scale,
             trim=self._ff_trim,
-            regime=self.gov.regime,
-            error=error,
-            near_band_below_deg=self.deadband_mgr.near_band_below_deg,
-            near_band_above_deg=self.deadband_mgr.near_band_above_deg,
-            ab_fallback=ab_fallback,
-            u_ff3=0.0,
         )
 
         u_ff3 = self._compute_ff3_for_cycle(
@@ -3086,27 +3054,18 @@ class SmartPI:
             hvac_mode=hvac_mode,
             slope_h=slope_h,
             setpoint_changed=setpoint_changed,
-            power_shedding=power_shedding,
             startup_first_run=startup_first_run,
             u_base=nominal_ff_result.u_ff_final,
         )
 
-        # --- FFv2 + FF3: full FF computation via orchestrator ---
-        ff_result = compute_ff(
-            k_ff=k_ff,
-            target_temp_ff=target_temp_ff,
-            ext_temp=ext_current_temp,
-            warmup_scale=warmup_scale,
-            trim=self._ff_trim,
-            regime=self.gov.regime,
-            error=error,
-            near_band_below_deg=self.deadband_mgr.near_band_below_deg,
-            near_band_above_deg=self.deadband_mgr.near_band_above_deg,
-            ab_fallback=ab_fallback,
+        # --- FFv2 + FF3: inject FF3 on top of FF1 + FF2 ---
+        ff_result = replace(
+            nominal_ff_result,
             u_ff3=u_ff3,
+            u_ff_eff=clamp(nominal_ff_result.u_ff_final + u_ff3, 0.0, 1.0),
         )
         self._last_ff_result = ff_result
-        self._last_ff_raw = ff_result.ff_raw
+        self._last_ff_raw = ff_result.u_ff1
         self._last_ff_reason = ff_result.ff_reason
         self._last_u_ff3 = ff_result.u_ff3
 
@@ -3116,7 +3075,7 @@ class SmartPI:
         # FF3 remains a predictive transient action and must not be maintained
         # around the setpoint.
         runtime_ff = (
-            ff_result.u_db_nominal
+            ff_result.u_ff_final
             if self.deadband_mgr.in_deadband
             else ff_result.u_ff_eff
         )
@@ -3393,14 +3352,15 @@ class SmartPI:
             self._recovery_hold_armed = False
             self._resume_deadtime_hold_source = IntegralGuardSource.NONE
             self._resume_deadtime_hold_started = False
-            # Preserve integral memory and restart the servo path.
-            new_error, new_error_p = self.ctl.handle_setpoint_change(
-                target_temp, old_target_temp, current_temp, hvac_mode, self.Kp, self.Ki
-            )
-            if new_error != 0.0:
-                self._e_filt = new_error
-                self._last_error = new_error
-                self._last_error_p = new_error_p
+            # Large changes restart the error history; the integral is preserved.
+            if abs(target_temp - old_target_temp) >= SETPOINT_MODE_DELTA_C:
+                new_error = float(target_temp - current_temp)
+                if hvac_mode == VThermHvacMode_COOL:
+                    new_error = -new_error
+                if new_error != 0.0:
+                    self._e_filt = new_error
+                    self._last_error = new_error
+                    self._last_error_p = new_error
         elif resume_guard_source != IntegralGuardSource.NONE:
             if resume_guard_source in {
                 IntegralGuardSource.WINDOW_RESUME,
@@ -3589,7 +3549,6 @@ class SmartPI:
             resumed_from_off,
             setpoint_changed=setpoint_changed,
             cycle_boundary=cycle_boundary,
-            power_shedding=power_shedding,
             startup_first_run=startup_first_run,
         )
         # Apply explicit hold (parameter) or governance hold
@@ -3623,16 +3582,8 @@ class SmartPI:
             self.Ki,
             u_ff,
             dt_min,
-            self._cycle_min,
             in_deadband_now,
-            self.deadband_mgr.in_near_band,
             integrator_hold,
-            self._last_ff_result.u_db_nominal if self._last_ff_result is not None else u_ff,
-            hvac_mode,
-            current_temp,
-            target_temp_filt,
-            self._tau_reliable,
-            self.est.learn_ok_count_a,
             deadband_c=self.deadband_c,
             trajectory_shaping_active=trajectory_i_active and block_positive_integral,
             core_deadband=in_core_deadband,

@@ -36,10 +36,8 @@ def _prepared(mode=VThermHvacMode_HEAT):
     inputs = dict(
         error=case.direction * (case.target - case.current), error_p=0.05,
         kp=rt.Kp, ki=rt.Ki, u_ff=case.pi.u_ff,
-        dt_min=1.0, cycle_min=rt._cycle_min, in_deadband=False,
-        in_near_band=True, integrator_hold=False, u_db_nominal=case.pi.u_ff,
-        hvac_mode=case.mode, current_temp=case.current, target_temp=case.target,
-        is_tau_reliable=True, learn_ok_count_a=10, deadband_c=rt.deadband_c,
+        dt_min=1.0, in_deadband=False,
+        integrator_hold=False, deadband_c=rt.deadband_c,
         core_deadband=False, deadband_allow_p=True,
     )
     release_inputs = dict(
@@ -53,7 +51,8 @@ def _prepared(mode=VThermHvacMode_HEAT):
 
 def _protected_state(rt):
     return deepcopy((
-        rt.ctl.save_state(), rt.est.save_state(), rt.integral_guard.save_state(),
+        rt.ctl.save_state(), rt.ctl.integral_hold_mode, rt.est.save_state(),
+        vars(rt.integral_guard),
         rt.guards.save_state(), rt._current_cycle_start_monotonic,
         rt._committed_on_percent, vars(rt._causal_power_trace),
         rt._last_u_cmd, rt._last_u_limited, rt._on_percent,
@@ -80,7 +79,6 @@ def test_terminal_release_replays_p_once_and_retires_only_governor_episode(mode)
     assert rt.ctl.u_p == pi.kp * p_error
     assert rt.ctl.u_pi == rt.ctl.u_p + pi.u_i
     assert rt.ctl.u_cmd == command
-    assert rt.ctl.last_error_p == inputs["error"]
     assert rt.ctl.last_error_p_db == p_error
     assert (rt.ctl.deadband_p_mode, rt.ctl._deadband_edge_count,
             rt.ctl._deadband_edge_sign) == (p_mode, p_count, p_sign)
@@ -238,12 +236,12 @@ def test_calculate_accepts_terminal_release_and_delivers_raw_command(monkeypatch
     def record_release(**kwargs):
         snapshot = rt.ctl.pi_output_snapshot
         integral = rt.integral
-        guard = rt.integral_guard.save_state()
+        guard = deepcopy(vars(rt.integral_guard))
         result = release(**kwargs)
         assert result is not None
         assert rt.ctl.pi_output_snapshot is snapshot
         assert rt.integral == integral
-        assert rt.integral_guard.save_state() == guard
+        assert vars(rt.integral_guard) == guard
         accepted.append((result, snapshot))
         return result
 

@@ -107,8 +107,6 @@ def compute_ff3(
     regime: GovernanceRegime | None,
     in_deadband: bool,
     in_near_band: bool,
-    is_calibrating: bool,
-    power_shedding: bool,
     setpoint_changed: bool,
     startup_first_run: bool,
     last_sat: str,
@@ -174,10 +172,6 @@ def compute_ff3(
         return _disabled_result(reason="twin_not_initialized", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if not twin_reliable:
         return _disabled_result(reason=twin_disabled_reason, u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
-    if is_calibrating:
-        return _disabled_result(reason="calibration", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
-    if power_shedding:
-        return _disabled_result(reason="power_shedding", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if setpoint_changed:
         return _disabled_result(reason="recent_setpoint_change", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if in_deadband:
@@ -189,7 +183,7 @@ def compute_ff3(
         return _disabled_result(reason=reason, u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if last_sat == "SAT_HI":
         return _disabled_result(reason="saturated_high", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
-    if regime not in (GovernanceRegime.EXCITED_STABLE, GovernanceRegime.NEAR_BAND, GovernanceRegime.SATURATED):
+    if regime not in (GovernanceRegime.NEAR_BAND, GovernanceRegime.SATURATED):
         reason = "system_not_stable" if regime is None else f"regime_{regime.value}"
         return _disabled_result(reason=reason, u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if max_delta_u <= 1e-9:

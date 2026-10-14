@@ -31,7 +31,6 @@ def make_algo(integral: float = 0.5, i_mode: str = "I:RUN") -> SmartPI:
     algo.ctl.integral = integral
     algo.ctl.last_i_mode = i_mode
     algo.ctl.u_ff = 0.0
-    algo.ctl.last_error_p = 0.3   # u_model = 0 + 0.5*0.3 + 0.05*integral
     # Thermal context (Tin < SP → no thermal invariant active by default)
     algo._last_hvac_mode = VThermHvacMode_HEAT
     algo._last_current_temp = 20.0
@@ -81,7 +80,7 @@ def test_t3_aw_blocked_in_freeze():
     assert algo.integral == before, "Integral must not change when I:FREEZE is active"
 
 
-def test_deadband_uses_u_db_nominal():
+def test_deadband_holds_ff_plus_frozen_pi():
     """In core deadband (HEAT, reliable), P must be frozen.
 
     Only FF and frozen I remain in the deadband command.
@@ -98,16 +97,8 @@ def test_deadband_uses_u_db_nominal():
         ki=0.05,
         u_ff=0.20,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=True,
-        in_near_band=False,
         integrator_hold=False,
-        u_db_nominal=0.35,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=19.95,
-        target_temp=20.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=10,
         deadband_c=0.1,
     )
 
@@ -135,16 +126,8 @@ def test_observed_valve_deadband_case_uses_frozen_integral_only():
         ki=0.001443,
         u_ff=0.0,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=True,
-        in_near_band=True,
         integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=22.93,
-        target_temp=23.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.10,
         deadband_allow_p=True,
     )
@@ -172,16 +155,8 @@ def test_tracking_trajectory_reduces_free_integral_growth():
         ki=0.1,
         u_ff=0.0,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=False,
-        in_near_band=False,
         integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=19.0,
-        target_temp=20.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.0,
         trajectory_shaping_active=True,
     )

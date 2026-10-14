@@ -61,7 +61,6 @@ class AutoCalibTrigger:
         WAITING_SNAPSHOT-> waiting for initial conditions to take first snapshot
         MONITORING      -> snapshot taken; evaluating stagnation hourly
         TRIGGERED       -> calibration launched; waiting for completion
-        POST_CALIB_CHECK-> calibration done; verifying exit criteria
     """
 
     def __init__(self, name: str) -> None:
@@ -262,9 +261,6 @@ class AutoCalibTrigger:
 
         if self._state == AutoCalibState.MONITORING:
             return self._check_monitoring(now_wall, algo, ext_temp, current_temp)
-
-        if self._state == AutoCalibState.POST_CALIB_CHECK:
-            return self._check_post_calib(now_wall, algo)
 
         # TRIGGERED / IDLE: no action needed here
         return None
@@ -591,7 +587,7 @@ class AutoCalibTrigger:
         Returns:
             AutoCalibEvent describing the result, or None if not in expected state.
         """
-        if self._state not in (AutoCalibState.TRIGGERED, AutoCalibState.POST_CALIB_CHECK):
+        if self._state != AutoCalibState.TRIGGERED:
             # Not triggered by us — ignore (no-op for unrelated calibrations)
             return None
 
@@ -606,7 +602,6 @@ class AutoCalibTrigger:
             self._triggered_params = []
             return None
 
-        self._state = AutoCalibState.POST_CALIB_CHECK
         return self._check_post_calib(now_wall, algo)
 
     def _check_post_calib(self, now_wall: float, algo: "SmartPI") -> AutoCalibEvent | None:

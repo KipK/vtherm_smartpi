@@ -6,7 +6,6 @@ from custom_components.vtherm_smartpi.smartpi.deadband_output import (
     deadband_proportional_error,
 )
 from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
-from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 
 
 def test_deadband_blocks_p_when_allow_p_disabled():
@@ -185,16 +184,8 @@ def test_controller_requires_persistent_deadband_edge_before_p_term():
         "ki": 0.01,
         "u_ff": 0.40,
         "dt_min": 1.0,
-        "cycle_min": 10.0,
         "in_deadband": True,
-        "in_near_band": True,
         "integrator_hold": False,
-        "u_db_nominal": 0.40,
-        "hvac_mode": VThermHvacMode_HEAT,
-        "current_temp": 20.10,
-        "target_temp": 20.0,
-        "is_tau_reliable": True,
-        "learn_ok_count_a": 10,
         "deadband_c": 0.10,
         "core_deadband": True,
         "deadband_allow_p": True,
@@ -214,10 +205,7 @@ def test_controller_snapshot_projects_pending_edge_without_advancing_persistence
     controller = SmartPIController("projection")
     kwargs = dict(
         error=0.10, error_p=0.10, kp=1.5, ki=0.05, u_ff=0.20,
-        dt_min=1.0, cycle_min=10.0, in_deadband=True, in_near_band=True,
-        integrator_hold=False, u_db_nominal=0.20,
-        hvac_mode=VThermHvacMode_HEAT, current_temp=20.0,
-        target_temp=20.10, is_tau_reliable=True, learn_ok_count_a=10,
+        dt_min=1.0, in_deadband=True, integrator_hold=False,
         deadband_c=0.10, core_deadband=True, deadband_allow_p=True,
     )
     controller.integral = 2.0
@@ -251,14 +239,7 @@ def test_controller_carries_edge_persistence_across_core_boundary(sign):
         "ki": 0.01,
         "u_ff": 0.40,
         "dt_min": 1.0,
-        "cycle_min": 10.0,
-        "in_near_band": True,
         "integrator_hold": True,
-        "u_db_nominal": 0.40,
-        "hvac_mode": VThermHvacMode_HEAT,
-        "target_temp": 20.0,
-        "is_tau_reliable": True,
-        "learn_ok_count_a": 10,
         "deadband_c": deadband_c,
         "deadband_allow_p": True,
     }
@@ -269,7 +250,6 @@ def test_controller_carries_edge_persistence_across_core_boundary(sign):
         error_p=outside_error,
         in_deadband=False,
         core_deadband=False,
-        current_temp=20.0 - outside_error,
         **common,
     )
     assert controller.deadband_p_mode == "deadzone_edge"
@@ -280,7 +260,6 @@ def test_controller_carries_edge_persistence_across_core_boundary(sign):
         error_p=inside_error,
         in_deadband=True,
         core_deadband=True,
-        current_temp=20.0 - inside_error,
         **common,
     )
 
@@ -297,14 +276,7 @@ def test_controller_resets_edge_persistence_on_sign_change():
         "ki": 0.01,
         "u_ff": 0.40,
         "dt_min": 1.0,
-        "cycle_min": 10.0,
-        "in_near_band": True,
         "integrator_hold": True,
-        "u_db_nominal": 0.40,
-        "hvac_mode": VThermHvacMode_HEAT,
-        "target_temp": 20.0,
-        "is_tau_reliable": True,
-        "learn_ok_count_a": 10,
         "deadband_c": 0.10,
         "deadband_allow_p": True,
     }
@@ -314,7 +286,6 @@ def test_controller_resets_edge_persistence_on_sign_change():
         error_p=0.11,
         in_deadband=False,
         core_deadband=False,
-        current_temp=19.89,
         **common,
     )
     first_negative = controller.compute_pwm(
@@ -322,7 +293,6 @@ def test_controller_resets_edge_persistence_on_sign_change():
         error_p=-0.09,
         in_deadband=True,
         core_deadband=True,
-        current_temp=20.09,
         **common,
     )
 
@@ -335,7 +305,6 @@ def test_controller_resets_edge_persistence_on_sign_change():
         error_p=-0.09,
         in_deadband=True,
         core_deadband=True,
-        current_temp=20.09,
         **common,
     )
 

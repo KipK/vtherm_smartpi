@@ -25,8 +25,6 @@ class TestBackwardCompatibility:
             plateau_n=11,
             alpha=1.0,
             r=0.85,
-            min_points_for_publish=1,
-            default_value=0.0005,
         )
         assert result == statistics.median(values)
         assert diag["ab_mode_effective"] == "weighted_median"
@@ -37,55 +35,8 @@ class TestBackwardCompatibility:
         d = deque([float(v) for v in values], maxlen=31)
         result, _ = ab_publish(
             d, plateau_n=11, alpha=1.0, r=0.85,
-            min_points_for_publish=1, default_value=0.0,
         )
         assert result == statistics.median([float(v) for v in values])
-
-
-# ---------------------------------------------------------------------------
-# T2 — Bootstrap freeze: N < min_points_for_publish → return default_value
-# ---------------------------------------------------------------------------
-
-class TestBootstrapFreeze:
-    """T2: buffer smaller than min_points_for_publish must return default_value."""
-
-    def test_bootstrap_returns_default(self):
-        d = deque([0.001, 0.002, 0.003], maxlen=31)
-        default = 0.0010
-        result, diag = ab_publish(
-            d,
-            plateau_n=11,
-            alpha=1.0,
-            r=0.85,
-            min_points_for_publish=11,
-            default_value=default,
-        )
-        assert result == default
-        assert diag["ab_bootstrap"] is True
-        assert diag["ab_mode_effective"] == "default_frozen"
-
-    def test_bootstrap_independent_of_buffer_content(self):
-        """Different buffer contents must all produce the same default_value."""
-        default = 0.0010
-        for content in [[0.001] * 5, [99.0] * 7, [0.0] * 3]:
-            d = deque(content, maxlen=31)
-            result, diag = ab_publish(
-                d, plateau_n=11, alpha=1.0, r=0.85,
-                min_points_for_publish=11, default_value=default,
-            )
-            assert result == default
-            assert diag["ab_bootstrap"] is True
-
-    def test_bootstrap_boundary_exact_min(self):
-        """Exactly min_points_for_publish points must NOT trigger bootstrap."""
-        values = [0.005] * 11
-        d = deque(values, maxlen=31)
-        result, diag = ab_publish(
-            d, plateau_n=11, alpha=1.0, r=0.85,
-            min_points_for_publish=11, default_value=9999.0,
-        )
-        assert diag["ab_bootstrap"] is False
-        assert result != 9999.0
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +52,6 @@ class TestShortWindowDegeneracy:
         d = deque(values, maxlen=31)
         result, diag = ab_publish(
             d, plateau_n=11, alpha=1.0, r=0.85,
-            min_points_for_publish=1, default_value=0.0,
         )
         assert result == statistics.median(values)
         assert diag["ab_mode_effective"] == "weighted_median"
@@ -111,7 +61,6 @@ class TestShortWindowDegeneracy:
         d = deque(values, maxlen=31)
         result, diag = ab_publish(
             d, plateau_n=11, alpha=1.0, r=0.85,
-            min_points_for_publish=1, default_value=0.0,
         )
         assert result == statistics.median(values)
         assert diag["ab_mode_effective"] == "weighted_median"
@@ -140,7 +89,6 @@ class TestAgeOrdering:
         d = self._make_deque(oldest_values=[0.001] * 10, newest_values=[0.010] * 11)
         result, diag = ab_publish(
             d, plateau_n=11, alpha=1.0, r=0.85,
-            min_points_for_publish=1, default_value=0.0,
         )
         assert diag["ab_mode_effective"] == "weighted_median"
         # Weighted median must be pulled toward 0.010 (the plateau cluster)
@@ -158,11 +106,9 @@ class TestAgeOrdering:
 
         result_correct, _ = ab_publish(
             d_correct, plateau_n=11, alpha=1.0, r=0.85,
-            min_points_for_publish=1, default_value=0.0,
         )
         result_inverted, _ = ab_publish(
             d_inverted, plateau_n=11, alpha=1.0, r=0.85,
-            min_points_for_publish=1, default_value=0.0,
         )
         assert result_correct != result_inverted
 
@@ -192,7 +138,6 @@ class TestOutlierRobustness:
 
         result, diag = ab_publish(
             d, plateau_n=11, alpha=1.0, r=0.85,
-            min_points_for_publish=1, default_value=0.0,
         )
         assert diag["ab_mode_effective"] == "weighted_median"
         # The outlier is 20x the normal value; the median must stay near the cluster

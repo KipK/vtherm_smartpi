@@ -5,65 +5,7 @@ Setpoint changes, gain changes, and FF changes must NOT rewrite the integral.
 """
 
 import pytest
-from custom_components.vtherm_smartpi.hvac_mode import (
-    VThermHvacMode_HEAT,
-    VThermHvacMode_COOL,
-)
 from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
-
-
-def test_small_setpoint_increase_preserves_integral():
-    """A small setpoint increase must NOT modify the integral."""
-    ctl = SmartPIController("test")
-    ctl.integral = 3.0
-    ctl.last_i_mode = "I:RUN"
-
-    ctl.handle_setpoint_change(
-        target_temp=20.3,
-        last_target_temp=20.0,
-        current_temp=19.8,
-        hvac_mode=VThermHvacMode_HEAT,
-        kp=1.0,
-        ki=0.05,
-    )
-
-    assert ctl.integral == 3.0, "Small setpoint increase must preserve integral"
-
-
-def test_small_setpoint_decrease_preserves_integral():
-    """A small setpoint decrease must preserve integral memory."""
-    ctl = SmartPIController("test")
-    ctl.integral = 3.0
-
-    ctl.handle_setpoint_change(
-        target_temp=19.7,
-        last_target_temp=20.0,
-        current_temp=19.8,
-        hvac_mode=VThermHvacMode_HEAT,
-        kp=1.0,
-        ki=0.05,
-    )
-
-    assert ctl.integral == 3.0, "Small setpoint decrease must preserve integral"
-
-
-def test_large_setpoint_decrease_below_target_preserves_integral():
-    """A demand reduction far below target must leave positive integration available."""
-    ctl = SmartPIController("test")
-    ctl.integral = -5.9
-
-    new_e, new_e_p = ctl.handle_setpoint_change(
-        target_temp=16.0,
-        last_target_temp=18.0,
-        current_temp=6.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        kp=0.3,
-        ki=0.001,
-    )
-
-    assert new_e == pytest.approx(10.0)
-    assert new_e_p == pytest.approx(10.0)
-    assert ctl.integral == pytest.approx(-5.9)
 
 
 def test_positive_integral_growth_remains_available_below_target():
@@ -78,16 +20,8 @@ def test_positive_integral_growth_remains_available_below_target():
         ki=0.01,
         u_ff=0.3,
         dt_min=1.0,
-        cycle_min=10.0,
         in_deadband=False,
-        in_near_band=False,
         integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=15.3,
-        target_temp=16.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.05,
     )
 
@@ -107,16 +41,8 @@ def test_positive_guard_unwinds_negative_integral_before_blocking_growth():
         "ki": 0.01,
         "u_ff": 0.3,
         "dt_min": 1.0,
-        "cycle_min": 10.0,
         "in_deadband": False,
-        "in_near_band": False,
         "integrator_hold": False,
-        "u_db_nominal": 0.0,
-        "hvac_mode": VThermHvacMode_HEAT,
-        "current_temp": 19.3,
-        "target_temp": 20.0,
-        "is_tau_reliable": True,
-        "learn_ok_count_a": 15,
         "deadband_c": 0.05,
         "block_positive_integral": True,
         "positive_integral_guard_mode": "setpoint_change",
@@ -131,43 +57,6 @@ def test_positive_guard_unwinds_negative_integral_before_blocking_growth():
 
     assert ctl.integral == 0.0
     assert ctl.last_i_mode == "I:GUARD(setpoint_change)"
-
-
-def test_large_setpoint_change_preserves_integral_without_recovery_hold():
-    """A large setpoint change must preserve the integral without rewriting its mode."""
-    ctl = SmartPIController("test")
-    ctl.integral = 5.0
-
-    new_e, new_e_p = ctl.handle_setpoint_change(
-        target_temp=22.0,
-        last_target_temp=20.0,
-        current_temp=19.8,
-        hvac_mode=VThermHvacMode_HEAT,
-        kp=1.0,
-        ki=0.05,
-    )
-
-    assert ctl.integral == 5.0, "Large setpoint change must preserve integral"
-    assert ctl.servo_integral_hold is False
-    assert new_e != 0.0
-    assert new_e_p == new_e
-
-
-def test_cool_mode_small_setpoint_preserves_integral():
-    """In COOL mode, small setpoint changes must also preserve integral."""
-    ctl = SmartPIController("test")
-    ctl.integral = 2.0
-
-    ctl.handle_setpoint_change(
-        target_temp=24.3,
-        last_target_temp=24.0,
-        current_temp=25.0,
-        hvac_mode=VThermHvacMode_COOL,
-        kp=1.0,
-        ki=0.05,
-    )
-
-    assert ctl.integral == 2.0, "COOL mode small setpoint must preserve integral"
 
 
 def test_deadband_u_hold_and_u_cmd_from_nominal():
@@ -187,16 +76,8 @@ def test_deadband_u_hold_and_u_cmd_from_nominal():
         ki=0.1,
         u_ff=0.3,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=True,
-        in_near_band=False,
         integrator_hold=False,
-        u_db_nominal=0.45,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=19.95,
-        target_temp=20.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.1,
     )
 
@@ -222,16 +103,8 @@ def test_deadband_heat_overshoot_freezes_p_in_deadband():
         ki=0.1,
         u_ff=0.3,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=True,
-        in_near_band=False,
         integrator_hold=False,
-        u_db_nominal=0.45,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=20.05,
-        target_temp=20.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.1,
     )
 
@@ -256,16 +129,8 @@ def test_deadband_cool_overshoot_freezes_p_in_deadband():
         ki=0.1,
         u_ff=0.25,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=True,
-        in_near_band=False,
         integrator_hold=False,
-        u_db_nominal=0.40,
-        hvac_mode=VThermHvacMode_COOL,
-        current_temp=23.95,
-        target_temp=24.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.1,
     )
 
@@ -290,16 +155,8 @@ def test_deadband_allow_p_uses_damped_error_not_raw_error():
         "ki": 0.1,
         "u_ff": 0.3,
         "dt_min": 10.0,
-        "cycle_min": 10.0,
         "in_deadband": True,
-        "in_near_band": False,
         "integrator_hold": False,
-        "u_db_nominal": 0.45,
-        "hvac_mode": VThermHvacMode_HEAT,
-        "current_temp": 19.9,
-        "target_temp": 20.0,
-        "is_tau_reliable": True,
-        "learn_ok_count_a": 15,
         "deadband_c": 0.1,
         "deadband_allow_p": True,
     }
@@ -333,16 +190,8 @@ def test_outside_deadband_u_hold_is_zero():
         ki=0.1,
         u_ff=0.3,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=False,
-        in_near_band=False,
         integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=19.5,
-        target_temp=20.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.0,
     )
 
@@ -353,11 +202,11 @@ def test_outside_deadband_u_hold_is_zero():
     assert pytest.approx(ctl.u_cmd, abs=0.01) == min(max(u_raw, 0.0), 1.0)
 
 
-def test_servo_integral_hold_blocks_integration_until_deadband():
-    """After a large setpoint change, integral must stay frozen until deadband."""
+def test_integral_hold_blocks_integration_until_deadband():
+    """An active integral hold must keep the integral frozen until deadband."""
     ctl = SmartPIController("test")
     ctl.integral = 0.0
-    ctl.servo_integral_hold = True
+    ctl.start_integral_hold("window_resume")
 
     u_cmd = ctl.compute_pwm(
         error=1.0,
@@ -366,30 +215,22 @@ def test_servo_integral_hold_blocks_integration_until_deadband():
         ki=0.1,
         u_ff=0.2,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=False,
-        in_near_band=False,
         integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=18.0,
-        target_temp=19.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.1,
     )
 
-    assert ctl.servo_integral_hold is True
+    assert ctl.integral_hold_mode == "window_resume"
     assert ctl.integral == pytest.approx(0.0)
-    assert ctl.last_i_mode == "I:HOLD(servo_recovery)"
+    assert ctl.last_i_mode == "I:HOLD(window_resume)"
     assert u_cmd == pytest.approx(1.0)
 
 
-def test_servo_integral_hold_stays_active_in_near_band():
-    """Servo integral hold must remain active until deadband becomes active."""
+def test_integral_hold_stays_active_in_near_band():
+    """An integral hold must remain active until deadband becomes active."""
     ctl = SmartPIController("test")
     ctl.integral = 0.0
-    ctl.servo_integral_hold = True
+    ctl.start_integral_hold("window_resume")
 
     ctl.compute_pwm(
         error=0.2,
@@ -398,29 +239,21 @@ def test_servo_integral_hold_stays_active_in_near_band():
         ki=0.1,
         u_ff=0.2,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=False,
-        in_near_band=True,
         integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=18.8,
-        target_temp=19.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.1,
     )
 
-    assert ctl.servo_integral_hold is True
+    assert ctl.integral_hold_mode == "window_resume"
     assert ctl.integral == pytest.approx(0.0)
-    assert ctl.last_i_mode == "I:HOLD(servo_recovery)"
+    assert ctl.last_i_mode == "I:HOLD(window_resume)"
 
 
-def test_servo_integral_hold_releases_in_deadband():
-    """Servo integral hold must release when deadband becomes active."""
+def test_integral_hold_releases_in_deadband():
+    """An integral hold must release when deadband becomes active."""
     ctl = SmartPIController("test")
     ctl.integral = 0.0
-    ctl.servo_integral_hold = True
+    ctl.start_integral_hold("window_resume")
 
     ctl.compute_pwm(
         error=0.05,
@@ -429,20 +262,12 @@ def test_servo_integral_hold_releases_in_deadband():
         ki=0.1,
         u_ff=0.2,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=True,
-        in_near_band=True,
         integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=18.95,
-        target_temp=19.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.1,
     )
 
-    assert ctl.servo_integral_hold is False
+    assert ctl.integral_hold_mode == "none"
     assert ctl.last_i_mode == "I:FREEZE(deadband)"
 
 
@@ -458,16 +283,8 @@ def test_core_deadband_unfreezes_integral_outside_latched_deadband_shell():
         ki=0.1,
         u_ff=0.0,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=True,
-        in_near_band=True,
         integrator_hold=False,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=19.93,
-        target_temp=20.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.05,
         core_deadband=False,
     )
@@ -488,16 +305,8 @@ def test_negative_guard_unwinds_positive_integral_after_setpoint_reduction():
         "ki": 0.1,
         "u_ff": 0.2,
         "dt_min": 10.0,
-        "cycle_min": 10.0,
         "in_deadband": False,
-        "in_near_band": True,
         "integrator_hold": False,
-        "u_db_nominal": 0.0,
-        "hvac_mode": VThermHvacMode_HEAT,
-        "current_temp": 20.2,
-        "target_temp": 20.0,
-        "is_tau_reliable": True,
-        "learn_ok_count_a": 15,
         "deadband_c": 0.05,
         "block_negative_integral": True,
         "positive_integral_guard_mode": "setpoint_change",
@@ -531,16 +340,8 @@ def test_negative_guard_prevents_hold_bleed_after_setpoint_reduction():
         ki=0.1,
         u_ff=0.2,
         dt_min=10.0,
-        cycle_min=10.0,
         in_deadband=False,
-        in_near_band=True,
         integrator_hold=True,
-        u_db_nominal=0.0,
-        hvac_mode=VThermHvacMode_HEAT,
-        current_temp=20.2,
-        target_temp=20.0,
-        is_tau_reliable=True,
-        learn_ok_count_a=15,
         deadband_c=0.05,
         block_negative_integral=True,
         positive_integral_guard_mode="setpoint_change",

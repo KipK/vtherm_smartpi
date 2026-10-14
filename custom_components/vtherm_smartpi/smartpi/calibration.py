@@ -63,7 +63,6 @@ class CalibrationManager:
         self._calibration_state: SmartPICalibrationPhase = SmartPICalibrationPhase.IDLE
         self._calibration_start_time: float | None = None
         self._force_calibration_requested: bool = False
-        self._calibration_retry_count: int = 0
         self._calibration_result: SmartPICalibrationResult = SmartPICalibrationResult.PENDING
 
     def reset(self) -> None:
@@ -71,7 +70,6 @@ class CalibrationManager:
         self._calibration_state = SmartPICalibrationPhase.IDLE
         self._calibration_start_time = None
         self._force_calibration_requested = False
-        self._calibration_retry_count = 0
         self._calibration_result = SmartPICalibrationResult.PENDING
         # Note: _last_calibration_time is NOT reset to preserve history
 
@@ -89,24 +87,18 @@ class CalibrationManager:
             return
         _LOGGER.info("%s - Manual force calibration requested", self._name)
         self._force_calibration_requested = True
-        self._calibration_retry_count = 0  # Reset retries on manual request
 
-    def start_calibration(self, now: float, is_manual: bool = False) -> None:
+    def start_calibration(self, now: float) -> None:
         """
         Start a calibration cycle.
         
         Args:
             now: Current monotonic timestamp
-            is_manual: True if manually requested, False if auto-triggered
         """
         self._calibration_state = SmartPICalibrationPhase.COOL_DOWN
         self._calibration_start_time = now
         self._force_calibration_requested = False
         self._calibration_result = SmartPICalibrationResult.PENDING
-        if is_manual:
-            self._calibration_retry_count = 0
-        else:
-            self._calibration_retry_count += 1
 
     def handle_timeout(self) -> None:
         """Handle calibration timeout."""
@@ -149,7 +141,7 @@ class CalibrationManager:
         # Check for manual request
         if self._force_calibration_requested:
             _LOGGER.info("%s - Starting forced calibration (reason=manual)", self._name)
-            self.start_calibration(now, is_manual=True)
+            self.start_calibration(now)
             return (True, "manual")
 
         return (False, "not_started")
@@ -234,7 +226,6 @@ class CalibrationManager:
                 self._calibration_state = SmartPICalibrationPhase.IDLE
                 self._last_calibration_time = time.time()
                 self._calibration_start_time = None
-                self._calibration_retry_count = 0  # <--- Reset retry count on success
                 self._calibration_result = SmartPICalibrationResult.SUCCESS
                 message = "completed"
                 
@@ -288,7 +279,6 @@ class CalibrationManager:
             
         self._calibration_start_time = wall_to_monotonic_ts(state.get("calibration_start_time"))
         self._force_calibration_requested = state.get("force_calibration_requested", False)
-        self._calibration_retry_count = state.get("calibration_retry_count", 0)
         
         calibration_result_str = state.get("calibration_result")
         if calibration_result_str:
@@ -311,7 +301,6 @@ class CalibrationManager:
             "calibration_state": self._calibration_state.value if self._calibration_state else None,
             "calibration_start_time": monotonic_to_wall_ts(self._calibration_start_time),
             "force_calibration_requested": self._force_calibration_requested,
-            "calibration_retry_count": self._calibration_retry_count,
             "calibration_result": self._calibration_result.value if self._calibration_result else None,
         }
 
@@ -351,15 +340,6 @@ class CalibrationManager:
     @calibration_start_time.setter
     def calibration_start_time(self, value: float | None) -> None:
         self._calibration_start_time = value
-
-    @property
-    def retry_count(self) -> int:
-        """Get current retry count."""
-        return self._calibration_retry_count
-
-    @retry_count.setter
-    def retry_count(self, value: int) -> None:
-        self._calibration_retry_count = value
 
     @property
     def calibration_requested(self) -> bool:

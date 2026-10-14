@@ -605,7 +605,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         },
         "calibration": {
             "state": diag["calibration_state"],
-            "retry_count": diag["calibration_retry_count"],
+            "retry_count": diag["autocalib_retry_count"],
             "last_time": diag["last_calibration_time"],
         },
         "analysis": _build_analysis_diagnostics(diag),
@@ -641,7 +641,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     u_ff2 = ff_result.u_ff2 if ff_result else 0.0
     u_ff_final = ff_result.u_ff_final if ff_result else 0.0
     u_ff3 = ff_result.u_ff3 if ff_result else algo.u_ff3
-    u_db_nominal = ff_result.u_db_nominal if ff_result else 0.0
+    u_db_nominal = ff_result.u_ff_final if ff_result else 0.0
     ff2_authority = FF_TRIM_RHO * max(u_ff1, FF_TRIM_EPSILON)
 
     diag = {
@@ -714,7 +714,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "u_hold": round(algo.ctl.u_hold, 6),
         "ff_warmup_ok_count": int(algo.ff_warmup_ok_count),
         "ff_warmup_cycles": int(algo.ff_warmup_cycles),
-        "ff_scale_unreliable_max": round(algo.ff_scale_unreliable_max, 3),
         # FFv3 signal chain
         "u_ff1": round(u_ff1, 6),
         "u_ff2": round(u_ff2, 6),
@@ -866,9 +865,9 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "fftrim_transfer_quality": algo._transfer_quality,
         "command_ownership": command_ownership,
         # FF compatibility aliases
-        "u_ff_ab": round(ff_result.u_ff_ab, 6) if ff_result else 0.0,
+        "u_ff_ab": round(ff_result.u_ff1, 6) if ff_result else 0.0,
         "u_ff_trim": round(algo._ff_trim.u_ff_trim, 6),
-        "u_ff_base": round(ff_result.u_ff_base, 6) if ff_result else 0.0,
+        "u_ff_base": round(ff_result.u_ff1, 6) if ff_result else 0.0,
         "u_ff_eff": round(ff_result.u_ff_eff, 6) if ff_result else 0.0,
         "ff3_enabled": algo._last_ff3_enabled,
         "ff3_reason_disabled": _effective_ff3_reason_disabled(algo),
@@ -1023,7 +1022,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         # Forced Calibration
         "calibration_state": algo.calibration_state,
         "last_calibration_time": (datetime.fromtimestamp(algo.calibration_mgr.last_calibration_time).isoformat() if algo.calibration_mgr.last_calibration_time else None),
-        "calibration_retry_count": algo.calibration_mgr.retry_count,
         # AutoCalibTrigger §6.1
         "autocalib_state": algo.autocalib.state.value,
         "autocalib_waiting_reason": algo.autocalib.waiting_reason.value,

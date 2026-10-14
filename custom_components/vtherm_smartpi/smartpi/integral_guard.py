@@ -174,32 +174,3 @@ class SmartPIIntegralGuard:
             not self._block_positive,
             self._source.value,
         )
-
-    def save_state(self) -> dict:
-        """Serialize the guard state for persistence."""
-        return {
-            "source": self._source.value,
-            "block_positive": self._block_positive,
-            "stable_cycles": self._stable_cycles,
-            "peak_signed_recovery_slope_h": self._peak_signed_recovery_slope_h,
-            "last_release_reason": self._last_release_reason,
-        }
-
-    def load_state(self, state: dict) -> None:
-        """Restore the guard state from persistence."""
-        if not state:
-            self.reset()
-            return
-
-        source = str(state.get("source", IntegralGuardSource.NONE.value))
-        try:
-            self._source = IntegralGuardSource(source)
-        except ValueError:
-            self._source = IntegralGuardSource.NONE
-        self._block_positive = bool(state.get("block_positive", True))
-        self._stable_cycles = max(int(state.get("stable_cycles", 0)), 0)
-        self._peak_signed_recovery_slope_h = max(
-            float(state.get("peak_signed_recovery_slope_h", 0.0)),
-            0.0,
-        )
-        self._last_release_reason = str(state.get("last_release_reason", "loaded"))

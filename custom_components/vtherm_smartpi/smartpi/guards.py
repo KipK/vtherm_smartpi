@@ -5,13 +5,9 @@ from __future__ import annotations
 import logging
 
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_HEAT
+from .const import NEAR_BAND_HYSTERESIS_C
 
 _LOGGER = logging.getLogger(__name__)
-
-# Re-defined here to avoid circular imports if necessary, 
-# or import if available. Assuming available in parent const.
-# NEAR_BAND_HYSTERESIS_C = 0.05 (We can pass this in or define it here)
-NEAR_BAND_HYSTERESIS_C = 0.05
 
 GuardState = dict[str, int]
 

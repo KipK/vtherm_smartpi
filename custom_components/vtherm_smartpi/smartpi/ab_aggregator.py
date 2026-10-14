@@ -26,8 +26,6 @@ def ab_publish(
     plateau_n: int,
     alpha: float,
     r: float,
-    min_points_for_publish: int,
-    default_value: float,
 ) -> tuple[float, dict[str, Any]]:
     """Compute the published a_hat or b_hat from the measurement buffer.
 
@@ -35,18 +33,13 @@ def ab_publish(
     (deque built with append(), oldest auto-evicted from left).
     Age j: j=0 is the most recent point, j=N-1 is the oldest.
 
+    The caller guarantees a non-empty buffer holding at least the minimum
+    number of samples required for publication.
+
     Returns (published_value, diag_dict).
     """
     vals = list(values_deque)
     N = len(vals)
-
-    # Bootstrap: not enough points — freeze to default value
-    if N < min_points_for_publish:
-        return default_value, {
-            "ab_bootstrap": True,
-            "ab_points": N,
-            "ab_mode_effective": "default_frozen",
-        }
 
     # Short window: all weights are uniform, weighted median degenerates to plain median
     if N <= plateau_n:

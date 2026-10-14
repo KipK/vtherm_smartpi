@@ -84,8 +84,8 @@ class TestIntegralHoldDuringDeadtime:
             )
 
         mock_pwm.assert_called_once()
-        # integrator_hold is positional arg index 9 in the current compute_pwm signature.
-        integrator_hold_arg = mock_pwm.call_args[0][9]
+        # integrator_hold is positional arg index 7 in the current compute_pwm signature.
+        integrator_hold_arg = mock_pwm.call_args[0][7]
         assert integrator_hold_arg is True, (
             f"compute_pwm should receive integrator_hold=True during deadtime, got {integrator_hold_arg}"
         )
@@ -262,15 +262,7 @@ def test_controller_reports_effective_hold_source_and_clears_it_next_cycle() -> 
         "ki": 0.01,
         "u_ff": 0.2,
         "dt_min": 5.0,
-        "cycle_min": 10.0,
         "in_deadband": False,
-        "in_near_band": True,
-        "u_db_nominal": 0.2,
-        "hvac_mode": VThermHvacMode_HEAT,
-        "current_temp": 19.8,
-        "target_temp": 20.0,
-        "is_tau_reliable": True,
-        "learn_ok_count_a": 20,
         "deadband_c": 0.1,
     }
 

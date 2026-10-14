@@ -202,7 +202,7 @@ def test_attribute_exposure():
     now_ts = time.time()
     algo.calibration_mgr.last_calibration_time = now_ts
     algo.calibration_mgr._calibration_state = SmartPICalibrationPhase.IDLE
-    algo.calibration_mgr._calibration_retry_count = 2
+    algo.autocalib._retry_count = 2
 
     attrs = algo.get_debug_diagnostics()
     assert attrs["calibration"]["state"] == SmartPICalibrationPhase.IDLE
@@ -211,6 +211,24 @@ def test_attribute_exposure():
     assert attrs["autocalib"]["state"] == AutoCalibState.WAITING_SNAPSHOT.value
     assert attrs["autocalib"]["model_degraded"] is False
     assert "debug" not in attrs
+
+
+def test_published_calibration_retry_count_follows_autocalib():
+    """calibration.retry_count is fed from the AutoCalibTrigger counter."""
+    algo = create_smartpi()
+    assert algo.get_debug_diagnostics()["calibration"]["retry_count"] == 0
+
+    algo.autocalib._retry_count = 2
+    assert algo.get_debug_diagnostics()["calibration"]["retry_count"] == 2
+
+
+def test_calibration_manager_loads_state_with_legacy_retry_key():
+    """A persisted state still carrying calibration_retry_count loads and is not re-written."""
+    algo = create_smartpi()
+    mgr = algo.calibration_mgr
+    mgr.load_state({"calibration_state": "idle", "calibration_retry_count": 2})
+    assert mgr._calibration_state == SmartPICalibrationPhase.IDLE
+    assert "calibration_retry_count" not in mgr.save_state()
 
 
 # =============================================================================
@@ -417,6 +435,14 @@ def test_autocalib_max_retries_degraded():
     assert event.event_type == "smartpi_autocalib_degraded"
     assert ac.model_degraded is True
     assert ac.retry_count == 0  # Reset after degraded
+
+
+def test_autocalib_load_unknown_persisted_state_falls_back():
+    """A persisted state value no longer in the enum (post_calib_check) falls back to WAITING_SNAPSHOT."""
+    ac = AutoCalibTrigger("test_vtherm")
+    ac.load_state({"state": "post_calib_check", "retry_count": 1})
+    assert ac.state == AutoCalibState.WAITING_SNAPSHOT
+    assert ac.retry_count == 1
 
 
 def test_autocalib_save_load_state():

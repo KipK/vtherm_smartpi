@@ -45,7 +45,7 @@ class GovernanceRegime(str, Enum):
     DEAD_BAND = "dead_band"            # In dead band, no action
     HOLD = "hold"                      # Integrator hold active
     PERTURBED = "perturbed"            # External disturbance (window, shedding)
-    DEGRADED = "degraded"              # Sensor absent, deadtime unknown
+    DEGRADED = "degraded"              # Outdoor temperature unavailable
     SATURATED = "saturated"            # Command at 0% or 100%
 
 
@@ -54,12 +54,8 @@ class FreezeReason(str, Enum):
     NONE = "none"
     # Structural
     REGIME_TRANSITION = "regime_transition"  # Cycle not homogeneous
-    CYCLE_INVALID = "cycle_invalid"
     # Physical / external
-    EVENT_POLLUTED = "event_polluted"
     SENSOR_INVALID = "sensor_invalid"
-    DEADTIME_UNRELIABLE = "deadtime_unreliable"
-    BOOT_GUARD = "boot_guard"
     # Regime-specific
     DEAD_BAND = "dead_band"
     NEAR_BAND = "near_band"
@@ -137,24 +133,23 @@ GAIN_LAMBDA_MIN_MIN = 5.0
 
 
 # Anti-windup / integrator behavior
-INTEGRAL_LEAK = 0.995  # leak factor per cycle when inside deadband
 MAX_STEP_PER_MINUTE = 0.25  # max output change per minute (rate limit)
 
 # Setpoint step boost: faster rate limit when setpoint changes significantly
 # This allows quick power ramp-up when user increases setpoint
 SETPOINT_BOOST_THRESHOLD = 0.3   # min setpoint change (°C) to trigger boost
 SETPOINT_BOOST_ERROR_MIN = 0.3   # min error (°C) to keep boost active
-SETPOINT_BOOST_RATE = 0.50       # boosted rate limit (/min) vs 0.15 normal
+SETPOINT_BOOST_RATE = 0.50       # boosted rate limit (/min) vs MAX_STEP_PER_MINUTE normal
 
 # Setpoint change handling (mode change vs adjustment)
-# - Large change (>= threshold): mode change (eco ↔ comfort) -> reset PI state
+# - Large change (>= threshold): mode change (eco ↔ comfort) -> restart error history, integral preserved
 # - Small change (< threshold): integral preserved, servo via P + SP filter + FF
 SETPOINT_MODE_DELTA_C = 0.5      # °C threshold for mode change detection
 OVERSHOOT_I_CLAMP_EPS_C = 0.04  # Guard band below setpoint where integral cannot increase (°C)
 
 # Tracking anti-windup (back-calculation) tuned for slow thermal systems
-AW_TRACK_TAU_S = 120.0        # tracking time constant in seconds (typ. 60-180s)
-AW_TRACK_MAX_DELTA_I = 5.0    # safety clamp on integral correction per cycle
+AW_TRACK_TAU_S = 120.0        # floor (s) on the tracking time constant, which otherwise follows Ti = Kp/Ki
+AW_TRACK_MAX_DELTA_I = 5.0    # safety clamp on integral correction per minute (scaled by elapsed time)
 
 # Skip cycles after resume from interruption (window, etc.)
 SKIP_CYCLES_AFTER_RESUME = 1
@@ -180,19 +175,7 @@ DEFAULT_DEADBAND_C = 0.05
 # different deadband configurations and typical sensor noise levels.
 DEADBAND_HYSTERESIS = 0.025
 
-# --- Asymmetric Deadband / Near-band (HEAT only) ---
-# Intent (thermal "rule of thumb"):
-# - Make the "quiet zone" a bit wider when slightly below the setpoint (e>0) so the controller
-#   does not wait too long before restarting after a setpoint decrease.
-# - Make the zone tighter above the setpoint (e<0) to reduce overshoot/hunting.
-# Guardrails: asymmetry is applied only in HEAT; COOL keeps symmetric logic.
-
-# Deadband (°C) and its hysteresis (°C)
-DEADBAND_BELOW_C = 0.06
-DEADBAND_ABOVE_C = 0.04
-DEADBAND_HYST_BELOW_C = 0.02
-DEADBAND_HYST_ABOVE_C = 0.02
-
+# --- Near-band asymmetry ---
 # Near-band asymmetry:
 # - below setpoint: use configured near_band_deg (self.near_band_deg)
 # - above setpoint: scale it down with a factor
@@ -217,8 +200,6 @@ class ServoPhase(str, Enum):
 TRAJECTORY_ENABLE_ERROR_THRESHOLD = 0.3  # °C — signed raw error needed to arm the trajectory
 TRAJECTORY_COMPLETE_EPS_C = 0.05         # °C — convergence epsilon to finish tracking
 TRAJECTORY_MIN_P_ERROR_RATIO = 0.25      # Fraction of the raw signed error kept on the P path during braking
-TRAJECTORY_SETPOINT_RHO = 0.70           # Fraction of available model slope used after a setpoint change
-TRAJECTORY_DISTURBANCE_RHO = 0.50        # Fraction of available model slope used after a disturbance recovery
 TRAJECTORY_BRAKE_GAIN = 1.20             # Safety factor applied to the predicted inertial rise before braking
 TRAJECTORY_BRAKE_RELEASE_HYST_C = 0.10   # Extra signed-error margin to keep an active trajectory in tracking
 TRAJECTORY_I_RUN_SCALE = 0.20            # Reduce free integral growth while the late-braking trajectory is still tracking
@@ -241,21 +222,8 @@ ERROR_FILTER_TAU = 25.0 # Minutes (matches alpha ~0.35 at 10min)
 
 
 # --- Robust learning / gating constants ---
-# Window sizes
-B_POINTS_MAX = 40        # OFF samples for b (tau)
-A_POINTS_MAX = 25        # ON samples for a
-RESIDUAL_HIST_MAX = 60   # Residual history for MAD estimation
-
-# Robust gating
-RESIDUAL_GATE_K = 4.5   # |r| > k * sigma_r  -> freeze learning
-
-# Intercept coherence checks (dimensionless ratios)
-INTERCEPT_SIGMA_FACTOR = 2.0   # |c| <= factor * sigma_r
-INTERCEPT_SCALE_FACTOR = 0.30  # |c| <= factor * median(|y|)
-
 # Tau stability check
 B_STABILITY_MAD_RATIO_MAX = 0.60   # MAD(b) / median(b)
-LEARN_BOOTSTRAP_COUNT = 10      # Number of learn cycles before applying strict residual gating
 
 # --- SmartPI Robust Learning Constants ---
 # Median+MAD Strategy Constants
@@ -267,13 +235,9 @@ AB_MAD_SIGMA_MULT = 3.0   # Outlier rejection threshold (sigma)
 
 AB_MAD_K = 1.4826         # Sigma scaling factor for MAD
 AB_VAL_TOLERANCE = 1e-12  # Small epsilon
-LEARN_SAMPLE_MAX = 240          # Max samples history (e.g. 4h @ 1min)
-LEARN_Q_HIST_MAX = 200          # History for quantization estimation
 DT_DERIVATIVE_MIN_ABS = 0.05    # Min absolute dT (°C) amplitude guard
 OLS_MIN_JUMPS = 3               # Min temperature level changes for OLS validity
 OLS_T_MIN = 2.5                 # Min t-statistic for slope significance
-LEARN_QUALITY_THRESHOLD = 0.25  # Min QI quality to accept learning
-QUANTIZATION_ROUND_TO = 0.001   # Rounding / binning for quantization detection
 
 # Sequential gate a->b
 AB_B_CONVERGENCE_MIN_SAMPLES: int = 11
@@ -286,9 +250,6 @@ AB_A_SOFT_GATE_MIN_B: int = 8
 AB_WMED_PLATEAU_N: int = 11          # Most-recent N points assigned weight 1.0 (plateau)
 AB_WMED_ALPHA: float = 1.0           # Weight factor at the start of the tail
 AB_WMED_R: float = 0.85              # Geometric decay factor for tail weights
-AB_MIN_POINTS_FOR_PUBLISH_A: int = 6  # Below this count: freeze a to default value
-AB_MIN_POINTS_FOR_PUBLISH_B: int = 8  # Below this count: freeze b to default value
-AB_MIN_POINTS_FOR_PUBLISH: int = AB_MIN_POINTS_FOR_PUBLISH_B
 
 # --- ABEstimator persistent drift detection ---
 AB_DRIFT_BUFFER_MAXLEN: int = 8
@@ -305,7 +266,6 @@ AB_DRIFT_SEQ_GAP_MAX: int = 3
 # Absolute timeout for a learning window (both A and B).
 # The window extends as long as the OLS slope is not yet robust, up to this limit.
 DT_MAX_MIN = 240
-MIN_ABS_DT = 0.03      # °C  (reference value; not used as a gate in learning_window)
 DELTA_MIN = 0.2        # °C (Matches DELTA_MIN_ON)
 U_OFF_MAX = 0.05
 U_ON_MIN = 0.20
@@ -313,9 +273,6 @@ DELTA_MIN_OFF = 0.5        # °C
 DELTA_MIN_ON = 0.2         # °C
 AB_B_MIN_PASSIVE_GRADIENT_C = 2.0
 AB_B_OUTDOOR_TARGET_MARGIN_C = 2.0
-# Backward-compatible names retained for existing integrations and tests.
-AB_B_HEAT_MIN_LOSS_GRADIENT_C = AB_B_MIN_PASSIVE_GRADIENT_C
-AB_B_HEAT_OUTDOOR_BELOW_TARGET_MARGIN_C = AB_B_OUTDOOR_TARGET_MARGIN_C
 
 # Power coefficient of variation gate (Welford-based)
 U_CV_MAX = 0.30            # Maximum accepted CV of power over the learning window
@@ -339,7 +296,6 @@ class AutoCalibState(str, Enum):
     WAITING_SNAPSHOT = "waiting_snapshot"
     MONITORING = "monitoring"
     TRIGGERED = "triggered"
-    POST_CALIB_CHECK = "post_calib_check"
 
 
 class AutoCalibWaitingReason(str, Enum):
@@ -404,9 +360,6 @@ FF_TRIM_TRANSFER_COMMAND_EPSILON = 0.001
 
 # Deadband output shaping
 DEADBAND_EDGE_PERSISTENCE = 2
-
-# AB confidence & fallback
-AB_BAD_PERSIST_CYCLES = 3           # Cycles in AB_BAD before fallback activates
 
 # --- FF3 conservative pseudo-MPC constants ---
 FF3_DELTA_U = 0.05

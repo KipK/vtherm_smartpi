@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from math import isfinite
 
 from .const import (
     KI_MIN,
     OVERSHOOT_I_CLAMP_EPS_C,
-    SETPOINT_MODE_DELTA_C,
     TRAJECTORY_I_RUN_SCALE,
     clamp
 )
 from .deadband_output import ProportionalState
 from .integral_guard import constrain_guarded_integral_delta
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
-
-_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -74,8 +70,6 @@ class SmartPIController:
         self.u_applied: float = 0.0 # Output after timing constraints
         
         # Diagnostics
-        self.last_error: float = 0.0
-        self.last_error_p: float = 0.0
         self.last_error_p_db: float = 0.0
         self.last_i_mode: str = "init"
         self.last_integral_hold_source: str = "none"
@@ -104,8 +98,6 @@ class SmartPIController:
         self.u_i = 0.0
         self.u_pi = 0.0
         self.u_hold = 0.0
-        self.last_error = 0.0
-        self.last_error_p = 0.0
         self.last_error_p_db = 0.0
         self.sat_p = False
         self.sat_i = False
@@ -139,7 +131,6 @@ class SmartPIController:
         if snapshot is None:
             raise ValueError("proportional restoration requires a PI snapshot")
         p_error, p_mode, p_count, p_sign = snapshot.p_state.project(error_p)
-        self.last_error_p = error_p
         self.last_error_p_db = p_error
         self.deadband_p_mode = p_mode
         self._deadband_edge_count = p_count
@@ -158,19 +149,6 @@ class SmartPIController:
         """Return True when integral protection hold is active."""
         return self.integral_hold_mode != "none"
 
-    @property
-    def servo_integral_hold(self) -> bool:
-        """Compatibility alias for the legacy servo-only hold flag."""
-        return self.integral_hold_mode == "servo_recovery"
-
-    @servo_integral_hold.setter
-    def servo_integral_hold(self, value: bool) -> None:
-        """Map legacy servo hold toggles to the generic hold state."""
-        if value:
-            self.start_integral_hold("servo_recovery")
-        elif self.integral_hold_mode == "servo_recovery":
-            self.clear_integral_hold()
-
     def start_integral_hold(self, mode: str) -> None:
         """Activate the generic integral hold state."""
         if not mode or mode == "none":
@@ -182,74 +160,16 @@ class SmartPIController:
         self.integral_hold_mode = "none"
         
         
-    def handle_setpoint_change(
-        self,
-        target_temp: float,
-        last_target_temp: float,
-        current_temp: float,
-        hvac_mode: VThermHvacMode,
-        kp: float,
-        ki: float,
-    ) -> tuple[float, float]:
-        """Preserve integral memory and restart the servo path on setpoint changes.
-
-        Two-tier setpoint change handling:
-        - Large change (>= SETPOINT_MODE_DELTA_C): preserve the integral but
-          restart the setpoint-response state (error history + recovery hold)
-        - Small change: Servo response handled by P + SP filter + FF;
-          integral is preserved (Åström §3.5: integral is slow memory
-          for disturbance rejection, not a servo transition variable).
-
-        Args:
-            target_temp: New setpoint (°C)
-            last_target_temp: Previous setpoint (°C)
-            current_temp: Current indoor temperature (°C)
-            hvac_mode: Current HVAC mode
-            kp: Proportional gain
-            ki: Integral gain
-
-        Returns:
-            Tuple of (new_error, new_error_p) to apply to main class state
-        """
-        if last_target_temp is None:
-            return 0.0, 0.0
-
-        sp_delta = abs(target_temp - last_target_temp)
-        if sp_delta <= 0.01:
-            return 0.0, 0.0
-
-        if sp_delta >= SETPOINT_MODE_DELTA_C:
-            # Large demand changes restart the setpoint-response path without
-            # erasing the disturbance-rejection memory stored in the integral.
-            # Force reset error state to avoid "wrong" error history (e.g. sign flip)
-            new_e = float(target_temp - current_temp)
-            if hvac_mode == VThermHvacMode_COOL:
-                new_e = -new_e
-
-            self.last_error = new_e
-            self.last_error_p = new_e
-
-            _LOGGER.info(
-                "%s - Large setpoint change detected (Δ=%.2f°C >= %.2f°C): preserve integral %.4f and restart the servo path",
-                self._name, sp_delta, SETPOINT_MODE_DELTA_C, self.integral
-            )
-
-            return new_e, new_e
-
-        return 0.0, 0.0
-
     def load_state(self, state: dict):
         if not state:
             return
         self.integral = float(state.get("integral") or 0.0)
-        self.integral_hold_mode = str(state.get("integral_hold_mode") or "none")
         self.last_integral_hold_source = "none"
         # Note: other internal diagnositcs not critical to restore
         
     def save_state(self) -> dict:
         return {
             "integral": self.integral,
-            "integral_hold_mode": self.integral_hold_mode,
         }
 
     def calculate_hysteresis(
@@ -302,16 +222,8 @@ class SmartPIController:
         ki: float,
         u_ff: float,
         dt_min: float,
-        cycle_min: float,
         in_deadband: bool,
-        in_near_band: bool,
         integrator_hold: bool,
-        u_db_nominal: float,
-        hvac_mode: VThermHvacMode,
-        current_temp: float,
-        target_temp: float,
-        is_tau_reliable: bool,
-        learn_ok_count_a: int,
         deadband_c: float,
         trajectory_shaping_active: bool = False,
         core_deadband: bool | None = None,
@@ -326,9 +238,8 @@ class SmartPIController:
         Updates self.integral, self.u_pi, self.u_cmd.
         Returns u_cmd (clamped 0-1).
         """
-        self.last_error = error
-        self.last_error_p = error_p
         self.last_integral_hold_source = "none"
+        self.sat_i = False
         freeze_deadband = in_deadband if core_deadband is None else core_deadband
 
         if self.integral_hold_active and freeze_deadband:
@@ -397,7 +308,6 @@ class SmartPIController:
                     u_pi = u_pi_pre
                     self.sat_i = True
                 else:
-                    self.sat_i = False
                     d_integral = error * dt_min
                     self.last_i_mode = "I:RUN"
 
@@ -442,15 +352,11 @@ class SmartPIController:
             p_state=p_state,
         )
 
-        if freeze_deadband:
-            # Explicit hold using Frozen PI: `u_ff + u_pi`.
-            # FF2 trim learns from the slope slowly.
-            u_raw = u_ff + u_pi
-        else:
+        if not freeze_deadband:
             self.u_hold = 0.0
-            u_raw = u_ff + u_pi
 
-        self.u_cmd = clamp(u_raw, 0.0, 1.0)
+        # In deadband the explicit hold is the frozen PI: `u_ff + u_pi`.
+        self.u_cmd = clamp(u_ff + u_pi, 0.0, 1.0)
 
         return self.u_cmd
 
