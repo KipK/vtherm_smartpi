@@ -2,8 +2,12 @@
 Adaptive statistical filter on indoor temperature (T_int).
 
 Produces two output signals from raw sensor readings:
-- t_int_lp : low-pass (EMA) smoothed value, used for dead time estimation
-- t_int_clean : adaptively gated value, used for learning / slopes / a,b estimation
+- t_int_lp : low-pass (EMA) smoothed value, used for dead time detection
+- t_int_clean : adaptively gated value, used by the learning window for its
+  anchor temperature and amplitude checks, and exposed in diagnostics
+
+Learning slopes (a, b estimation) are computed on raw measured temperatures,
+not on these filtered signals.
 
 The PI control loop, deadband, twin and governance are NOT affected.
 """
