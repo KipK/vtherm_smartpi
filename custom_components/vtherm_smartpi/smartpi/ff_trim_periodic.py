@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from heapq import heappop, heappush
 from math import isfinite
-from statistics import median
 
 from .const import (
     FF_TRIM_DEADTIME_WINDOW_FACTOR,
@@ -136,11 +136,13 @@ class PeriodicFFTrimObserver:
             return None
 
         earliest_observable = float(earliest_power_start) + delay_s
-        while (
-            self._thermal_samples
-            and self._thermal_samples[0].observed_monotonic < earliest_observable
-        ):
-            self._thermal_samples.pop(0)
+        stale_count = 0
+        for sample in self._thermal_samples:
+            if not sample.observed_monotonic < earliest_observable:
+                break
+            stale_count += 1
+        if stale_count:
+            del self._thermal_samples[:stale_count]
 
         if len(self._thermal_samples) < FF_TRIM_PERIODIC_MIN_DISTINCT_MEASUREMENTS:
             self.state = "collecting"
@@ -165,42 +167,77 @@ class PeriodicFFTrimObserver:
             self.invalidate("hvac_mode_changed")
             return None
 
+        # Suffixes are scanned from the shortest to the longest one, so every
+        # statistic is extended by prepending one sample instead of being
+        # recomputed from scratch. Each value reproduces the expression of a
+        # per-suffix evaluation exactly (same operands, same tie handling).
         saw_reversal = False
         saw_sufficient_amplitude = False
         last_start_index = len(samples) - FF_TRIM_PERIODIC_MIN_DISTINCT_MEASUREMENTS
-        for start_index in range(last_start_index, -1, -1):
-            candidate = samples[start_index:]
-            duration_s = (
-                candidate[-1].observed_monotonic
-                - candidate[0].observed_monotonic
-            )
+        last_observed = samples[-1].observed_monotonic
+        last_temperature = samples[-1].temperature
+        max_temperature = last_temperature
+        min_temperature = last_temperature
+        # Two heaps holding |delta| values: lower half negated, upper half.
+        lower_half: list[float] = []
+        upper_half: list[float] = []
+        delta_count = 0
+        has_rise = False
+        has_fall = False
+        first_delta = 0.0
+        last_delta = 0.0
+        for start_index in range(len(samples) - 2, -1, -1):
+            temperature = samples[start_index].temperature
+            # max()/min() keep the leftmost extreme on ties.
+            if temperature >= max_temperature:
+                max_temperature = temperature
+            if temperature <= min_temperature:
+                min_temperature = temperature
+            delta = samples[start_index + 1].temperature - temperature
+            if abs(delta) > 1e-9:
+                if delta_count == 0:
+                    last_delta = delta
+                first_delta = delta
+                delta_count += 1
+                if delta > 0.0:
+                    has_rise = True
+                elif delta < 0.0:
+                    has_fall = True
+                magnitude = abs(delta)
+                if lower_half and magnitude > -lower_half[0]:
+                    heappush(upper_half, magnitude)
+                else:
+                    heappush(lower_half, -magnitude)
+                if len(lower_half) > len(upper_half) + 1:
+                    heappush(upper_half, -heappop(lower_half))
+                elif len(upper_half) > len(lower_half):
+                    heappush(lower_half, -heappop(upper_half))
+            if start_index > last_start_index:
+                continue
+
+            duration_s = last_observed - samples[start_index].observed_monotonic
             if duration_s < self.target_duration_s:
                 continue
-            temperatures = [sample.temperature for sample in candidate]
-            deltas = [
-                current - previous
-                for previous, current in zip(temperatures, temperatures[1:])
-                if abs(current - previous) > 1e-9
-            ]
-            if not deltas or not any(delta > 0.0 for delta in deltas) or not any(
-                delta < 0.0 for delta in deltas
-            ):
+            if not delta_count or not has_rise or not has_fall:
                 continue
             saw_reversal = True
-            quantum_c = float(median(abs(delta) for delta in deltas))
-            amplitude_c = max(temperatures) - min(temperatures)
+            if delta_count % 2 == 1:
+                quantum_c = float(-lower_half[0])
+            else:
+                quantum_c = float((-lower_half[0] + upper_half[0]) / 2)
+            amplitude_c = max_temperature - min_temperature
             if amplitude_c < 2.0 * quantum_c:
                 continue
             saw_sufficient_amplitude = True
-            closure_error_c = abs(temperatures[-1] - temperatures[0])
+            closure_error_c = abs(last_temperature - temperature)
             closure_tolerance_c = max(0.001, quantum_c / 2.0)
-            same_direction = deltas[0] * deltas[-1] > 0.0
+            same_direction = first_delta * last_delta > 0.0
             if closure_error_c > closure_tolerance_c or not same_direction:
                 continue
             self.state = "ready"
             self.last_reject_reason = "none"
             return PeriodicFFTrimWindow(
-                samples=candidate,
+                samples=samples[start_index:],
                 deadtime_s=delay_s,
                 duration_s=duration_s,
                 amplitude_c=amplitude_c,
