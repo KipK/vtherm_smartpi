@@ -1,10 +1,10 @@
-import time
 from unittest.mock import MagicMock
 
 import pytest
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.ab_estimator import ABEstimator
 from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
+from custom_components.vtherm_smartpi.smartpi import deadtime_estimator, timestamp_utils
 from custom_components.vtherm_smartpi.smartpi.deadtime_estimator import DeadTimeEstimator
 from custom_components.vtherm_smartpi.smartpi.tint_filter import AdaptiveTintFilter
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
@@ -347,42 +347,169 @@ def test_reset_observation_clears_both_histories() -> None:
     assert not est._tin_lp_history
 
 
-def test_histories_persistence_round_trip() -> None:
-    """Both histories survive save/load; their samples stay distinct."""
+class _Clock:
+    """Controllable wall and monotonic clocks for persistence conversions."""
+
+    def __init__(self, wall: float, mono: float) -> None:
+        self.wall = wall
+        self.mono = mono
+
+    def time(self) -> float:
+        return self.wall
+
+    def monotonic(self) -> float:
+        return self.mono
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
+    """Patch the clocks used by persistence conversions and state restore."""
+    fake = _Clock(wall=1_700_000_000.0, mono=50_000.0)
+    monkeypatch.setattr(timestamp_utils, "time", fake)
+    monkeypatch.setattr(deadtime_estimator, "time", fake)
+    return fake
+
+
+def _restart(clock: _Clock, downtime_s: float, mono_after_boot: float) -> None:
+    """Simulate a host restart: wall time advances, monotonic origin resets."""
+    clock.wall += downtime_s
+    clock.mono = mono_after_boot
+
+
+def test_histories_persistence_round_trip(clock: _Clock) -> None:
+    """Both histories survive save/load with past samples; their samples stay distinct."""
     est = DeadTimeEstimator()
-    # Persistence converts monotonic timestamps through wall-clock time.
-    base = time.monotonic() + 3600.0
+    base = clock.mono - 120.0
     est.update(base, 20.0, 21.0, 0.0, tin_raw=20.1)
     est.update(base + 60.0, 20.02, 21.0, 0.0, tin_raw=20.2)
 
     state = est.save_state()
+    assert [t for t, _ in state["tin_history"]] == [
+        pytest.approx(clock.wall - 120.0),
+        pytest.approx(clock.wall - 60.0),
+    ]
     assert [v for _, v in state["tin_history"]] == [20.1, 20.2]
     assert [v for _, v in state["tin_lp_history"]] == [20.0, 20.02]
 
+    _restart(clock, downtime_s=300.0, mono_after_boot=10.0)
     restored = DeadTimeEstimator()
     restored.load_state(state)
     assert [v for _, v in restored.tin_history] == [20.1, 20.2]
     assert [v for _, v in restored._tin_lp_history] == [20.0, 20.02]
-    for (t_a, _), (t_b, _) in zip(restored.tin_history, est.tin_history):
-        assert t_a == pytest.approx(t_b, abs=1.0)
-    for (t_a, _), (t_b, _) in zip(restored._tin_lp_history, est._tin_lp_history):
-        assert t_a == pytest.approx(t_b, abs=1.0)
+    # Samples keep their age relative to the restarted monotonic clock.
+    expected_ts = [10.0 - 300.0 - 120.0, 10.0 - 300.0 - 60.0]
+    assert [t for t, _ in restored.tin_history] == pytest.approx(expected_ts)
+    assert [t for t, _ in restored._tin_lp_history] == pytest.approx(expected_ts)
 
 
-def test_legacy_state_without_filtered_history_loads() -> None:
+def _learned_estimator_waiting(clock: _Clock, *, active: bool) -> DeadTimeEstimator:
+    """Estimator with learned dead times and a detection in progress."""
+    est = DeadTimeEstimator()
+    est.deadtime_heat_s = 300.0
+    est.deadtime_cool_s = 900.0
+    est.deadtime_heat_reliable = True
+    est.deadtime_cool_reliable = True
+    est._history_heat.append(300.0)
+    est._history_cool.append(900.0)
+    est.update(clock.mono - 120.0, 20.0, 21.0, 0.0, tin_raw=20.05)
+    # Old stop: well beyond the minimum OFF time.
+    est.last_stop_time = clock.mono - 7200.0
+    if active:
+        est.state = "WAITING_HEAT_RESPONSE"
+        est.heat_start_time = clock.mono - 600.0
+        est.heat_start_temp = 20.0
+        est.heat_trough_temp = 20.0
+        est._waiting_power_on = True
+    else:
+        est.state = "WAITING_COOL_RESPONSE"
+        est.cool_start_time = clock.mono - 600.0
+        est.cool_peak_temp = 20.0
+        est._waiting_power_on = False
+    return est
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_in_progress_detection_is_not_restored(clock: _Clock, active: bool) -> None:
+    """A detection spanning a restart is dropped; learned dead times and histories survive."""
+    est = _learned_estimator_waiting(clock, active=active)
+    state = est.save_state()
+    # The persisted format still carries the detection keys as wall-clock values.
+    assert state["last_stop_time"] == pytest.approx(clock.wall - 7200.0)
+    start_key = "heat_start_time" if active else "cool_start_time"
+    assert state[start_key] == pytest.approx(clock.wall - 600.0)
+
+    _restart(clock, downtime_s=1800.0, mono_after_boot=5.0)
+    restored = DeadTimeEstimator()
+    restored.load_state(state)
+
+    assert restored.state == "OFF"
+    assert restored.heat_start_time is None
+    assert restored.heat_start_temp is None
+    assert restored.heat_trough_temp is None
+    assert restored.cool_start_time is None
+    assert restored.cool_peak_temp is None
+    assert restored._waiting_power_on is None
+    assert restored.last_stop_time == pytest.approx(5.0)
+    assert restored.deadtime_heat_s == 300.0
+    assert restored.deadtime_cool_s == 900.0
+    assert restored.deadtime_heat_reliable
+    assert restored.deadtime_cool_reliable
+    assert list(restored._history_heat) == [300.0]
+    assert list(restored._history_cool) == [900.0]
+    assert [v for _, v in restored.tin_history] == [20.05]
+    assert [v for _, v in restored._tin_lp_history] == [20.0]
+    assert restored.tin_history[0][0] == pytest.approx(5.0 - 1800.0 - 120.0)
+
+    # Immediately after the restart the room already moves in the waited direction.
+    now = clock.mono + 10.0
+    u = 1.0 if active else 0.0
+    step = 0.2 if active else -0.2
+    for i in range(1, 4):
+        restored.update(now + 60.0 * i, 20.0 + step * i, 21.0, u)
+
+    assert list(restored._history_heat) == [300.0]
+    assert list(restored._history_cool) == [900.0]
+    assert restored.deadtime_heat_s == 300.0
+    assert restored.deadtime_cool_s == 900.0
+    assert restored.state not in {"WAITING_HEAT_RESPONSE", "WAITING_COOL_RESPONSE"}
+
+
+def test_detection_arms_after_in_session_minimum_off(clock: _Clock) -> None:
+    """Once the minimum OFF time elapses within the session, detection arms again."""
+    est = _learned_estimator_waiting(clock, active=True)
+    state = est.save_state()
+    _restart(clock, downtime_s=1800.0, mono_after_boot=5.0)
+    restored = DeadTimeEstimator()
+    restored.load_state(state)
+
+    restored.update(10.0, 20.0, 21.0, 0.0)
+    restored.update(5.0 + restored.min_off_time_seconds + 1.0, 20.0, 21.0, 1.0)
+    assert restored.state == "WAITING_HEAT_RESPONSE"
+
+
+def test_legacy_state_without_filtered_history_loads(clock: _Clock) -> None:
     """A persisted state without the filtered history key loads with it empty."""
     est = DeadTimeEstimator()
-    base = time.monotonic() + 3600.0
-    est.update(base, 20.0, 21.0, 0.0, tin_raw=20.1)
+    est.update(clock.mono - 60.0, 20.0, 21.0, 0.0, tin_raw=20.1)
     state = est.save_state()
     del state["tin_lp_history"]
 
+    _restart(clock, downtime_s=60.0, mono_after_boot=1.0)
     restored = DeadTimeEstimator()
     restored._tin_lp_history.append((1.0, 19.0))
     restored.load_state(state)
 
     assert [v for _, v in restored.tin_history] == [20.1]
     assert not restored._tin_lp_history
+
+
+def test_legacy_null_sample_timestamps_are_dropped(clock: _Clock) -> None:
+    """Samples persisted without a timestamp are skipped on load."""
+    restored = DeadTimeEstimator()
+    restored.load_state(
+        {"tin_history": [(None, 19.0), (clock.wall - 60.0, 20.0)]}
+    )
+    assert [v for _, v in restored.tin_history] == [20.0]
 
 
 @pytest.mark.parametrize("stable", [False, True])

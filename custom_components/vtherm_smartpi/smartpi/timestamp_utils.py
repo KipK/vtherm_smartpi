@@ -33,6 +33,42 @@ def elapsed_wall_minutes(
     return max(now - since, 0.0) / 60.0
 
 
+def monotonic_to_wall_ts(monotonic_ts: float | None) -> float | None:
+    """Convert a past monotonic event timestamp to wall clock time for persistence.
+
+    Unlike ``convert_monotonic_to_wall_ts``, which serves future deadlines and
+    drops expired values, past events keep their wall-clock position.
+
+    Args:
+        monotonic_ts: Monotonic timestamp or None
+
+    Returns:
+        Wall clock timestamp (time.time()) or None if None
+    """
+    if monotonic_ts is None:
+        return None
+    return time.time() - (time.monotonic() - monotonic_ts)
+
+
+def wall_to_monotonic_ts(wall_ts: object) -> float | None:
+    """Convert a persisted wall-clock event timestamp to the monotonic clock.
+
+    Past events map to monotonic values earlier than ``time.monotonic()``;
+    after a host reboot the result can be negative. Consumers must compare
+    against ``None`` only, never against zero.
+
+    Args:
+        wall_ts: Wall clock timestamp (time.time()) or None
+
+    Returns:
+        Monotonic timestamp or None if missing or invalid
+    """
+    wall = normalize_wall_timestamp(wall_ts)
+    if wall is None:
+        return None
+    return time.monotonic() - (time.time() - wall)
+
+
 def convert_monotonic_to_wall_ts(monotonic_ts: float | None) -> float | None:
     """Convert a monotonic timestamp to wall clock time for persistence.
 

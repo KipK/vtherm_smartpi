@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import statistics
+import time
 from collections import deque
 from typing import Deque, Tuple
 
@@ -14,7 +15,7 @@ from ..hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
 )
-from .timestamp_utils import convert_monotonic_to_wall_ts, convert_wall_to_monotonic_ts
+from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -392,15 +393,15 @@ class DeadTimeEstimator:
             "history_heat": list(self._history_heat),
             "history_cool": list(self._history_cool),
             "state": self.state,
-            "last_stop_time": convert_monotonic_to_wall_ts(self.last_stop_time),
-            "heat_start_time": convert_monotonic_to_wall_ts(self.heat_start_time),
+            "last_stop_time": monotonic_to_wall_ts(self.last_stop_time),
+            "heat_start_time": monotonic_to_wall_ts(self.heat_start_time),
             "heat_start_temp": self.heat_start_temp,
             "heat_trough_temp": self.heat_trough_temp,
-            "cool_start_time": convert_monotonic_to_wall_ts(self.cool_start_time),
+            "cool_start_time": monotonic_to_wall_ts(self.cool_start_time),
             "cool_peak_temp": self.cool_peak_temp,
             "waiting_power_on": self._waiting_power_on,
-            "tin_history": [(convert_monotonic_to_wall_ts(t), v) for t, v in self._tin_history],
-            "tin_lp_history": [(convert_monotonic_to_wall_ts(t), v) for t, v in self._tin_lp_history],
+            "tin_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_history],
+            "tin_lp_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_lp_history],
         }
 
     def load_state(self, state: dict) -> None:
@@ -426,15 +427,13 @@ class DeadTimeEstimator:
         hc = state.get("history_cool", [])
         self._history_cool = deque(hc, maxlen=6)
 
-        # Restore detection state
-        self.state = state.get("state", "OFF")
-        self.last_stop_time = convert_wall_to_monotonic_ts(state.get("last_stop_time"))
-        self.heat_start_time = convert_wall_to_monotonic_ts(state.get("heat_start_time"))
-        self.heat_start_temp = state.get("heat_start_temp")
-        self.heat_trough_temp = state.get("heat_trough_temp", self.heat_start_temp)
-        self.cool_start_time = convert_wall_to_monotonic_ts(state.get("cool_start_time"))
-        self.cool_peak_temp = state.get("cool_peak_temp")
-        self._waiting_power_on = state.get("waiting_power_on")
+        # An in-progress detection is not restored: the actuator state during
+        # the outage is unknown, so a response spanning it is not attributable.
+        # The persisted detection keys are kept for format compatibility only.
+        self.reset_observation()
+        # The OFF duration before the restart is unknown: the minimum OFF time
+        # must elapse within this session before a detection can be armed.
+        self.last_stop_time = time.monotonic()
 
         # Restore temperature histories (a missing filtered history stays empty)
         for key, history in (
@@ -443,6 +442,6 @@ class DeadTimeEstimator:
         ):
             history.clear()
             for t_wall, v in state.get(key, []):
-                t_mono = convert_wall_to_monotonic_ts(t_wall)
+                t_mono = wall_to_monotonic_ts(t_wall)
                 if t_mono is not None:
                     history.append((t_mono, v))
