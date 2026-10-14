@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 from homeassistant.util import slugify
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.storage import Store
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from datetime import timedelta
 
 from .algo import SmartPI
+from .state_store import SmartPIStateStore
 from .smartpi.command_ownership import project_cycle_command
 from .smartpi.const import (
     SMARTPI_RECALC_INTERVAL_SEC,
@@ -54,18 +54,13 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-STORAGE_VERSION = 1
-STORAGE_KEY = "vtherm_smartpi.{}"
-LEGACY_STORAGE_KEY = "versatile_thermostat.smartpi.{}"
-
 class SmartPIHandler:
     """Handler for SmartPI-specific logic."""
 
     def __init__(self, thermostat: "InterfaceThermostatRuntime"):
         """Initialize handler with parent thermostat reference."""
         self._thermostat = thermostat
-        self._store: Store | None = None
-        self._legacy_store: Store | None = None
+        self._store: SmartPIStateStore | None = None
         self._recalc_timer_remove = None
         # State for learning
         self._last_temp = None
@@ -88,10 +83,7 @@ class SmartPIHandler:
 
         # Initialize storage with slugified name to allow retrieval if re-created
         safe_name = slugify(t.name)
-        self._store = Store(t.hass, STORAGE_VERSION, STORAGE_KEY.format(safe_name))
-        self._legacy_store = Store(
-            t.hass, STORAGE_VERSION, LEGACY_STORAGE_KEY.format(safe_name)
-        )
+        self._store = SmartPIStateStore(t.hass, safe_name)
 
         # Use the thermostat's cycle_min property directly for consistency
         # (base_thermostat reads CONF_CYCLE_MIN in __init__)
@@ -231,10 +223,6 @@ class SmartPIHandler:
         if self._store:
             try:
                 data = await self._store.async_load()
-                if data is None and self._legacy_store is not None:
-                    data = await self._legacy_store.async_load()
-                    if data is not None:
-                        t.hass.async_create_task(self._store.async_save(data))
                 if data and t.prop_algorithm:
                     t.prop_algorithm.load_state(data)
                     _LOGGER.debug("%s - SmartPI state loaded", t)
@@ -254,12 +242,11 @@ class SmartPIHandler:
         await self.on_state_changed(True)
 
     async def _async_save(self):
-        """Save SmartPI state to storage."""
+        """Write the SmartPI state to storage immediately."""
         t = self._thermostat
         if self._store and t.prop_algorithm:
             try:
-                data = t.prop_algorithm.save_state()
-                t.hass.async_create_task(self._store.async_save(data))
+                await self._store.save_now(t.prop_algorithm)
                 _LOGGER.debug("%s - SmartPI state saved", t)
             except Exception as e:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
@@ -268,8 +255,11 @@ class SmartPIHandler:
         """Cleanup and save state on removal."""
         t = self._thermostat
         if self._store and t.prop_algorithm:
-            # We can't await here easily, but we schedule save
-            t.hass.async_create_task(self._async_save())
+            try:
+                # Snapshot now; the write itself cannot be awaited from this sync method.
+                t.hass.async_create_task(self._store.save_now(t.prop_algorithm))
+            except Exception as e:
+                _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
         self._stop_recalc_timer()
 
@@ -553,8 +543,9 @@ class SmartPIHandler:
             committed_changed = abs(algo.committed_on_percent - previous_committed) > 0.001
             self._should_publish_intermediate = self._should_publish_intermediate or committed_changed
 
-        # Save state after cycle to persist learning data
-        await self._async_save()
+        # Persist learning data through a debounced write
+        if self._store and t.prop_algorithm:
+            self._store.schedule_save(t.prop_algorithm)
 
         # --- AutoCalibTrigger: hourly check ---
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):

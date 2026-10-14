@@ -318,7 +318,7 @@ async def test_smartpi_60s_timer_interference():
     # Configure SmartPI
     handler = SmartPIHandler(t)
     # We mock the internal store to avoid FS ops
-    handler._store = AsyncMock()
+    handler._store = MagicMock(save_now=AsyncMock())
 
     # Init algorithm directly
     cycle_min = 10
@@ -676,7 +676,7 @@ async def test_smartpi_resume_from_off_resets_cycle():
     # Setup
     t = MockThermostat()
     handler = SmartPIHandler(t)
-    handler._store = AsyncMock()
+    handler._store = MagicMock(save_now=AsyncMock())
 
     algo = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0, name="TestAlgo")
     t.prop_algorithm = algo
