@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Fix AutoCalib event payloads: `entity_id` now carries the climate entity id
+  (fixing the "Invalid entity ID" recorder warning) and the thermostat name is
+  in `name`. Automations that read the name from `entity_id` must read `name`.
+
 ## [0.4.0]
 
 - Reworked attributes schema and HA database recording rules.

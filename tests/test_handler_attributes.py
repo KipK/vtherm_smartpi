@@ -8,6 +8,7 @@ from custom_components.vtherm_smartpi.const import (
     DOMAIN,
 )
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
+from custom_components.vtherm_smartpi.smartpi.autocalib import AutoCalibEvent
 
 
 def test_update_attributes_publishes_diagnostic_entity_id(monkeypatch):
@@ -87,5 +88,68 @@ async def test_set_learning_service_publishes_and_persists(monkeypatch):
             "entity_id": "climate.test",
             "type": "learning_enabled_changed",
             "learning_enabled": False,
+        },
+    )
+
+
+def _autocalib_thermostat() -> MagicMock:
+    """Build a thermostat whose entity id differs from its name."""
+    thermostat = MagicMock()
+    thermostat.hass = MagicMock()
+    thermostat.entity_id = "climate.salon"
+    thermostat.name = "Salon"
+    return thermostat
+
+
+def test_autocalib_event_carries_entity_id_and_name():
+    """AutoCalib events fire with the climate entity in entity_id and the name in name."""
+    thermostat = _autocalib_thermostat()
+    handler = SmartPIHandler(thermostat)
+    event = AutoCalibEvent(
+        event_type="smartpi_autocalib_success",
+        payload={"name": "Salon", "x": 1},
+    )
+
+    handler._fire_autocalib_event(event)
+
+    thermostat.hass.bus.async_fire.assert_called_once_with(
+        "smartpi_autocalib_success",
+        {"entity_id": "climate.salon", "name": "Salon", "x": 1},
+    )
+    # The event emitted by AutoCalibTrigger is not mutated.
+    assert "entity_id" not in event.payload
+
+
+async def test_force_calibration_service_fires_autocalib_event_with_entity_id(monkeypatch):
+    """The force calibration service fires the AutoCalib event with the climate entity id."""
+    thermostat = _autocalib_thermostat()
+    thermostat.prop_algorithm = SmartPI(
+        hass=thermostat.hass,
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="Salon",
+    )
+    handler = SmartPIHandler(thermostat)
+    handler._async_save = AsyncMock()
+    handler.control_heating = AsyncMock()
+    handler.update_attributes = MagicMock()
+    monkeypatch.setattr(
+        thermostat.prop_algorithm,
+        "force_calibration",
+        lambda: AutoCalibEvent(
+            event_type="smartpi_autocalib_triggered",
+            payload={"name": "Salon", "triggered_params": ["manual_request"]},
+        ),
+    )
+
+    await handler.service_force_smartpi_calibration()
+
+    thermostat.hass.bus.async_fire.assert_any_call(
+        "smartpi_autocalib_triggered",
+        {
+            "entity_id": "climate.salon",
+            "name": "Salon",
+            "triggered_params": ["manual_request"],
         },
     )

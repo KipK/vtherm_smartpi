@@ -284,7 +284,14 @@ def test_autocalib_waiting_snapshot_to_monitoring():
     assert ac.state == AutoCalibState.MONITORING
     assert event is not None
     assert event.event_type == "smartpi_autocalib_snapshot_taken"
+    _assert_name_payload(event)
     assert ac.snapshot_age_h is not None
+
+
+def _assert_name_payload(event, name="test_vtherm"):
+    """AutoCalibTrigger only knows the thermostat name; the handler adds entity_id."""
+    assert event.payload["name"] == name
+    assert "entity_id" not in event.payload
 
 
 def test_autocalib_cool_never_falls_back_without_active_cool_deadtime():
@@ -386,6 +393,7 @@ def test_autocalib_post_calib_success():
 
     assert event is not None
     assert event.event_type == "smartpi_autocalib_success"
+    _assert_name_payload(event)
     assert ac.state == AutoCalibState.MONITORING
     assert ac.retry_count == 0
 
@@ -410,6 +418,7 @@ def test_autocalib_retry_logic():
 
     assert event is not None
     assert event.event_type == "smartpi_autocalib_retry"
+    _assert_name_payload(event)
     assert ac.retry_count == 1
     assert ac.state == AutoCalibState.MONITORING
 
@@ -433,6 +442,7 @@ def test_autocalib_max_retries_degraded():
     event = ac.on_calibration_complete(now, mock_algo)
 
     assert event.event_type == "smartpi_autocalib_degraded"
+    _assert_name_payload(event)
     assert ac.model_degraded is True
     assert ac.retry_count == 0  # Reset after degraded
 
@@ -482,7 +492,9 @@ def test_autocalib_manual_calibration_success():
     now = time.time()
     
     # Simulate force trigger
-    ac.force_manual_trigger(now, mock_algo)
+    event = ac.force_manual_trigger(now, mock_algo)
+    assert event.event_type == "smartpi_autocalib_triggered"
+    _assert_name_payload(event)
     assert ac.retry_count == 0
 
     # Simulate success

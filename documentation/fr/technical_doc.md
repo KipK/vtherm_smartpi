@@ -435,6 +435,12 @@ Comportement implémenté :
 - jusqu'à `AUTOCALIB_MAX_RETRIES = 3` essais,
 - délai de retry planifié `AUTOCALIB_RETRY_DELAY_H = 6` heures.
 
+`AutoCalibTrigger` publie ses transitions sur le bus d'événements Home Assistant via le handler :
+`smartpi_autocalib_snapshot_taken`, `smartpi_autocalib_triggered`, `smartpi_autocalib_success`,
+`smartpi_autocalib_retry` et `smartpi_autocalib_degraded`. Chaque payload d'événement contient `entity_id`
+(l'entité climate, par exemple `climate.salon`) et `name` (le nom du thermostat, par exemple `Salon`),
+suivis des champs propres à chaque événement.
+
 Le cycle forcé est géré par `CalibrationManager` :
 
 - `COOL_DOWN` jusqu'à `sp - 0.3°C`,

@@ -210,6 +210,11 @@ class SmartPIHandler:
             except Exception as e:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
+    def _fire_autocalib_event(self, event):
+        """Fire an AutoCalib event: `entity_id` is the climate entity, `name` the thermostat name."""
+        self._thermostat.hass.bus.async_fire(event.event_type, {**event.payload, "entity_id": self._thermostat.entity_id})
+        _LOGGER.info("%s - AutoCalib event fired: %s", self._thermostat.name, event.event_type)
+
     def remove(self):
         """Cleanup and save state on removal."""
         t = self._thermostat
@@ -515,10 +520,7 @@ class SmartPIHandler:
                     result=algo.calibration_mgr.calibration_result,
                 )
                 if ac_event is not None:
-                    t.hass.bus.async_fire(ac_event.event_type, ac_event.payload)
-                    _LOGGER.info(
-                        "%s - AutoCalib event fired: %s", t.name, ac_event.event_type
-                    )
+                    self._fire_autocalib_event(ac_event)
             self._prev_is_calibrating = currently_calibrating
 
             # Hourly stagnation check
@@ -529,10 +531,7 @@ class SmartPIHandler:
                 current_temp=t.current_temperature,
             )
             if ac_event is not None:
-                t.hass.bus.async_fire(ac_event.event_type, ac_event.payload)
-                _LOGGER.info(
-                    "%s - AutoCalib event fired: %s", t.name, ac_event.event_type
-                )
+                self._fire_autocalib_event(ac_event)
                 if ac_event.should_trigger_calibration:
                     # AutoCalibTrigger decided to start a calibration
                     algo.calibration_mgr.request_calibration(phase=algo.phase)
@@ -681,7 +680,7 @@ class SmartPIHandler:
                  "type": "force_calibration"
              })
             if event is not None:
-                t.hass.bus.async_fire(event.event_type, event.payload)
+                self._fire_autocalib_event(event)
 
             write_event_log(_LOGGER, t, "SmartPI forced calibration triggered")
             # Force immediate recalculation to update state
