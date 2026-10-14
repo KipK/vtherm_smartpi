@@ -308,8 +308,8 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
     _pending_thermostat_title: str | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
-        """Create default plugin settings on first install."""
-        if not self._async_current_entries():
+        """Create the default plugin settings entry when missing, else select a thermostat."""
+        if self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DOMAIN) is None:
             await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
             return self.async_create_entry(
@@ -318,19 +318,6 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
             )
 
         return await self.async_step_thermostat(user_input)
-
-    async def async_step_global(self, user_input: dict[str, Any] | None = None):
-        """Handle the global defaults entry."""
-        await self.async_set_unique_id(DOMAIN)
-        self._abort_if_unique_id_configured()
-
-        if user_input is not None:
-            return self.async_create_entry(title="SmartPI defaults", data=user_input)
-
-        return self.async_show_form(
-            step_id="global",
-            data_schema=build_options_schema(DEFAULT_OPTIONS),
-        )
 
     async def async_step_thermostat(self, user_input: dict[str, Any] | None = None):
         """Select the target thermostat."""

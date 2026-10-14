@@ -81,7 +81,7 @@ async def test_set_learning_service_publishes_and_persists(monkeypatch):
         thermostat.hass,
         "smartpi_diag_update_vt-test",
     )
-    thermostat.hass.bus.fire.assert_called_once_with(
+    thermostat.hass.bus.async_fire.assert_called_once_with(
         "vtherm_smartpi_event",
         {
             "entity_id": "climate.test",

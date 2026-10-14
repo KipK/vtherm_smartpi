@@ -653,13 +653,8 @@ class SmartPIHandler:
         # Reset the calibration manager
         algo.calibration_mgr.reset()
 
-        # Notify autocalib trigger about the cancellation
-        now_wall = time.time()
-        event = algo.autocalib.on_calibration_complete(now_wall, algo, SmartPICalibrationResult.CANCELLED)
-
-        # Fire event if autocalib returns one
-        if event:
-            t.hass.bus.fire(EventType.SMART_PI_EVENT.value, {"entity_id": t.entity_id, "type": event.event_type, "data": event.data or {}})
+        # Notify autocalib trigger about the cancellation (it never returns an event)
+        algo.autocalib.on_calibration_complete(time.time(), algo, SmartPICalibrationResult.CANCELLED)
 
         # Reset tracking state
         self._prev_is_calibrating = False
@@ -692,7 +687,7 @@ class SmartPIHandler:
         t = self._thermostat
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
             t.prop_algorithm.reset_learning()
-            t.hass.bus.fire(EventType.SMART_PI_EVENT.value, {
+            t.hass.bus.async_fire(EventType.SMART_PI_EVENT.value, {
                  "entity_id": t.entity_id,
                  "type": "learning_reset"
              })
@@ -708,7 +703,7 @@ class SmartPIHandler:
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
             enabled = bool(learning_enabled)
             t.prop_algorithm.set_learning_enabled(enabled)
-            t.hass.bus.fire(EventType.SMART_PI_EVENT.value, {
+            t.hass.bus.async_fire(EventType.SMART_PI_EVENT.value, {
                 "entity_id": t.entity_id,
                 "type": "learning_enabled_changed",
                 "learning_enabled": enabled,
@@ -728,12 +723,12 @@ class SmartPIHandler:
         t = self._thermostat
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
             event = t.prop_algorithm.force_calibration()
-            t.hass.bus.fire(EventType.SMART_PI_EVENT.value, {
+            t.hass.bus.async_fire(EventType.SMART_PI_EVENT.value, {
                  "entity_id": t.entity_id,
                  "type": "force_calibration"
              })
             if event is not None:
-                t.hass.bus.fire(event.event_type, event.payload)
+                t.hass.bus.async_fire(event.event_type, event.payload)
 
             write_event_log(_LOGGER, t, "SmartPI forced calibration triggered")
             # Force immediate recalculation to update state
@@ -750,7 +745,7 @@ class SmartPIHandler:
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
             t.prop_algorithm.ctl.integral = 0.0
             t.prop_algorithm.ctl.clear_integral_hold()
-            t.hass.bus.fire(EventType.SMART_PI_EVENT.value, {
+            t.hass.bus.async_fire(EventType.SMART_PI_EVENT.value, {
                 "entity_id": t.entity_id,
                 "type": "integral_reset"
             })

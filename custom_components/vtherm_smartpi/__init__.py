@@ -9,6 +9,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
@@ -48,31 +49,11 @@ def _register_factory(hass: HomeAssistant) -> None:
 def _register_services(hass: HomeAssistant) -> None:
     """Register SmartPI services on the plugin domain."""
     async def _call_on_vtherms(call, method_name: str, *args) -> None:
-        entity_ids = set(await service_helper.async_extract_entity_ids(call))
-
-        call_target = getattr(call, "target", None)
-        if isinstance(call_target, dict):
-            target_entity_ids = call_target.get("entity_id")
-            if isinstance(target_entity_ids, str):
-                entity_ids.add(target_entity_ids)
-            elif isinstance(target_entity_ids, list):
-                entity_ids.update(
-                    entity_id for entity_id in target_entity_ids if isinstance(entity_id, str)
-                )
-
-        explicit_entity_ids = call.data.get("entity_id")
-        if isinstance(explicit_entity_ids, str):
-            entity_ids.add(explicit_entity_ids)
-        elif isinstance(explicit_entity_ids, list):
-            entity_ids.update(
-                entity_id for entity_id in explicit_entity_ids if isinstance(entity_id, str)
-            )
-
+        entity_ids = await service_helper.async_extract_entity_ids(call)
         component = hass.data.get(CLIMATE_DOMAIN)
-        if not component or not entity_ids:
-            return
+        matched = 0
 
-        for entity_id in sorted(entity_ids):
+        for entity_id in sorted(entity_ids if component else ()):
             entity = component.get_entity(entity_id) if hasattr(component, "get_entity") else None
             if entity is None:
                 entity = next(
@@ -84,6 +65,7 @@ def _register_services(hass: HomeAssistant) -> None:
 
             if getattr(entity, "proportional_function", None) != PROP_FUNCTION_SMART_PI:
                 continue
+            matched += 1
             handler = getattr(entity, method_name, None)
             if handler is None:
                 algo_handler = getattr(entity, "_algo_handler", None)
@@ -94,6 +76,12 @@ def _register_services(hass: HomeAssistant) -> None:
                 )
                 continue
             await handler(*args)
+
+        if not matched:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="no_smartpi_target",
+            )
 
     async def _handle_reset_learning(call) -> None:
         """Handle SmartPI learning reset with a real async callable."""
@@ -119,25 +107,27 @@ def _register_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_RESET_SMARTPI_LEARNING,
         _handle_reset_learning,
+        schema=cv.make_entity_service_schema({}),
     )
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_SMARTPI_LEARNING,
         _handle_set_learning,
-        schema=vol.Schema(
-            {vol.Required(ATTR_LEARNING_ENABLED): cv.boolean},
-            extra=vol.ALLOW_EXTRA,
+        schema=cv.make_entity_service_schema(
+            {vol.Required(ATTR_LEARNING_ENABLED): cv.boolean}
         ),
     )
     hass.services.async_register(
         DOMAIN,
         SERVICE_FORCE_SMARTPI_CALIBRATION,
         _handle_force_calibration,
+        schema=cv.make_entity_service_schema({}),
     )
     hass.services.async_register(
         DOMAIN,
         SERVICE_RESET_SMARTPI_INTEGRAL,
         _handle_reset_integral,
+        schema=cv.make_entity_service_schema({}),
     )
 
 

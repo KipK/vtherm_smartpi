@@ -2,23 +2,6 @@
   "title": "Versatile Thermostat SmartPI",
   "config": {
     "step": {
-      "global": {
-        "title": "Paramètres SmartPI",
-        "data": {
-          "minimal_activation_delay": "Délai minimal d'activation",
-          "minimal_deactivation_delay": "Délai minimal de désactivation",
-          "smart_pi_deadband": "Bande morte",
-          "smart_pi_hysteresis_on": "Hystérésis marche",
-          "smart_pi_hysteresis_off": "Hystérésis arrêt",
-          "smart_pi_release_tau_factor": "Facteur tau de relâchement",
-          "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
-          "smart_pi_use_ff3": "Utiliser FF3",
-          "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
-          "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
-          "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
-          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
-        }
-      },
       "thermostat": {
         "title": "SmartPI par thermostat",
         "data": {
@@ -53,10 +36,11 @@
       }
     },
     "error": {
-      "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale."
+      "invalid_valve_curve": "La courbe de vanne doit respecter ouverture minimale < ouverture au coude < ouverture maximale.",
+      "invalid_entity": "L'entité sélectionnée n'est pas un thermostat valide."
     },
     "abort": {
-      "single_instance_allowed": "Une seule configuration du plugin SmartPI est autorisée."
+      "already_configured": "Ce thermostat possède déjà une configuration SmartPI dédiée."
     }
   },
   "options": {
@@ -93,19 +77,32 @@
     }
   },
   "services": {
+    "reset_smartpi_learning": {
+      "name": "Réinitialiser l'apprentissage SmartPI",
+      "description": "Réinitialise l'état d'apprentissage SmartPI d'un thermostat."
+    },
     "set_smartpi_learning": {
       "name": "Définir l'apprentissage SmartPI",
       "description": "Active ou met en pause l'apprentissage thermique SmartPI pour un thermostat.",
       "fields": {
-        "entity_id": {
-          "name": "Thermostat cible",
-          "description": "L'entité climate VTherm à mettre à jour."
-        },
         "learning_enabled": {
           "name": "Apprentissage activé",
           "description": "Indique si SmartPI peut mettre à jour son modèle thermique et ses estimations de temps mort."
         }
       }
+    },
+    "force_smartpi_calibration": {
+      "name": "Forcer la calibration SmartPI",
+      "description": "Force un cycle de calibration SmartPI pour un thermostat."
+    },
+    "reset_smartpi_integral": {
+      "name": "Réinitialiser l'intégrale SmartPI",
+      "description": "Réinitialise l'accumulateur d'intégrale SmartPI d'un thermostat."
+    }
+  },
+  "exceptions": {
+    "no_smartpi_target": {
+      "message": "Aucune des entités ciblées n'est un Versatile Thermostat utilisant SmartPI."
     }
   }
 }

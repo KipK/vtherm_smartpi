@@ -1,26 +1,19 @@
 reset_smartpi_learning:
   name: Reset SmartPI learning
   description: Reset the SmartPI learning state for a thermostat.
-  fields:
-    entity_id:
-      name: Target thermostat
-      description: The VTherm climate entity to reset.
-      required: true
-      selector:
-        entity:
-          domain: climate
+  target:
+    entity:
+      integration: versatile_thermostat
+      domain: climate
 
 set_smartpi_learning:
   name: Set SmartPI learning
   description: Enable or pause SmartPI thermal learning for a thermostat.
+  target:
+    entity:
+      integration: versatile_thermostat
+      domain: climate
   fields:
-    entity_id:
-      name: Target thermostat
-      description: The VTherm climate entity to update.
-      required: true
-      selector:
-        entity:
-          domain: climate
     learning_enabled:
       name: Learning enabled
       description: Whether SmartPI may update its thermal model and dead-time estimates.
@@ -31,23 +24,15 @@ set_smartpi_learning:
 force_smartpi_calibration:
   name: Force SmartPI calibration
   description: Force a SmartPI calibration cycle for a thermostat.
-  fields:
-    entity_id:
-      name: Target thermostat
-      description: The VTherm climate entity to calibrate.
-      required: true
-      selector:
-        entity:
-          domain: climate
+  target:
+    entity:
+      integration: versatile_thermostat
+      domain: climate
 
 reset_smartpi_integral:
   name: Reset SmartPI integral
   description: Reset the SmartPI integral accumulator for a thermostat.
-  fields:
-    entity_id:
-      name: Target thermostat
-      description: The VTherm climate entity to reset.
-      required: true
-      selector:
-        entity:
-          domain: climate
+  target:
+    entity:
+      integration: versatile_thermostat
+      domain: climate
