@@ -132,10 +132,12 @@ def _register_services(hass: HomeAssistant) -> None:
 
 
 def _get_dedicated_target_unique_ids(hass: HomeAssistant) -> set[str]:
-    """Return VT unique ids that have a dedicated SmartPI config entry."""
+    """Return VT unique ids that have an enabled dedicated SmartPI config entry."""
     return {
         plugin_entry.data[CONF_TARGET_VTHERM]
-        for plugin_entry in hass.config_entries.async_entries(DOMAIN)
+        for plugin_entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False
+        )
         if plugin_entry.data.get(CONF_TARGET_VTHERM)
     }
 
@@ -217,6 +219,15 @@ async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up vtherm_smartpi from a config entry."""
+
+    async def _reload_affected_vtherms_if_disabled() -> None:
+        """Reload the dependent VT entries once a disabled entry is fully unloaded."""
+        if entry.disabled_by:
+            await _reload_affected_vtherms(hass, entry)
+
+    # Registered first so it runs last (unload callbacks run in reverse order),
+    # after the platform and dispatcher listeners of this entry are gone.
+    entry.async_on_unload(_reload_affected_vtherms_if_disabled)
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     # Only reload VT entries when HA is already running (live install/update).

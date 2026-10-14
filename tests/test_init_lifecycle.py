@@ -5,12 +5,14 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.core import CoreState
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from vtherm_api.vtherm_api import VThermAPI
 
 from custom_components.vtherm_smartpi import (
     _async_update_options,
+    _get_dedicated_target_unique_ids,
     async_remove_entry,
     async_setup,
     async_setup_entry,
@@ -206,3 +208,118 @@ async def test_setup_entry_defers_vtherm_reload_until_homeassistant_runs(
 
     for_target.assert_not_awaited()
     using_defaults.assert_not_awaited()
+
+
+@pytest.fixture
+def state_at_reload(reload_helpers):
+    """Record the disabled flag and load state of the plugin entry at each VT reload."""
+    for_target, using_defaults, _ = reload_helpers
+    seen: list[tuple[str, object, ConfigEntryState]] = []
+
+    def _watch(name: str, mock: AsyncMock, entry: MockConfigEntry) -> None:
+        inner = mock.side_effect
+
+        async def _record(hass, *args):
+            seen.append((name, entry.disabled_by, entry.state))
+            await inner(hass, *args)
+
+        mock.side_effect = _record
+
+    return for_target, using_defaults, seen, _watch
+
+
+@pytest.mark.asyncio
+async def test_disabling_dedicated_entry_reloads_its_target_once_after_disabling(
+    hass, state_at_reload
+) -> None:
+    """Disabling a dedicated entry reloads its target once, when the entry is already disabled."""
+    for_target, using_defaults, seen, watch = state_at_reload
+    entry = _dedicated_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    watch("target", for_target, entry)
+    for_target.reset_mock()
+
+    assert await hass.config_entries.async_set_disabled_by(
+        entry.entry_id, ConfigEntryDisabler.USER
+    )
+
+    for_target.assert_awaited_once_with(hass, TARGET_UNIQUE_ID)
+    using_defaults.assert_not_awaited()
+    assert seen == [
+        ("target", ConfigEntryDisabler.USER, ConfigEntryState.UNLOAD_IN_PROGRESS)
+    ]
+    assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+@pytest.mark.asyncio
+async def test_disabling_global_entry_reloads_default_vtherms_once(
+    hass, state_at_reload
+) -> None:
+    """Disabling the global entry reloads only the VT entries relying on the defaults."""
+    for_target, using_defaults, seen, watch = state_at_reload
+    entry = _global_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    watch("defaults", using_defaults, entry)
+    using_defaults.reset_mock()
+
+    assert await hass.config_entries.async_set_disabled_by(
+        entry.entry_id, ConfigEntryDisabler.USER
+    )
+
+    using_defaults.assert_awaited_once_with(hass)
+    for_target.assert_not_awaited()
+    assert [(name, disabled_by) for name, disabled_by, _ in seen] == [
+        ("defaults", ConfigEntryDisabler.USER)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_enabling_dedicated_entry_reloads_its_target_once(
+    hass, reload_helpers
+) -> None:
+    """Re-enabling a dedicated entry sets it up again, which reloads its target once."""
+    for_target, using_defaults, _ = reload_helpers
+    entry = _dedicated_entry()
+    entry.disabled_by = ConfigEntryDisabler.USER
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_set_disabled_by(entry.entry_id, None)
+
+    assert entry.state is ConfigEntryState.LOADED
+    for_target.assert_awaited_once_with(hass, TARGET_UNIQUE_ID)
+    using_defaults.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_plain_unload_and_reload_do_not_reload_on_unload(
+    hass, reload_helpers
+) -> None:
+    """Only a disabled entry triggers a VT reload while unloading."""
+    for_target, using_defaults, _ = reload_helpers
+    entry = _dedicated_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    for_target.reset_mock()
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+    for_target.assert_not_awaited()
+    using_defaults.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disabled_dedicated_entry_does_not_count_as_dedicated(hass) -> None:
+    """A disabled dedicated entry leaves its target to the global entry."""
+    enabled = _dedicated_entry()
+    enabled.add_to_hass(hass)
+    disabled = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=f"{DOMAIN}-vt-disabled",
+        data={CONF_TARGET_VTHERM: "vt-disabled"},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    disabled.add_to_hass(hass)
+
+    assert _get_dedicated_target_unique_ids(hass) == {TARGET_UNIQUE_ID}

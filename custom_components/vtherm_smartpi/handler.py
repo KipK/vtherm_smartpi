@@ -192,7 +192,7 @@ class SmartPIHandler:
         config = dict(DEFAULT_OPTIONS)
         config.update(t.entry_infos or {})
 
-        plugin_entries = t.hass.config_entries.async_entries(DOMAIN)
+        plugin_entries = t.hass.config_entries.async_entries(DOMAIN, include_disabled=False)
         matching_entry = next(
             (
                 entry

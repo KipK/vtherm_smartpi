@@ -20,9 +20,15 @@ class _FakeConfigEntries:
     def __init__(self) -> None:
         self._entries: list[object] = []
 
-    def async_entries(self, _domain: str | None = None) -> list[object]:
+    def async_entries(
+        self, _domain: str | None = None, include_disabled: bool = True
+    ) -> list[object]:
         """Return the currently registered entries."""
-        return list(self._entries)
+        return [
+            entry
+            for entry in self._entries
+            if include_disabled or not getattr(entry, "disabled_by", None)
+        ]
 
 
 @dataclass
