@@ -2032,10 +2032,6 @@ class SmartPI:
     def guard_cut_active(self) -> bool:
         return self.guards.guard_cut_active
 
-    @guard_cut_active.setter
-    def guard_cut_active(self, value: bool) -> None:
-        self.guards.guard_cut_active = value
-
     @property
     def guard_cut_count(self) -> int:
         return self.guards.guard_cut_count
@@ -2043,10 +2039,6 @@ class SmartPI:
     @property
     def guard_kick_active(self) -> bool:
         return self.guards.guard_kick_active
-
-    @guard_kick_active.setter
-    def guard_kick_active(self, value: bool) -> None:
-        self.guards.guard_kick_active = value
 
     @property
     def guard_kick_count(self) -> int:
