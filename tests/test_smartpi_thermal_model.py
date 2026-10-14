@@ -132,3 +132,52 @@ def test_ff3_and_twin_match_closed_form_without_mutating_prediction_state() -> N
     )
     assert result["T_pred"] == pytest.approx(expected, abs=1e-12)
     assert result["T_hat_next"] == pytest.approx(expected, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("mode", "a", "text", "active_deadtime_s", "passive_deadtime_s"),
+    [
+        ("heat", 0.4, 5.0, 600.0, 120.0),
+        ("cool", -0.4, 35.0, 120.0, 600.0),
+    ],
+    ids=["heat", "cool"],
+)
+def test_twin_delays_power_on_and_off_by_the_mode_response_deadtime(
+    mode: str,
+    a: float,
+    text: float,
+    active_deadtime_s: float,
+    passive_deadtime_s: float,
+) -> None:
+    """Power on uses the mode's active response, power off its passive one.
+
+    The heat dead time (600 s) delays a rise and the cool one (120 s) a fall.
+    """
+    twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
+    steps = 12
+
+    def run(on_percent: float) -> list[dict]:
+        return [
+            twin.update_with_eta(
+                tin=22.0, text=text, target=22.0, on_percent=on_percent,
+                tau_reliable=True, a=a, b=0.02, mode=mode,
+                deadtime_heat_s=600.0, deadtime_cool_s=120.0,
+                deadtime_heat_reliable=True, deadtime_cool_reliable=True,
+                dt_s=60.0,
+            )
+            for _ in range(steps)
+        ]
+
+    run(0.0)
+    power_on = run(1.0)
+    power_off = run(0.0)
+
+    assert {r["deadtime_s"] for r in power_on} == {active_deadtime_s}
+    assert {r["deadtime_s"] for r in power_off} == {passive_deadtime_s}
+    # The applied command reaches the plant only after the selected delay.
+    assert [r["u_eff"] for r in power_on] == [
+        0.0 if index * 60.0 < active_deadtime_s else 1.0 for index in range(steps)
+    ]
+    assert [r["u_eff"] for r in power_off] == [
+        1.0 if index * 60.0 < passive_deadtime_s else 0.0 for index in range(steps)
+    ]

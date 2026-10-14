@@ -2867,6 +2867,7 @@ class SmartPI:
             )
 
         if self.phase == SmartPIPhase.STABLE and not resumed_from_off and not startup_first_run:
+            stop_deadtime_s, stop_deadtime_reliable = self.dt_est.passive_deadtime(hvac_mode)
             target_temp_filt = self.sp_mgr.filter_setpoint(
                 target_temp=target_temp,
                 current_temp=current_temp,
@@ -2875,8 +2876,8 @@ class SmartPI:
                 b=self.est.b,
                 ext_current_temp=ext_current_temp,
                 u_ref=self._committed_on_percent,
-                deadtime_cool_s=self.dt_est.deadtime_cool_s,
-                deadtime_cool_reliable=self.dt_est.deadtime_cool_reliable,
+                stop_deadtime_s=stop_deadtime_s,
+                stop_deadtime_reliable=stop_deadtime_reliable,
                 tau_reliable=tau_info.reliable,
                 deadband_c=self.deadband_c,
                 kp=self.Kp,

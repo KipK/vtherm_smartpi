@@ -654,8 +654,8 @@ class SmartPISetpointManager:
         b: float = 0.0,
         ext_current_temp: float | None = None,
         u_ref: float = 1.0,
-        deadtime_cool_s: float | None = None,
-        deadtime_cool_reliable: bool = False,
+        stop_deadtime_s: float | None = None,
+        stop_deadtime_reliable: bool = False,
         tau_reliable: bool = False,
         deadband_c: float = 0.0,
         kp: float | None = None,
@@ -672,6 +672,8 @@ class SmartPISetpointManager:
         The integral path must continue to use the raw setpoint.
         The proportional path keeps the raw setpoint until the predicted
         braking zone is reached, then applies a smooth late-braking trajectory.
+        ``stop_deadtime_s`` is the dead time of the passive response after
+        active power stops for ``hvac_mode``.
         """
         self._reference_governor_prepared_at = None
         if not self.enabled:
@@ -745,24 +747,24 @@ class SmartPISetpointManager:
             self.set_passthrough(target_temp)
             return target_temp
 
-        deadtime_cool_min = (
-            (deadtime_cool_s / 60.0)
-            if deadtime_cool_reliable and deadtime_cool_s is not None and deadtime_cool_s > 0.0
+        stop_deadtime_min = (
+            (stop_deadtime_s / 60.0)
+            if stop_deadtime_reliable and stop_deadtime_s is not None and stop_deadtime_s > 0.0
             else None
         )
         braking_delay_min = None
         predicted_change = None
         effective_rate = None
         model_ready = False
-        if tau_reliable and deadtime_cool_min is not None:
-            # Predict across the current cycle remainder, the cooling delay,
+        if tau_reliable and stop_deadtime_min is not None:
+            # Predict across the current cycle remainder, the passive delay,
             # and any queued power at the start of the following cycle.
-            braking_delay_min = deadtime_cool_min + max(remaining_cycle_min, 0.0)
+            braking_delay_min = stop_deadtime_min + max(remaining_cycle_min, 0.0)
             next_cycle_horizon_min = 0.0
             if next_cycle_u_ref > 0.0:
                 next_cycle_horizon_min = min(
                     max(float(cycle_min), 0.0),
-                    deadtime_cool_min,
+                    stop_deadtime_min,
                 )
             predicted_change = self._compute_predicted_signed_change(
                 current_temp=current_temp,
@@ -787,7 +789,7 @@ class SmartPISetpointManager:
         tau_brake_min = None
         if (
             model_ready
-            and deadtime_cool_min is not None
+            and stop_deadtime_min is not None
             and predicted_change is not None
             and effective_rate is not None
         ):
@@ -828,9 +830,9 @@ class SmartPISetpointManager:
                 min_signed_p_error=min_signed_p_error,
                 hvac_mode=hvac_mode,
             )
-            # Keep the braking time constant at least as long as the cooling delay.
+            # Keep the braking time constant at least as long as the passive delay.
             tau_brake_min = max(
-                deadtime_cool_min,
+                stop_deadtime_min,
                 signed_error / max(effective_rate, 1e-6),
                 1e-6,
             )
@@ -895,7 +897,7 @@ class SmartPISetpointManager:
                     current_tau_ref = (
                         self._trajectory.tau_ref_min
                         or tau_brake_min
-                        or deadtime_cool_min
+                        or stop_deadtime_min
                         or 1e-6
                     )
                     tau_target_min = max(
@@ -954,10 +956,10 @@ class SmartPISetpointManager:
                 ext_temp=ext_current_temp,
                 committed_u=u_ref,
                 remaining_cycle_min=remaining_cycle_min,
-                stop_deadtime_s=deadtime_cool_s,
+                stop_deadtime_s=stop_deadtime_s,
                 measured_slope_h=temperature_slope_h,
                 model_reliable=tau_reliable,
-                deadtime_reliable=deadtime_cool_reliable,
+                deadtime_reliable=stop_deadtime_reliable,
                 now_monotonic=now_monotonic,
             )
             self._reference_governor_authority_selected = True

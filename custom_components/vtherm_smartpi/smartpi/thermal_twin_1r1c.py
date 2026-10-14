@@ -943,8 +943,10 @@ class ThermalTwin1R1C:
                 return {"status": "not_reliable"}
             self.reset(tin, text, u_init=on_percent)
 
-        # v4.2: use correct deadtime based on power direction
-        if on_percent > 0.01:
+        # Power on drives the active response of the mode and power off the
+        # passive one. The heat dead time delays a rise, the cool one a fall.
+        temperature_rising = (on_percent > 0.01) == (mode != "cool")
+        if temperature_rising:
             deadtime_s = deadtime_heat_s or 0.0
         else:
             deadtime_s = deadtime_cool_s or 0.0

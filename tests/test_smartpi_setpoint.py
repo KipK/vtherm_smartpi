@@ -1,7 +1,11 @@
 """Tests for SmartPISetpointManager trajectory shaping."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 
+from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.const import (
     TRAJECTORY_COMPLETE_EPS_C,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
@@ -17,11 +21,12 @@ from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
 )
+from helpers import force_smartpi_stable_mode
 
 B_TEST = 0.02  # tau = 50 min
 A_TEST = 0.4
 EXT_TEST = 5.0
-DEADTIME_COOL_TEST_S = 240.0
+STOP_DEADTIME_TEST_S = 240.0
 
 
 def snapshot() -> PIOutputSnapshot:
@@ -41,7 +46,7 @@ def _filter(
     a: float = A_TEST,
     b: float = B_TEST,
     ext_temp: float = EXT_TEST,
-    deadtime_cool_s: float = DEADTIME_COOL_TEST_S,
+    stop_deadtime_s: float = STOP_DEADTIME_TEST_S,
     tau_reliable: bool = True,
     deadband_c: float = 0.05,
     remaining_cycle_min: float = 0.0,
@@ -58,8 +63,8 @@ def _filter(
         b=b,
         ext_current_temp=ext_temp,
         u_ref=u_ref,
-        deadtime_cool_s=deadtime_cool_s,
-        deadtime_cool_reliable=True,
+        stop_deadtime_s=stop_deadtime_s,
+        stop_deadtime_reliable=True,
         tau_reliable=tau_reliable,
         deadband_c=deadband_c,
         kp=1.0,
@@ -337,8 +342,8 @@ class TestTrajectoryActivation:
 
     def test_remaining_cycle_time_can_advance_braking_entry(self):
         manager = _make_manager()
-        _filter(manager, target=21.0, current=21.0, now=0.0, a=0.200835, b=0.005569, ext_temp=5.0, deadtime_cool_s=251.99418194520405)
-        _filter(manager, target=22.0, current=21.0, now=60.0, a=0.200835, b=0.005569, ext_temp=5.0, deadtime_cool_s=251.99418194520405)
+        _filter(manager, target=21.0, current=21.0, now=0.0, a=0.200835, b=0.005569, ext_temp=5.0, stop_deadtime_s=251.99418194520405)
+        _filter(manager, target=22.0, current=21.0, now=60.0, a=0.200835, b=0.005569, ext_temp=5.0, stop_deadtime_s=251.99418194520405)
 
         result = _filter(
             manager,
@@ -348,7 +353,7 @@ class TestTrajectoryActivation:
             a=0.200835,
             b=0.005569,
             ext_temp=5.0,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             remaining_cycle_min=8.0,
         )
 
@@ -368,7 +373,7 @@ class TestTrajectoryActivation:
                 a=0.184723,
                 b=0.005366,
                 ext_temp=7.44,
-                deadtime_cool_s=251.99418194520405,
+                stop_deadtime_s=251.99418194520405,
             )
             _filter(
                 manager,
@@ -378,7 +383,7 @@ class TestTrajectoryActivation:
                 a=0.184723,
                 b=0.005366,
                 ext_temp=7.44,
-                deadtime_cool_s=251.99418194520405,
+                stop_deadtime_s=251.99418194520405,
             )
 
         baseline_result = _filter(
@@ -389,7 +394,7 @@ class TestTrajectoryActivation:
             a=0.184723,
             b=0.005366,
             ext_temp=7.44,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             remaining_cycle_min=0.0,
             u_ref=1.0,
             next_u_ref=0.0,
@@ -403,7 +408,7 @@ class TestTrajectoryActivation:
             a=0.184723,
             b=0.005366,
             ext_temp=7.44,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             remaining_cycle_min=0.0,
             u_ref=1.0,
             next_u_ref=1.0,
@@ -425,7 +430,7 @@ class TestTrajectoryActivation:
             a=0.180774,
             b=0.005366,
             ext_temp=5.2,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
         )
         _filter(
             manager,
@@ -435,7 +440,7 @@ class TestTrajectoryActivation:
             a=0.180774,
             b=0.005366,
             ext_temp=5.2,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             u_ref=1.0,
             next_u_ref=1.0,
             cycle_min=10.0,
@@ -449,7 +454,7 @@ class TestTrajectoryActivation:
             a=0.180774,
             b=0.005366,
             ext_temp=5.2,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             u_ref=1.0,
             next_u_ref=1.0,
             cycle_min=10.0,
@@ -464,7 +469,7 @@ class TestTrajectoryActivation:
             a=0.178426,
             b=0.005366,
             ext_temp=5.19,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             u_ref=1.0,
             next_u_ref=1.0,
             cycle_min=10.0,
@@ -504,8 +509,8 @@ class TestTrajectoryActivation:
 
     def test_braking_target_never_goes_below_current_temp_in_heat(self):
         manager = _make_manager()
-        _filter(manager, target=22.0, current=22.0, now=0.0, a=0.200835, b=0.005439, ext_temp=5.0, deadtime_cool_s=251.99418194520405)
-        _filter(manager, target=23.0, current=22.0, now=60.0, a=0.200835, b=0.005439, ext_temp=5.0, deadtime_cool_s=251.99418194520405)
+        _filter(manager, target=22.0, current=22.0, now=0.0, a=0.200835, b=0.005439, ext_temp=5.0, stop_deadtime_s=251.99418194520405)
+        _filter(manager, target=23.0, current=22.0, now=60.0, a=0.200835, b=0.005439, ext_temp=5.0, stop_deadtime_s=251.99418194520405)
 
         result = _filter(
             manager,
@@ -515,7 +520,7 @@ class TestTrajectoryActivation:
             a=0.200835,
             b=0.005439,
             ext_temp=5.0,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             remaining_cycle_min=8.0,
         )
 
@@ -615,8 +620,8 @@ class TestTrajectoryProgression:
             b=B_TEST,
             ext_current_temp=EXT_TEST,
             u_ref=0.0,
-            deadtime_cool_s=DEADTIME_COOL_TEST_S,
-            deadtime_cool_reliable=True,
+            stop_deadtime_s=STOP_DEADTIME_TEST_S,
+            stop_deadtime_reliable=True,
             tau_reliable=True,
             deadband_c=0.05,
             kp=1.0,
@@ -655,7 +660,7 @@ class TestTrajectoryProgression:
             a=0.170377,
             b=0.005592,
             ext_temp=15.57,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             u_ref=1.0,
             next_u_ref=1.0,
             cycle_min=2.0,
@@ -691,8 +696,8 @@ class TestTrajectoryProgression:
             b=0.005397,
             ext_current_temp=5.0,
             u_ref=0.6,
-            deadtime_cool_s=251.99418194520405,
-            deadtime_cool_reliable=True,
+            stop_deadtime_s=251.99418194520405,
+            stop_deadtime_reliable=True,
             tau_reliable=True,
             deadband_c=0.05,
             kp=None,
@@ -791,7 +796,7 @@ class TestTrajectoryProgression:
             a=0.173127,
             b=0.005592,
             ext_temp=5.0,
-            deadtime_cool_s=251.99418194520405,
+            stop_deadtime_s=251.99418194520405,
             u_ref=0.133333,
             next_u_ref=0.127483,
             cycle_min=2.0,
@@ -932,3 +937,77 @@ class TestReset:
         assert manager.trajectory_active is False
         assert manager.trajectory_phase == TrajectoryPhase.IDLE
         assert manager.reference_governor_authority_decision is None
+
+
+class TestStopDeadtimeSelection:
+    """The braking horizon and governor use the passive response dead time."""
+
+    @pytest.mark.parametrize(
+        ("hvac_mode", "expected_stop_deadtime_s"),
+        [(VThermHvacMode_HEAT, 120.0), (VThermHvacMode_COOL, 600.0)],
+        ids=["heat_uses_fall_delay", "cool_uses_rise_delay"],
+    )
+    def test_braking_and_governor_use_passive_deadtime(
+        self, hvac_mode, expected_stop_deadtime_s
+    ):
+        direction = 1.0 if hvac_mode == VThermHvacMode_HEAT else -1.0
+        smartpi = SmartPI(
+            hass=MagicMock(), cycle_min=10, minimal_activation_delay=0,
+            minimal_deactivation_delay=0, name="stop deadtime", deadband_c=0.05,
+        )
+        force_smartpi_stable_mode(smartpi)
+        smartpi.est.a = direction * A_TEST
+        smartpi.est.b = B_TEST
+        smartpi.est.tau_reliability = lambda: SimpleNamespace(reliable=True)
+        # Rise delay (heat) and fall delay (cool) deliberately differ.
+        smartpi.dt_est.deadtime_heat_s = 600.0
+        smartpi.dt_est.deadtime_heat_reliable = True
+        smartpi.dt_est.deadtime_cool_s = 120.0
+        smartpi.dt_est.deadtime_cool_reliable = True
+        smartpi._committed_on_percent = 1.0
+        smartpi._on_percent = 0.9
+
+        manager = smartpi.sp_mgr
+        horizons_min = []
+        original_prediction = manager._compute_predicted_signed_change
+
+        def record_prediction(**kwargs):
+            horizons_min.append(kwargs["horizon_min"])
+            return original_prediction(**kwargs)
+
+        governor_deadtimes = []
+        authority = manager._reference_governor_authority
+        original_prepare = authority.prepare
+
+        def record_prepare(**kwargs):
+            governor_deadtimes.append(
+                (kwargs["stop_deadtime_s"], kwargs["deadtime_reliable"])
+            )
+            return original_prepare(**kwargs)
+
+        manager._compute_predicted_signed_change = record_prediction
+        authority.prepare = record_prepare
+
+        target = 22.0
+        ext_temp = target - direction * 17.0
+        steps = [
+            (target - direction, target - direction),
+            (target, target - direction),
+            (target, target - direction * 0.1),
+        ]
+        for index, (step_target, current) in enumerate(steps):
+            smartpi._manage_setpoint(
+                target_temp=step_target,
+                current_temp=current,
+                ext_current_temp=ext_temp,
+                hvac_mode=hvac_mode,
+                dt_min=1.0,
+                now_monotonic=60.0 * index,
+                slope_h=direction * 0.01,
+            )
+
+        assert horizons_min == [pytest.approx(expected_stop_deadtime_s / 60.0)]
+        assert manager.trajectory_active is True
+        assert manager.trajectory_source == "setpoint"
+        assert manager.trajectory_tau_ref_min >= expected_stop_deadtime_s / 60.0
+        assert governor_deadtimes == [(expected_stop_deadtime_s, True)]
