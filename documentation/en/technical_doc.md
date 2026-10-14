@@ -128,7 +128,7 @@ In practice, the decision to submit or extend the window depends on slope robust
 - minimum number of level changes: `OLS_MIN_JUMPS = 3`,
 - statistical significance: `OLS_T_MIN = 2.5`.
 
-Validated slopes are then fed into `ABEstimator.learn()`, which:
+Slopes are computed on the raw measured indoor temperature, not on the filtered signals, because the robustness guard counts distinct value jumps of the measurement. Validated slopes are then fed into `ABEstimator.learn()`, which:
 
 - rejects physical outliers (`max_abs_dT_per_min = 0.35`),
 - learns `b` if `u < U_OFF_MAX`,
@@ -161,6 +161,8 @@ physical room response, not the power-transition direction:
 
 Therefore OFF -> ON learns `heat` in HEAT mode but `cool` in COOL mode. The
 ON -> OFF transition learns the opposite passive response.
+
+Detection tracks the filtered indoor temperature. A detection in progress is not resumed after a restart, and the minimum OFF duration must be observed again in the new session before a detection can be armed.
 
 Reliability becomes true as soon as at least one valid measurement has been captured on the corresponding channel. Published values are the averages of the `heat` and `cool` histories.
 
@@ -266,7 +268,7 @@ The principle is:
 - the P branch keeps the raw setpoint until the predicted braking zone is reached,
 - a significant setpoint change arms late braking once; HEAT and COOL then use the same signed braking-window equations,
 - disturbance-triggered entry continues to require the significant-gap threshold,
-- the exact learned 1R1C model, `deadtime_cool`, the remaining cycle latency, and the committed cycle power are used to detect the braking zone,
+- the exact learned 1R1C model, the passive-response dead time of the mode (`deadtime_cool` in HEAT, `deadtime_heat` in COOL), the remaining cycle latency, and the committed cycle power are used to detect the braking zone,
 - a smooth late-braking trajectory proposes an independent nominal P reference near the target,
 - for HEAT and COOL setpoint trajectories, the predictive reference governor derives an admissible P reference and can constrain the internal command after PI computation,
 - when braking is no longer needed, the filtered reference returns progressively to the raw target before the trajectory stops,
@@ -385,7 +387,7 @@ Transient catch-up states are not restored after a reboot:
 - the integral guard is reset,
 - any temporary `integral_hold_mode` is cleared.
 
-The restart therefore keeps only useful persistent PI memory, without restoring transient servo states that are no longer physically valid outside their original runtime session. The wall-clock timestamp of the last valid active regulation tick is persisted and is not refreshed while HVAC is OFF. If inactivity exceeds 96 hours, controller PI memory is purged on resume while the learned A/B model remains available.
+The restart therefore keeps only useful persistent PI memory, without restoring transient servo states that are no longer physically valid outside their original runtime session. The wall-clock timestamp of the last valid active regulation tick is persisted and is not refreshed while HVAC is OFF. If inactivity exceeds 96 hours, controller PI memory is purged on resume while the learned A/B model remains available. If the HVAC mode after a restart differs from the mode of the persisted model (HEAT versus COOL), the integral is cleared. When a tick is skipped because the temperature sensor is missing or `guard_cut` is active, time tracking restarts like after OFF, so the error is not integrated over the skipped period.
 
 ### 4.5 Deadband, near-band, and protections
 
@@ -434,17 +436,19 @@ The forced cycle is managed by `CalibrationManager`:
 
 | File                      | Class            | Role                                                                     |
 | ------------------------- | ---------------- | ------------------------------------------------------------------------ |
-| `prop_algo_smartpi.py`    | `SmartPI`        | algorithm facade, full orchestration                                     |
-| `prop_handler_smartpi.py` | `SmartPIHandler` | Home Assistant bridge: persistence, periodic timer, services, attributes |
+| `algo.py`                 | `SmartPI`        | algorithm facade, full orchestration                                     |
+| `handler.py`              | `SmartPIHandler` | Home Assistant bridge: periodic timer, services, attributes              |
+| `state_store.py`          | `SmartPIStateStore` | Home Assistant `Store` persistence of the algorithm state             |
 
 ### 5.2 `smartpi/` modules effectively used
 
 | Module                 | Main role                                                   |
 | ---------------------- | ----------------------------------------------------------- |
 | `const.py`             | constants, enums, governance matrix                         |
-| `learning.py`          | slope estimation, `ABEstimator`, `DeadTimeEstimator`        |
+| `ab_estimator.py`      | slope estimation and `ABEstimator`                          |
+| `deadtime_estimator.py` | `DeadTimeEstimator`                                        |
 | `ab_aggregator.py`     | median or weighted-median aggregation of `a/b` measurements |
-| `ab_drift.py`          | persistent drift detection and recentering for `a/b`        |
+| `ab_drift.py`          | persistent drift detection and recentering for `a/b`, with one candidate sequence per channel |
 | `learning_window.py`   | learning-window management and guardrails                   |
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis                  |
@@ -472,19 +476,21 @@ Components instantiated by `SmartPI.__init__()` notably include:
 
 ```python
 self.gov = SmartPIGovernance(name)
-self.sp_mgr = SmartPISetpointManager(name, enabled=use_setpoint_filter)
+self.sp_mgr = SmartPISetpointManager(name, enabled=use_setpoint_filter, release_tau_factor=release_tau_factor)
 self.ctl = SmartPIController(name)
-self.est = ABEstimator(mode=aggregation_mode)
+self.est = ABEstimator()
 self.learn_win = LearningWindowManager(name)
 self.deadband_mgr = DeadbandManager(name, near_band_deg)
 self.calibration_mgr = CalibrationManager(name)
 self.gain_scheduler = GainScheduler(name)
 self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
+self.integral_guard = SmartPIIntegralGuard(name)
+self.dt_est = DeadTimeEstimator()
 self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()
 self.autocalib = AutoCalibTrigger(name)
 self._ff_trim = FFTrim()
-self._fftrim_observer = CausalFFTrimObserver(cycle_min)
+self._fftrim_observer = CausalFFTrimObserver(cycle_min, self._causal_power_trace)
 self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
 self._command_ownership = CommandOwnershipTracker()
 self._ab_confidence = ABConfidence()
@@ -520,6 +526,18 @@ The current payload from `SmartPI.save_state()` notably contains:
 
 ```python
 {
+    "version": 2,
+    "learning_enabled": ...,
+    "on_percent": ...,
+    "last_target_temp": ...,
+    "last_active_wall_ts": ...,
+    "last_calibration_time": ...,
+    "cycles_since_reset": ...,
+    "accumulated_dt": ...,
+    "deadtime_skip_count_a": ...,
+    "deadtime_skip_count_b": ...,
+    "learning_resume_ts": ...,
+    "learning_start_date": ...,
     "est_state": {...},
     "dt_est_state": {...},
     "gov_state": {...},
@@ -530,13 +548,18 @@ The current payload from `SmartPI.save_state()` notably contains:
     "cal_state": {...},
     "gs_state": {...},
     "twin_state": {...},
+    "integral_guard_state": {...},
     "guards_state": {...},
+    "ac_state": {...},
     "ff_v2_trim": {...},
+    "ff_trim_delta": ...,
     "tint_filter_state": {...},
 }
 ```
 
-Loading can also read `ac_state`, but that block is not currently emitted again by `save_state()`.
+The control loop schedules at most one delayed write of this payload per five-minute window; Home Assistant flushes a pending write at shutdown. Services and entity removal write a snapshot immediately.
+
+Past event timestamps (temperature histories, calibration start) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
 
 Only the learned trim remains persistent. Ownership windows, pending
 proposals, and integral transfers are transient; after restart the observer is

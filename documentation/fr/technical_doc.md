@@ -131,7 +131,7 @@ En pratique, la décision de soumettre ou d'étendre la fenêtre dépend de la r
 - nombre minimal de changements de niveau : `OLS_MIN_JUMPS = 3`,
 - significativité statistique : `OLS_T_MIN = 2.5`.
 
-Les pentes validées alimentent ensuite `ABEstimator.learn()` qui :
+Les pentes sont calculées sur la température intérieure brute mesurée, et non sur les signaux filtrés, car le garde-fou de robustesse compte les sauts de valeur distincts de la mesure. Les pentes validées alimentent ensuite `ABEstimator.learn()` qui :
 
 - rejette les outliers physiques (`max_abs_dT_per_min = 0.35`),
 - apprend `b` si `u < U_OFF_MAX`,
@@ -164,6 +164,8 @@ réponse physique de la pièce, pas le sens de la transition de puissance :
 
 Ainsi, OFF -> ON apprend `heat` en mode HEAT mais `cool` en mode COOL.
 La transition ON -> OFF apprend la réponse passive opposée.
+
+La détection suit la température intérieure filtrée. Une détection en cours n'est pas reprise après un redémarrage, et la durée minimale OFF doit être observée dans la session en cours avant qu'une détection puisse être armée.
 
 La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée sur le canal correspondant. Les valeurs publiées sont les moyennes des historiques `heat` et `cool`.
 
@@ -269,7 +271,7 @@ Le principe est le suivant :
 - la branche P conserve la consigne brute tant que la zone de freinage prédite n'est pas atteinte,
 - un changement de consigne significatif arme une seule fois le freinage tardif ; HEAT et COOL utilisent ensuite les mêmes équations signées de fenêtre de freinage,
 - un déclenchement dû à une perturbation continue d'exiger le seuil d'écart significatif,
-- le modèle 1R1C appris, `deadtime_cool`, la latence restante du cycle et la puissance engagée sur le cycle servent à détecter cette zone de freinage,
+- le modèle 1R1C appris, le temps mort de réponse passive du mode (`deadtime_cool` en HEAT, `deadtime_heat` en COOL), la latence restante du cycle et la puissance engagée sur le cycle servent à détecter cette zone de freinage,
 - une trajectoire de freinage tardif douce propose une référence P nominale indépendante près de la cible,
 - pour les trajectoires de consigne HEAT et COOL, le gouverneur de référence prédictif détermine une référence P admissible et peut contraindre la commande interne après le calcul PI,
 - lorsque le freinage n'est plus nécessaire, la référence filtrée remonte progressivement vers la consigne brute avant l'arrêt de la trajectoire,
@@ -391,7 +393,7 @@ Les états transitoires de rattrapage ne sont pas restaurés après reboot :
 - la garde intégrale est remise à zéro,
 - tout `integral_hold_mode` temporaire est effacé.
 
-Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer des états servo transitoires qui ne sont plus physiquement valides hors de leur session d'origine. Le timestamp mural de la dernière régulation active valide est persisté et n'est pas rafraîchi lorsque le mode HVAC est OFF. Si l'inactivité dépasse 96 heures, la mémoire PI du contrôleur est purgée à la reprise tandis que le modèle A/B appris reste disponible.
+Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer des états servo transitoires qui ne sont plus physiquement valides hors de leur session d'origine. Le timestamp mural de la dernière régulation active valide est persisté et n'est pas rafraîchi lorsque le mode HVAC est OFF. Si l'inactivité dépasse 96 heures, la mémoire PI du contrôleur est purgée à la reprise tandis que le modèle A/B appris reste disponible. Si le mode HVAC après un redémarrage diffère du mode du modèle persisté (HEAT versus COOL), l'intégrale est effacée. Lorsqu'une itération de régulation est ignorée parce que le capteur de température est absent ou que `guard_cut` est actif, le suivi du temps repart comme après un passage en OFF, afin que l'erreur ne soit pas intégrée sur la période ignorée.
 
 ### 4.5 Deadband, near-band et protections
 
@@ -447,17 +449,19 @@ Le cycle forcé est géré par `CalibrationManager` :
 
 | Fichier                   | Classe           | Rôle                                                                     |
 | ------------------------- | ---------------- | ------------------------------------------------------------------------ |
-| `prop_algo_smartpi.py`    | `SmartPI`        | façade algorithmique, orchestration complète                             |
-| `prop_handler_smartpi.py` | `SmartPIHandler` | pont Home Assistant : persistance, timer périodique, services, attributs |
+| `algo.py`                 | `SmartPI`        | façade algorithmique, orchestration complète                             |
+| `handler.py`              | `SmartPIHandler` | pont Home Assistant : timer périodique, services, attributs              |
+| `state_store.py`          | `SmartPIStateStore` | persistance Home Assistant (`Store`) de l'état de l'algorithme        |
 
 ### 5.2 Modules `smartpi/` réellement utilisés
 
 | Module                 | Rôle principal                                           |
 | ---------------------- | -------------------------------------------------------- |
 | `const.py`             | constantes, enums, matrice de gouvernance                |
-| `learning.py`          | estimation de pente, `ABEstimator`, `DeadTimeEstimator`  |
+| `ab_estimator.py`      | estimation de pente et `ABEstimator`                     |
+| `deadtime_estimator.py` | `DeadTimeEstimator`                                     |
 | `ab_aggregator.py`     | agrégation médiane ou médiane pondérée des mesures `a/b` |
-| `ab_drift.py`          | détection et recentrage de dérive persistante sur `a/b`  |
+| `ab_drift.py`          | détection et recentrage de dérive persistante sur `a/b`, avec une séquence de candidats par canal |
 | `learning_window.py`   | gestion des fenêtres d'apprentissage et de leurs gardes  |
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
@@ -486,20 +490,21 @@ Les composants instanciés par `SmartPI.__init__()` sont notamment :
 
 ```python
 self.gov = SmartPIGovernance(name)
-self.sp_mgr = SmartPISetpointManager(name, enabled=use_setpoint_filter)
+self.sp_mgr = SmartPISetpointManager(name, enabled=use_setpoint_filter, release_tau_factor=release_tau_factor)
 self.ctl = SmartPIController(name)
-self.est = ABEstimator(mode=aggregation_mode)
+self.est = ABEstimator()
 self.learn_win = LearningWindowManager(name)
 self.deadband_mgr = DeadbandManager(name, near_band_deg)
 self.calibration_mgr = CalibrationManager(name)
 self.gain_scheduler = GainScheduler(name)
 self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
 self.integral_guard = SmartPIIntegralGuard(name)
+self.dt_est = DeadTimeEstimator()
 self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()
 self.autocalib = AutoCalibTrigger(name)
 self._ff_trim = FFTrim()
-self._fftrim_observer = CausalFFTrimObserver(cycle_min)
+self._fftrim_observer = CausalFFTrimObserver(cycle_min, self._causal_power_trace)
 self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
 self._command_ownership = CommandOwnershipTracker()
 self._ab_confidence = ABConfidence()
@@ -539,6 +544,18 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
 
 ```python
 {
+    "version": 2,
+    "learning_enabled": ...,
+    "on_percent": ...,
+    "last_target_temp": ...,
+    "last_active_wall_ts": ...,
+    "last_calibration_time": ...,
+    "cycles_since_reset": ...,
+    "accumulated_dt": ...,
+    "deadtime_skip_count_a": ...,
+    "deadtime_skip_count_b": ...,
+    "learning_resume_ts": ...,
+    "learning_start_date": ...,
     "est_state": {...},
     "dt_est_state": {...},
     "gov_state": {...},
@@ -548,14 +565,19 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "db_state": {...},
     "cal_state": {...},
     "gs_state": {...},
-    "integral_guard_state": {...},
     "twin_state": {...},
+    "integral_guard_state": {...},
     "guards_state": {...},
     "ac_state": {...},
     "ff_v2_trim": {...},
+    "ff_trim_delta": ...,
     "tint_filter_state": {...},
 }
 ```
+
+La boucle de régulation planifie au plus une écriture différée de ce payload par fenêtre de cinq minutes ; Home Assistant vide une écriture en attente à l'arrêt. Les services et la suppression de l'entité écrivent immédiatement un snapshot.
+
+Les timestamps d'événements passés (historiques de température, début de calibration) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
 
 Seul le trim appris reste persistant. Les fenêtres de propriété, propositions
 en attente et transferts d'intégrale sont transitoires ; après redémarrage,

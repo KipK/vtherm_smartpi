@@ -102,6 +102,8 @@ To add SmartPI to an additional thermostat, open the SmartPI integration configu
 
 The parameters available are the same as for global defaults. Any parameter set here overrides the corresponding global default for the selected thermostat only.
 
+A disabled SmartPI entry is ignored. A thermostat whose dedicated entry is disabled uses the enabled defaults entry, or the built-in defaults when there is none, and the thermostats depending on an entry are reloaded when it is disabled or removed. If the defaults entry has been deleted, it is recreated when you add the SmartPI integration again.
+
 ## Radiator valves and curve linearization
 
 This section only applies to thermostats that directly drive a valve, for example a radiator TRV.
@@ -290,8 +292,8 @@ Do not try to tune several parameters at once during the first learning period. 
 | **Allow P inside deadband**    | Allows the proportional branch to remain active inside the deadband.                              | `disabled`    |
 | **Allow PWM cycle restart on band transitions** | Allows SmartPI to restart the current PWM cycle when entering or leaving deadband or near-band. | `disabled` |
 | **Release tau factor**         | Scales the integral release delay relative to the learned time constant.                          | `0.5`         |
-| **Lower hysteresis threshold** | Restart threshold during bootstrap learning.                                                      | `0.3°C`       |
-| **Upper hysteresis threshold** | Stop threshold during bootstrap learning.                                                         | `0.5°C`       |
+| **Hysteresis on** | Restart threshold during bootstrap learning: heating restarts at setpoint − threshold in HEAT, cooling restarts at setpoint + threshold in COOL. | `0.3°C`       |
+| **Hysteresis off** | Stop threshold during bootstrap learning: heating stops at setpoint + threshold in HEAT, cooling stops at setpoint − threshold in COOL. | `0.5°C`       |
 | **SmartPI debug mode**         | Records the complete live diagnostic payload for historical analysis.                             | `disabled`    |
 | **Valve curve linearization**  | Adapts SmartPI demand to non-linear radiator valves.                                              | `disabled`    |
 | **Minimum valve opening**      | First useful opening when linearization is enabled.                                               | `7%`          |
@@ -377,6 +379,8 @@ Install Equinox from its repository or HACS, configure it for the same Versatile
 ## Services
 
 SmartPI exposes four services in the `vtherm_smartpi` domain.
+
+Each service uses the standard Home Assistant `target:` and accepts Versatile Thermostat climate entities. Targets that are not SmartPI thermostats are ignored, and the call fails with a validation error when none of the targeted entities is a SmartPI thermostat.
 
 ### `set_smartpi_learning`
 

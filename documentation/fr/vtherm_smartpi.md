@@ -102,6 +102,8 @@ Pour ajouter SmartPI à un thermostat supplémentaire, ouvrez la configuration d
 
 Les paramètres disponibles sont identiques à ceux des valeurs par défaut globales. Tout paramètre défini ici remplace la valeur globale correspondante pour ce thermostat uniquement.
 
+Une entrée SmartPI désactivée est ignorée. Un thermostat dont l'entrée dédiée est désactivée utilise l'entrée de valeurs par défaut activée, ou les valeurs intégrées s'il n'en existe pas, et les thermostats qui dépendent d'une entrée sont rechargés lorsqu'elle est désactivée ou supprimée. Si l'entrée de valeurs par défaut a été supprimée, elle est recréée lorsque vous réajoutez l'intégration SmartPI.
+
 ## Vannes de radiateur et linéarisation
 
 Cette section concerne uniquement les thermostats qui pilotent directement une vanne, par exemple une tête thermostatique de radiateur.
@@ -290,8 +292,8 @@ Pour démarrer simplement :
 | **Autoriser P dans la deadband**     | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
 | **Autoriser le redémarrage PWM aux transitions de bande** | Permet à SmartPI de redémarrer le cycle PWM courant lors d'une entrée ou sortie de deadband ou de near-band. | `désactivé` |
 | **Facteur release tau**              | Échelle du délai de relâchement intégral par rapport à la constante de temps apprise.                  | `0.5`             |
-| **Seuil bas d'hystérésis**           | Seuil de redémarrage pendant le bootstrap.                                                             | `0.3°C`           |
-| **Seuil haut d'hystérésis**          | Seuil d'arrêt pendant le bootstrap.                                                                    | `0.5°C`           |
+| **Hystérésis marche**                | Seuil de redémarrage pendant le bootstrap : le chauffage redémarre à consigne − seuil en HEAT, le refroidissement redémarre à consigne + seuil en COOL. | `0.3°C`           |
+| **Hystérésis arrêt**                 | Seuil d'arrêt pendant le bootstrap : le chauffage s'arrête à consigne + seuil en HEAT, le refroidissement s'arrête à consigne − seuil en COOL. | `0.5°C`           |
 | **Mode debug SmartPI**               | Enregistre les diagnostics live complets pour l'analyse historique.                                    | `désactivé`       |
 | **Linéarisation de courbe de vanne** | Adapte la demande SmartPI aux vannes de radiateur non linéaires.                                       | `désactivé`       |
 | **Ouverture minimale de vanne**      | Première ouverture utile lorsque la linéarisation est activée.                                         | `7%`              |
@@ -379,6 +381,8 @@ Installez Equinox depuis son dépôt ou HACS, configurez-le sur la même entité
 ## Services
 
 SmartPI expose quatre services dans le domaine `vtherm_smartpi`.
+
+Chaque service utilise le paramètre standard `target:` de Home Assistant et accepte les entités climate de Versatile Thermostat. Les cibles qui ne sont pas des thermostats SmartPI sont ignorées, et l'appel échoue avec une erreur de validation lorsqu'aucune des entités ciblées n'est un thermostat SmartPI.
 
 ### `set_smartpi_learning`
 
