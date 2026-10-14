@@ -119,7 +119,9 @@ class ABEstimator:
         self.learn_ok_count_b = 0
         self.learn_skip_count = 0
         self.learn_last_reason: Optional[str] = "init"
-        self._learn_seq = 0
+        # Per-channel drift sequence counters (gap check in detect_persistent_drift)
+        self._learn_seq_a = 0
+        self._learn_seq_b = 0
 
         # Diagnostics
         self.diag_dTdt_method: str = "init"
@@ -149,7 +151,8 @@ class ABEstimator:
         self.learn_ok_count_b = 0
         self.learn_skip_count = 0
         self.learn_last_reason = "reset"
-        self._learn_seq = 0
+        self._learn_seq_a = 0
+        self._learn_seq_b = 0
         self._b_hat_hist.clear()
         self._a_hat_hist.clear()
         self.a_meas_hist.clear()
@@ -390,6 +393,7 @@ class ABEstimator:
         drift_channel: DriftChannelState,
         min_collect_count: int,
         allow_drift: bool,
+        seq: int,
     ) -> DriftDecision:
         """Apply nominal or drift-aware gating for a measured parameter."""
 
@@ -482,7 +486,7 @@ class ABEstimator:
         append_drift_candidate(
             channel=drift_channel,
             value=value,
-            seq=self._learn_seq,
+            seq=seq,
             hist_center=hist_center,
         )
 
@@ -633,7 +637,7 @@ class ABEstimator:
                 self.diag_b_last_reason = self.learn_last_reason
                 return
 
-            self._learn_seq += 1
+            self._learn_seq_b += 1
             decision = self._process_param_measure(
                 name="b",
                 value=b_meas,
@@ -641,6 +645,7 @@ class ABEstimator:
                 drift_channel=self.b_drift,
                 min_collect_count=AB_MIN_SAMPLES_B,
                 allow_drift=True,
+                seq=self._learn_seq_b,
             )
             self.diag_b_last_reason = decision.accepted_reason
 
@@ -706,7 +711,7 @@ class ABEstimator:
                 self.diag_a_last_reason = self.learn_last_reason
                 return
 
-            self._learn_seq += 1
+            self._learn_seq_a += 1
             decision = self._process_param_measure(
                 name="a",
                 value=a_meas,
@@ -714,6 +719,7 @@ class ABEstimator:
                 drift_channel=self.a_drift,
                 min_collect_count=min_a_samples,
                 allow_drift=self.b_converged_for_a(),
+                seq=self._learn_seq_a,
             )
             self.diag_a_last_reason = decision.accepted_reason
 
@@ -825,7 +831,8 @@ class ABEstimator:
             "b_meas_hist": list(self.b_meas_hist),
             "a_hat_hist": list(self._a_hat_hist),
             "b_hat_hist": list(self._b_hat_hist),
-            "learn_seq": self._learn_seq,
+            "learn_seq_a": self._learn_seq_a,
+            "learn_seq_b": self._learn_seq_b,
             "a_drift": serialize_channel_state(self.a_drift),
             "b_drift": serialize_channel_state(self.b_drift),
         }
@@ -850,7 +857,10 @@ class ABEstimator:
         self.learn_ok_count_a = int(state.get("learn_ok_count_a", 0))
         self.learn_ok_count_b = int(state.get("learn_ok_count_b", 0))
         self.learn_skip_count = int(state.get("learn_skip_count", 0))
-        self._learn_seq = int(state.get("learn_seq", 0))
+        # Legacy states hold a single shared counter: use it for both channels
+        legacy_seq = int(state.get("learn_seq", 0))
+        self._learn_seq_a = int(state.get("learn_seq_a", legacy_seq))
+        self._learn_seq_b = int(state.get("learn_seq_b", legacy_seq))
 
         amh = state.get("a_meas_hist", [])
         self.a_meas_hist = deque(amh, maxlen=AB_HISTORY_SIZE)

@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.ab_drift import (
     DriftChannelState,
@@ -106,6 +108,69 @@ def test_abestimator_b_persistent_drift_accepts_real_measure():
     }
 
 
+@pytest.mark.parametrize("a_between_b", [3, 4, 5])
+def test_abestimator_b_drift_recenters_with_interleaved_a_measures(a_between_b):
+    """b drift detection should not be blocked by a measurements between b measurements."""
+
+    est = ABEstimator()
+    est.b = 0.002
+    est.b_meas_hist.extend([0.002] * 31)
+    est.learn_ok_count_b = 31
+    est._b_hat_hist.extend([0.002] * 10)
+    est.a_meas_hist.extend([0.05] * 31)
+    est.learn_ok_count_a = 31
+
+    for _ in range(40):
+        for _ in range(a_between_b):
+            est.learn(
+                dT_int_per_min=0.03,
+                u=1.0,
+                t_int=20.0,
+                t_ext=10.0,
+            )
+        est.learn(
+            dT_int_per_min=-0.04,
+            u=0.0,
+            t_int=20.0,
+            t_ext=10.0,
+        )
+
+    assert max(est.b_meas_hist) >= 0.004
+    assert est.b >= 0.003
+
+
+def test_abestimator_a_drift_recenters_with_interleaved_b_measures():
+    """a drift detection should not be blocked by b measurements between a measurements."""
+
+    est = ABEstimator()
+    est.b = 0.002
+    est.b_meas_hist.extend([0.002] * 31)
+    est.learn_ok_count_b = 31
+    est._b_hat_hist.extend([0.002] * 10)
+    est.a = 0.05
+    est.a_meas_hist.extend([0.05] * 31)
+    est.learn_ok_count_a = 31
+    assert est.b_converged_for_a()
+
+    for _ in range(40):
+        for _ in range(4):
+            est.learn(
+                dT_int_per_min=-0.02,
+                u=0.0,
+                t_int=20.0,
+                t_ext=10.0,
+            )
+        est.learn(
+            dT_int_per_min=0.032,
+            u=1.0,
+            t_int=20.0,
+            t_ext=10.0,
+        )
+
+    assert max(est.a_meas_hist) >= 0.0519
+    assert est.a >= 0.051
+
+
 def test_abestimator_a_drift_is_disabled_until_b_converges():
     """A drift should remain disabled while b is not converged for a."""
 
@@ -150,10 +215,21 @@ def test_abestimator_save_load_restores_drift_state():
     est2 = ABEstimator()
     est2.load_state(saved)
 
-    assert est2._learn_seq == est1._learn_seq
+    assert est2._learn_seq_a == est1._learn_seq_a
+    assert est2._learn_seq_b == est1._learn_seq_b
     assert est2.b_drift.state == est1.b_drift.state
     assert est2.b_drift.recenter_cycles_left == est1.b_drift.recenter_cycles_left
     assert len(est2.b_drift.drift_buffer) == len(est1.b_drift.drift_buffer)
+
+
+def test_abestimator_load_legacy_learn_seq_seeds_both_channels():
+    """A legacy shared learn_seq should seed both per-channel counters."""
+
+    est = ABEstimator()
+    est.load_state({"a": 0.05, "b": 0.002, "learn_seq": 42})
+
+    assert est._learn_seq_a == 42
+    assert est._learn_seq_b == 42
 
 
 def test_smartpi_diagnostics_expose_ab_drift_fields():
