@@ -40,7 +40,7 @@ v4.3 improvements:
   - NaN/Inf validation in reset() (prevents corrupted initialization)
   - last_tin_meas reset to None in load_state() (prevents stale dTin_dt after HA restart)
   - NaN guard on tin0/target in eta_best_case() (prevents indeterminate results)
-  - Periodic RMSE recalibration every 1000 steps (prevents float drift accumulation)
+  - RMSE warm-up tracked by elapsed time (_rmse_age_s), reset with the RMSE state
   - Exponential backoff on auto-reset cooldown (prevents reset loops on structural divergence)
   - T_hat_error diagnostic (absolute gap between twin and measurement)
   - warming_up flag (indicates unreliable diagnostics during buffer fill)
@@ -153,7 +153,7 @@ class ThermalTwin1R1C:
       - Corrected model (with d_hat_ema) for exposed diagnostics
 
     v4.4 T_steady: NaN-proof inputs/state/text, clamped nudge & d_raw,
-    auto-reset with backoff, incremental RMSE with recalibration, bias tracking,
+    auto-reset with backoff, EMA RMSE with time-based warm-up, bias tracking,
     T_steady_max_valid returned, T_steady_immediate (at u_eff), T_steady_passive
     (at u=0), d_hat_fresh flag, T_steady_reliable composite.
 
@@ -235,7 +235,6 @@ class ThermalTwin1R1C:
 
         # Robustness state
         self._innovation_bias_ema: float = 0.0
-        self._step_count: int = 0
         self._reset_count: int = 0  # for auto-reset cooldown backoff
 
         # Time-based confidence state
@@ -283,8 +282,7 @@ class ThermalTwin1R1C:
         self._ema_sq_innovation = 0.0
         self._ema_sq_innovation_pure = 0.0
         self._innovation_bias_ema = 0.0
-        # Reset step count but NOT _reset_count (persists across resets)
-        self._step_count = 0
+        # _reset_count is NOT reset (persists across resets)
         # Time-based confidence counters
         self._sat_active_time_s = 0.0
         self._d_hat_active_time_s = 0.0
@@ -516,7 +514,6 @@ class ThermalTwin1R1C:
             self.cusum_pos = 0.0
             self.cusum_neg = 0.0
             self._innovation_bias_ema = 0.0
-            self._step_count = 0
             self._d_hat_active_time_s = 0.0
             self.last_tin_meas = None
             # Exponential backoff cooldown (seconds)
@@ -697,8 +694,6 @@ class ThermalTwin1R1C:
             and temp_beyond_sat
         )
 
-        self._step_count += 1
-
         # ---- T_steady_reliable composite flag ----
         # True only when all conditions are met:
         #   - T_steady is within physical bounds
@@ -789,7 +784,6 @@ class ThermalTwin1R1C:
             "ema_sq_innovation_pure": self._ema_sq_innovation_pure,
             # Robustness state
             "innovation_bias_ema": self._innovation_bias_ema,
-            "step_count": self._step_count,
             "reset_count": self._reset_count,
             # Time-based confidence
             "sat_active_time_s": self._sat_active_time_s,
@@ -853,7 +847,6 @@ class ThermalTwin1R1C:
 
         # Robustness state
         self._innovation_bias_ema = _safe_float(state.get("innovation_bias_ema"), 0.0)
-        self._step_count = int(state.get("step_count", 0))
         self._reset_count = int(state.get("reset_count", 0))
 
         # Time-based confidence state

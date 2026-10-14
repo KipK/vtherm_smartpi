@@ -9,8 +9,6 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from .timestamp_utils import convert_monotonic_to_wall_ts
-
 from .const import (
     AB_B_MIN_PASSIVE_GRADIENT_C,
     AB_B_OUTDOOR_TARGET_MARGIN_C,
@@ -221,7 +219,6 @@ class LearningWindowManager:
                 self._learning_start_date.isoformat() 
                 if self._learning_start_date else None
             ),
-            "learning_resume_ts": convert_monotonic_to_wall_ts(self._learning_resume_ts),
         }
 
     # --------------------------------------------------------------------------
@@ -234,11 +231,9 @@ class LearningWindowManager:
         current_temp: float,
         ext_temp: float,
         u_active: float,
-        setpoint_changed: bool,
         estimator: "ABEstimator",
         dt_est: "DeadTimeEstimator",
         governance: "SmartPIGovernance",
-        learning_resume_ts: float | None,
         now: float,
         in_deadband: bool,
         in_near_band: bool,
@@ -262,11 +257,9 @@ class LearningWindowManager:
             current_temp: Current indoor temperature.
             ext_temp: Current outdoor temperature.
             u_active: Power applied during this interval (0..1).
-            setpoint_changed: True if setpoint changed during this interval.
             estimator: The ABEstimator instance for learning submission.
             dt_est: The DeadTimeEstimator instance for deadtime checks.
             governance: The SmartPIGovernance instance for regime decisions.
-            learning_resume_ts: Timestamp for learning resume cooldown.
             now: Current monotonic time.
             in_deadband: Whether the system is in deadband.
             in_near_band: Whether the system is in near-band.
@@ -293,10 +286,6 @@ class LearningWindowManager:
 
         dt_s = dt_min * 60.0
 
-        # Update learning resume timestamp if provided
-        if learning_resume_ts is not None:
-            self._learning_resume_ts = learning_resume_ts
-
         if ff3_active:
             estimator.learn_skip_count += 1
             estimator.learn_last_reason = "skip: ff3_active"
@@ -304,18 +293,8 @@ class LearningWindowManager:
                 self.reset()
             return deadtime_skip_count_a, deadtime_skip_count_b
 
-        # --- Setpoint change ---
-        # Active windows are allowed to continue:
-        # - B (OFF): cooling is purely physical, independent of setpoint.
-        # - A (ON):  power transition detection closes the window if u changes.
-        # In both cases the power-transition guard (u_active ≠ u_first) is the
-        # real safety net; a blind reset here would discard valid in-flight data.
-        # If no window is active there is nothing to do either way.
-        if setpoint_changed and self._active:
-            _LOGGER.debug(
-                "%s - setpoint changed, window continues (power transition guards)",
-                self._name
-            )
+        # Setpoint changes do not reset an active window: the power-transition
+        # guard closes it when u changes, and OFF/B cooling is setpoint-independent.
 
         # --- Governance gate (thermal domain: a/b learning) ---
         # During calibration, bypass governance to allow A/B learning

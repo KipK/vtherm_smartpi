@@ -19,7 +19,7 @@ def test_start_pause_logic():
 
     # 1. Initial State (Startup)
     assert pi._last_calculate_time is None
-    assert pi.learning_resume_ts is None
+    assert pi.learn_win.learning_resume_ts is None
     assert pi._startup_grace_period is True
 
     # 2. First calculation (Reboot) -> SHOULD freeze learning for 1 cycle
@@ -35,9 +35,9 @@ def test_start_pause_logic():
     # Startup grace period consumed
     assert pi._startup_grace_period is False
     # Learning frozen for exactly cycle_min (1 min) after reboot
-    assert pi.learning_resume_ts is not None
+    assert pi.learn_win.learning_resume_ts is not None
     expected_freeze = now + 1 * 60.0  # cycle_min * 60
-    assert abs(pi.learning_resume_ts - expected_freeze) < 2.0
+    assert abs(pi.learn_win.learning_resume_ts - expected_freeze) < 2.0
 
     # 3. Simulate OFF/Resume cycle
     pi.calculate(
@@ -60,9 +60,9 @@ def test_start_pause_logic():
     )
 
     # Check pause timestamp set
-    assert pi.learning_resume_ts is not None
+    assert pi.learn_win.learning_resume_ts is not None
     expected_resume = now2 + LEARNING_PAUSE_RESUME_MIN * 60.0
-    assert abs(pi.learning_resume_ts - expected_resume) < 5.0
+    assert abs(pi.learn_win.learning_resume_ts - expected_resume) < 5.0
 
     # 4. Simulate cycle ongoing (should be skipped due to learning pause)
     pi.est.learn_skip_count = 0

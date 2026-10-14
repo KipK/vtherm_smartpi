@@ -14,7 +14,6 @@ from .const import (
     AB_A_SOFT_GATE_MIN_B,
     ABConfidenceState,
     SmartPIPhase,
-    U_ON_MIN,
     AB_HISTORY_SIZE,
     AB_MIN_SAMPLES_A,
     AB_MIN_SAMPLES_B,
@@ -520,7 +519,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     u_ff2 = ff_result.u_ff2 if ff_result else 0.0
     u_ff_final = ff_result.u_ff_final if ff_result else 0.0
     u_ff3 = ff_result.u_ff3 if ff_result else algo.u_ff3
-    u_db_nominal = ff_result.u_ff_final if ff_result else 0.0
     ff2_authority = FF_TRIM_RHO * max(u_ff1, FF_TRIM_EPSILON)
 
     diag = {
@@ -545,22 +543,12 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ),
         "learn_last_reason": str(algo.est.learn_last_reason),
         "learn_b_converged": algo.est.b_converged_for_a(),
-        "learn_a_blocked_by_b": len(algo.est.b_meas_hist) < AB_A_SOFT_GATE_MIN_B,
         # A1/A2/A3 Diagnostics
-        "diag_dTdt_method": algo.est.diag_dTdt_method,
         "diag_b_mad_over_med": round(algo.est.diag_b_mad_over_med, 3) if algo.est.diag_b_mad_over_med is not None else None,
         "diag_a_mad_over_med": round(algo.est.diag_a_mad_over_med, 3) if algo.est.diag_a_mad_over_med is not None else None,
-        "diag_ab_bootstrap": algo.est.diag_ab_bootstrap,
-        "diag_ab_points": algo.est.diag_ab_points,
-        "diag_ab_mode_effective": algo.est.diag_ab_mode_effective,
         "a_drift_state": algo.est.a_drift.state,
         "b_drift_state": algo.est.b_drift.state,
-        "a_drift_buffer_count": len(algo.est.a_drift.drift_buffer),
-        "b_drift_buffer_count": len(algo.est.b_drift.drift_buffer),
-        "a_drift_last_reason": algo.est.a_drift.last_reason,
-        "b_drift_last_reason": algo.est.b_drift.last_reason,
         # Learning metadata
-        "learning_start_dt": algo._learning_start_date,
         "learn_u_avg": round(algo.learn_u_int / max(algo.learn_t_int_s, 1.0), 3) if algo.learn_win_active else None,
         "learn_u_cv": round(algo.learn_win._u_cv, 3) if algo.learn_win_active else None,
         "learn_u_std": round(algo.learn_win._u_std, 4) if algo.learn_win_active else None,
@@ -569,7 +557,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "Ki": round(algo.Ki, 6),
         "integral_error": round(algo.integral, 6),
         "i_mode": algo.last_i_mode,
-        "integral_guard_active": algo.integral_guard.active,
         "integral_guard_source": algo.integral_guard.source.value,
         "integral_guard_mode": algo._last_integral_guard_mode,
         "sat": algo.last_sat,
@@ -581,11 +568,8 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             round(algo.temperature_slope_h, 6)
             if algo.temperature_slope_h is not None else None
         ),
-        # 2DOF/scheduling
-        "near_band_deg": round(algo.near_band_deg, 3),
         # Output
         "u_ff": round(algo.u_ff, 6),
-        "ff_raw": round(algo._last_ff_raw, 6),
         "ff_reason": algo._last_ff_reason,
         "u_pi": round(algo.u_pi, 6),
         "u_hold": round(algo.ctl.u_hold, 6),
@@ -596,7 +580,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "u_ff2": round(u_ff2, 6),
         "u_ff_final": round(u_ff_final, 6),
         "u_ff3": round(u_ff3, 6),
-        "u_db_nominal": round(u_db_nominal, 6),
         "ff2_trim_delta": round(algo._last_ff_trim_delta, 6),
         "ff2_authority": round(ff2_authority, 6),
         "ff2_frozen": algo._ff_trim.frozen,
@@ -608,10 +591,8 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ],
         "fftrim_last_result": fftrim_last_result,
         "fftrim_last_transaction": fftrim_last_transaction,
-        "fftrim_cycles_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_windows_since_update": int(algo._cycles_since_fftrim_update),
         "fftrim_observation_mode": algo._fftrim_observation_mode,
-        "fftrim_cycle_admissible": algo._last_fftrim_cycle_admissible,
         "fftrim_observer_state": fftrim_observer["state"],
         "fftrim_window_duration_s": round(
             float(fftrim_observer["window_duration_s"]), 3
@@ -644,89 +625,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "fftrim_periodic_last_reject_reason": fftrim_periodic[
             "last_reject_reason"
         ],
-        "fftrim_alignment_delay_s": (
-            round(float(fftrim_observer["alignment_delay_s"]), 3)
-            if fftrim_observer["alignment_delay_s"] is not None
-            else None
-        ),
-        "fftrim_power_coverage_ratio": round(
-            float(fftrim_observer["power_coverage_ratio"]), 6
-        ),
-        "fftrim_mean_causal_power": (
-            round(float(fftrim_observer["mean_causal_power"]), 6)
-            if fftrim_observer["mean_causal_power"] is not None
-            else None
-        ),
-        "fftrim_mean_ff1": (
-            round(float(fftrim_observer["mean_ff1"]), 6)
-            if fftrim_observer["mean_ff1"] is not None
-            else None
-        ),
-        "fftrim_mean_temperature": (
-            round(float(fftrim_observer["mean_temperature"]), 6)
-            if fftrim_observer["mean_temperature"] is not None
-            else None
-        ),
-        "fftrim_mean_error": (
-            round(float(fftrim_observer["mean_error"]), 6)
-            if fftrim_observer["mean_error"] is not None
-            else None
-        ),
-        "fftrim_mean_slope_h": (
-            round(float(fftrim_observer["mean_slope_h"]), 6)
-            if fftrim_observer["mean_slope_h"] is not None
-            else None
-        ),
-        "fftrim_observed_hold_power": (
-            round(float(fftrim_observer["observed_hold_power"]), 6)
-            if fftrim_observer["observed_hold_power"] is not None
-            else None
-        ),
-        "fftrim_target_trim": (
-            round(float(fftrim_observer["target_trim"]), 6)
-            if fftrim_observer["target_trim"] is not None
-            else None
-        ),
-        "fftrim_correction": (
-            round(float(fftrim_observer["correction"]), 6)
-            if fftrim_observer["correction"] is not None
-            else None
-        ),
-        "fftrim_mean_p_power": (
-            round(float(fftrim_observer["mean_p_power"]), 6)
-            if fftrim_observer["mean_p_power"] is not None
-            else None
-        ),
-        "fftrim_mean_i_power": (
-            round(float(fftrim_observer["mean_i_power"]), 6)
-            if fftrim_observer["mean_i_power"] is not None
-            else None
-        ),
-        "fftrim_mean_visible_ff_power": (
-            round(float(fftrim_observer["mean_visible_ff_power"]), 6)
-            if fftrim_observer["mean_visible_ff_power"] is not None
-            else None
-        ),
-        "fftrim_mean_ki": (
-            round(float(fftrim_observer["mean_ki"]), 6)
-            if fftrim_observer["mean_ki"] is not None
-            else None
-        ),
-        "fftrim_mean_delivery_residual": (
-            round(float(fftrim_observer["mean_delivery_residual"]), 6)
-            if fftrim_observer["mean_delivery_residual"] is not None
-            else None
-        ),
-        "fftrim_physical_power_deficit": (
-            round(float(fftrim_observer["physical_power_deficit"]), 6)
-            if fftrim_observer["physical_power_deficit"] is not None
-            else None
-        ),
-        "fftrim_decomposed_correction": (
-            round(float(fftrim_observer["decomposed_correction"]), 6)
-            if fftrim_observer["decomposed_correction"] is not None
-            else None
-        ),
         "fftrim_requested_trim_delta": round(algo._requested_trim_delta, 6),
         "fftrim_stored_trim_delta": round(algo._stored_trim_delta, 6),
         "fftrim_applied_trim_delta": round(algo._applied_trim_delta, 6),
@@ -741,14 +639,10 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ),
         "fftrim_transfer_quality": algo._transfer_quality,
         "command_ownership": command_ownership,
-        # FF compatibility aliases
-        "u_ff_ab": round(ff_result.u_ff1, 6) if ff_result else 0.0,
-        "u_ff_trim": round(algo._ff_trim.u_ff_trim, 6),
-        "u_ff_base": round(ff_result.u_ff1, 6) if ff_result else 0.0,
+        # Effective feed-forward and FF3
         "u_ff_eff": round(ff_result.u_ff_eff, 6) if ff_result else 0.0,
         "ff3_enabled": algo._last_ff3_enabled,
         "ff3_reason_disabled": _effective_ff3_reason_disabled(algo),
-        "ff3_candidate_scores": algo._last_ff3_candidate_scores,
         "ff3_selected_candidate": round(algo._last_ff3_selected_candidate, 6),
         "ff3_horizon_cycles": algo._last_ff3_horizon_cycles,
         "ff3_raw_reason_disabled": algo._last_ff3_raw_reason_disabled,
@@ -764,21 +658,11 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "ff3_dynamic_coherent": algo._last_ff3_dynamic_coherent,
         "twin_status": twin_status,
         "ff3_twin_usable": ff3_twin_usable,
-        "integral_hold_active": algo.ctl.integral_hold_active,
         "integral_hold_mode": algo.ctl.integral_hold_mode,
         "integral_hold_source": algo.ctl.last_integral_hold_source,
-        "integral_hold_reason": algo.ctl.integral_hold_mode,
         "restart_reason": algo._last_restart_reason,
-        "signed_error_mode": "positive_means_hvac_demand",
         "ab_confidence_state": _build_ab_confidence_state(algo),
-        # FFv2 freeze reasons
-        "trim_freeze_reason": algo._ff_trim.freeze_reason,
-        # FFv2 regime tracking
-        "regime_prev": algo._last_regime_prev,
-        "sat_persistent_cycles": algo._sat_persistent_cycles,
-        "cycles_since_reset": int(algo.cycles_since_reset),
         "on_percent": round(algo.on_percent, 6),
-        "calculated_on_percent": round(algo.calculated_on_percent, 6),
         "committed_on_percent": round(algo.committed_on_percent, 6),
         "linear_on_percent": round(algo.linear_on_percent, 6),
         "linear_committed_on_percent": round(algo.linear_committed_on_percent, 6),
@@ -858,8 +742,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ),
         "governor_falsification_count": algo.sp_mgr.governor_falsification_count,
         "governor_falsification_span_s": round(algo.sp_mgr.governor_falsification_span_s, 1),
-        # Resume skip
-        "learning_resume_ts": int(algo.learning_resume_ts) if algo.learning_resume_ts else None,
         # Anti-windup tracking diagnostics
         "u_cmd": round(algo.u_cmd, 6),
         "u_limited": round(algo.u_limited, 6),
@@ -881,54 +763,32 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "deadtime_cool_reliable": algo.dt_est.deadtime_cool_reliable,
         "in_deadtime_window": algo.in_deadtime_window,
         "kp_source": algo.gain_scheduler.kp_source,
-        "deadtime_skip_count_a": algo._deadtime_skip_count_a,
-        "deadtime_skip_count_b": algo._deadtime_skip_count_b,
         "deadtime_state": algo.dt_est.state,
         "deadtime_last_power": algo.dt_est.last_power,
-        "deadtime_heat_start_time": algo.dt_est.heat_start_time,
-        "deadtime_cool_start_time": algo.dt_est.cool_start_time,
         # Near-Band Auto (Phase 2) - delegated to DeadbandManager
         "near_band_below_deg": algo.deadband_mgr.near_band_below_deg,
         "near_band_above_deg": algo.deadband_mgr.near_band_above_deg,
         "near_band_source": algo.deadband_mgr.near_band_source,
-        # Guard Cut
-        "guard_cut_active": algo.guard_cut_active,
-        "guard_cut_count": algo.guard_cut_count,
-        "guard_kick_active": algo.guard_kick_active,
-        "guard_kick_count": algo.guard_kick_count,
         # Forced Calibration
         "calibration_state": algo.calibration_state,
         "last_calibration_time": (datetime.fromtimestamp(algo.calibration_mgr.last_calibration_time).isoformat() if algo.calibration_mgr.last_calibration_time else None),
         # AutoCalibTrigger §6.1
         "autocalib_state": algo.autocalib.state.value,
-        "autocalib_waiting_reason": algo.autocalib.waiting_reason.value,
         "autocalib_model_degraded": algo.autocalib.model_degraded,
-        "autocalib_triggered_params": algo.autocalib.triggered_params,
         "autocalib_retry_count": algo.autocalib.retry_count,
         "autocalib_last_trigger_ts": algo.autocalib.last_trigger_ts_iso,
         "autocalib_next_check_ts": algo.autocalib.next_check_ts_iso,
         "autocalib_snapshot_age_h": algo.autocalib.snapshot_age_h,
-        "autocalib_dt_cool_unavailable": algo.autocalib.snap_dt_cool_unavailable,
         # Safety-First Governance
         "governance_regime": algo.gov._current_regime.value,
-        "governance_cycle_regimes": [r.value for r in algo.gov._cycle_regimes],
         # Governance diagnostics
         "last_freeze_reason_thermal": algo.gov.last_freeze_reason_thermal.value,
         "last_freeze_reason_gains": algo.gov.last_freeze_reason_gains.value,
         "last_decision_thermal": algo.gov.last_decision_thermal.value,
         "last_decision_gains": algo.gov.last_decision_gains.value,
-        # Setpoint boost aliases
-        "boost_active": algo.sp_mgr.boost_active,
         # Sensor temperature (unrounded) used in last calculation cycle
         "sensor_temperature": algo._last_current_temp,
         "ext_sensor_temperature": algo._last_ext_temp,
-        # Adaptive T_int filter
-        "t_int_raw": algo._last_current_temp,
-        "t_int_lp": round(algo.tint_filter.t_int_lp, 4) if algo.tint_filter.t_int_lp is not None else None,
-        "t_int_clean": round(algo.tint_filter.t_int_clean, 4) if algo.tint_filter.t_int_clean is not None else None,
-        "sigma_t_int": round(algo.tint_filter.sigma, 5),
-        "adaptive_tint_update": algo.tint_filter.last_update_was_publish,
-        "adaptive_tint_hold_duration_s": round(algo.tint_filter.hold_duration_s, 1),
     }
 
     # --- Bootstrap / Learning Diagnostics ---

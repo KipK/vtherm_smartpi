@@ -308,14 +308,7 @@ def test_no_integral_init_on_sat_exit():
     algo.ctl.last_sat = "SAT_HI"
 
     # Simulate SAT_HI exit (step 14b logic)
-    prev_sat_before_compute = algo.ctl.last_sat  # "SAT_HI"
     algo.ctl.last_sat = "NO_SAT"  # Simulate compute_pwm transition
-
-    # Reproduce the step 14b logic (no equilibrium init, just counter tracking)
-    if algo.ctl.last_sat != "NO_SAT":
-        algo._sat_persistent_cycles += 1
-    else:
-        algo._sat_persistent_cycles = 0
 
     assert algo.ctl.integral == 0.0, (
         "Integral must stay at 0 on SAT_HI exit (natural post-conditional-integration)"

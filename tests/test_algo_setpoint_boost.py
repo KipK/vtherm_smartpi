@@ -38,7 +38,7 @@ def test_setpoint_boost_activates_on_setpoint_increase() -> None:
         hvac_mode=VThermHvacMode_HEAT,
     )
 
-    assert smartpi.setpoint_boost_active is False
+    assert smartpi.sp_mgr.boost_active is False
     assert smartpi.sp_mgr.prev_setpoint_for_boost == 18.0
 
     smartpi._last_calculate_time = None
@@ -50,7 +50,7 @@ def test_setpoint_boost_activates_on_setpoint_increase() -> None:
         hvac_mode=VThermHvacMode_HEAT,
     )
 
-    assert smartpi.setpoint_boost_active is True
+    assert smartpi.sp_mgr.boost_active is True
     assert smartpi.sp_mgr.prev_setpoint_for_boost == 19.0
     assert smartpi.get_published_diagnostics()["setpoint"]["boost_active"] is True
 
@@ -71,7 +71,7 @@ def test_setpoint_boost_deactivates_when_error_small() -> None:
         hvac_mode=VThermHvacMode_HEAT,
     )
 
-    assert smartpi.setpoint_boost_active is False
+    assert smartpi.sp_mgr.boost_active is False
 
 
 def test_setpoint_boost_activates_on_decrease_in_heat_mode() -> None:
@@ -90,7 +90,7 @@ def test_setpoint_boost_activates_on_decrease_in_heat_mode() -> None:
         hvac_mode=VThermHvacMode_HEAT,
     )
 
-    assert smartpi.setpoint_boost_active is True
+    assert smartpi.sp_mgr.boost_active is True
     assert smartpi.sp_mgr.prev_setpoint_for_boost == 20.0
 
 
@@ -117,7 +117,7 @@ def test_setpoint_boost_persisted() -> None:
         saved_state=saved,
     )
 
-    assert smartpi2.setpoint_boost_active is True
+    assert smartpi2.sp_mgr.boost_active is True
     assert smartpi2.sp_mgr.prev_setpoint_for_boost == 21.0
 
 
@@ -135,7 +135,7 @@ def test_setpoint_boost_cleared_on_reset() -> None:
 
     smartpi.reset_learning()
 
-    assert smartpi.setpoint_boost_active is False
+    assert smartpi.sp_mgr.boost_active is False
     assert smartpi.sp_mgr.prev_setpoint_for_boost is None
 
 
@@ -155,5 +155,5 @@ def test_setpoint_boost_cool_mode() -> None:
         hvac_mode=VThermHvacMode_COOL,
     )
 
-    assert smartpi.setpoint_boost_active is True
+    assert smartpi.sp_mgr.boost_active is True
     assert smartpi.sp_mgr.prev_setpoint_for_boost == 22.0

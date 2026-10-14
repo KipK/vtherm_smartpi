@@ -226,7 +226,7 @@ def test_save_and_load_state_restores_autocalib_and_learning_start() -> None:
         saved_state=saved,
     )
 
-    assert smartpi2.learning_start_dt == learning_start.isoformat()
+    assert smartpi2._learning_start_date == learning_start
     assert smartpi2.autocalib._snapshot_ts == snapshot_ts
     assert smartpi2.autocalib.retry_count == 2
     assert smartpi2.autocalib.model_degraded is True

@@ -269,7 +269,6 @@ def test_learning_change_starts_with_clean_observations() -> None:
     smartpi.dt_est.update(
         now=300.0,
         tin=20.0,
-        sp=21.0,
         u_applied=0.8,
         hvac_mode=VThermHvacMode_HEAT,
     )

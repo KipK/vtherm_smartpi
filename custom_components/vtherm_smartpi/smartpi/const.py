@@ -187,13 +187,6 @@ class TrajectoryPhase(str, Enum):
     RELEASE = "release"
 
 
-class ServoPhase(str, Enum):
-    """Legacy compatibility enum for pre-trajectory tests and persisted state."""
-    NONE = TrajectoryPhase.IDLE.value
-    BOOST = TrajectoryPhase.TRACKING.value
-    LANDING = TrajectoryPhase.TRACKING.value
-
-
 # Trajectory generator
 TRAJECTORY_ENABLE_ERROR_THRESHOLD = 0.3  # °C — signed raw error needed to arm the trajectory
 TRAJECTORY_COMPLETE_EPS_C = 0.05         # °C — convergence epsilon to finish tracking

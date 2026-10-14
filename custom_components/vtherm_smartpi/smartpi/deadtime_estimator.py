@@ -47,7 +47,6 @@ class DeadTimeEstimator:
 
         # Detection ephemeral data
         self.heat_start_time: float | None = None
-        self.heat_start_temp: float | None = None
         self.heat_trough_temp: float | None = None
 
         self.cool_start_time: float | None = None
@@ -95,7 +94,6 @@ class DeadTimeEstimator:
         self.last_power = 0.0
         self.last_stop_time = None
         self.heat_start_time = None
-        self.heat_start_temp = None
         self.heat_trough_temp = None
         self.cool_start_time = None
         self.cool_peak_temp = None
@@ -111,7 +109,6 @@ class DeadTimeEstimator:
         self.last_power = float(current_power)
         self.last_stop_time = None
         self.heat_start_time = None
-        self.heat_start_temp = None
         self.heat_trough_temp = None
         self.cool_start_time = None
         self.cool_peak_temp = None
@@ -177,7 +174,6 @@ class DeadTimeEstimator:
             self.state = "WAITING_COOL_RESPONSE"
         else:
             self.heat_start_time = now
-            self.heat_start_temp = tin
             self.heat_trough_temp = tin
             self.state = "WAITING_HEAT_RESPONSE"
         _LOGGER.debug(
@@ -187,14 +183,11 @@ class DeadTimeEstimator:
             tin,
         )
 
-    def update(  # pylint: disable=unused-argument
+    def update(
         self,
         now: float,
         tin: float,
-        sp: float,
         u_applied: float,
-        max_on_percent: float = 1.0,
-        is_hysteresis: bool = False,
         hvac_mode: VThermHvacMode = VThermHvacMode_HEAT,
         tin_raw: float | None = None,
     ) -> None:
@@ -392,14 +385,6 @@ class DeadTimeEstimator:
             "model_hvac_mode": self.model_hvac_mode,
             "history_heat": list(self._history_heat),
             "history_cool": list(self._history_cool),
-            "state": self.state,
-            "last_stop_time": monotonic_to_wall_ts(self.last_stop_time),
-            "heat_start_time": monotonic_to_wall_ts(self.heat_start_time),
-            "heat_start_temp": self.heat_start_temp,
-            "heat_trough_temp": self.heat_trough_temp,
-            "cool_start_time": monotonic_to_wall_ts(self.cool_start_time),
-            "cool_peak_temp": self.cool_peak_temp,
-            "waiting_power_on": self._waiting_power_on,
             "tin_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_history],
             "tin_lp_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_lp_history],
         }
@@ -429,7 +414,7 @@ class DeadTimeEstimator:
 
         # An in-progress detection is not restored: the actuator state during
         # the outage is unknown, so a response spanning it is not attributable.
-        # The persisted detection keys are kept for format compatibility only.
+        # Legacy states may still carry detection keys; they are ignored.
         self.reset_observation()
         # The OFF duration before the restart is unknown: the minimum OFF time
         # must elapse within this session before a detection can be armed.

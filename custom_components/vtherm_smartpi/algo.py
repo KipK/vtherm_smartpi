@@ -255,7 +255,6 @@ class SmartPI:
         self._last_temperature_slope_h: float | None = None
         self._last_u_ff: float = 0.0
         self._last_u_pi: float = 0.0
-        self._last_ff_raw: float = 0.0
         self._last_ff_reason: str = "ff_none"
         self._last_u_ff3: float = 0.0
         self._u_ff3_cycle: float = 0.0
@@ -268,7 +267,6 @@ class SmartPI:
 
         self._last_ff3_enabled: bool = False
         self._last_ff3_reason_disabled: str = "config_disabled"
-        self._last_ff3_candidate_scores: list[dict[str, float]] = []
         self._last_ff3_selected_candidate: float = 0.0
         self._last_ff3_horizon_cycles: int = 1
         self._last_ff3_disturbance_active: bool = False
@@ -316,7 +314,6 @@ class SmartPI:
         self._last_u_applied: float = 0.0   # candidate output after timing constraints
         self._last_aw_du: float = 0.0       # tracking delta for diagnostics
         self._last_ff_trim_delta: float = 0.0
-        self._last_fftrim_cycle_admissible: bool = False
         self._last_fftrim_reject_reason: str = "none"
         self._last_fftrim_update_reason: str = "none"
         self._cycles_since_fftrim_update: int = 0
@@ -376,11 +373,6 @@ class SmartPI:
         # Last complete FFResult (used by diagnostics and on_cycle_completed)
         self._last_ff_result: FFResult | None = None
 
-        self._last_regime_prev: str = ""
-
-        # Persistent saturation counter
-        self._sat_persistent_cycles: int = 0
-
         # FFv2 post-reboot freeze countdown (cycles remaining before unfreeze)
         self._ff_v2_reboot_freeze_remaining: int = 0
 
@@ -413,7 +405,6 @@ class SmartPI:
         self._ff3_pending_active = False
         self._last_ff3_enabled = False
         self._last_ff3_reason_disabled = reason
-        self._last_ff3_candidate_scores = []
         self._last_ff3_selected_candidate = 0.0
         self._last_ff3_horizon_cycles = 1
         self._last_ff3_prediction_quality = "unavailable"
@@ -438,7 +429,6 @@ class SmartPI:
         self._output_initialized = False
         self._last_u_ff = 0.0
         self._last_u_pi = 0.0
-        self._last_ff_raw = 0.0
         self._last_ff_reason = "ff_none"
         self._last_u_ff3 = 0.0
         self._reset_ff3_runtime("reset")
@@ -454,7 +444,6 @@ class SmartPI:
         self._actuator_committed_on_percent = 0.0
         self._last_aw_du = 0.0
         self._last_ff_trim_delta = 0.0
-        self._last_fftrim_cycle_admissible = False
         self._last_fftrim_reject_reason = "none"
         self._last_fftrim_update_reason = "none"
         self._cycles_since_fftrim_update = 0
@@ -779,11 +768,9 @@ class SmartPI:
             ext_temp=ext_temp,
             u_active=u_active,
             ff3_active=self._ff3_active_cycle,
-            setpoint_changed=setpoint_changed,
             estimator=self.est,
             dt_est=self.dt_est,
             governance=self.gov,
-            learning_resume_ts=self.learn_win.learning_resume_ts,
             now=now,
             in_deadband=self.deadband_mgr.in_deadband,
             in_near_band=self.deadband_mgr.in_near_band,
@@ -1199,7 +1186,6 @@ class SmartPI:
         """Route an observer result through the persistent trim safeguards."""
         observation_mode = result.observation_mode
         self._fftrim_observation_mode = observation_mode
-        self._last_fftrim_cycle_admissible = result.admissible
         if not result.admissible:
             self._pending_bumpless_persistent = None
             self._ff_trim.clear_pending(observation_mode)
@@ -1778,10 +1764,6 @@ class SmartPI:
         return self.est.learn_last_reason
 
     @property
-    def learning_start_dt(self) -> str:
-        return self._learning_start_date.isoformat() if self._learning_start_date else None
-
-    @property
     def last_decision_thermal(self) -> str:
         return self.gov.last_decision_thermal.value
 
@@ -1903,35 +1885,6 @@ class SmartPI:
         return self._e_filt if self._e_filt is not None else 0.0
 
     @property
-    def guard_cut_active(self) -> bool:
-        return self.guards.guard_cut_active
-
-    @property
-    def guard_cut_count(self) -> int:
-        return self.guards.guard_cut_count
-
-    @property
-    def guard_kick_active(self) -> bool:
-        return self.guards.guard_kick_active
-
-    @property
-    def guard_kick_count(self) -> int:
-        return self.guards.guard_kick_count
-
-    @property
-    def cycles_since_reset(self) -> int:
-        return self._cycles_since_reset
-
-    @property
-    def filtered_setpoint(self) -> float | None:
-        return self.sp_mgr.effective_setpoint
-
-    @property
-    def learning_resume_ts(self) -> float | None:
-        """Return monotonic resume timestamp."""
-        return self.learn_win.learning_resume_ts
-
-    @property
     def u_cmd(self) -> float:
         return self._last_u_cmd
 
@@ -2004,10 +1957,6 @@ class SmartPI:
     def learn_t_int_s(self) -> float:
         """Return the accumulated time integral in seconds."""
         return self.learn_win.t_int_s
-
-    @property
-    def setpoint_boost_active(self) -> bool:
-        return self.sp_mgr.boost_active
 
     @property
     def in_deadtime_window(self) -> bool:
@@ -2096,7 +2045,6 @@ class SmartPI:
         self.ctl.last_i_mode = "CALIB"
         self.ctl.last_sat = "NO_SAT"
         self._last_u_ff = 0.0
-        self._last_ff_raw = 0.0
         self._last_ff_reason = "ff_none"
         self._last_u_pi = self._on_percent
         self._last_u_cmd = self._on_percent
@@ -2589,7 +2537,6 @@ class SmartPI:
         self._ff3_pending_active = abs(ff3_result.u_ff3_applied) > 1e-9
         self._last_ff3_enabled = ff3_result.enabled
         self._last_ff3_reason_disabled = ff3_result.reason_disabled
-        self._last_ff3_candidate_scores = ff3_result.candidate_scores
         self._last_ff3_selected_candidate = ff3_result.selected_candidate
         self._last_ff3_horizon_cycles = ff3_result.horizon_cycles
         self._last_ff3_disturbance_active = ff3_context.disturbance_active
@@ -2865,7 +2812,6 @@ class SmartPI:
             u_ff_eff=clamp(nominal_ff_result.u_ff_final + u_ff3, 0.0, 1.0),
         )
         self._last_ff_result = ff_result
-        self._last_ff_raw = ff_result.u_ff1
         self._last_ff_reason = ff_result.ff_reason
         self._last_u_ff3 = ff_result.u_ff3
 
@@ -3159,10 +3105,7 @@ class SmartPI:
                 now=now,
                 tin=t_int_lp,
                 tin_raw=current_temp,
-                sp=target_temp_filt,
                 u_applied=self._committed_on_percent,
-                max_on_percent=self._max_on_percent if self._max_on_percent is not None else 1.0,
-                is_hysteresis=False,
                 hvac_mode=hvac_mode,
             )
 
@@ -3229,10 +3172,7 @@ class SmartPI:
                     now=now,
                     tin=t_int_lp,
                     tin_raw=current_temp,
-                    sp=target_temp_filt,
                     u_applied=self._committed_on_percent,
-                    max_on_percent=self._max_on_percent if self._max_on_percent is not None else 1.0,
-                    is_hysteresis=True,
                     hvac_mode=hvac_mode,
                 )
 
@@ -3287,9 +3227,6 @@ class SmartPI:
         integrator_hold_source = "deadtime" if integrator_hold else "none"
 
         # --- 7. Governance Decision ---
-        # Capture previous regime before update (for FFv2 bumpless and diagnostics)
-        self._last_regime_prev = self.gov.regime.value if self.gov.regime else ""
-
         regime = self.gov.determine_regime(
             self.phase,
             ext_current_temp,
@@ -3414,17 +3351,12 @@ class SmartPI:
         self._last_ext_temp = ext_current_temp
         self._last_target_temp = target_temp
 
-        # --- 14b. FF trim sample recording & saturation tracking ---
-        # Update persistent saturation counter and detect SAT_HI exit.
-        if self.ctl.last_sat != "NO_SAT":
-            self._sat_persistent_cycles += 1
-        else:
-            if prev_sat_before_compute == "SAT_HI":
-                _LOGGER.debug(
-                    "%s - SAT_HI exit: integral stays at %.2f (natural post-conditional-integration)",
-                    self._name, self.ctl.integral
-                )
-            self._sat_persistent_cycles = 0
+        # --- 14b. SAT_HI exit tracking ---
+        if self.ctl.last_sat == "NO_SAT" and prev_sat_before_compute == "SAT_HI":
+            _LOGGER.debug(
+                "%s - SAT_HI exit: integral stays at %.2f (natural post-conditional-integration)",
+                self._name, self.ctl.integral
+            )
 
         # --- 14c. FFv2: freeze management for trim ---
         # Post-reboot freeze countdown

@@ -158,7 +158,7 @@ class TestDecideUpdate:
     """Tests for the central governance decision method."""
 
     def call_decide(self, spi, domain):
-        lrt = spi.learning_resume_ts
+        lrt = spi.learn_win.learning_resume_ts
         return spi.gov.decide_update(domain, learning_resume_ts=lrt, now=time.monotonic())
 
     def test_regime_transition_freezes_both(self):

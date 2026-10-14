@@ -16,11 +16,11 @@ class TestSmartPiHysteresisLearning:
         now = 0.0
         # History of OFF
         for i in range(15):
-             self.est.update(now=now, tin=19.0, sp=20.0, u_applied=0.0, is_hysteresis=True)
+             self.est.update(now=now, tin=19.0, u_applied=0.0)
              now += 60.0
              
         # Power ON
-        self.est.update(now=now, tin=19.0, sp=20.0, u_applied=1.0, is_hysteresis=True)
+        self.est.update(now=now, tin=19.0, u_applied=1.0)
         
         # New assertion: State check
         assert self.est.state == "WAITING_HEAT_RESPONSE"
@@ -31,11 +31,11 @@ class TestSmartPiHysteresisLearning:
         now = 0.0
         # OFF
         for i in range(15):
-             self.est.update(now=now, tin=19.0, sp=20.0, u_applied=0.0, is_hysteresis=True)
+             self.est.update(now=now, tin=19.0, u_applied=0.0)
              now += 60.0
              
         # ON (Start)
-        self.est.update(now=now, tin=19.0, sp=21.0, u_applied=1.0, is_hysteresis=True)
+        self.est.update(now=now, tin=19.0, u_applied=1.0)
         assert self.est.state == "WAITING_HEAT_RESPONSE"
         
         # Pulse ON for 10 mins, temp rises
@@ -48,7 +48,7 @@ class TestSmartPiHysteresisLearning:
             else:
                 tin = 19.0 + (i - 3) * 0.02
                 
-            self.est.update(now=now, tin=tin, sp=21.0, u_applied=1.0, is_hysteresis=True)
+            self.est.update(now=now, tin=tin, u_applied=1.0)
             
         # At i=6 (6 mins), trigger is hit.
         # Inflection point was at i=3 (3 mins = 180s).
@@ -61,8 +61,8 @@ class TestSmartPiHysteresisLearning:
 class TestSmartPiIntegration:
     """Integration tests for SmartPI -> DeadTimeEstimator."""
     
-    def test_smartpi_passes_is_hysteresis(self):
-        """Verify SmartPI passes is_hysteresis=True when in HYSTERESIS phase."""
+    def test_smartpi_feeds_deadtime_in_hysteresis(self):
+        """Verify SmartPI feeds the dead time estimator in HYSTERESIS phase."""
         # Setup SmartPI
         hass = MagicMock()
         # Correct args: hass, cycle_min, min_on, min_off, name
@@ -80,13 +80,10 @@ class TestSmartPiIntegration:
         # Call calculate
         pi.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=10.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
         
-        # Verify update was called with is_hysteresis=True
         pi.dt_est.update.assert_called()
-        call_kwargs = pi.dt_est.update.call_args.kwargs
-        assert call_kwargs.get('is_hysteresis') is True, "SmartPI should pass is_hysteresis=True in Hysteresis phase"
 
-    def test_smartpi_passes_is_hysteresis_false_in_stable(self):
-        """Verify SmartPI passes is_hysteresis=False when in STABLE phase."""
+    def test_smartpi_feeds_deadtime_in_stable(self):
+        """Verify SmartPI feeds the dead time estimator in STABLE phase."""
         hass = MagicMock()
         pi = SmartPI(hass, 10.0, 0, 0, "test_pi")
         import time
@@ -110,5 +107,3 @@ class TestSmartPiIntegration:
         
         # Verify update was called
         pi.dt_est.update.assert_called()
-        call_kwargs = pi.dt_est.update.call_args.kwargs
-        assert call_kwargs.get('is_hysteresis', False) is False, "SmartPI should NOT pass is_hysteresis=True in Stable phase"

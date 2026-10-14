@@ -8,7 +8,6 @@ from typing import Optional
 from .const import (
     SETPOINT_BOOST_THRESHOLD,
     SETPOINT_BOOST_ERROR_MIN,
-    ServoPhase,
     TrajectoryPhase,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     TRAJECTORY_COMPLETE_EPS_C,
@@ -292,25 +291,6 @@ class SmartPISetpointManager:
         """Return the command emitted after the governor cap."""
         return self._governor_u_cmd_after_cap
 
-    # Legacy aliases kept for compatibility with older tests / consumers.
-    @property
-    def servo_active(self) -> bool:
-        return self.trajectory_active
-
-    @property
-    def servo_phase(self) -> ServoPhase:
-        return ServoPhase.BOOST if self.trajectory_active else ServoPhase.NONE
-
-    @property
-    def servo_target_at_activation(self) -> float | None:
-        return self.trajectory_start_setpoint
-
-    @property
-    def servo_step_amplitude(self) -> float | None:
-        if self.trajectory_start_setpoint is None or self.trajectory_target_setpoint is None:
-            return None
-        return abs(self.trajectory_target_setpoint - self.trajectory_start_setpoint)
-
     def _reset_trajectory(self) -> None:
         """Reset the trajectory state only."""
         self._trajectory.reset()
@@ -420,11 +400,6 @@ class SmartPISetpointManager:
             "prev_setpoint_for_boost": self.prev_setpoint_for_boost,
             "trajectory_pending_target_change_braking": self._pending_target_change_braking,
             "trajectory_source": self._trajectory_source,
-            # Legacy aliases kept during the transition to trajectory naming.
-            "servo_active": self.servo_active,
-            "servo_phase": self.servo_phase.value,
-            "servo_target_at_activation": self.servo_target_at_activation,
-            "servo_step_amplitude": self.servo_step_amplitude,
             **self._trajectory.save_state(),
         }
 
