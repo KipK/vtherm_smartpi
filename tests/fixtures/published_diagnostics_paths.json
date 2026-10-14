@@ -294,5 +294,11 @@
   "temperature.integral_hold_mode",
   "temperature.integral_hold_source",
   "temperature.integral_mode",
-  "temperature.outdoor"
+  "temperature.outdoor",
+  "valve",
+  "valve.issues",
+  "valve.opening_remap_active",
+  "valve.quantization_step_linear_percent",
+  "valve.vt_dpercent",
+  "valve.vt_period_min"
 ]

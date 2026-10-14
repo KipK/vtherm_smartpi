@@ -12,6 +12,7 @@
     - [What linearization does](#what-linearization-does)
     - [When to enable it](#when-to-enable-it)
     - [Choosing the values](#choosing-the-values)
+    - [Versatile Thermostat valve settings](#versatile-thermostat-valve-settings)
   - [Operating phases](#operating-phases)
     - [Learning phase](#learning-phase)
       - [How bootstrap heats](#how-bootstrap-heats)
@@ -184,6 +185,22 @@ If you do not want to test carefully, keep the defaults. If your valve reacts ve
 
 After changing a value, let SmartPI run for several cycles before judging the result. One heating cycle is not always enough to conclude.
 
+### Versatile Thermostat valve settings
+
+In valve mode, Versatile Thermostat processes the opening requested by SmartPI before it reaches the valve. SmartPI cannot see this processing, so these settings must stay transparent for SmartPI to learn and regulate on the opening it really commands:
+
+| Versatile Thermostat setting                                                                                              | Effect on SmartPI commands                                                                                                          | Recommended value                           |
+| ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| **Regulation threshold** (`auto_regulation_dtemp`)                                                                          | Keeps the previous opening when the requested one differs by less than the threshold, and forces to `0%` any opening below it.        | `0`                                         |
+| **Regulation minimum period** (`auto_regulation_periode_min`)                                                               | Holds back a change of the valve command until the period has elapsed since the previous change, except when a cycle restarts.        | `0`                                         |
+| **Opening threshold degree**, **Min opening degrees**, **Max opening degrees**, **Max closing degree**                     | Remap the opening sent to the valve. This conflicts with the SmartPI valve linearization, which inverts its curve on the opening.     | `0`, `0`, `100`, `100` (no remap) when linearization is enabled |
+
+The integer rounding of the valve position (`1%` steps) always applies. A regulation threshold below `1` therefore has no additional effect.
+
+SmartPI checks these settings when the thermostat starts and raises a warning in Home Assistant **Settings > Repairs** for each setting that is not transparent: the regulation threshold is `1` or more, the regulation minimum period is above `0`, or an opening remap is active while the valve linearization is enabled. The warning disappears at the next start once the setting is corrected. The checked values and the issue codes (`dpercent_filter`, `period_filter`, `opening_remap`) are also published under `live.valve` in the [diagnostics](diagnostics.md).
+
+To clear the warnings, set the regulation threshold and the regulation minimum period to `0` in the valve regulation settings of the Versatile Thermostat. If you need an opening remap, disable the SmartPI valve linearization instead.
+
 ## Operating phases
 
 ### Learning phase
@@ -284,8 +301,8 @@ Do not try to tune several parameters at once during the first learning period. 
 
 | Parameter                      | Role                                                                                              | Default value |
 | ------------------------------ | ------------------------------------------------------------------------------------------------- | ------------- |
-| **Minimal activation delay**   | Minimum time the heater stays on once activated.                                                  | `0 s`         |
-| **Minimal deactivation delay** | Minimum time the heater stays off once deactivated.                                               | `0 s`         |
+| **Minimal activation delay**   | Minimum time the heater stays on once activated. Switch outputs only; ignored for valves.                                                  | `0 s`         |
+| **Minimal deactivation delay** | Minimum time the heater stays off once deactivated. Switch outputs only; ignored for valves.                                               | `0 s`         |
 | **Deadband**                   | Tolerance zone around the setpoint.                                                               | `0.05°C`      |
 | **Setpoint filter**            | Enables proportional setpoint shaping and predictive HEAT/COOL governance near the target.        | `enabled`     |
 | **FF3**                        | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled`     |

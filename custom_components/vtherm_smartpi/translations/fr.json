@@ -104,5 +104,19 @@
     "no_smartpi_target": {
       "message": "Aucune des entités ciblées n'est un Versatile Thermostat utilisant SmartPI."
     }
+  },
+  "issues": {
+    "dpercent_filter": {
+      "title": "Les commandes de vanne SmartPI sont filtrées pour {name}",
+      "description": "Le thermostat {name} pilote une vanne et son « Seuil de régulation » Versatile Thermostat est réglé à {dpercent} %. Versatile Thermostat conserve l'ouverture précédente de la vanne lorsque l'ouverture demandée par SmartPI en diffère de moins que ce seuil, et force à 0 % toute ouverture inférieure au seuil. SmartPI n'a pas connaissance de ce filtrage : la vanne ne suit pas sa commande et son apprentissage ainsi que sa régulation sont dégradés.\n\nPour corriger, ouvrez les réglages Versatile Thermostat de {name}, allez dans les réglages de régulation de la vanne et mettez « Seuil de régulation » à 0."
+    },
+    "period_filter": {
+      "title": "Les commandes de vanne SmartPI sont retardées pour {name}",
+      "description": "Le thermostat {name} pilote une vanne et sa « Période minimale de régulation » Versatile Thermostat est réglée à {period_min} minutes. Versatile Thermostat retient un changement de commande de vanne demandé par SmartPI jusqu'à l'expiration de cette période depuis le changement précédent, sauf lors du redémarrage d'un cycle. SmartPI n'a pas connaissance de ce retard : la vanne ne suit pas sa commande et son apprentissage ainsi que sa régulation sont dégradés.\n\nPour corriger, ouvrez les réglages Versatile Thermostat de {name}, allez dans les réglages de régulation de la vanne et mettez « Période minimale de régulation » à 0."
+    },
+    "opening_remap": {
+      "title": "La linéarisation de vanne SmartPI entre en conflit avec les réglages d'ouverture de {name}",
+      "description": "Le thermostat {name} utilise la linéarisation de vanne SmartPI, mais ses réglages d'ouverture Versatile Thermostat (« Seuil d'ouverture », « Ouvertures minimales », « Ouvertures maximales » ou « Fermetures maximale ») transforment l'ouverture avant qu'elle n'atteigne la vanne. SmartPI inverse sa courbe de vanne sur une valeur qui n'est plus l'ouverture physique de la vanne : son modèle est donc appris sur une commande erronée.\n\nPour corriger, désactivez la linéarisation de vanne dans les réglages SmartPI de {name}, ou rétablissez les réglages d'ouverture par défaut de Versatile Thermostat (seuil 0, minimum 0, maximum 100, fermeture maximale 100)."
+    }
   }
 }

@@ -34,6 +34,12 @@ All notable changes to this project will be documented in this file.
 - `calibration.retry_count` now publishes the AutoCalib retry counter, and
   `analysis.feedforward.reason` no longer reports `ff_ab_fallback`.
 - Release of stable HEAT setpoint landing plateaus after cycle confirmation, terminal braking release and a more tolerant reference governor cap.
+- In valve mode, the minimal activation and deactivation delays no longer raise
+  or zero the valve command: valve position does not depend on ON time.
+- A Home Assistant repair warns when the Versatile Thermostat valve regulation
+  threshold or minimum period filters SmartPI commands, or when an opening
+  degree remap is active with valve linearization. The values are published
+  under `live.valve`.
 - Internal cleanup of dead code.
 
 ## [0.4.0]

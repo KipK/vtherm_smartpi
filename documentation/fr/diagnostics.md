@@ -70,10 +70,21 @@ Le bloc `live` est organisé par responsabilité :
 | `autocalib` | État du superviseur de calibration automatique |
 | `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
+| `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `trajectory`, `reference_governor`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
 est disponible, `twin`.
+
+`valve` vaut `null` sauf si le thermostat pilote une vanne. En mode vanne, il contient :
+
+| Champ | Signification |
+|---|---|
+| `vt_dpercent` | Seuil de régulation de Versatile Thermostat en `%` (`null` si indisponible) |
+| `vt_period_min` | Période minimale de régulation de Versatile Thermostat en minutes (`null` si indisponible) |
+| `opening_remap_active` | `true` lorsque les réglages d'ouverture de Versatile Thermostat modifient l'ouverture envoyée à la vanne |
+| `quantization_step_linear_percent` | Demande linéaire, en pourcentage, déplacée par un pas de vanne de `1%` à la position de vanne engagée ; `1.0` sans linéarisation, `null` lorsque la vanne est fermée |
+| `issues` | Codes des réglages non transparents pour SmartPI : `dpercent_filter`, `period_filter`, `opening_remap`. Les mêmes problèmes sont signalés dans les Réparations de Home Assistant |
 
 FFTrim utilise des blocs canoniques imbriqués :
 

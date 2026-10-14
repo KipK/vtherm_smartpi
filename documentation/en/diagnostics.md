@@ -70,10 +70,21 @@ The `live` block is organized by responsibility:
 | `autocalib` | Automatic calibration supervisor state |
 | `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
+| `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
 
 `analysis` groups the advanced live values into `control`, `learning`,
 `trajectory`, `reference_governor`, `deadtime`, `governance`, `feedforward` and, when
 available, `twin`.
+
+`valve` is `null` unless the thermostat drives a valve. In valve mode it contains:
+
+| Field | Meaning |
+|---|---|
+| `vt_dpercent` | Versatile Thermostat regulation threshold in `%` (`null` when unavailable) |
+| `vt_period_min` | Versatile Thermostat regulation minimum period in minutes (`null` when unavailable) |
+| `opening_remap_active` | `true` when the Versatile Thermostat opening settings change the opening sent to the valve |
+| `quantization_step_linear_percent` | Linear demand, in percent, moved by one `1%` valve step at the committed valve position; `1.0` without linearization, `null` when the valve is closed |
+| `issues` | Codes of the settings that are not transparent for SmartPI: `dpercent_filter`, `period_filter`, `opening_remap`. The same issues are raised in Home Assistant Repairs |
 
 FFTrim uses nested canonical blocks:
 

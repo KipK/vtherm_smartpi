@@ -136,7 +136,6 @@ from .smartpi.integral_guard import (
 )
 from .smartpi.valve_curve import (
     ValveCurveParams,
-    apply_valve_activation_floor,
     build_valve_curve,
 )
 from .smartpi.const import (
@@ -206,6 +205,8 @@ class SmartPI:
             valve_curve_params,
         )
         self._valve_mode_enabled = bool(enable_valve_linearization)
+        # VT valve settings seen by SmartPI; set by the handler in valve mode.
+        self.valve_config_diag: dict[str, Any] | None = None
 
         self.deadband_c = float(deadband_c)
 
@@ -1908,23 +1909,14 @@ class SmartPI:
         """Apply min on/off delays and update forced_by_timing status."""
         self._last_forced_by_timing = False
 
+        # Valve opening does not depend on scheduler ON time: min ON/OFF delays
+        # only constrain switch-like outputs.
+        if self._valve_mode_enabled:
+            return u_cmd
+
         u_final = u_cmd
         cycle_sec = self._cycle_min * 60
         on_time_sec = u_cmd * cycle_sec
-
-        if self._valve_mode_enabled:
-            u_floored, adjusted = apply_valve_activation_floor(
-                self.valve_curve,
-                u_cmd,
-                self._cycle_min,
-                self._minimal_activation_delay,
-            )
-            if adjusted:
-                self._last_forced_by_timing = True
-                return min(
-                    u_floored,
-                    self._max_on_percent if self._max_on_percent is not None else 1.0,
-                )
 
         # Case: Switching ON
         if u_prev <= 0.001 and u_cmd > 0.001:

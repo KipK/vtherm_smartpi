@@ -104,5 +104,19 @@
     "no_smartpi_target": {
       "message": "None of the targeted entities is a Versatile Thermostat using SmartPI."
     }
+  },
+  "issues": {
+    "dpercent_filter": {
+      "title": "SmartPI valve commands are filtered for {name}",
+      "description": "The thermostat {name} controls a valve and its Versatile Thermostat \"Regulation threshold\" is set to {dpercent} %. Versatile Thermostat keeps the previous valve opening when the opening requested by SmartPI differs from it by less than this threshold, and forces any opening below the threshold to 0 %. SmartPI is not aware of this filtering, so the valve does not follow its command and its learning and regulation are degraded.\n\nTo fix it, open the Versatile Thermostat settings of {name}, go to the valve regulation settings and set \"Regulation threshold\" to 0."
+    },
+    "period_filter": {
+      "title": "SmartPI valve commands are delayed for {name}",
+      "description": "The thermostat {name} controls a valve and its Versatile Thermostat \"Regulation minimum period\" is set to {period_min} minutes. Versatile Thermostat holds back a change of the valve command requested by SmartPI until this period has elapsed since the previous change, except when a cycle restarts. SmartPI is not aware of this delay, so the valve does not follow its command and its learning and regulation are degraded.\n\nTo fix it, open the Versatile Thermostat settings of {name}, go to the valve regulation settings and set \"Regulation minimum period\" to 0."
+    },
+    "opening_remap": {
+      "title": "SmartPI valve linearization conflicts with the opening settings of {name}",
+      "description": "The thermostat {name} uses the SmartPI valve linearization, but its Versatile Thermostat opening settings (\"Opening threshold degree\", \"Min opening degrees\", \"Max opening degrees\" or \"Max closing degree\") remap the opening before it reaches the valve. SmartPI inverts its valve curve on a value that is no longer the physical valve opening, so its model is learned on a wrong command.\n\nTo fix it, either disable the valve linearization in the SmartPI settings of {name}, or restore the default Versatile Thermostat opening settings (threshold 0, minimum 0, maximum 100, max closing 100)."
+    }
   }
 }

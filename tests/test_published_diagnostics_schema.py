@@ -67,6 +67,13 @@ def _representative_smartpi() -> SmartPI:
     algo._fftrim_observer.publish_external_result(result)
     # A healthy twin adds the analysis.twin subtree.
     algo._last_twin_diag = {"status": "ok", "model_reliable": True}
+    # Valve mode adds the valve subtree.
+    algo.valve_config_diag = {
+        "vt_dpercent": 0.0,
+        "vt_period_min": 0.0,
+        "opening_remap_active": False,
+        "issues": [],
+    }
     return algo
 
 

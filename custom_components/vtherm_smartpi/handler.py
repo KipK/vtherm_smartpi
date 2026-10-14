@@ -46,6 +46,7 @@ from .const import (
 )
 from .hvac_mode import VThermHvacMode_OFF, VThermHvacMode_HEAT, VThermHvacMode_COOL
 from .commons import write_event_log
+from .valve_config_check import apply_valve_config_check, clear_valve_config_issues
 from .smartpi.valve_curve import ValveCurveParams
 
 if TYPE_CHECKING:
@@ -194,6 +195,7 @@ class SmartPIHandler:
 
     async def async_startup(self):
         """Startup actions."""
+        apply_valve_config_check(self._thermostat, self._valve_linearization_configured)
         # Check if we need to start the periodic recalculation timer
         await self.on_state_changed(True)
 
@@ -223,6 +225,7 @@ class SmartPIHandler:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
         self._stop_recalc_timer()
+        clear_valve_config_issues(t)
 
     def on_scheduler_ready(self, scheduler) -> None:
         """Register SmartPI learning callbacks on the cycle scheduler."""

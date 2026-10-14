@@ -12,6 +12,7 @@
     - [Ce que fait la linéarisation](#ce-que-fait-la-linéarisation)
     - [Quand l'activer](#quand-lactiver)
     - [Choisir les valeurs](#choisir-les-valeurs)
+    - [Réglages de vanne dans Versatile Thermostat](#réglages-de-vanne-dans-versatile-thermostat)
   - [Phases de fonctionnement](#phases-de-fonctionnement)
     - [Phase d'apprentissage](#phase-dapprentissage)
       - [Comment le bootstrap chauffe](#comment-le-bootstrap-chauffe)
@@ -184,6 +185,22 @@ Si vous n'avez pas envie de tester finement, gardez les valeurs par défaut. Si 
 
 Après un changement, laissez SmartPI fonctionner plusieurs cycles avant de juger le résultat. Une seule chauffe ne suffit pas toujours à conclure.
 
+### Réglages de vanne dans Versatile Thermostat
+
+En mode vanne, Versatile Thermostat traite l'ouverture demandée par SmartPI avant qu'elle n'atteigne la vanne. SmartPI ne voit pas ce traitement : ces réglages doivent donc rester transparents pour que SmartPI apprenne et régule sur l'ouverture qu'il commande réellement.
+
+| Réglage Versatile Thermostat                                                                                              | Effet sur les commandes SmartPI                                                                                                     | Valeur recommandée                          |
+| ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| **Seuil de régulation** (`auto_regulation_dtemp`)                                                                          | Conserve l'ouverture précédente lorsque l'ouverture demandée en diffère de moins que le seuil, et force à `0%` toute ouverture inférieure au seuil. | `0`                                         |
+| **Période minimale de régulation** (`auto_regulation_periode_min`)                                                         | Retient un changement de commande de la vanne jusqu'à l'expiration de la période depuis le changement précédent, sauf lors du redémarrage d'un cycle. | `0`                                         |
+| **Seuil d'ouverture**, **Ouvertures minimales**, **Ouvertures maximales**, **Fermetures maximale**                        | Modifient l'ouverture envoyée à la vanne. Cela entre en conflit avec la linéarisation de vanne de SmartPI, qui inverse sa courbe sur l'ouverture. | `0`, `0`, `100`, `100` (aucune modification) lorsque la linéarisation est activée |
+
+L'arrondi entier de la position de la vanne (pas de `1%`) s'applique toujours. Un seuil de régulation inférieur à `1` n'a donc aucun effet supplémentaire.
+
+SmartPI vérifie ces réglages au démarrage du thermostat et affiche, dans Home Assistant **Paramètres > Réparations**, un avertissement pour chaque réglage non transparent : le seuil de régulation vaut `1` ou plus, la période minimale de régulation est supérieure à `0`, ou une modification de l'ouverture est active alors que la linéarisation de vanne est activée. L'avertissement disparaît au démarrage suivant, une fois le réglage mis en conformité. Les valeurs contrôlées et les codes de problème (`dpercent_filter`, `period_filter`, `opening_remap`) sont aussi publiés sous `live.valve` dans les [diagnostics](./diagnostics.md).
+
+Pour lever les avertissements, réglez le seuil de régulation et la période minimale de régulation à `0` dans les réglages de régulation de la vanne de Versatile Thermostat. Si vous avez besoin de ces réglages d'ouverture, désactivez plutôt la linéarisation de vanne de SmartPI.
+
 ## Phases de fonctionnement
 
 ### Phase d'apprentissage
@@ -284,8 +301,8 @@ Pour démarrer simplement :
 
 | Paramètre                            | Rôle                                                                                                   | Valeur par défaut |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------ | ----------------- |
-| **Délai minimal d'activation**       | Durée minimale pendant laquelle le chauffage reste allumé une fois activé.                             | `0 s`             |
-| **Délai minimal de désactivation**   | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé.                          | `0 s`             |
+| **Délai minimal d'activation**       | Durée minimale pendant laquelle le chauffage reste allumé une fois activé. Sorties switch uniquement, ignoré pour les vannes.                             | `0 s`             |
+| **Délai minimal de désactivation**   | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé. Sorties switch uniquement, ignoré pour les vannes.                          | `0 s`             |
 | **Deadband**                         | Zone de tolérance autour de la consigne.                                                               | `0.05°C`          |
 | **Filtre de consigne**               | Active le lissage proportionnel et la gouvernance prédictive HEAT/COOL près de la cible.                | `activé`          |
 | **FF3**                              | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé`          |

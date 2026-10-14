@@ -152,6 +152,25 @@ def _build_fftrim_transaction(transaction: Any | None) -> Dict[str, Any] | None:
     }
 
 
+def _build_valve_diagnostics(algo: SmartPI) -> Dict[str, Any] | None:
+    """Return the VT valve settings seen by SmartPI, or None outside valve mode."""
+    config = algo.valve_config_diag
+    if config is None:
+        return None
+
+    # Linear demand (in percent) moved by one 1 % valve step at the committed
+    # valve position, from the local slope of the inverse curve.
+    step = None
+    valve = algo.committed_on_percent
+    if valve > 0.0:
+        low = max(0.0, valve - 0.005)
+        high = min(1.0, valve + 0.005)
+        if high > low:
+            slope = (algo.valve_curve.invert(high) - algo.valve_curve.invert(low)) / (high - low)
+            step = round(slope, 3)
+    return {**config, "quantization_step_linear_percent": step}
+
+
 def _build_command_ownership(algo: SmartPI) -> Dict[str, Any]:
     """Build the latest immutable command-to-actuator binding diagnostics."""
     binding = algo._command_ownership.last_binding
@@ -492,6 +511,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "last_time": diag["last_calibration_time"],
         },
         "analysis": _build_analysis_diagnostics(diag),
+        "valve": _build_valve_diagnostics(algo),
     }
 
 
