@@ -2266,9 +2266,8 @@ class SmartPI:
                 self.learn_win.set_learning_resume_ts(now + (LEARNING_PAUSE_RESUME_MIN * 60.0))
                 _LOGGER.debug("%s - Resume from OFF: Learning paused for %d min", self._name, LEARNING_PAUSE_RESUME_MIN)
 
-        # Cap dt to avoid huge jumps after pause
-        if dt_min > (self._cycle_min * 10):
-            dt_min = self._cycle_min
+        # A gap between two ticks never counts for more than one cycle
+        dt_min = min(dt_min, self._cycle_min)
 
         return dt_min, resumed_from_off, startup_first_run, resume_guard_source
 
