@@ -294,6 +294,7 @@ class SmartPI:
         # Track last sensor temperature (unrounded) used in calculations
         self._last_current_temp: float | None = None
         self._last_ext_temp: float | None = None
+        self._ext_control: float | None = None  # last valid outdoor reading, control path only
 
         # Track last HVAC mode for integral reset on HEAT/COOL transitions
         self._last_hvac_mode: VThermHvacMode | None = None
@@ -1025,7 +1026,8 @@ class SmartPI:
         if ff_result is None:
             return None
 
-        visible_ff = clamp(ff_result.u_ff1 + self._ff_trim.u_ff_trim, 0.0, 1.0)
+        trim = self._ff_trim.u_ff_trim if ff_result.trim_applied else 0.0
+        visible_ff = clamp(ff_result.u_ff1 + trim, 0.0, 1.0)
         actual_ff3 = self.ctl.u_ff - visible_ff
         return CommandOwnershipSnapshot(
             hvac_mode=str(hvac_mode),
@@ -2760,6 +2762,7 @@ class SmartPI:
         self._last_temperature_slope_h = float(slope) if isinstance(slope, (int, float)) else None
 
         now = time.monotonic()
+        self._ext_control = self._ext_control if ext_current_temp is None else ext_current_temp
 
         # --- 0. HVAC mode transition (HEAT↔COOL) → reset integral ---
         # Track active modes BEFORE validation so that missing presets in COOL
@@ -2836,7 +2839,7 @@ class SmartPI:
         target_temp_filt, setpoint_changed, error_i, error_p, old_target_temp = self._manage_setpoint(
             target_temp,
             current_temp,
-            ext_current_temp,
+            self._ext_control,
             hvac_mode,
             dt_min,
             now,
@@ -2976,7 +2979,7 @@ class SmartPI:
             error_i,
             hvac_mode,
             current_temp,
-            ext_current_temp,
+            self._ext_control,
             error_p,
             dt_min,
         )
@@ -3034,7 +3037,7 @@ class SmartPI:
         u_ff = self._apply_gains_and_ff(
             gov_decision_g,
             target_temp,
-            ext_current_temp,
+            self._ext_control,
             hvac_mode,
             error_i,
             current_temp,
@@ -3044,14 +3047,11 @@ class SmartPI:
             cycle_boundary=cycle_boundary,
             startup_first_run=startup_first_run,
         )
-        # Integrator holds after the deadtime one: deadband hysteresis shell,
-        # then DEGRADED (no outdoor temperature). A regime transition freezes
-        # gains and learning only.
-        if not integrator_hold:
-            if self.deadband_mgr.in_deadband and not in_core_deadband:
-                integrator_hold, integrator_hold_source = True, "deadband_hysteresis_shell"
-            elif self.gov.regime == GovernanceRegime.DEGRADED:
-                integrator_hold, integrator_hold_source = True, "governance_sensor_invalid"
+        # After the deadtime hold: deadband shell, then no outdoor value yet; a dropout freezes gains/learning only
+        if not integrator_hold and self.deadband_mgr.in_deadband and not in_core_deadband:
+            integrator_hold, integrator_hold_source = True, "deadband_hysteresis_shell"
+        elif not integrator_hold and self._ext_control is None:
+            integrator_hold, integrator_hold_source = True, "governance_sensor_invalid"
         if self.vt_safety_override:  # the PI does not drive the actuator
             integrator_hold, integrator_hold_source = True, "vt_safety"
 

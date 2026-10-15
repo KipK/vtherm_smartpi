@@ -219,9 +219,15 @@ $k_{ff}$ is zero, and therefore $u_{ff1}$ is zero, whenever the model is not
 ready (not enough `a` and `b` measurements), `tau` is not reliable, or the sign
 of `a` does not match the active mode.
 
+$T_{ext}$ is the last valid outdoor temperature received by SmartPI. When the
+outdoor sensor reports no value, FF1, the setpoint model and the near band keep
+using that last value, without age limit. Until a first outdoor temperature has
+been received, $u_{ff1}$ and $u_{ff2}$ are both zero (`ff_reason`
+`ff_no_ext_temp`).
+
 This is combined with:
 
-- `u_ff2`: slow `FFTrim` correction, frozen while `ABConfidence` is `AB_DEGRADED` or `AB_BAD`, or while `warmup_scale` is below 1 (`ff2_freeze_reason` `ff_warmup`).
+- `u_ff2`: slow `FFTrim` correction, frozen while `ABConfidence` is `AB_DEGRADED` or `AB_BAD`, or while `warmup_scale` is below 1 (`ff2_freeze_reason` `ff_warmup`), and zero until a first outdoor temperature has been received.
 
 ### 4.3 FF3
 
@@ -411,7 +417,7 @@ Additional protections currently present are:
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
 - `I:HOLD` with source `vt_safety` while Versatile Thermostat safety mode applies its default power instead of the SmartPI command,
 - `I:HOLD` with source `deadband_hysteresis_shell` while the hysteretic deadband state is active and the error is outside the core deadband,
-- `I:HOLD` with source `governance_sensor_invalid` in the `DEGRADED` regime,
+- `I:HOLD` with source `governance_sensor_invalid` while no outdoor temperature has been received yet (`DEGRADED` regime),
 - freeze of P and I inside the core deadband.
 
 The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower (and, for the back-calculation, the governor cap when it is lower still). It has two parts:
@@ -730,7 +736,7 @@ This governance is central because:
 - it avoids moving gains in poorly informative regimes,
 - it still keeps thermal learning active in some constrained regimes such as `SATURATED`.
 
-The matrix drives the gain updates and thermal learning only. A regime transition (`REGIME_TRANSITION`) freezes gains and learning but does not hold the integral. The integral is held only by the sources listed in the protections of section 4 (deadtime, resume phases, `vt_safety`) and by two governance-related sources: `deadband_hysteresis_shell` (hysteretic deadband state active, error outside the core deadband) and `governance_sensor_invalid` (`DEGRADED` regime).
+The matrix drives the gain updates and thermal learning only. A regime transition (`REGIME_TRANSITION`) freezes gains and learning but does not hold the integral. The integral is held only by the sources listed in the protections of section 4 (deadtime, resume phases, `vt_safety`) and by two governance-related sources: `deadband_hysteresis_shell` (hysteretic deadband state active, error outside the core deadband) and `governance_sensor_invalid` (`DEGRADED` regime before a first outdoor temperature has been received). When the outdoor sensor stops reporting after a first value, the regime is `DEGRADED`: gains, thermal learning and the FF trim stay frozen, the integral keeps integrating, and the control path uses the last valid outdoor temperature.
 
 ---
 

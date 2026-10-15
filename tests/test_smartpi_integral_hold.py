@@ -392,8 +392,8 @@ def test_regime_transition_freezes_gains_but_not_the_integral() -> None:
     assert pi.ctl.integral != before
 
 
-def test_degraded_regime_holds_the_integral() -> None:
-    """Without outdoor temperature (DEGRADED) the integral is held."""
+def test_degraded_regime_holds_the_integral_until_a_first_outdoor_value() -> None:
+    """Without any outdoor temperature received yet (DEGRADED) the integral is held."""
     from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
 
     pi = make_smartpi(deadband_c=0.0)

@@ -32,6 +32,7 @@ class FFResult:
     u_ff_eff: float        # FF effectively injected after FF3: clamp(u_ff_final + u_ff3, 0, 1)
     ff_reason: str         # Diagnostic reason string for the current FF state
     warmup_scale: float = 1.0  # FF1 warmup factor in [0, 1]; the trim stays frozen below 1
+    trim_applied: bool = True  # False without outdoor temperature (no FF1 to correct)
 
 
 def compute_ff(
@@ -48,7 +49,8 @@ def compute_ff(
     Args:
         k_ff: Signed FF gain b / a (positive in HEAT, negative in COOL).
         target_temp_ff: Feedforward reference setpoint (°C).
-        ext_temp: Outdoor temperature (°C), or None if unavailable.
+        ext_temp: Outdoor temperature (°C), or None if unavailable (FF1 and the
+            trim are then both 0).
         warmup_scale: Combined warmup scaling factor (learn_scale * time_scale).
         trim: FFTrim instance (provides additive u_ff2 correction).
         u_ff3: Predictive FF3 correction applied after FF1 + FF2.
@@ -57,14 +59,16 @@ def compute_ff(
         FFResult with all FF signal components.
     """
     # --- Step 1: Compute u_ff1 (structural branch) ---
+    # Without outdoor temperature there is no FF1 for the trim to correct:
+    # both branches are off.
     if ext_temp is not None:
         u_ff1 = clamp(k_ff * (target_temp_ff - ext_temp), 0.0, 1.0) * warmup_scale
+        u_ff2 = trim.u_ff_trim
         ff_reason = "ff_none"
     else:
         u_ff1 = 0.0
+        u_ff2 = 0.0
         ff_reason = "ff_no_ext_temp"
-
-    u_ff2 = trim.u_ff_trim
 
     # --- Step 2: final FF and effective command ---
     u_ff_final = clamp(u_ff1 + u_ff2, 0.0, 1.0)
@@ -79,4 +83,5 @@ def compute_ff(
         u_ff_eff=u_ff_eff,
         ff_reason=ff_reason,
         warmup_scale=float(warmup_scale),
+        trim_applied=ext_temp is not None,
     )

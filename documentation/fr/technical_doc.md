@@ -221,9 +221,11 @@ Le trim FF2 reste gelé (`ff_warmup`) tant que `warmup_scale` est inférieur à 
 
 $k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (pas assez de mesures de `a` et de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
 
+$T_{ext}$ est la dernière température extérieure valide reçue par SmartPI. Lorsque la sonde extérieure ne fournit aucune valeur, FF1, le modèle de consigne et la near-band continuent d'utiliser cette dernière valeur, sans limite d'âge. Tant qu'aucune température extérieure n'a été reçue, $u_{ff1}$ et $u_{ff2}$ sont tous deux nuls (`ff_reason` `ff_no_ext_temp`).
+
 À cela s'ajoutent :
 
-- `u_ff2` : correction lente `FFTrim`, gelée tant que `ABConfidence` vaut `AB_DEGRADED` ou `AB_BAD`, ou tant que `warmup_scale` est inférieur à 1 (`ff2_freeze_reason` `ff_warmup`).
+- `u_ff2` : correction lente `FFTrim`, gelée tant que `ABConfidence` vaut `AB_DEGRADED` ou `AB_BAD`, ou tant que `warmup_scale` est inférieur à 1 (`ff2_freeze_reason` `ff_warmup`), et nulle tant qu'aucune température extérieure n'a été reçue.
 
 ### 4.3 FF3
 
@@ -416,7 +418,7 @@ Les protections complémentaires actuellement présentes sont :
 - `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,
 - `I:HOLD` avec source `vt_safety` pendant que le mode sécurité de Versatile Thermostat applique sa puissance par défaut à la place de la commande SmartPI,
 - `I:HOLD` avec source `deadband_hysteresis_shell` tant que l'état de deadband hystérétique est actif et que l'erreur est hors de la deadband centrale,
-- `I:HOLD` avec source `governance_sensor_invalid` dans le régime `DEGRADED`,
+- `I:HOLD` avec source `governance_sensor_invalid` tant qu'aucune température extérieure n'a été reçue (régime `DEGRADED`),
 - gel de P et I dans la deadband centrale.
 
 L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse (et, pour la rétro-calculation, le cap du gouverneur lorsqu'il est plus bas encore). Il comporte deux parties :
@@ -751,7 +753,7 @@ Cette gouvernance est centrale :
 - elle évite de faire bouger les gains dans des régimes peu informatifs,
 - elle laisse malgré tout l'apprentissage thermique actif dans certains régimes contraints comme `SATURATED`.
 
-La matrice pilote uniquement la mise à jour des gains et l'apprentissage thermique. Une transition de régime (`REGIME_TRANSITION`) gèle les gains et l'apprentissage mais ne maintient pas l'intégrale. L'intégrale n'est maintenue que par les sources listées dans les protections de la section 4 (deadtime, phases de reprise, `vt_safety`) et par deux sources liées à la gouvernance : `deadband_hysteresis_shell` (état de deadband hystérétique actif, erreur hors de la deadband centrale) et `governance_sensor_invalid` (régime `DEGRADED`).
+La matrice pilote uniquement la mise à jour des gains et l'apprentissage thermique. Une transition de régime (`REGIME_TRANSITION`) gèle les gains et l'apprentissage mais ne maintient pas l'intégrale. L'intégrale n'est maintenue que par les sources listées dans les protections de la section 4 (deadtime, phases de reprise, `vt_safety`) et par deux sources liées à la gouvernance : `deadband_hysteresis_shell` (état de deadband hystérétique actif, erreur hors de la deadband centrale) et `governance_sensor_invalid` (régime `DEGRADED` avant la réception d'une première température extérieure). Lorsque la sonde extérieure cesse de fournir des valeurs après une première valeur, le régime est `DEGRADED` : les gains, l'apprentissage thermique et le trim FF restent gelés, l'intégrale continue d'intégrer, et la chaîne de commande utilise la dernière température extérieure valide.
 
 ---
 
