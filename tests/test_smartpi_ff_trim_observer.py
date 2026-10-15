@@ -7,10 +7,12 @@ import pytest
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
-from custom_components.vtherm_smartpi.smartpi.ff_trim import (
+from custom_components.vtherm_smartpi.smartpi.causal_power_trace import (
     AppliedPowerSegment,
-    CausalFFTrimObserver,
     ControlOwnershipSnapshot,
+)
+from custom_components.vtherm_smartpi.smartpi.ff_trim import (
+    CausalFFTrimObserver,
     FFTrimThermalSample,
 )
 
@@ -119,12 +121,12 @@ def _record_owned_switch_window(
     ownership: ControlOwnershipSnapshot,
 ) -> None:
     """Record one complete equivalent switch-power and ownership interval."""
-    observer.start_applied_cycle(
+    observer.physical_trace.start_applied_cycle(
         now_monotonic=0.0,
         linear_power=ownership.linear_committed_power,
         ownership=ownership,
     )
-    observer.complete_applied_cycle(
+    observer.physical_trace.complete_applied_cycle(
         now_monotonic=1800.0,
         realized_linear_power=ownership.linear_committed_power,
         use_valve_trace=False,
@@ -134,7 +136,7 @@ def _record_owned_switch_window(
 def test_causal_observer_returns_zero_for_correct_stable_ff() -> None:
     """A stable room with the correct FF must not create a trim correction."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
     _record_samples(observer, (20.0, 20.0, 20.0, 20.0))
 
     result = observer.try_complete_window(
@@ -160,7 +162,7 @@ def test_causal_observer_returns_zero_for_correct_stable_ff() -> None:
 def test_causal_observer_uses_model_to_reconstruct_missing_hold_power() -> None:
     """Cooling drift under heat must produce the model-derived positive bias."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
     _record_samples(observer, (20.0, 19.9667, 19.9333, 19.9))
 
     result = observer.try_complete_window(
@@ -181,7 +183,7 @@ def test_causal_observer_uses_model_to_reconstruct_missing_hold_power() -> None:
 def test_causal_observer_returns_zero_for_correct_stable_cool_ff() -> None:
     """The same physical observer equation is valid with a negative COOL A."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
     _record_samples(
         observer,
         (20.0, 20.0, 20.0, 20.0),
@@ -205,7 +207,7 @@ def test_causal_observer_returns_zero_for_correct_stable_cool_ff() -> None:
 def test_causal_observer_cool_warming_drift_requests_more_power() -> None:
     """A warming room under COOL must reconstruct a positive cooling deficit."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
     _record_samples(
         observer,
         (20.0, 20.0333, 20.0667, 20.1),
@@ -230,9 +232,9 @@ def test_causal_observer_cool_warming_drift_requests_more_power() -> None:
 def test_causal_observer_integrates_power_on_the_shifted_window() -> None:
     """Power before the measurements must be weighted after dead-time shift."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.start_applied_cycle(now_monotonic=0.0, linear_power=0.2)
-    observer.update_applied_power(now_monotonic=300.0, linear_power=0.8)
-    observer.complete_applied_cycle(
+    observer.physical_trace.start_applied_cycle(now_monotonic=0.0, linear_power=0.2)
+    observer.physical_trace.update_applied_power(now_monotonic=300.0, linear_power=0.8)
+    observer.physical_trace.complete_applied_cycle(
         now_monotonic=1800.0,
         realized_linear_power=None,
         use_valve_trace=True,
@@ -256,7 +258,7 @@ def test_causal_observer_integrates_power_on_the_shifted_window() -> None:
 def test_causal_observer_time_weights_irregular_temperature_samples() -> None:
     """Temperature density must not turn the window mean into a sample mean."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
     for timestamp, temperature in (
         (120.0, 20.0),
         (240.0, 20.2),
@@ -285,8 +287,8 @@ def test_causal_observer_time_weights_irregular_temperature_samples() -> None:
 def test_causal_observer_uses_realized_switch_cycle_power() -> None:
     """Switch timelines must use realized e_eff instead of requested duty."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.start_applied_cycle(now_monotonic=0.0, linear_power=0.8)
-    observer.complete_applied_cycle(
+    observer.physical_trace.start_applied_cycle(now_monotonic=0.0, linear_power=0.8)
+    observer.physical_trace.complete_applied_cycle(
         now_monotonic=1800.0,
         realized_linear_power=0.4,
         use_valve_trace=False,
@@ -374,7 +376,7 @@ def test_repeated_measurement_identity_does_not_reapply_trim_gates() -> None:
 def test_causal_observer_cancels_symmetric_cycle_limit() -> None:
     """Opposite half-cycles must not generate opposite trim corrections."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
     _record_samples(observer, (20.0, 20.1, 19.9, 20.0))
 
     result = observer.try_complete_window(
@@ -395,7 +397,7 @@ def test_causal_observer_cancels_symmetric_cycle_limit() -> None:
 def test_causal_observer_waits_for_complete_power_coverage() -> None:
     """A thermal window with missing causal power must remain unapplied."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1500.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 1500.0, 0.5))
     _record_samples(observer, (20.0, 20.0, 20.0, 20.0))
 
     result = observer.try_complete_window(
@@ -414,7 +416,7 @@ def test_causal_observer_waits_for_complete_power_coverage() -> None:
 def test_causal_observer_rejects_unstable_near_band_pi() -> None:
     """Near-band PI motion must not be mistaken for a stable FF bias."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 1800.0, 0.5))
     _record_samples(
         observer,
         (20.0, 20.0, 20.0, 20.0),
@@ -513,7 +515,7 @@ def test_causal_observer_uses_ff1_from_aligned_ownership_window() -> None:
 def test_causal_observer_time_weights_asynchronous_ownership() -> None:
     """Ownership components must follow their unequal committed durations."""
     observer = CausalFFTrimObserver(cycle_min=5.0)
-    observer.start_applied_cycle(
+    observer.physical_trace.start_applied_cycle(
         now_monotonic=0.0,
         linear_power=0.2,
         ownership=_ownership(
@@ -524,7 +526,7 @@ def test_causal_observer_time_weights_asynchronous_ownership() -> None:
             committed=0.2,
         ),
     )
-    observer.update_applied_power(
+    observer.physical_trace.update_applied_power(
         now_monotonic=300.0,
         linear_power=0.8,
         ownership=_ownership(
@@ -535,7 +537,7 @@ def test_causal_observer_time_weights_asynchronous_ownership() -> None:
             committed=0.8,
         ),
     )
-    observer.complete_applied_cycle(
+    observer.physical_trace.complete_applied_cycle(
         now_monotonic=1800.0,
         realized_linear_power=None,
         use_valve_trace=True,

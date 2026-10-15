@@ -26,6 +26,7 @@ class FF3DisturbanceContext:
     external_loss_detected: bool
     perturbation_dtdt_sign: str
     measured_slope_sign: str
+    twin_unavailability_reason: str
 
 
 def _sign_label(value: float | None) -> str:
@@ -106,8 +107,9 @@ def get_ff3_twin_unavailability_reason(twin_diag: dict) -> str:
     return "none"
 
 
-def _prediction_quality_from_twin(twin_diag: dict) -> tuple[bool, str, float]:
-    twin_reason = get_ff3_twin_unavailability_reason(twin_diag)
+def _prediction_quality_from_twin(
+    twin_diag: dict, twin_reason: str
+) -> tuple[bool, str, float]:
     if twin_reason != "none":
         return False, twin_reason, 0.0
     if twin_diag.get("model_reliable") is True:
@@ -124,7 +126,10 @@ def build_ff3_disturbance_context(
 ) -> FF3DisturbanceContext:
     """Build the FF3 disturbance-only eligibility context."""
     twin_status = str(twin_diag.get("status", "unavailable"))
-    prediction_usable, prediction_quality, authority_factor = _prediction_quality_from_twin(twin_diag)
+    twin_reason = get_ff3_twin_unavailability_reason(twin_diag)
+    prediction_usable, prediction_quality, authority_factor = _prediction_quality_from_twin(
+        twin_diag, twin_reason
+    )
     model_reliable = twin_status == "ok" and twin_diag.get("model_reliable") is True
     bias_warning = twin_diag.get("bias_warning") is True
     external_gain_detected = twin_diag.get("external_gain_detected") is True
@@ -179,4 +184,5 @@ def build_ff3_disturbance_context(
         external_loss_detected=external_loss_detected,
         perturbation_dtdt_sign=_sign_label(perturbation_dtdt),
         measured_slope_sign=_sign_label(measured_slope_h),
+        twin_unavailability_reason=twin_reason,
     )

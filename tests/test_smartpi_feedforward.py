@@ -22,6 +22,8 @@ from custom_components.vtherm_smartpi.smartpi.ff3_eligibility import (
 )
 from custom_components.vtherm_smartpi.smartpi.ff_trim import (
     FFTrim,
+    FFTrimUpdateResult,
+    FFTrimWindowProposal,
     evaluate_pi_eligibility_for_trim,
 )
 from custom_components.vtherm_smartpi.smartpi.const import (
@@ -33,7 +35,6 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     FF3_NEARBAND_GAIN,
     FF_TRIM_LAMBDA,
     FF_TRIM_PERSISTENCE,
-    FF_TRIM_PI_STABILITY_EPSILON,
 )
 from custom_components.vtherm_smartpi.smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 from custom_components.vtherm_smartpi.const import (
@@ -238,6 +239,25 @@ class TestPassthrough:
 # ================================================================
 
 
+
+def _update_persistent(trim: FFTrim, delta_power: float, u_ff_ab: float) -> FFTrimUpdateResult:
+    """Feed one stationary correction through the persistence buffer and apply it."""
+    persistent = trim.collect_persistent(
+        FFTrimWindowProposal(
+            correction=float(delta_power),
+            mean_ff1=float(u_ff_ab),
+            physical_power_deficit=None,
+            integral_bias=None,
+            transfer_eligible=False,
+            transfer_reason="causal_update_without_transfer",
+            observation_mode="stationary",
+        )
+    )
+    if not persistent.ready:
+        return FFTrimUpdateResult(False, persistent.reason, 0.0, persistent.pending_count)
+    return trim.apply_persistent_result(persistent, u_ff_ab=float(u_ff_ab))
+
+
 class TestFFResult:
     """Verify all FFResult fields are populated correctly."""
 
@@ -284,7 +304,7 @@ class TestFFResult:
         assert result.u_ff_eff == pytest.approx(0.45)
 
     def test_trim_update_applies_incremental_correction(self):
-        """FFTrim.update must apply delta_power as an increment, not an absolute target.
+        """A trim correction must be applied as an increment, not an absolute target.
 
         authority = FF_TRIM_RHO * u_ff_ab = 0.15 * 0.5 = 0.075
         Starting trim must be within [-0.075, 0.075] to avoid clamping.
@@ -293,7 +313,7 @@ class TestFFResult:
         trim = FFTrim()
         trim.u_ff_trim = 0.05  # within authority (0.075)
 
-        trim.update(delta_power=0.03, u_ff_ab=0.5)
+        trim._apply_correction(median_correction=0.03, u_ff_ab=0.5, pending_count=0)
 
         expected = 0.05 + FF_TRIM_LAMBDA * 0.03
         assert trim.u_ff_trim == pytest.approx(expected)
@@ -303,12 +323,12 @@ class TestFFResult:
         trim = FFTrim()
 
         for idx in range(FF_TRIM_PERSISTENCE - 1):
-            result = trim.update_persistent(delta_power=0.03, u_ff_ab=0.5)
+            result = _update_persistent(trim, delta_power=0.03, u_ff_ab=0.5)
             assert result.updated is False
             assert result.reason == f"pending_{idx + 1}/{FF_TRIM_PERSISTENCE}"
             assert trim.u_ff_trim == pytest.approx(0.0)
 
-        result = trim.update_persistent(delta_power=0.03, u_ff_ab=0.5)
+        result = _update_persistent(trim, delta_power=0.03, u_ff_ab=0.5)
 
         assert result.updated is True
         assert result.reason == "updated_persistent"
@@ -323,9 +343,9 @@ class TestFFResult:
         """Persistent trim must apply the robust median of pending corrections."""
         trim = FFTrim()
 
-        trim.update_persistent(delta_power=0.02, u_ff_ab=0.5)
-        trim.update_persistent(delta_power=0.04, u_ff_ab=0.5)
-        result = trim.update_persistent(delta_power=0.03, u_ff_ab=0.5)
+        _update_persistent(trim, delta_power=0.02, u_ff_ab=0.5)
+        _update_persistent(trim, delta_power=0.04, u_ff_ab=0.5)
+        result = _update_persistent(trim, delta_power=0.03, u_ff_ab=0.5)
 
         assert result.updated is True
         assert result.median_correction == pytest.approx(0.03)
@@ -336,15 +356,15 @@ class TestFFResult:
         """Opposite correction signs belong to different thermal contexts."""
         trim = FFTrim()
 
-        trim.update_persistent(delta_power=0.03, u_ff_ab=0.5)
-        result = trim.update_persistent(delta_power=-0.03, u_ff_ab=0.5)
+        _update_persistent(trim, delta_power=0.03, u_ff_ab=0.5)
+        result = _update_persistent(trim, delta_power=-0.03, u_ff_ab=0.5)
 
         assert result.updated is False
         assert result.reason == f"pending_1/{FF_TRIM_PERSISTENCE}"
         assert trim.u_ff_trim == pytest.approx(0.0)
 
-        trim.update_persistent(delta_power=-0.03, u_ff_ab=0.5)
-        result = trim.update_persistent(delta_power=-0.03, u_ff_ab=0.5)
+        _update_persistent(trim, delta_power=-0.03, u_ff_ab=0.5)
+        result = _update_persistent(trim, delta_power=-0.03, u_ff_ab=0.5)
 
         assert result.updated is True
         assert result.median_correction == pytest.approx(-0.03)
@@ -356,7 +376,6 @@ class TestFFResult:
             regime=GovernanceRegime.DEAD_BAND,
             i_mode="I:FREEZE(deadband)",
             u_pi=0.08,
-            previous_u_pi=None,
         )
 
         assert result.admissible is True
@@ -367,29 +386,16 @@ class TestFFResult:
             regime=GovernanceRegime.NEAR_BAND,
             i_mode="I:RUN",
             u_pi=0.205,
-            previous_u_pi=0.20,
         )
 
         assert result.admissible is True
         assert result.reason == "pi_near_band_stable"
-
-    def test_trim_pi_eligibility_rejects_unstable_near_band(self):
-        result = evaluate_pi_eligibility_for_trim(
-            regime=GovernanceRegime.NEAR_BAND,
-            i_mode="I:RUN",
-            u_pi=0.20 + FF_TRIM_PI_STABILITY_EPSILON + 0.001,
-            previous_u_pi=0.20,
-        )
-
-        assert result.admissible is False
-        assert result.reason == "pi_unstable"
 
     def test_trim_pi_eligibility_rejects_excited_stable(self):
         result = evaluate_pi_eligibility_for_trim(
             regime=GovernanceRegime.EXCITED_STABLE,
             i_mode="I:RUN",
             u_pi=0.20,
-            previous_u_pi=0.20,
         )
 
         assert result.admissible is False

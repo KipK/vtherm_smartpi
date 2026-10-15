@@ -11,10 +11,12 @@ from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
 from custom_components.vtherm_smartpi.smartpi.diagnostics import (
     build_published_diagnostics,
 )
+from custom_components.vtherm_smartpi.smartpi.causal_power_trace import (
+    ControlOwnershipSnapshot,
+)
 from custom_components.vtherm_smartpi.smartpi.ff_trim import (
     CausalFFTrimObserver,
     CausalFFTrimResult,
-    ControlOwnershipSnapshot,
     FFTrim,
     FFTrimThermalSample,
     FFTrimWindowProposal,
@@ -96,17 +98,17 @@ def _ownership(
 
 def _record_shared_power_cycle(observer: CausalFFTrimObserver) -> None:
     """Record one 0-to-8 percent valve cycle in the shared causal trace."""
-    observer.start_applied_cycle(
+    observer.physical_trace.start_applied_cycle(
         now_monotonic=0.0,
         linear_power=0.0,
         ownership=_ownership(0.0, saturated_low=True),
     )
-    observer.update_applied_power(
+    observer.physical_trace.update_applied_power(
         now_monotonic=900.0,
         linear_power=0.08,
         ownership=_ownership(0.08, saturated_low=False),
     )
-    observer.complete_applied_cycle(
+    observer.physical_trace.complete_applied_cycle(
         now_monotonic=1800.0,
         realized_linear_power=None,
         use_valve_trace=True,
@@ -166,12 +168,12 @@ def test_periodic_window_accepts_small_scheduler_quantization_limits() -> None:
     """Small command and PWM quantization deltas remain observable."""
     causal = CausalFFTrimObserver(cycle_min=2.0)
     periodic = PeriodicFFTrimObserver(cycle_min=2.0)
-    causal.start_applied_cycle(
+    causal.physical_trace.start_applied_cycle(
         now_monotonic=0.0,
         linear_power=0.0,
         ownership=_ownership(0.0, saturated_low=True),
     )
-    causal.update_applied_power(
+    causal.physical_trace.update_applied_power(
         now_monotonic=900.0,
         linear_power=0.08,
         ownership=_ownership(
@@ -182,7 +184,7 @@ def test_periodic_window_accepts_small_scheduler_quantization_limits() -> None:
             constraint_flags=("output_limited", "timing_output"),
         ),
     )
-    causal.complete_applied_cycle(
+    causal.physical_trace.complete_applied_cycle(
         now_monotonic=1800.0,
         realized_linear_power=None,
         use_valve_trace=True,
@@ -226,12 +228,12 @@ def test_periodic_window_rejects_hard_scheduler_limits(
     """Large command or PWM deltas are still unsafe for periodic trim."""
     causal = CausalFFTrimObserver(cycle_min=2.0)
     periodic = PeriodicFFTrimObserver(cycle_min=2.0)
-    causal.start_applied_cycle(
+    causal.physical_trace.start_applied_cycle(
         now_monotonic=0.0,
         linear_power=0.0,
         ownership=_ownership(0.0, saturated_low=True),
     )
-    causal.update_applied_power(
+    causal.physical_trace.update_applied_power(
         now_monotonic=900.0,
         linear_power=committed,
         ownership=_ownership(
@@ -242,7 +244,7 @@ def test_periodic_window_rejects_hard_scheduler_limits(
             constraint_flags=(flag,),
         ),
     )
-    causal.complete_applied_cycle(
+    causal.physical_trace.complete_applied_cycle(
         now_monotonic=1800.0,
         realized_linear_power=None,
         use_valve_trace=True,

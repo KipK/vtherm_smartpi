@@ -9,10 +9,11 @@ from math import isfinite
 from .const import (
     FF_TRIM_DEADTIME_WINDOW_FACTOR,
     FF_TRIM_MIN_WINDOW_CYCLES,
+    FF_TRIM_PERIODIC_ALLOWED_REGIMES,
     FF_TRIM_PERIODIC_MIN_DISTINCT_MEASUREMENTS,
     GovernanceRegime,
 )
-from .ff_trim import FFTrimThermalSample
+from .ff_trim import FFTrimThermalSample, _ThermalWindowCollector
 
 
 @dataclass(frozen=True)
@@ -27,84 +28,16 @@ class PeriodicFFTrimWindow:
     quantum_c: float
 
 
-class PeriodicFFTrimObserver:
+class PeriodicFFTrimObserver(_ThermalWindowCollector):
     """Select complete thermal cycles without owning physical trace data."""
 
-    _ALLOWED_REGIMES = frozenset(
-        {
-            GovernanceRegime.NEAR_BAND,
-            GovernanceRegime.DEAD_BAND,
-            GovernanceRegime.HOLD,
-            GovernanceRegime.SATURATED,
-        }
-    )
-
     def __init__(self, cycle_min: float) -> None:
-        self._cycle_min = max(float(cycle_min), 0.0)
-        self._thermal_samples: list[FFTrimThermalSample] = []
-        self._window_deadtime_s: float | None = None
-        self._washout_until_monotonic = 0.0
-        self.state = "warming_up"
-        self.last_reject_reason = "none"
-        self.last_update_reason = "none"
+        super().__init__(cycle_min)
         self.target_duration_s = 0.0
         self.last_duration_s = 0.0
         self.last_amplitude_c = 0.0
         self.last_closure_error_c = 0.0
         self.last_measurement_count = 0
-
-    def record_thermal_sample(
-        self,
-        sample: FFTrimThermalSample,
-        *,
-        deadtime_s: float | None,
-        deadtime_reliable: bool,
-    ) -> None:
-        """Record one distinct sample when the periodic context is usable."""
-        rejection = self._sample_rejection_reason(sample)
-        if rejection is not None:
-            self.invalidate(
-                rejection,
-                now_monotonic=sample.observed_monotonic,
-                washout_s=deadtime_s if deadtime_reliable else 0.0,
-            )
-            return
-
-        if (
-            not deadtime_reliable
-            or deadtime_s is None
-            or not isfinite(float(deadtime_s))
-            or float(deadtime_s) <= 0.0
-        ):
-            self.invalidate(
-                "deadtime_unreliable",
-                now_monotonic=sample.observed_monotonic,
-            )
-            return
-
-        delay_s = float(deadtime_s)
-        if (
-            self._window_deadtime_s is not None
-            and abs(delay_s - self._window_deadtime_s)
-            > max(1.0, 0.05 * self._window_deadtime_s)
-        ):
-            self.invalidate(
-                "deadtime_changed",
-                now_monotonic=sample.observed_monotonic,
-                washout_s=delay_s,
-            )
-            return
-
-        if sample.observed_monotonic < self._washout_until_monotonic:
-            self.state = "waiting_deadtime"
-            self.last_reject_reason = "washout"
-            return
-
-        if not self._thermal_samples:
-            self._window_deadtime_s = delay_s
-        self._thermal_samples.append(sample)
-        self.state = "collecting"
-        self.last_reject_reason = "none"
 
     def try_close_window(
         self,
@@ -114,12 +47,7 @@ class PeriodicFFTrimObserver:
         deadtime_reliable: bool,
     ) -> PeriodicFFTrimWindow | None:
         """Return the first complete phase-aligned thermal cycle."""
-        if (
-            not deadtime_reliable
-            or deadtime_s is None
-            or not isfinite(float(deadtime_s))
-            or float(deadtime_s) <= 0.0
-        ):
+        if not self._deadtime_usable(deadtime_s, deadtime_reliable):
             self.state = "waiting_deadtime"
             self.last_reject_reason = "deadtime_unreliable"
             return None
@@ -272,63 +200,14 @@ class PeriodicFFTrimObserver:
         self.last_reject_reason = "none" if admissible else reason
         self.last_update_reason = reason
 
-    def invalidate(
-        self,
-        reason: str,
-        *,
-        now_monotonic: float | None = None,
-        washout_s: float | None = None,
-    ) -> None:
-        """Discard only the periodic window and optionally impose washout."""
-        self._thermal_samples.clear()
-        self._window_deadtime_s = None
-        if now_monotonic is not None and washout_s is not None:
-            self._washout_until_monotonic = max(
-                self._washout_until_monotonic,
-                float(now_monotonic) + max(float(washout_s), 0.0),
-            )
-        self.state = "rejected"
-        self.last_reject_reason = reason
-        self.last_update_reason = "skipped"
-
-    def reset_after_trim_update(
-        self,
-        *,
-        now_monotonic: float,
-        washout_s: float,
-    ) -> None:
-        """Start a fresh periodic episode after the reference trim changes."""
-        self._thermal_samples.clear()
-        self._window_deadtime_s = None
-        self._washout_until_monotonic = max(
-            self._washout_until_monotonic,
-            float(now_monotonic) + max(float(washout_s), 0.0),
-        )
-        self.state = "waiting_deadtime"
-
     def reset_runtime(self) -> None:
         """Clear all transient periodic observation state."""
-        self._thermal_samples.clear()
-        self._window_deadtime_s = None
-        self._washout_until_monotonic = 0.0
-        self.state = "warming_up"
-        self.last_reject_reason = "none"
-        self.last_update_reason = "none"
+        super().reset_runtime()
         self.target_duration_s = 0.0
         self.last_duration_s = 0.0
         self.last_amplitude_c = 0.0
         self.last_closure_error_c = 0.0
         self.last_measurement_count = 0
-
-    @property
-    def window_duration_s(self) -> float:
-        """Return the active periodic-window duration."""
-        if len(self._thermal_samples) < 2:
-            return 0.0
-        return (
-            self._thermal_samples[-1].observed_monotonic
-            - self._thermal_samples[0].observed_monotonic
-        )
 
     @property
     def diagnostics(self) -> dict[str, float | int | str | None]:
@@ -362,11 +241,8 @@ class PeriodicFFTrimObserver:
             "last_update_reason": self.last_update_reason,
         }
 
-    @classmethod
-    def _sample_rejection_reason(
-        cls,
-        sample: FFTrimThermalSample,
-    ) -> str | None:
+    @staticmethod
+    def _sample_rejection_reason(sample: FFTrimThermalSample) -> str | None:
         values = (
             sample.observed_monotonic,
             sample.temperature,
@@ -391,7 +267,7 @@ class PeriodicFFTrimObserver:
             return "trajectory_active"
         if sample.ff3_active:
             return "ff3_active"
-        if sample.regime not in cls._ALLOWED_REGIMES:
+        if sample.regime not in FF_TRIM_PERIODIC_ALLOWED_REGIMES:
             regime = (
                 sample.regime.value
                 if isinstance(sample.regime, GovernanceRegime)

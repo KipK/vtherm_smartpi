@@ -24,12 +24,11 @@ from statistics import median
 from typing import Callable, Deque, Sequence
 
 from .causal_power_trace import (
-    AppliedPowerSegment,
     CausalPowerTrace,
     ControlOwnershipSegment,
-    ControlOwnershipSnapshot,
 )
 from .const import (
+    FF_TRIM_PERIODIC_ALLOWED_REGIMES,
     GovernanceRegime,
     clamp,
     FF_TRIM_RHO,
@@ -236,78 +235,31 @@ class _OwnershipStats:
     quality: str
 
 
-class CausalFFTrimObserver:
-    """Estimate slow FF bias from causally aligned thermal windows."""
+class _ThermalWindowCollector:
+    """Thermal sample collection, deadtime checks and washout shared by the trim observers."""
 
-    def __init__(
-        self,
-        cycle_min: float,
-        physical_trace: CausalPowerTrace | None = None,
-    ) -> None:
+    def __init__(self, cycle_min: float) -> None:
         self._cycle_min = max(float(cycle_min), 0.0)
-        self._physical_trace = physical_trace or CausalPowerTrace()
         self._thermal_samples: list[FFTrimThermalSample] = []
         self._window_deadtime_s: float | None = None
         self._washout_until_monotonic: float = 0.0
         self.state: str = "warming_up"
         self.last_reject_reason: str = "none"
         self.last_update_reason: str = "none"
-        self.target_duration_s: float = FF_TRIM_MIN_WINDOW_MIN * 60.0
-        self.last_result: CausalFFTrimResult = self._empty_result(
-            "warming_up",
-            measurement_count=0,
-        )
-        self._last_admissible_result: CausalFFTrimResult | None = None
 
-    def record_applied_power(self, segment: AppliedPowerSegment) -> None:
-        """Compatibility wrapper for direct observer users."""
-        self._physical_trace.record_applied_power(segment)
-
-    def start_applied_cycle(
-        self,
-        *,
-        now_monotonic: float,
-        linear_power: float,
-        ownership: ControlOwnershipSnapshot | None = None,
-        quality: str = "unspecified",
-    ) -> None:
-        """Compatibility wrapper for direct observer users."""
-        self._physical_trace.start_applied_cycle(
-            now_monotonic=now_monotonic,
-            linear_power=linear_power,
-            ownership=ownership,
-            quality=quality,
+    @staticmethod
+    def _deadtime_usable(deadtime_s: float | None, deadtime_reliable: bool) -> bool:
+        """Return whether the dead time can align a thermal window."""
+        return not (
+            not deadtime_reliable
+            or deadtime_s is None
+            or not isfinite(float(deadtime_s))
+            or float(deadtime_s) <= 0.0
         )
 
-    def update_applied_power(
-        self,
-        *,
-        now_monotonic: float,
-        linear_power: float,
-        ownership: ControlOwnershipSnapshot | None = None,
-        quality: str = "unspecified",
-    ) -> None:
-        """Compatibility wrapper for direct observer users."""
-        self._physical_trace.update_applied_power(
-            now_monotonic=now_monotonic,
-            linear_power=linear_power,
-            ownership=ownership,
-            quality=quality,
-        )
-
-    def complete_applied_cycle(
-        self,
-        *,
-        now_monotonic: float,
-        realized_linear_power: float | None,
-        use_valve_trace: bool,
-    ) -> None:
-        """Compatibility wrapper for direct observer users."""
-        self._physical_trace.complete_applied_cycle(
-            now_monotonic=now_monotonic,
-            realized_linear_power=realized_linear_power,
-            use_valve_trace=use_valve_trace,
-        )
+    def _sample_rejection_reason(self, sample: FFTrimThermalSample) -> str | None:
+        """Return why a sample cannot enter the window, or None."""
+        raise NotImplementedError
 
     def record_thermal_sample(
         self,
@@ -316,7 +268,11 @@ class CausalFFTrimObserver:
         deadtime_s: float | None,
         deadtime_reliable: bool,
     ) -> CausalFFTrimResult | None:
-        """Store one fresh measurement or reject its full thermal context."""
+        """Store one fresh measurement or reject its full thermal context.
+
+        A rejection returns the value of ``invalidate``: the empty result for
+        the stationary observer, None for the periodic selector.
+        """
         rejection = self._sample_rejection_reason(sample)
         if rejection is not None:
             return self.invalidate(
@@ -325,12 +281,7 @@ class CausalFFTrimObserver:
                 washout_s=deadtime_s if deadtime_reliable else 0.0,
             )
 
-        if (
-            not deadtime_reliable
-            or deadtime_s is None
-            or not isfinite(float(deadtime_s))
-            or float(deadtime_s) <= 0.0
-        ):
+        if not self._deadtime_usable(deadtime_s, deadtime_reliable):
             return self.invalidate(
                 "deadtime_unreliable",
                 now_monotonic=sample.observed_monotonic,
@@ -360,6 +311,79 @@ class CausalFFTrimObserver:
         self.last_reject_reason = "none"
         return None
 
+    def _extend_washout(self, now_monotonic: float, washout_s: float) -> None:
+        """Extend the washout so it ends no earlier than ``now + washout_s``."""
+        self._washout_until_monotonic = max(
+            self._washout_until_monotonic,
+            float(now_monotonic) + max(float(washout_s), 0.0),
+        )
+
+    def invalidate(
+        self,
+        reason: str,
+        *,
+        now_monotonic: float | None = None,
+        washout_s: float | None = None,
+    ) -> CausalFFTrimResult | None:
+        """Discard the current window and optionally impose a causal washout."""
+        self._thermal_samples.clear()
+        self._window_deadtime_s = None
+        if now_monotonic is not None and washout_s is not None:
+            self._extend_washout(now_monotonic, washout_s)
+        self.state = "rejected"
+        self.last_reject_reason = reason
+        self.last_update_reason = "skipped"
+        return None
+
+    def reset_after_trim_update(
+        self,
+        *,
+        now_monotonic: float,
+        washout_s: float,
+    ) -> None:
+        """Start a fresh window after the reference trim changes."""
+        self._thermal_samples.clear()
+        self._window_deadtime_s = None
+        self._extend_washout(now_monotonic, washout_s)
+        self.state = "waiting_deadtime"
+
+    def reset_runtime(self) -> None:
+        """Clear transient observation state without changing persisted trim."""
+        self._thermal_samples.clear()
+        self._window_deadtime_s = None
+        self._washout_until_monotonic = 0.0
+        self.state = "warming_up"
+        self.last_reject_reason = "none"
+        self.last_update_reason = "none"
+
+    @property
+    def window_duration_s(self) -> float:
+        """Return the active window duration."""
+        if len(self._thermal_samples) < 2:
+            return 0.0
+        return (
+            self._thermal_samples[-1].observed_monotonic
+            - self._thermal_samples[0].observed_monotonic
+        )
+
+
+class CausalFFTrimObserver(_ThermalWindowCollector):
+    """Estimate slow FF bias from causally aligned thermal windows."""
+
+    def __init__(
+        self,
+        cycle_min: float,
+        physical_trace: CausalPowerTrace | None = None,
+    ) -> None:
+        super().__init__(cycle_min)
+        self._physical_trace = physical_trace or CausalPowerTrace()
+        self.target_duration_s: float = FF_TRIM_MIN_WINDOW_MIN * 60.0
+        self.last_result: CausalFFTrimResult = self._empty_result(
+            "warming_up",
+            measurement_count=0,
+        )
+        self._last_admissible_result: CausalFFTrimResult | None = None
+
     def try_complete_window(
         self,
         *,
@@ -370,12 +394,7 @@ class CausalFFTrimObserver:
         current_trim: float,
     ) -> CausalFFTrimResult | None:
         """Return a correction when one full causal window is observable."""
-        if (
-            not deadtime_reliable
-            or deadtime_s is None
-            or not isfinite(float(deadtime_s))
-            or float(deadtime_s) <= 0.0
-        ):
+        if not self._deadtime_usable(deadtime_s, deadtime_reliable):
             self.state = "waiting_deadtime"
             self.last_reject_reason = "deadtime_unreliable"
             return None
@@ -471,11 +490,6 @@ class CausalFFTrimObserver:
     def physical_trace(self) -> CausalPowerTrace:
         """Return the neutral physical trace used by this observer."""
         return self._physical_trace
-
-    @property
-    def _active_ownership_segments(self) -> tuple[ControlOwnershipSegment, ...]:
-        """Keep legacy test introspection read-only during trace extraction."""
-        return self._physical_trace.active_ownership_segments
 
     @property
     def earliest_power_start(self) -> float | None:
@@ -725,15 +739,9 @@ class CausalFFTrimObserver:
         """Return why a phase-closed cycle is unsafe for periodic trim."""
         if stats is None:
             return "periodic_ownership_not_covered"
-        allowed_regimes = frozenset(
-            {
-                GovernanceRegime.NEAR_BAND,
-                GovernanceRegime.DEAD_BAND,
-                GovernanceRegime.HOLD,
-                GovernanceRegime.SATURATED,
-            }
-        )
-        if not stats.regimes or not stats.regimes.issubset(allowed_regimes):
+        if not stats.regimes or not stats.regimes.issubset(
+            FF_TRIM_PERIODIC_ALLOWED_REGIMES
+        ):
             return "periodic_regime_changed"
         negligible_power_delta = self._negligible_periodic_limit_power()
         allowed_flags = {"saturated_low"}
@@ -789,46 +797,17 @@ class CausalFFTrimObserver:
         now_monotonic: float | None = None,
         washout_s: float | None = None,
     ) -> CausalFFTrimResult:
-        """Discard the current window and optionally impose a causal washout."""
-        self._thermal_samples.clear()
-        self._window_deadtime_s = None
-        if now_monotonic is not None and washout_s is not None:
-            self._washout_until_monotonic = max(
-                self._washout_until_monotonic,
-                float(now_monotonic) + max(float(washout_s), 0.0),
-            )
+        """Discard the current window and publish an empty rejected result."""
+        super().invalidate(reason, now_monotonic=now_monotonic, washout_s=washout_s)
         result = self._empty_result(reason, measurement_count=0)
         self.last_result = result
-        self.state = "rejected"
-        self.last_reject_reason = reason
-        self.last_update_reason = "skipped"
         return result
-
-    def reset_after_trim_update(
-        self,
-        *,
-        now_monotonic: float,
-        washout_s: float,
-    ) -> None:
-        """Start a fresh stationary window after the reference trim changes."""
-        self._thermal_samples.clear()
-        self._window_deadtime_s = None
-        self._washout_until_monotonic = max(
-            self._washout_until_monotonic,
-            float(now_monotonic) + max(float(washout_s), 0.0),
-        )
-        self.state = "waiting_deadtime"
 
     def reset_runtime(self, *, reset_physical_trace: bool = True) -> None:
         """Clear transient observation state without changing persisted trim."""
         if reset_physical_trace:
             self._physical_trace.reset()
-        self._thermal_samples.clear()
-        self._window_deadtime_s = None
-        self._washout_until_monotonic = 0.0
-        self.state = "warming_up"
-        self.last_reject_reason = "none"
-        self.last_update_reason = "none"
+        super().reset_runtime()
         self.last_result = self._empty_result(
             "warming_up",
             measurement_count=0,
@@ -841,12 +820,7 @@ class CausalFFTrimObserver:
         current_result = self.last_result
         result = self._last_admissible_result or current_result
         has_samples = bool(self._thermal_samples)
-        duration_s = 0.0
-        if len(self._thermal_samples) >= 2:
-            duration_s = (
-                self._thermal_samples[-1].observed_monotonic
-                - self._thermal_samples[0].observed_monotonic
-            )
+        duration_s = self.window_duration_s
         return {
             "state": self.state,
             "window_duration_s": (
@@ -922,7 +896,6 @@ class CausalFFTrimObserver:
             sample.regime,
             sample.i_mode,
             sample.u_pi,
-            sample.u_pi,
         )
         if not pi_eligibility.admissible:
             return pi_eligibility.reason
@@ -949,14 +922,6 @@ class CausalFFTrimObserver:
         if hvac_mode not in {"heat", "cool"}:
             return "invalid_hvac_mode"
         return None
-
-    def _mean_causal_power(
-        self,
-        start: float,
-        end: float,
-    ) -> tuple[float | None, float]:
-        window = self._physical_trace.read_window(start, end)
-        return window.mean_linear_power, window.power_coverage_ratio
 
     @staticmethod
     def _time_weighted_mean(
@@ -1274,7 +1239,6 @@ def evaluate_pi_eligibility_for_trim(
     regime: GovernanceRegime | str | None,
     i_mode: str | None,
     u_pi: float | None,
-    previous_u_pi: float | None,
 ) -> FFTrimPIEligibility:
     """Validate that PI is neutral enough for trim learning."""
     if regime == GovernanceRegime.DEAD_BAND:
@@ -1299,11 +1263,8 @@ def evaluate_pi_eligibility_for_trim(
     if i_mode.startswith(blocked_prefixes):
         return FFTrimPIEligibility(False, f"pi_mode_{i_mode}")
 
-    if u_pi is None or previous_u_pi is None:
+    if u_pi is None:
         return FFTrimPIEligibility(False, "pi_pending_stability")
-
-    if abs(u_pi - previous_u_pi) > FF_TRIM_PI_STABILITY_EPSILON:
-        return FFTrimPIEligibility(False, "pi_unstable")
 
     return FFTrimPIEligibility(True, "pi_near_band_stable")
 
@@ -1494,31 +1455,6 @@ class FFTrim:
     # Public API
     # ------------------------------------------------------------------
 
-    def update(self, delta_power: float, u_ff_ab: float) -> None:
-        """Update the trim using the observed power deficit.
-
-        The signal is the difference between the causally observed trim target
-        and the trim already applied over an independent thermal window.
-
-        Args:
-            delta_power: incremental power correction needed
-                (positive = need more power).
-            u_ff_ab: Current FF principal value (used to compute authority budget).
-        """
-        result = self._apply_correction(
-            median_correction=float(delta_power),
-            u_ff_ab=float(u_ff_ab),
-            pending_count=len(self._pending_proposals),
-        )
-
-        _LOGGER.debug(
-            "FFTrim: update reason=%s trim=%.4f correction=%.4f visible_delta=%.4f",
-            result.reason,
-            self.u_ff_trim,
-            delta_power,
-            result.visible_ff_delta,
-        )
-
     def collect_persistent(
         self,
         proposal: FFTrimWindowProposal,
@@ -1643,35 +1579,6 @@ class FFTrim:
                 else proposal.transfer_reason
             ),
             observation_mode=observation_mode,
-        )
-
-    def update_persistent(
-        self,
-        delta_power: float,
-        u_ff_ab: float,
-    ) -> FFTrimUpdateResult:
-        """Update trim only after same-direction thermal corrections persist."""
-        persistent = self.collect_persistent(
-            FFTrimWindowProposal(
-                correction=float(delta_power),
-                mean_ff1=float(u_ff_ab),
-                physical_power_deficit=None,
-                integral_bias=None,
-                transfer_eligible=False,
-                transfer_reason="causal_update_without_transfer",
-                observation_mode="stationary",
-            )
-        )
-        if not persistent.ready:
-            return FFTrimUpdateResult(
-                False,
-                persistent.reason,
-                0.0,
-                persistent.pending_count,
-            )
-        return self.apply_persistent_result(
-            persistent,
-            u_ff_ab=float(u_ff_ab),
         )
 
     def apply_persistent_result(
@@ -1824,10 +1731,6 @@ class FFTrim:
         if observation_mode == "periodic":
             return self._periodic_pending_proposals
         return self._pending_proposals
-
-    def compute_ff_base(self, u_ff_ab: float) -> float:
-        """Return u_ff_base = clamp(u_ff_ab + u_ff_trim, 0, 1)."""
-        return clamp(u_ff_ab + self.u_ff_trim, 0.0, 1.0)
 
     def freeze(self, reason: str) -> None:
         """Freeze trim updates."""

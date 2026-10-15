@@ -104,7 +104,6 @@ from .smartpi.feedforward import compute_ff, FFResult
 from .smartpi.ff3 import FF3Result, compute_ff3
 from .smartpi.ff3_eligibility import (
     build_ff3_disturbance_context,
-    get_ff3_twin_unavailability_reason,
 )
 from .smartpi.causal_power_trace import (
     CausalPowerTrace,
@@ -2316,14 +2315,13 @@ class SmartPI:
             trajectory_active=self.sp_mgr.trajectory_active,
             trajectory_source=self.sp_mgr.trajectory_source,
         )
-        twin_disabled_reason = get_ff3_twin_unavailability_reason(self._last_twin_diag)
         twin_reliable = ff3_context.prediction_usable
         ff3_result: FF3Result = compute_ff3(
             enabled=self._use_ff3,
             twin=self.twin,
             twin_reliable=twin_reliable,
             twin_initialized=self.twin.T_hat is not None,
-            twin_disabled_reason=twin_disabled_reason,
+            twin_disabled_reason=ff3_context.twin_unavailability_reason,
             tau_reliable=self._tau_reliable,
             ext_temp=ext_current_temp,
             hvac_mode=hvac_mode,
