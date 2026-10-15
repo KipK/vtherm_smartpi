@@ -481,6 +481,7 @@ class LearningWindowManager:
                         self._name, cv, U_CV_MAX, self._t_int_s,
                     )
                     early_submit = True
+                    slope_val, method = slope_early, method_early
                 else:
                     estimator.learn_skip_count += 1
                     estimator.learn_last_reason = (
@@ -491,13 +492,9 @@ class LearningWindowManager:
             else:
                 early_submit = False
 
-        if early_submit:
-            # Use already-accumulated data (do not add the transition tick)
-            window_dt_min = self._t_int_s / 60.0
-            dT = current_temp - self._T_int_start
-            abs_dT = abs(dT)
-            delta_T = self._T_int_start - self._T_ext_start
-        else:
+        # An early submit uses the already-accumulated data and does not add the
+        # transition tick.
+        if not early_submit:
             # Accumulate current sample into power stats and energy integral
             self._update_u_stats(u_active)
             self._u_int += clamp(u_active, 0.0, 1.0) * dt_s
@@ -507,7 +504,6 @@ class LearningWindowManager:
             window_dt_min = self._t_int_s / 60.0
 
             dT = current_temp - self._T_int_start
-            abs_dT = abs(dT)
             delta_T = self._T_int_start - self._T_ext_start
 
             # Calculate preliminary u_eff for direction check
@@ -568,7 +564,7 @@ class LearningWindowManager:
             )
 
             if slope_val is not None:
-                # Slope is robust: proceed to submission.
+                # Slope is robust: proceed to submission with this slope.
                 pass
             elif window_dt_min < DT_MAX_MIN:
                 # Signal not yet robust: extend window.
@@ -592,7 +588,6 @@ class LearningWindowManager:
 
         # --- Learning Submission ---
         u_eff = self._u_int / self._t_int_s
-        dT_dt = dT / window_dt_min
 
         # A window can start as passive and become active after power changes.
         # Recheck the effective duty before submission so such a mixed window
@@ -654,30 +649,9 @@ class LearningWindowManager:
                     self.reset()
                     return deadtime_skip_count_a, deadtime_skip_count_b
 
-            relevant_samples = [
-                p for p in dt_est.tin_history 
-                if p[0] >= self._start_ts
-            ]
-
-            slope_val, method, _ = ABEstimator.robust_dTdt_per_min(
-                relevant_samples,
-                trim_start_frac=0.10,
-                # trim_end omitted: the useful passive signal arrives late in
-                # the window. Power-transition detection closes the window
-                # before active HVAC data can contaminate the tail.
-            )
-
-            if slope_val is not None:
-                final_slope = slope_val
-                estimator.diag_dTdt_method = method
-            else:
-                estimator.learn_skip_count += 1
-                estimator.learn_last_reason = f"skip: OFF slope not robust ({method})"
-                self.reset()
-                return deadtime_skip_count_a, deadtime_skip_count_b
-
+            estimator.diag_dTdt_method = method
             estimator.learn(
-                dT_int_per_min=final_slope,
+                dT_int_per_min=slope_val,
                 u=0.0,
                 t_int=self._T_int_start,
                 t_ext=self._T_ext_start,
@@ -689,26 +663,9 @@ class LearningWindowManager:
             )
         elif u_eff > U_ON_MIN:
             # ON phase
-            relevant_samples = [
-                p for p in dt_est.tin_history 
-                if p[0] >= self._start_ts
-            ]
-
-            slope_val, method, _ = ABEstimator.robust_dTdt_per_min(relevant_samples)
-            if slope_val is not None:
-                final_slope = slope_val
-                estimator.diag_dTdt_method = method
-            elif is_calibrating:
-                final_slope = dT_dt
-                estimator.diag_dTdt_method = "fallback_simple"
-            else:
-                estimator.learn_skip_count += 1
-                estimator.learn_last_reason = f"skip: ON slope not robust ({method})"
-                self.reset()
-                return deadtime_skip_count_a, deadtime_skip_count_b
-
+            estimator.diag_dTdt_method = method
             estimator.learn(
-                dT_int_per_min=final_slope,
+                dT_int_per_min=slope_val,
                 u=u_eff,
                 t_int=self._T_int_start,
                 t_ext=self._T_ext_start,
