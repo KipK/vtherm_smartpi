@@ -185,6 +185,12 @@ $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 3. calcul de $K_i = K_p / \tau$,
 4. bornage des gains puis application des gels de gouvernance.
 
+`GainScheduler.generation` compte les changements des gains du modèle non
+atténués (IMC/SIMC ou gains de sécurité). Elle n'avance que tant que les gains
+ne sont pas gelés et n'est pas avancée par l'atténuation en bande proche. La
+fenêtre périodique du trim FF rejette une fenêtre qui couvre plusieurs
+générations (`periodic_gains_changed`).
+
 Le temps mort actif est `deadtime_heat` en HEAT et `deadtime_cool` en COOL.
 
 Important :
@@ -211,11 +217,13 @@ Le `warmup_scale` n'est pas un simple interrupteur. Il est le produit :
 - du nombre d'apprentissages valides,
 - du nombre de cycles depuis reset.
 
+Le trim FF2 reste gelé (`ff_warmup`) tant que `warmup_scale` est inférieur à 1.
+
 $k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (pas assez de mesures de `a` et de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
 
 À cela s'ajoutent :
 
-- `u_ff2` : correction lente `FFTrim`, gelée tant que `ABConfidence` vaut `AB_DEGRADED` ou `AB_BAD`.
+- `u_ff2` : correction lente `FFTrim`, gelée tant que `ABConfidence` vaut `AB_DEGRADED` ou `AB_BAD`, ou tant que `warmup_scale` est inférieur à 1 (`ff2_freeze_reason` `ff_warmup`).
 
 ### 4.3 FF3
 
@@ -551,6 +559,12 @@ plancher fixe de trente minutes. Son estimation causale pondérée dans le temps
 n’effectue jamais de transfert de propriété de l’intégrale ; les corrections
 persistantes restent soumises au même taux d’apprentissage et à la même limite
 d’autorité du trim.
+
+Un gel du trim vide le buffer stationnaire. Un gel de raison `saturated`
+conserve les mesures et les propositions en attente de la voie périodique, et
+la fenêtre périodique reste valide ; le trim lui-même n'est pas modifié tant
+qu'il est gelé. Toute autre raison de gel vide le buffer périodique et
+invalide la fenêtre.
 
 Le payload actuel de `SmartPI.save_state()` contient notamment :
 

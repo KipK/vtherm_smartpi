@@ -341,6 +341,9 @@ FF_TRIM_PERIODIC_ALLOWED_REGIMES = frozenset({  # Regimes in which a phase-close
     GovernanceRegime.SATURATED,
 })
 FF_TRIM_PERIODIC_NEGLIGIBLE_LIMIT_S = 5.0
+# Trim freeze reasons a periodic cycle tolerates: its samples, pending proposals
+# and proposal collection survive them; the trim itself is never mutated while frozen.
+FF_TRIM_PERIODIC_TOLERATED_FREEZE_REASONS = frozenset({"saturated"})
 FF_TRIM_TRANSFER_MAX_ERROR_C = 0.10
 FF_TRIM_TRANSFER_MAX_SLOPE_H = 0.10
 FF_TRIM_TRANSFER_MAX_P_POWER = 0.01

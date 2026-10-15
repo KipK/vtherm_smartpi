@@ -316,7 +316,6 @@ class SmartPI:
         self._last_fftrim_reject_reason: str = "none"
         self._last_fftrim_update_reason: str = "none"
         self._cycles_since_fftrim_update: int = 0
-        self._gain_generation: int = 0
         self._command_ownership = CommandOwnershipTracker()
         self._bumpless_transfer_state: str = "idle"
         self._bumpless_transfer_reason: str = "none"
@@ -448,7 +447,6 @@ class SmartPI:
         self._last_fftrim_reject_reason = "none"
         self._last_fftrim_update_reason = "none"
         self._cycles_since_fftrim_update = 0
-        self._gain_generation = 0
         self._command_ownership.reset()
         self._bumpless_transfer_state = "idle"
         self._bumpless_transfer_reason = "none"
@@ -1038,7 +1036,7 @@ class SmartPI:
             u_p=float(self.ctl.u_p),
             u_i=float(self.ctl.u_i),
             ki=float(self.Ki),
-            gain_generation=self._gain_generation,
+            gain_generation=self.gain_scheduler.generation,
             u_cmd=float(self._last_u_cmd),
             u_limited=float(self._last_u_limited),
             regime=self.gov.regime,
@@ -2535,7 +2533,6 @@ class SmartPI:
         """Calculate gains and feedforward and return the runtime feedforward."""
         # Capture old Ki for bumpless integral rescaling
         old_ki = self.gain_scheduler.ki
-        old_kp = self.gain_scheduler.kp
         near_band_ratio = self._near_band_gain_ratio(error, hvac_mode)
 
         # Delegate gain calculation to GainScheduler component
@@ -2553,9 +2550,6 @@ class SmartPI:
             hvac_mode=hvac_mode,
         )
         new_ki = self.gain_scheduler.ki
-        new_kp = self.gain_scheduler.kp
-        if abs(old_ki - new_ki) > 1e-9 or abs(old_kp - new_kp) > 1e-9:
-            self._gain_generation += 1
 
         # Bumpless Gain Scheduling: Rescale integral to preserve identical energy output
         if old_ki > 0.0 and new_ki > 0.0 and abs(old_ki - new_ki) > 1e-6:
@@ -3171,10 +3165,10 @@ class SmartPI:
 
         if self._ff_v2_reboot_freeze_remaining > 0:
             self._ff_trim.freeze("reboot")
-        elif ab_state == ABConfidenceState.AB_BAD:
+        elif ab_state in (ABConfidenceState.AB_BAD, ABConfidenceState.AB_DEGRADED):
             self._ff_trim.freeze(f"ab_{ab_state.value}")
-        elif ab_state == ABConfidenceState.AB_DEGRADED:
-            self._ff_trim.freeze(f"ab_{ab_state.value}")
+        elif self._last_ff_result is not None and self._last_ff_result.warmup_scale < 1.0:
+            self._ff_trim.freeze("ff_warmup")
         elif is_saturated and self.ctl.last_sat == "SAT_HI":
             self._ff_trim.freeze("saturated_high")
         elif is_saturated and self.ctl.last_sat != "SAT_LO":

@@ -11,6 +11,7 @@ from .const import (
     FF_TRIM_MIN_WINDOW_CYCLES,
     FF_TRIM_PERIODIC_ALLOWED_REGIMES,
     FF_TRIM_PERIODIC_MIN_DISTINCT_MEASUREMENTS,
+    FF_TRIM_PERIODIC_TOLERATED_FREEZE_REASONS,
     GovernanceRegime,
 )
 from .ff_trim import FFTrimThermalSample, _ThermalWindowCollector
@@ -259,7 +260,11 @@ class PeriodicFFTrimObserver(_ThermalWindowCollector):
             return "saturated_high"
         if sample.saturated and sample.saturation_state != "SAT_LO":
             return "saturation_unknown"
-        if sample.trim_frozen_reason not in (None, "none", "saturated"):
+        if (
+            sample.trim_frozen_reason not in (None, "none")
+            and sample.trim_frozen_reason
+            not in FF_TRIM_PERIODIC_TOLERATED_FREEZE_REASONS
+        ):
             return f"frozen_{sample.trim_frozen_reason}"
         if sample.setpoint_changed:
             return "setpoint_changed"

@@ -31,6 +31,7 @@ class FFResult:
     u_ff_trim: float       # Slow trim correction applied (additive)
     u_ff_eff: float        # FF effectively injected after FF3: clamp(u_ff_final + u_ff3, 0, 1)
     ff_reason: str         # Diagnostic reason string for the current FF state
+    warmup_scale: float = 1.0  # FF1 warmup factor in [0, 1]; the trim stays frozen below 1
 
 
 def compute_ff(
@@ -77,4 +78,5 @@ def compute_ff(
         u_ff_trim=u_ff2,
         u_ff_eff=u_ff_eff,
         ff_reason=ff_reason,
+        warmup_scale=float(warmup_scale),
     )

@@ -71,6 +71,8 @@ class GainScheduler:
         self._ki = KI_SAFE
         self._kp_source = "safe"
         self._ki_source = "safe"
+        self._generation = 0
+        self._generation_gains: tuple[float, float] | None = None
 
     def reset(self) -> None:
         """Reset gains to safe defaults."""
@@ -78,6 +80,8 @@ class GainScheduler:
         self._ki = KI_SAFE
         self._kp_source = "safe"
         self._ki_source = "safe"
+        self._generation = 0
+        self._generation_gains = None
         _LOGGER.debug("%s: GainScheduler reset to safe defaults", self._name)
 
     def calculate(
@@ -157,6 +161,8 @@ class GainScheduler:
                 kp_source = "imc_simc"
                 ki_source = "imc_simc"
         
+        model_gains = (kp, ki)
+
         # Apply Near Band factor for stability near setpoint
         if in_near_band:
             ratio = clamp(float(near_band_ratio), 0.0, 1.0)
@@ -174,11 +180,13 @@ class GainScheduler:
             ki = self._ki
             kp_source = "frozen"
             ki_source = "frozen"
-        elif governance_decision == GovernanceDecision.SOFT_FREEZE_DOWN:
-            kp = min(kp, self._kp)
-            ki = min(ki, self._ki)
-            kp_source = f"{kp_source}_softfreeze"
-            ki_source = f"{ki_source}_softfreeze"
+        else:
+            self._update_generation(model_gains)
+            if governance_decision == GovernanceDecision.SOFT_FREEZE_DOWN:
+                kp = min(kp, self._kp)
+                ki = min(ki, self._ki)
+                kp_source = f"{kp_source}_softfreeze"
+                ki_source = f"{ki_source}_softfreeze"
         
         # Store current values
         self._kp = kp
@@ -192,6 +200,19 @@ class GainScheduler:
             kp_source=self._kp_source,
             ki_source=self._ki_source,
         )
+
+    def _update_generation(self, model_gains: tuple[float, float]) -> None:
+        """Start a gain generation when the untapered model gains become active.
+
+        The near-band taper is a deterministic function of the error, so it
+        does not start a generation; a model, dead-time or safe-gain change does.
+        """
+        previous = self._generation_gains
+        if previous is None or any(
+            abs(new - old) > 1e-9 for new, old in zip(model_gains, previous)
+        ):
+            self._generation += 1
+            self._generation_gains = model_gains
 
     def load_state(self, state: dict) -> None:
         """Load state from persistence dict.
@@ -235,6 +256,11 @@ class GainScheduler:
         }
 
     # --- Properties for diagnostic access ---
+
+    @property
+    def generation(self) -> int:
+        """Generation of the untapered model gains behind the applied gains."""
+        return self._generation
 
     @property
     def kp(self) -> float:

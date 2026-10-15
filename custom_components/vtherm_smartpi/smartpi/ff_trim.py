@@ -45,6 +45,7 @@ from .const import (
     FF_TRIM_MIN_POWER_COVERAGE,
     FF_TRIM_PERIODIC_MIN_POWER_RANGE,
     FF_TRIM_PERIODIC_NEGLIGIBLE_LIMIT_S,
+    FF_TRIM_PERIODIC_TOLERATED_FREEZE_REASONS,
     FF_TRIM_MAX_ERROR_C,
     FF_TRIM_MAX_SLOPE_H,
     FF_TRIM_TRANSFER_MAX_ERROR_C,
@@ -1462,7 +1463,7 @@ class FFTrim:
         """Collect one causal proposal in its observation-mode buffer."""
         observation_mode = proposal.observation_mode
         pending_proposals = self._pending_buffer(observation_mode)
-        if self.frozen:
+        if self.frozen and not self._periodic_tolerates_freeze(observation_mode):
             self.clear_pending(observation_mode)
             return FFTrimPersistentResult(
                 False,
@@ -1732,13 +1733,22 @@ class FFTrim:
             return self._periodic_pending_proposals
         return self._pending_proposals
 
+    def _periodic_tolerates_freeze(self, observation_mode: str) -> bool:
+        """Return whether the current freeze keeps periodic evidence alive."""
+        return (
+            observation_mode == "periodic"
+            and self.freeze_reason in FF_TRIM_PERIODIC_TOLERATED_FREEZE_REASONS
+        )
+
     def freeze(self, reason: str) -> None:
-        """Freeze trim updates."""
+        """Freeze trim updates and drop the evidence the freeze invalidates."""
         if not self.frozen:
             _LOGGER.debug("FFTrim: frozen (%s)", reason)
         self.frozen = True
         self.freeze_reason = reason
-        self.clear_pending()
+        self.clear_pending("stationary")
+        if not self._periodic_tolerates_freeze("periodic"):
+            self.clear_pending("periodic")
 
     def unfreeze(self) -> None:
         """Unfreeze trim updates."""

@@ -182,6 +182,11 @@ $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 3. compute $K_i = K_p / \tau$,
 4. clamp the gains and apply governance freezes.
 
+`GainScheduler.generation` counts the changes of the untapered model gains
+(IMC/SIMC or safe gains). It advances only while the gains are not frozen and
+is not advanced by the near-band taper. The periodic FF-trim window rejects a
+window that spans several generations (`periodic_gains_changed`).
+
 The active dead time is `deadtime_heat` in HEAT and `deadtime_cool` in COOL.
 
 Important:
@@ -208,13 +213,15 @@ power.
 - the number of valid learning episodes,
 - the number of cycles since reset.
 
+The FF2 trim stays frozen (`ff_warmup`) while `warmup_scale` is below 1.
+
 $k_{ff}$ is zero, and therefore $u_{ff1}$ is zero, whenever the model is not
 ready (not enough `a` and `b` measurements), `tau` is not reliable, or the sign
 of `a` does not match the active mode.
 
 This is combined with:
 
-- `u_ff2`: slow `FFTrim` correction, frozen while `ABConfidence` is `AB_DEGRADED` or `AB_BAD`.
+- `u_ff2`: slow `FFTrim` correction, frozen while `ABConfidence` is `AB_DEGRADED` or `AB_BAD`, or while `warmup_scale` is below 1 (`ff2_freeze_reason` `ff_warmup`).
 
 ### 4.3 FF3
 
@@ -535,6 +542,11 @@ phase, following at least `max(6 VT cycles, 2 × dead time)`, so its horizon has
 no fixed thirty-minute floor. Its time-weighted causal estimate never performs
 an integral ownership transfer; persistent corrections remain subject to the
 same trim learning rate and authority limit.
+
+A trim freeze clears the stationary buffer. A freeze with reason `saturated`
+keeps the periodic samples and pending proposals, and the periodic window
+stays valid through it; the trim itself is not modified while it is frozen. Any
+other freeze reason clears the periodic buffer and invalidates the window.
 
 The current payload from `SmartPI.save_state()` notably contains:
 

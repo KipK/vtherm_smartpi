@@ -557,3 +557,96 @@ def test_applied_periodic_transaction_survives_live_rejection_until_reset() -> N
         ]
         is None
     )
+
+
+def _periodic_proposal(correction: float = -0.02) -> FFTrimWindowProposal:
+    return FFTrimWindowProposal(
+        correction=correction,
+        mean_ff1=0.08,
+        physical_power_deficit=None,
+        integral_bias=None,
+        transfer_eligible=False,
+        transfer_reason="periodic_equilibrium",
+        observation_mode="periodic",
+    )
+
+
+def _stationary_proposal() -> FFTrimWindowProposal:
+    return FFTrimWindowProposal(
+        correction=-0.02,
+        mean_ff1=0.08,
+        physical_power_deficit=-0.02,
+        integral_bias=0.0,
+        transfer_eligible=True,
+        transfer_reason="quasi_equilibrium",
+        observation_mode="stationary",
+    )
+
+
+def test_saturated_freeze_keeps_periodic_persistence_without_mutation() -> None:
+    """The periodic tolerance of a saturation exit reaches its proposal buffer."""
+    trim = FFTrim()
+    trim.collect_persistent(_periodic_proposal())
+    trim.collect_persistent(_periodic_proposal())
+    trim.collect_persistent(_stationary_proposal())
+
+    trim.freeze("saturated")
+
+    assert len(trim._periodic_pending_proposals) == 2
+    assert len(trim._pending_proposals) == 0
+    stationary = trim.collect_persistent(_stationary_proposal())
+    assert stationary.reason == "frozen_saturated"
+
+    ready = trim.collect_persistent(_periodic_proposal())
+    assert ready.ready is True
+    blocked = trim.apply_persistent_result(ready, u_ff_ab=0.08)
+    assert blocked.updated is False
+    assert blocked.reason == "frozen_saturated"
+    assert trim.u_ff_trim == 0.0
+
+    trim.unfreeze()
+    applied = trim.apply_persistent_result(
+        trim.collect_persistent(_periodic_proposal()),
+        u_ff_ab=0.08,
+    )
+    assert applied.updated is True
+    assert trim.u_ff_trim < 0.0
+
+
+@pytest.mark.parametrize("reason", ("saturated_high", "ff_warmup", "perturbed"))
+def test_other_freezes_clear_periodic_persistence(reason: str) -> None:
+    """Only the tolerated freeze keeps periodic evidence."""
+    trim = FFTrim()
+    trim.collect_persistent(_periodic_proposal())
+
+    trim.freeze(reason)
+    result = trim.collect_persistent(_periodic_proposal())
+
+    assert result.reason == f"frozen_{reason}"
+    assert len(trim._periodic_pending_proposals) == 0
+
+
+def test_periodic_sample_tolerates_only_the_saturated_freeze() -> None:
+    """A periodic sample keeps the saturation-exit freeze, not the FF1 warmup."""
+    periodic = PeriodicFFTrimObserver(cycle_min=2.0)
+    periodic.record_thermal_sample(
+        _sample(120.0, 20.0),
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+    periodic.record_thermal_sample(
+        replace(_sample(420.0, 20.01), trim_frozen_reason="saturated"),
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+
+    assert periodic.diagnostics["measurement_count"] == 2
+
+    periodic.record_thermal_sample(
+        replace(_sample(720.0, 20.02), trim_frozen_reason="ff_warmup"),
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+
+    assert periodic.diagnostics["measurement_count"] == 0
+    assert periodic.last_reject_reason == "frozen_ff_warmup"

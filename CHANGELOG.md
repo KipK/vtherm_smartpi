@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Periodic FF-trim windows are no longer invalidated by the near-band gain
+  taper, periodic proposals survive a saturation freeze, and the trim waits for
+  the end of the feed-forward warmup (`ff2_freeze_reason` `ff_warmup`). Effect:
+  the periodic trim is admitted and applied far more often.
 - A regime transition no longer holds the integrator; gains and learning stay
   frozen. The integral is held only in the deadband hysteresis shell and in the
   `DEGRADED` regime. Effect: smaller steady error after setpoint or regime
