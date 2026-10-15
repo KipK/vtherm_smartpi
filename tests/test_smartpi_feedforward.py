@@ -132,7 +132,7 @@ def test_algo_enables_signed_structural_feedforward_in_cool():
     algo._cycles_since_reset = algo.ff_warmup_cycles
     algo.gov.regime = GovernanceRegime.EXCITED_STABLE
 
-    runtime_ff, _ = algo._apply_gains_and_ff(
+    runtime_ff = algo._apply_gains_and_ff(
         GovernanceDecision.ADAPT_ON,
         target_temp_ff=20.0,
         ext_current_temp=30.0,

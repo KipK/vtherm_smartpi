@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- A regime transition no longer holds the integrator; gains and learning stay
+  frozen. The integral is held only in the deadband hysteresis shell and in the
+  `DEGRADED` regime. Effect: smaller steady error after setpoint or regime
+  changes, and the FF trim learns more often.
 - Anti-windup works per tick on the applicable limit (`max_on_percent`, governor
   cap) and only drains the accumulated integral; the end-of-cycle tracking is
   removed. Effect: no steady offset below the setpoint when Versatile

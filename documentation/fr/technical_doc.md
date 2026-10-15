@@ -409,7 +409,9 @@ Les protections complémentaires actuellement présentes sont :
 - garde intégrale signée pendant les reprises, rattrapages et changements de consigne,
 - `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,
 - `I:HOLD` avec source `vt_safety` pendant que le mode sécurité de Versatile Thermostat applique sa puissance par défaut à la place de la commande SmartPI,
-- logique de maintien dans la deadband.
+- `I:HOLD` avec source `deadband_hysteresis_shell` tant que l'état de deadband hystérétique est actif et que l'erreur est hors de la deadband centrale,
+- `I:HOLD` avec source `governance_sensor_invalid` dans le régime `DEGRADED`,
+- gel de P et I dans la deadband centrale.
 
 L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse (et, pour la rétro-calculation, le cap du gouverneur lorsqu'il est plus bas encore). Il comporte deux parties :
 
@@ -736,6 +738,8 @@ Cette gouvernance est centrale :
 - elle empêche d'apprendre sur des données jugées polluées,
 - elle évite de faire bouger les gains dans des régimes peu informatifs,
 - elle laisse malgré tout l'apprentissage thermique actif dans certains régimes contraints comme `SATURATED`.
+
+La matrice pilote uniquement la mise à jour des gains et l'apprentissage thermique. Une transition de régime (`REGIME_TRANSITION`) gèle les gains et l'apprentissage mais ne maintient pas l'intégrale. L'intégrale n'est maintenue que par les sources listées dans les protections de la section 4 (deadtime, phases de reprise, `vt_safety`) et par deux sources liées à la gouvernance : `deadband_hysteresis_shell` (état de deadband hystérétique actif, erreur hors de la deadband centrale) et `governance_sensor_invalid` (régime `DEGRADED`).
 
 ---
 

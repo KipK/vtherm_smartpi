@@ -228,8 +228,9 @@ def test_smartpi_calculate_resolves_with_effective_post_compute_terms(
         smartpi.Kp = 1.25
         smartpi.Ki = 0.05
         smartpi.integral = 2.0
-        # Governance hold keeps the integrator frozen for this cycle.
-        return 0.2, True
+        # The VT safety hold keeps the integrator frozen for this cycle.
+        smartpi.vt_safety_override = True
+        return 0.2
 
     seen = []
     original_resolve = smartpi.sp_mgr.resolve_reference_governor

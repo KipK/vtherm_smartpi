@@ -2532,12 +2532,8 @@ class SmartPI:
         setpoint_changed: bool = False,
         cycle_boundary: bool = False,
         startup_first_run: bool = False,
-    ) -> tuple[float, bool]:
-        """Calculate gains and feedforward, and handles integrator hold.
-
-        Returns:
-            Tuple of (runtime_ff, integrator_hold).
-        """
+    ) -> float:
+        """Calculate gains and feedforward and return the runtime feedforward."""
         # Capture old Ki for bumpless integral rescaling
         old_ki = self.gain_scheduler.ki
         old_kp = self.gain_scheduler.kp
@@ -2629,8 +2625,6 @@ class SmartPI:
         self._last_ff_reason = ff_result.ff_reason
         self._last_u_ff3 = ff_result.u_ff3
 
-        integrator_hold = gov_decision_g == GovernanceDecision.HARD_FREEZE
-
         # Deadband must keep the structural hold power only: FF1 + FF2.
         # FF3 remains a predictive transient action and must not be maintained
         # around the setpoint.
@@ -2640,7 +2634,7 @@ class SmartPI:
             else ff_result.u_ff_eff
         )
 
-        return runtime_ff, integrator_hold
+        return runtime_ff
 
     def _near_band_gain_ratio(
         self,
@@ -3046,11 +3040,11 @@ class SmartPI:
             self.deadband_mgr.in_near_band
         )
         self.gov.update_regime(regime)
-        gov_decision_g, gov_freeze_reason_g = self.gov.decide_update('gains')
+        gov_decision_g, _ = self.gov.decide_update('gains')
         self.gov.decide_update('thermal', self.learn_win.learning_resume_ts, now)
 
         # --- 8. Gains & FF ---
-        u_ff, gov_hold = self._apply_gains_and_ff(
+        u_ff = self._apply_gains_and_ff(
             gov_decision_g,
             target_temp,
             ext_current_temp,
@@ -3063,19 +3057,14 @@ class SmartPI:
             cycle_boundary=cycle_boundary,
             startup_first_run=startup_first_run,
         )
-        # Combine the deadtime hold with the governance hold
-        if gov_hold and not integrator_hold:
-            if (
-                self.gov.regime == GovernanceRegime.DEAD_BAND
-                and self.deadband_mgr.in_deadband
-                and not in_core_deadband
-            ):
-                integrator_hold_source = "deadband_hysteresis_shell"
-            else:
-                integrator_hold_source = (
-                    f"governance_{gov_freeze_reason_g.value}"
-                )
-        integrator_hold = integrator_hold or gov_hold
+        # Integrator holds after the deadtime one: deadband hysteresis shell,
+        # then DEGRADED (no outdoor temperature). A regime transition freezes
+        # gains and learning only.
+        if not integrator_hold:
+            if self.deadband_mgr.in_deadband and not in_core_deadband:
+                integrator_hold, integrator_hold_source = True, "deadband_hysteresis_shell"
+            elif self.gov.regime == GovernanceRegime.DEGRADED:
+                integrator_hold, integrator_hold_source = True, "governance_sensor_invalid"
         if self.vt_safety_override:  # the PI does not drive the actuator
             integrator_hold, integrator_hold_source = True, "vt_safety"
 

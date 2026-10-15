@@ -160,10 +160,9 @@ def test_calculate_checks_release_after_pi_before_resolving_authority(monkeypatc
     monkeypatch.setattr(rt, "_manage_setpoint", lambda *args, **kwargs: (
         case.target, False, inputs["error"], inputs["error_p"], case.target,
     ))
-    # Governance hold drives the integrator hold through the public cycle.
-    monkeypatch.setattr(rt, "_apply_gains_and_ff", lambda *args, **kwargs: (
-        case.pi.u_ff, True,
-    ))
+    # An integrator hold drives the release check through the public cycle.
+    monkeypatch.setattr(rt, "_apply_gains_and_ff", lambda *args, **kwargs: case.pi.u_ff)
+    rt.vt_safety_override = True
     events = []
     compute = rt.ctl.compute_pwm
     release = rt._try_release_terminal_braking
@@ -226,9 +225,7 @@ def test_calculate_accepts_terminal_release_and_delivers_raw_command(monkeypatch
     monkeypatch.setattr(rt, "_manage_setpoint", lambda *args, **kwargs: (
         case.target, False, inputs["error"], inputs["error_p"], case.target,
     ))
-    monkeypatch.setattr(rt, "_apply_gains_and_ff", lambda *args, **kwargs: (
-        case.pi.u_ff, False,
-    ))
+    monkeypatch.setattr(rt, "_apply_gains_and_ff", lambda *args, **kwargs: case.pi.u_ff)
     release = rt._try_release_terminal_braking
     accepted = []
     compute = Mock(wraps=rt.ctl.compute_pwm)

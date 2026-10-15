@@ -405,7 +405,9 @@ Additional protections currently present are:
 - signed integral guard during resumes, catch-up phases, and setpoint changes,
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
 - `I:HOLD` with source `vt_safety` while Versatile Thermostat safety mode applies its default power instead of the SmartPI command,
-- deadband hold logic.
+- `I:HOLD` with source `deadband_hysteresis_shell` while the hysteretic deadband state is active and the error is outside the core deadband,
+- `I:HOLD` with source `governance_sensor_invalid` in the `DEGRADED` regime,
+- freeze of P and I inside the core deadband.
 
 The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower (and, for the back-calculation, the governor cap when it is lower still). It has two parts:
 
@@ -717,6 +719,8 @@ This governance is central because:
 - it prevents learning on data considered polluted,
 - it avoids moving gains in poorly informative regimes,
 - it still keeps thermal learning active in some constrained regimes such as `SATURATED`.
+
+The matrix drives the gain updates and thermal learning only. A regime transition (`REGIME_TRANSITION`) freezes gains and learning but does not hold the integral. The integral is held only by the sources listed in the protections of section 4 (deadtime, resume phases, `vt_safety`) and by two governance-related sources: `deadband_hysteresis_shell` (hysteretic deadband state active, error outside the core deadband) and `governance_sensor_invalid` (`DEGRADED` regime).
 
 ---
 

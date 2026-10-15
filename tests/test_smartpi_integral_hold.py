@@ -342,3 +342,101 @@ def test_vt_safety_override_holds_the_integral() -> None:
     assert before_ref == before
     assert after_ref != before_ref
     assert ref.ctl.last_integral_hold_source != "vt_safety"
+
+
+def _run_two_ticks(pi, *, ext_temp, prepare=None):
+    """Run two STABLE calculate() ticks one minute apart and return the integral before the second."""
+    from unittest.mock import PropertyMock, patch
+
+    from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
+
+    with (
+        patch("custom_components.vtherm_smartpi.algo.time.monotonic") as monotonic,
+        patch.object(SmartPI, "phase", new_callable=PropertyMock, return_value=SmartPIPhase.STABLE),
+    ):
+        before = None
+        for minute in range(2):
+            monotonic.return_value = 1000.0 + 60.0 * minute
+            if minute == 1:
+                before = pi.ctl.integral
+                if prepare is not None:
+                    prepare(pi)
+            pi.calculate(
+                target_temp=20.0,
+                current_temp=19.5,
+                ext_current_temp=ext_temp,
+                slope=0.0,
+                hvac_mode=VThermHvacMode_HEAT,
+            )
+    return before
+
+
+def test_regime_transition_freezes_gains_but_not_the_integral() -> None:
+    """A regime transition inside a cycle freezes gains and learning only."""
+    from custom_components.vtherm_smartpi.smartpi.const import (
+        FreezeReason,
+        GovernanceDecision,
+        GovernanceRegime,
+    )
+
+    pi = make_smartpi(deadband_c=0.0)
+
+    def mixed_cycle(p):
+        p.gov._cycle_regimes = {GovernanceRegime.NEAR_BAND, GovernanceRegime.EXCITED_STABLE}
+
+    before = _run_two_ticks(pi, ext_temp=5.0, prepare=mixed_cycle)
+    assert pi.gov.last_decision_gains == GovernanceDecision.HARD_FREEZE
+    assert pi.gov.last_freeze_reason_gains == FreezeReason.REGIME_TRANSITION
+    assert pi.ctl.last_i_mode == "I:RUN"
+    assert pi.ctl.last_integral_hold_source == "none"
+    assert pi.ctl.integral != before
+
+
+def test_degraded_regime_holds_the_integral() -> None:
+    """Without outdoor temperature (DEGRADED) the integral is held."""
+    from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
+
+    pi = make_smartpi(deadband_c=0.0)
+    before = _run_two_ticks(pi, ext_temp=None)
+    assert pi.gov.regime == GovernanceRegime.DEGRADED
+    assert pi.ctl.last_i_mode == "I:HOLD"
+    assert pi.ctl.last_integral_hold_source == "governance_sensor_invalid"
+    assert pi.ctl.integral == before
+
+
+def test_deadtime_hold_has_priority_over_degraded() -> None:
+    """The deadtime hold keeps its source when DEGRADED also holds."""
+    pi = make_smartpi(deadband_c=0.0)
+
+    def in_deadtime(p):
+        p.dt_est.deadtime_heat_s = 3600.0
+        p.dt_est.deadtime_heat_reliable = True
+        p._t_heat_episode_start = 1050.0
+
+    before = _run_two_ticks(pi, ext_temp=None, prepare=in_deadtime)
+    assert pi.ctl.last_i_mode == "I:HOLD"
+    assert pi.ctl.last_integral_hold_source == "deadtime"
+    assert pi.ctl.integral == before
+
+
+def test_deadband_shell_holds_during_a_regime_transition() -> None:
+    """The hysteresis shell (deadband, outside the core) holds the integral."""
+    from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
+
+    pi = make_smartpi(deadband_c=0.0)
+
+    def in_shell(p):
+        update = p.deadband_mgr.update
+
+        def update_in_shell(*args, **kwargs):
+            result = update(*args, **kwargs)
+            p.deadband_mgr._in_deadband = True  # hysteresis kept; core is empty (deadband_c = 0)
+            return result
+
+        p.deadband_mgr.update = update_in_shell
+        p.gov._cycle_regimes = {GovernanceRegime.NEAR_BAND, GovernanceRegime.EXCITED_STABLE}
+
+    before = _run_two_ticks(pi, ext_temp=5.0, prepare=in_shell)
+    assert pi.ctl.last_i_mode == "I:HOLD"
+    assert pi.ctl.last_integral_hold_source == "deadband_hysteresis_shell"
+    assert pi.ctl.integral == before
