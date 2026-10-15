@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from math import isfinite
 
 from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
-from .command_ownership import project_cycle_command
 from .const import (
     DEADBAND_HYSTERESIS, REFERENCE_GOVERNOR_MARGIN_MAX_C, REFERENCE_GOVERNOR_RESERVE_SELECTOR,
     REFERENCE_GOVERNOR_RHO_MARGIN, TRAJECTORY_BUMPLESS_MAX_U_DELTA,
@@ -21,6 +20,17 @@ from .reference_governor import (
 from .reference_governor_authority import (
     ReferenceGovernorAuthorityContext,
 )
+
+
+def project_zero_delay_switch_power(on_percent: float, cycle_min: float) -> float:
+    """Return the duty a switch scheduler without minimal delays realizes.
+
+    The scheduler truncates the ON time to whole seconds of the cycle.
+    """
+    cycle_sec = cycle_min * 60
+    if not cycle_sec:
+        return 0.0
+    return int(max(0.0, min(1.0, on_percent)) * cycle_sec) / cycle_sec
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +133,7 @@ def evaluate_braking_release(
     if not isfinite(requested):
         return reject("invalid_raw_pi_projection")
     requested = min(max(requested, 0.0), 1.0)
-    projected = project_cycle_command(requested, cycle_min).projected_power
+    projected = project_zero_delay_switch_power(requested, cycle_min)
     # Do not obtain admission merely through downward PWM truncation. The
     # demand-direction model sees the envelope of requested and projected power.
     forecast_power = max(requested, projected)

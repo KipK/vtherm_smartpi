@@ -13,7 +13,6 @@ from datetime import timedelta
 
 from .algo import SmartPI
 from .state_store import SmartPIStateStore
-from .smartpi.command_ownership import project_cycle_command
 from .smartpi.const import (
     SMARTPI_RECALC_INTERVAL_SEC,
     SmartPIPhase,
@@ -62,6 +61,8 @@ class SmartPIHandler:
         self._thermostat = thermostat
         self._store: SmartPIStateStore | None = None
         self._recalc_timer_remove = None
+        # Remover of the applied-command receipt callback; None without receipts
+        self._receipt_remove = None
         # State for learning
         self._last_temp = None
         self._last_ext_temp = None
@@ -225,7 +226,14 @@ class SmartPIHandler:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
         self._stop_recalc_timer()
+        self._remove_receipt_callback()
         clear_valve_config_issues(t)
+
+    def _remove_receipt_callback(self) -> None:
+        """Unregister the applied-command receipt callback, if any."""
+        if self._receipt_remove is not None:
+            self._receipt_remove()
+            self._receipt_remove = None
 
     def on_scheduler_ready(self, scheduler) -> None:
         """Register SmartPI learning callbacks on the cycle scheduler."""
@@ -242,7 +250,21 @@ class SmartPIHandler:
                 self._valve_curve_params,
                 valve_mode=bool(getattr(scheduler, "is_valve_mode", False)),
             )
-            scheduler.register_cycle_start_callback(self._on_scheduler_cycle_started)
+            self._remove_receipt_callback()
+            # Capability check before any request_id reaches start_cycle (older VT raise TypeError)
+            if hasattr(scheduler, "register_command_receipt_callback"):
+                self._receipt_remove = scheduler.register_command_receipt_callback(
+                    algo.on_command_receipt
+                )
+            else:
+                _LOGGER.warning(
+                    "%s - Versatile Thermostat does not report applied commands: "
+                    "SmartPI runs without command ownership (no bumpless transfer, "
+                    "no periodic feed-forward trim)",
+                    self._thermostat,
+                )
+                scheduler.register_cycle_start_callback(self._on_legacy_cycle_started)
+            algo.receipts_supported = self._receipt_remove is not None
             scheduler.register_cycle_end_callback(algo.on_cycle_completed)
 
     def _synchronize_scheduler_timing(
@@ -261,28 +283,6 @@ class SmartPIHandler:
         scheduler.min_activation_delay = int(minimal_activation_delay)
         scheduler.min_deactivation_delay = int(minimal_deactivation_delay)
 
-    def _project_scheduler_command(self, on_percent: float):
-        """Project one request from the effective scheduler timing inputs."""
-        t = self._thermostat
-        scheduler = t.cycle_scheduler
-        cycle_min = t.cycle_min
-        minimal_activation_delay = getattr(
-            scheduler,
-            "min_activation_delay",
-            t.minimal_activation_delay,
-        )
-        minimal_deactivation_delay = getattr(
-            scheduler,
-            "min_deactivation_delay",
-            t.minimal_deactivation_delay,
-        )
-        return project_cycle_command(
-            on_percent=on_percent,
-            cycle_min=cycle_min,
-            minimal_activation_delay=int(minimal_activation_delay),
-            minimal_deactivation_delay=int(minimal_deactivation_delay),
-        )
-
     @staticmethod
     def _published_valve_power(thermostat) -> float | None:
         """Return the current valve opening published by the thermostat."""
@@ -294,29 +294,23 @@ class SmartPIHandler:
         except (TypeError, ValueError):
             return None
 
-    async def _on_scheduler_cycle_started(
+    async def _on_legacy_cycle_started(
         self,
         on_time_sec: float,
         off_time_sec: float,
         on_percent: float,
         hvac_mode: str,
     ) -> None:
-        """Forward scheduler starts after valve publication when required."""
+        """Forward a cycle start of a scheduler without receipts."""
         algo = self._thermostat.prop_algorithm
-        if not isinstance(algo, SmartPI):
-            return
-        if not bool(
-            getattr(self._thermostat.cycle_scheduler, "is_valve_mode", False)
-        ):
-            await algo.on_cycle_started(on_time_sec, off_time_sec, on_percent, hvac_mode)
-            return
-        await algo.on_cycle_started(
-            on_time_sec,
-            off_time_sec,
-            on_percent,
-            hvac_mode,
-            physical_on_percent=self._published_valve_power(self._thermostat),
-        )
+        if isinstance(algo, SmartPI):
+            await algo.on_cycle_started(
+                on_time_sec,
+                off_time_sec,
+                on_percent,
+                hvac_mode,
+                physical_on_percent=self._published_valve_power(self._thermostat),
+            )
 
     def should_publish_intermediate(self) -> bool:
         """Return True when VT may publish the current control iteration."""
@@ -462,37 +456,31 @@ class SmartPIHandler:
                 or (t.prop_algorithm.phase == SmartPIPhase.HYSTERESIS and on_percent_changed)
             )
 
-            is_valve_mode = bool(
-                getattr(t.cycle_scheduler, "is_valve_mode", False)
-            )
-            projection = self._project_scheduler_command(on_percent)
-            valve_segment_staged = False
+            # An untagged request (no request_id) is never owned.
+            request_kwargs = {}
             if algo is not None:
                 if abs(on_percent - algo.on_percent) > 1e-6:
                     # VT override (e.g. safety default): not owned by the SmartPI request.
                     algo.reset_command_ownership("runtime_power_override")
-                elif not is_valve_mode:
-                    algo.stage_cycle_command(projection, t.vtherm_hvac_mode)
-                else:
-                    algo.stage_valve_command(projection, t.vtherm_hvac_mode)
-                    valve_segment_staged = True
+                elif self._receipt_remove is not None:
+                    request_kwargs = {"request_id": algo.stage_command(t.vtherm_hvac_mode)}
 
             await t.cycle_scheduler.start_cycle(
                 t.vtherm_hvac_mode,
                 on_percent,
                 force_cycle,
+                **request_kwargs,
             )
             if (
                 algo is not None
+                and self._receipt_remove is None
                 and was_cycle_running
                 and not force_cycle
-                and is_valve_mode
-                and valve_segment_staged
+                and getattr(t.cycle_scheduler, "is_valve_mode", False)
             ):
+                # Without receipts the applied valve position is read back.
                 algo.on_applied_power_updated(
-                    on_percent=self._published_valve_power(t),
-                    hvac_mode=t.vtherm_hvac_mode,
-                    projection=projection,
+                    self._published_valve_power(t), t.vtherm_hvac_mode
                 )
 
         if (

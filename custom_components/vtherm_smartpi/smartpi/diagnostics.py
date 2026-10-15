@@ -172,71 +172,35 @@ def _build_valve_diagnostics(algo: SmartPI) -> Dict[str, Any] | None:
 
 
 def _build_command_ownership(algo: SmartPI) -> Dict[str, Any]:
-    """Build the latest immutable command-to-actuator binding diagnostics."""
-    binding = algo._command_ownership.last_binding
-    snapshot = binding.snapshot
-    projection = snapshot.projection if snapshot is not None else None
-    realized_power = binding.realized_power
-    scheduler_realized_power = binding.scheduler_realized_power
-    projected_power = projection.projected_power if projection is not None else None
-    expected_actuator_power = (
-        snapshot.expected_actuator_power
-        if snapshot is not None and snapshot.expected_actuator_power is not None
-        else projected_power
-    )
+    """Build the latest request-to-receipt binding diagnostics."""
+    tracker = algo._command_ownership
+    binding = tracker.last_binding
 
+    def _round(value: float | None) -> float | None:
+        return round(float(value), 6) if value is not None else None
+
+    requested = binding.requested_power
+    realized = binding.realized_power
     return {
+        "receipts_supported": algo.receipts_supported,
         "status": binding.status.value,
         "reason": binding.reason,
-        "request_sequence": (
-            snapshot.request_sequence if snapshot is not None else None
-        ),
-        "requested_power": (
-            round(float(projection.requested_power), 6)
-            if projection is not None
-            else None
-        ),
-        "projected_power": (
-            round(float(projected_power), 6)
-            if projected_power is not None
-            else None
-        ),
-        "realized_power": (
-            round(float(realized_power), 6)
-            if realized_power is not None
-            else None
-        ),
+        "request_sequence": binding.request_id,
+        "kind": binding.kind,
+        "requested_power": _round(requested),
+        "realized_power": _round(realized),
         "power_delta": (
-            round(float(realized_power - projected_power), 6)
-            if realized_power is not None and projected_power is not None
+            _round(realized - requested)
+            if realized is not None and requested is not None
             else None
-        ),
-        "expected_actuator_power": (
-            round(float(expected_actuator_power), 6)
-            if expected_actuator_power is not None
-            else None
-        ),
-        "scheduler_realized_power": (
-            round(float(scheduler_realized_power), 6)
-            if scheduler_realized_power is not None
-            else None
-        ),
-        "actuator_power_delta": (
-            round(float(realized_power - expected_actuator_power), 6)
-            if realized_power is not None and expected_actuator_power is not None
-            else None
-        ),
-        "projected_on_time_sec": (
-            projection.on_time_sec if projection is not None else None
-        ),
-        "projected_off_time_sec": (
-            projection.off_time_sec if projection is not None else None
         ),
         "realized_on_time_sec": binding.realized_on_time_sec,
         "realized_off_time_sec": binding.realized_off_time_sec,
+        "alterations": list(binding.alterations),
         "forced_by_timing": (
-            projection.forced_by_timing if projection is not None else None
+            "min_on_off" in binding.alterations if binding.kind is not None else None
         ),
+        "rejection_counts": dict(tracker.rejection_counts),
     }
 
 
@@ -655,7 +619,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "fftrim_bumpless_transfer_state": algo._bumpless_transfer_state,
         "fftrim_bumpless_transfer_reason": algo._bumpless_transfer_reason,
         "fftrim_transfer_pending_engagement": (
-            algo._transfer_pending_engagement
+            algo._transfer_pending_request_id is not None
         ),
         "fftrim_transfer_quality": algo._transfer_quality,
         "command_ownership": command_ownership,

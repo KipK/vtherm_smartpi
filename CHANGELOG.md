@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- SmartPI attributes each applied command to its request through the
+  applied-command receipts of Versatile Thermostat (`vtherm_api` 0.7.0 or later).
+  The feed-forward trim and the bumpless transfer require a Versatile Thermostat
+  release whose cycle scheduler emits these receipts. With an older Versatile
+  Thermostat, a warning is logged and PI regulation is unchanged, but the
+  periodic trim and the bumpless transfer stay inactive and the stationary trim
+  uses the sampled feed-forward.
+- In valve mode, commands are attributed to their SmartPI request, so the
+  feed-forward trim and the bumpless transfer work with valves. A valve opening
+  held back by Versatile Thermostat (regulation threshold or minimum period) or
+  set by its deferred update is not attributed to SmartPI.
+- `feedforward.fftrim.command_ownership` diagnostics report the receipts:
+  `receipts_supported`, `kind`, `alterations` and `rejection_counts` replace
+  `projected_power`, `projected_on_time_sec`, `projected_off_time_sec`,
+  `expected_actuator_power`, `scheduler_realized_power` and `actuator_power_delta`;
+  `power_delta` is the applied minus the requested power.
 - Fix AutoCalib event payloads: `entity_id` now carries the climate entity id
   (fixing the "Invalid entity ID" recorder warning) and the thermostat name is
   in `name`. Automations that read the name from `entity_id` must read `name`.

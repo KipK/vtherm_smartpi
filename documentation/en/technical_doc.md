@@ -462,7 +462,7 @@ The forced cycle is managed by `CalibrationManager`:
 | `setpoint.py`          | analytical setpoint trajectory and signed reference-governor orchestration |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
-| `command_ownership.py` | frozen command projection and scheduler binding tracker     |
+| `command_ownership.py` | request identifiers, frozen snapshots and binding of the scheduler applied-command receipts |
 | `ff_trim_periodic.py`  | phase-closed periodic-equilibrium window selection          |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
 | `ff3.py`               | bounded FF3 predictive correction                           |
@@ -563,14 +563,32 @@ Only the learned trim remains persistent. Ownership windows, pending
 proposals, and integral transfers are transient; after restart the observer is
 rebuilt and the existing three-cycle trim freeze still applies.
 
-For switch commands, SmartPI stages a frozen ownership snapshot immediately
-before submitting the scheduler request. The cycle-start callback binds it only
-when HVAC mode, projected ON/OFF durations, and realized power agree. Normal
-second quantization is represented by the projection; a minimum timing
-constraint remains a rejected causal segment. A missing or mismatched callback
-never falls back to the live controller state. Valve command snapshots follow
-the same frozen ownership rule in actuator space before their linear model
-mapping.
+Command ownership comes from the applied-command receipts of the Versatile
+Thermostat cycle scheduler (`vtherm_api` `AppliedCommandReceipt`). Immediately
+before submitting a request, SmartPI freezes its control decomposition and
+passes a strictly increasing `request_id` to `start_cycle`. The scheduler
+echoes that identifier in a receipt for each command it really applies: a
+`cycle_start` receipt at each master-cycle start, including its automatic
+restart, and an `update` receipt for each valve position applied during a
+cycle. No receipt is emitted for a switch request waiting for the next cycle.
+The receipt commits the applied actuator power, mapped to the linear model
+space, and binds the frozen snapshot of its request. A receipt is owned only
+when its request is known, keeps its HVAC mode, carries no `min_on_off` or
+`valve_retained` alteration, and was not timing constrained; a rejected
+request stays rejected for its later receipts. Untagged commands are never
+owned: Versatile Thermostat overrides such as the safety default power, and
+the deferred valve updates of Versatile Thermostat. The last 32 requests are
+kept so that a scheduler applying an older request still attributes it to
+that request. A missing or rejected receipt never falls back to the live
+controller state. A bumpless transfer is engaged once an owned receipt
+carries a request staged after the transfer.
+
+Without receipt support in Versatile Thermostat, SmartPI submits untagged
+requests and commits the power reported by the cycle-start callback, or the
+published valve opening in valve mode, without ownership. The stationary trim
+then uses the sampled `u_ff1`, the periodic trim and the bumpless transfer stay
+inactive, and PI regulation is unchanged. A valve update without a published
+opening commits nothing and marks a trace discontinuity.
 
 ### 5.5 Published diagnostics
 
@@ -589,11 +607,13 @@ relative to the current Home Assistant process. Persisted model counters remain
 internal and are used for model quality and warm-up decisions. When the thermal
 twin is usable, its public diagnostic fields are exposed under `analysis.twin`.
 
-`feedforward.fftrim.command_ownership` exposes the latest binding status,
-rejection reason, request sequence, requested/projected/realized powers and
-durations, their power delta, and the timing-constraint flag. These values are
-observational: they explain a causal acceptance or rejection without changing
-the learning decision.
+`feedforward.fftrim.command_ownership` exposes whether the scheduler emits
+receipts, the latest binding status and rejection reason, the request
+identifier (`request_sequence`), the receipt kind, the requested and applied
+powers and their delta, the applied ON/OFF durations, the receipt alterations,
+the timing-constraint flag, and the rejection counters of the current Home
+Assistant session. These values are observational: they explain a causal
+acceptance or rejection without changing the learning decision.
 
 ---
 

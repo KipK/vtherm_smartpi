@@ -15,12 +15,16 @@ from custom_components.vtherm_smartpi.smartpi.command_ownership import (
 from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
 from custom_components.vtherm_smartpi.smartpi.feedforward import FFResult
 from custom_components.vtherm_smartpi.smartpi.guards import GuardAction
-from helpers import force_smartpi_stable_mode
+from fakes.fake_cycle_scheduler import FakeReceiptCycleScheduler
+from helpers import force_smartpi_stable_mode, make_receipt
 
 
-def _make_handler(thermostat) -> tuple[SmartPIHandler, SmartPI]:
+def _make_handler(thermostat, receipts: bool = True) -> tuple[SmartPIHandler, SmartPI]:
+    if receipts:
+        thermostat.cycle_scheduler = FakeReceiptCycleScheduler()
     handler = SmartPIHandler(thermostat)
     handler.init_algorithm()
+    handler.on_scheduler_ready(thermostat.cycle_scheduler)
     handler._async_save = AsyncMock()
     algo = thermostat.prop_algorithm
     assert isinstance(algo, SmartPI)
@@ -54,44 +58,87 @@ async def _control(handler: SmartPIHandler, algo: SmartPI, power: float = 0.6) -
 
 
 @pytest.mark.asyncio
-async def test_normal_mode_applies_and_stages_the_smartpi_request(fake_handler_runtime) -> None:
-    """Without runtime override the scheduler receives the SmartPI request."""
+async def test_normal_mode_applies_and_owns_the_smartpi_request(fake_handler_runtime) -> None:
+    """Without runtime override the scheduler receives the tagged SmartPI request."""
     thermostat = fake_handler_runtime
     handler, algo = _make_handler(thermostat)
 
     await _control(handler, algo)
 
-    assert thermostat.cycle_scheduler.start_cycle.await_args.args[1] == pytest.approx(0.6)
+    start = thermostat.cycle_scheduler.start_cycle.await_args
+    assert start.args[1] == pytest.approx(0.6)
     binding = algo._command_ownership.last_binding
-    assert binding.status == CommandOwnershipBindingStatus.PENDING
+    assert binding.status == CommandOwnershipBindingStatus.BOUND
+    assert binding.request_id == start.kwargs["request_id"]
     assert binding.snapshot is not None
 
 
 @pytest.mark.asyncio
 async def test_safety_mode_applies_the_safety_default_without_ownership(fake_handler_runtime) -> None:
-    """In VT safety mode the safety power is applied and never owned by SmartPI."""
+    """In VT safety mode the safety power is applied untagged and never owned."""
     thermostat = fake_handler_runtime
     handler, algo = _make_handler(thermostat)
     await _control(handler, algo)
-    assert algo._command_ownership.pending is not None
+    owned_id = algo._command_ownership.last_binding.request_id
 
     thermostat.safety_default_on_percent = 0.25
     await _control(handler, algo)
 
-    assert thermostat.cycle_scheduler.start_cycle.await_args.args[1] == pytest.approx(0.25)
+    start = thermostat.cycle_scheduler.start_cycle.await_args
+    assert start.args[1] == pytest.approx(0.25)
+    assert "request_id" not in start.kwargs
     assert algo.on_percent == pytest.approx(0.6)
-    assert algo._command_ownership.pending is None
     assert algo._command_ownership.last_binding.reason == "runtime_power_override"
 
-    await algo.on_cycle_started(150, 450, 0.25, VThermHvacMode_HEAT)
+    # VT applies the pending safety request at the next cycle start.
+    await algo.on_command_receipt(make_receipt(None, 0.25, cycle_duration_sec=600.0))
     binding = algo._command_ownership.last_binding
     assert binding.status == CommandOwnershipBindingStatus.REJECTED
-    assert binding.reason == "ownership_request_missing"
+    assert binding.reason == "ownership_request_untagged"
+    assert algo._causal_power_trace._active_ownership is None
+    assert algo.committed_on_percent == pytest.approx(0.25)
+    # The request owned before the override is no longer attributable.
+    await algo.on_command_receipt(make_receipt(owned_id, 0.6, is_repeat=True))
+    assert algo._command_ownership.last_binding.reason == "ownership_request_unknown"
 
     thermostat.safety_default_on_percent = None
     await _control(handler, algo)
-    assert thermostat.cycle_scheduler.start_cycle.await_args.args[1] == pytest.approx(0.6)
+    start = thermostat.cycle_scheduler.start_cycle.await_args
+    assert start.args[1] == pytest.approx(0.6)
+    assert start.kwargs["request_id"] > owned_id
     assert algo._command_ownership.last_binding.status == CommandOwnershipBindingStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_scheduler_without_receipts_runs_without_ownership(fake_handler_runtime) -> None:
+    """An older VT scheduler never receives request_id and nothing is owned."""
+    thermostat = fake_handler_runtime
+    handler, algo = _make_handler(thermostat, receipts=False)
+    assert algo.receipts_supported is False
+
+    await _control(handler, algo)
+    callback = thermostat.cycle_scheduler._cycle_start_callbacks[0]
+    await callback(360, 240, 0.6, VThermHvacMode_HEAT)
+
+    assert thermostat.cycle_scheduler.start_cycle.await_args.kwargs == {}
+    assert algo._command_ownership.last_binding.status == CommandOwnershipBindingStatus.NONE
+    assert algo._causal_power_trace._active_ownership is None
+    assert algo.committed_on_percent == pytest.approx(0.6)
+
+
+def test_remove_unregisters_the_receipt_callback(fake_handler_runtime) -> None:
+    """Removing the handler stops the receipt delivery."""
+    thermostat = fake_handler_runtime
+    handler, algo = _make_handler(thermostat)
+    scheduler = thermostat.cycle_scheduler
+    assert scheduler._receipt_callbacks == [algo.on_command_receipt]
+    assert algo.receipts_supported is True
+    handler._store = None
+
+    handler.remove()
+
+    assert scheduler._receipt_callbacks == []
+    assert handler._receipt_remove is None
 
 
 @pytest.mark.asyncio

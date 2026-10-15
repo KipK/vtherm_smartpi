@@ -474,7 +474,7 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `integral_guard.py`    | garde de croissance positive de l'intégrale              |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
-| `command_ownership.py` | projection de commande figée et suivi de rattachement du scheduler |
+| `command_ownership.py` | identifiants de requête, snapshots figés et rattachement des reçus de commande appliquée du scheduler |
 | `ff_trim_periodic.py`  | sélection de fenêtres d’équilibre périodique par phase   |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |
 | `ff3.py`               | correction prédictive bornée FF3                         |
@@ -579,15 +579,35 @@ Seul le trim appris reste persistant. Les fenêtres de propriété, propositions
 en attente et transferts d'intégrale sont transitoires ; après redémarrage,
 l'observateur est reconstruit et le gel existant de trois cycles est conservé.
 
-Pour les commandes switch, SmartPI prépare un snapshot de propriété figé juste
-avant la soumission au scheduler. Le callback de début de cycle ne le rattache
-que si le mode HVAC, les durées ON/OFF projetées et la puissance réalisée
-correspondent. La quantification normale à la seconde est portée par la
-projection ; une contrainte de durée minimale reste un segment causal rejeté.
-Un callback absent ou divergent ne reconstruit jamais la propriété depuis
-l’état courant du contrôleur. Les snapshots valve suivent la même règle de
-propriété figée dans l’espace actionneur avant leur conversion vers l’espace
-linéaire du modèle.
+La propriété des commandes vient des reçus de commande appliquée du scheduler
+de cycles de Versatile Thermostat (`AppliedCommandReceipt` de `vtherm_api`).
+Juste avant de soumettre une requête, SmartPI fige sa décomposition de
+commande et passe un `request_id` strictement croissant à `start_cycle`. Le
+scheduler renvoie cet identifiant dans un reçu pour chaque commande qu’il
+applique réellement : un reçu `cycle_start` à chaque début de cycle maître, y
+compris son redémarrage automatique, et un reçu `update` pour chaque position
+de vanne appliquée en cours de cycle. Aucun reçu n’est émis pour une requête
+switch en attente du cycle suivant. Le reçu engage la puissance actionneur
+appliquée, convertie dans l’espace linéaire du modèle, et rattache le snapshot
+figé de sa requête. Un reçu n’est possédé que si sa requête est connue, garde
+son mode HVAC, ne porte aucune altération `min_on_off` ou `valve_retained` et
+n’a pas été contrainte par le timing ; une requête rejetée reste rejetée pour
+ses reçus suivants. Les commandes non taguées ne sont jamais possédées : les
+substitutions de Versatile Thermostat comme la puissance par défaut de
+sécurité, et les mises à jour de vanne différées de Versatile Thermostat. Les
+32 dernières requêtes sont conservées, de sorte qu’un scheduler qui applique
+une requête plus ancienne l’attribue encore à cette requête. Un reçu absent ou
+rejeté ne reconstruit jamais la propriété depuis l’état courant du contrôleur.
+Un transfert bumpless est engagé dès qu’un reçu possédé porte une requête
+préparée après le transfert.
+
+Sans prise en charge des reçus par Versatile Thermostat, SmartPI soumet des
+requêtes non taguées et engage la puissance indiquée par le callback de début
+de cycle, ou l’ouverture de vanne publiée en mode vanne, sans propriété. Le
+trim stationnaire utilise alors le `u_ff1` échantillonné, le trim périodique et
+le transfert bumpless restent inactifs, et la régulation PI est inchangée. Une
+mise à jour de vanne sans ouverture publiée n’engage rien et marque une
+discontinuité de trace.
 
 ### 5.5 Diagnostics publiés
 
@@ -606,10 +626,12 @@ persistés du modèle restent internes et servent aux décisions de qualité du
 modèle et de warm-up. Quand le jumeau thermique est exploitable, ses champs
 publics sont exposés sous `analysis.twin`.
 
-`feedforward.fftrim.command_ownership` expose le dernier état de rattachement,
-son motif de rejet, la séquence de requête, les puissances et durées
-demandées/projetées/réalisées, leur delta de puissance et l’indicateur de
-contrainte temporelle. Ces valeurs sont des observations : elles expliquent
+`feedforward.fftrim.command_ownership` indique si le scheduler émet des reçus
+et expose le dernier état de rattachement, son motif de rejet, l’identifiant de
+requête (`request_sequence`), le type de reçu, les puissances demandée et
+appliquée et leur delta, les durées ON/OFF appliquées, les altérations du reçu,
+l’indicateur de contrainte temporelle et les compteurs de rejet de la session
+Home Assistant courante. Ces valeurs sont des observations : elles expliquent
 une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 
 ---
