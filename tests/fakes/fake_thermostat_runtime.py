@@ -75,11 +75,21 @@ class FakeThermostatRuntime:
         self.is_device_active = False
         self.is_overpowering_detected = False
         self.max_on_percent = 1.0
+        self.safety_default_on_percent: float | None = None
         self._custom_attributes_updates = 0
         self._ha_state_writes = 0
         self.async_underlying_entity_turn_off = AsyncMock()
         self.async_control_heating = AsyncMock(return_value=True)
         self._state = SimpleNamespace()
+
+    @property
+    def on_percent(self) -> float | None:
+        """Mirror VT: the safety default overrides the algorithm output."""
+        if self.safety_default_on_percent is not None:
+            return self.safety_default_on_percent
+        if self.prop_algorithm is None:
+            return 0.0
+        return self.prop_algorithm.on_percent
 
     def update_custom_attributes(self) -> None:
         """Track attribute refresh requests."""

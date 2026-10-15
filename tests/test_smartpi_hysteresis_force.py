@@ -67,6 +67,7 @@ async def test_smartpi_hysteresis_forces_cycle():
     algo.update_realized_power = MagicMock()
 
     thermostat.prop_algorithm = algo
+    thermostat.on_percent = algo.on_percent
 
     # Call control_heating - hysteresis toggled from 0% to 100%
     await handler.control_heating(timestamp=datetime.now())

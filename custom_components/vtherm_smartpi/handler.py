@@ -449,9 +449,9 @@ class SmartPIHandler:
                 # The master scheduler may still hold a pending heat cycle while
                 # the physical device is already in its OFF phase.
                 await t.cycle_scheduler.cancel_cycle()
+        elif (on_percent := t.on_percent) is None:
+            _LOGGER.info("%s - on_percent unknown (no temperature), keeping the switch state", t)
         else:
-            on_percent = t.prop_algorithm.on_percent if t.prop_algorithm else 0.0
-
             # Check if on_percent has changed
             on_percent_changed = abs(on_percent - self._last_on_percent) > 0.001
             self._last_on_percent = on_percent
@@ -468,7 +468,10 @@ class SmartPIHandler:
             projection = self._project_scheduler_command(on_percent)
             valve_segment_staged = False
             if algo is not None:
-                if not is_valve_mode:
+                if abs(on_percent - algo.on_percent) > 1e-6:
+                    # VT override (e.g. safety default): not owned by the SmartPI request.
+                    algo.reset_command_ownership("runtime_power_override")
+                elif not is_valve_mode:
                     algo.stage_cycle_command(projection, t.vtherm_hvac_mode)
                 else:
                     algo.stage_valve_command(projection, t.vtherm_hvac_mode)

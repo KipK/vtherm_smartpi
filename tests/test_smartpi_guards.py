@@ -22,6 +22,9 @@ def _make_thermostat():
     thermostat.underlyings = []
     thermostat.cycle_scheduler = MagicMock()
     thermostat.cycle_scheduler.start_cycle = AsyncMock()
+    type(thermostat).on_percent = PropertyMock(
+        side_effect=lambda: thermostat.prop_algorithm.on_percent
+    )
     return thermostat
 
 

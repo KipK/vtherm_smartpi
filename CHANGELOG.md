@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
   (fixing the "Invalid entity ID" recorder warning) and the thermostat name is
   in `name`. Automations that read the name from `entity_id` must read `name`.
 - Turning the thermostat OFF during the PWM off phase now cancels the running cycle.
+- In Versatile Thermostat safety mode the safety default power is applied instead of
+  the SmartPI command, and those cycles are not used as SmartPI-owned commands.
 - An options change reloads only the affected thermostats, once. Disabled SmartPI
   entries are ignored (thermostats fall back to the enabled defaults entry or to
   built-in defaults), and the defaults entry can be recreated after deletion.
