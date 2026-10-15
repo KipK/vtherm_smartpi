@@ -373,8 +373,6 @@ Cette pente est traitée symétriquement :
 - en chauffage, une pente positive correspond à un rapprochement vers la consigne,
 - en refroidissement, la pente est inversée logiquement pour conserver la même lecture physique.
 
-Tant que la garde reste active, l'atténuation `TRAJECTORY_I_RUN_SCALE` peut limiter la croissance positive de l'intégrale pendant la trajectoire. Dès que la garde est relâchée, cette atténuation n'est plus appliquée : la branche I retrouve sa dynamique normale pour corriger le résidu statique.
-
 Les reprises suivant détection d'ouverture et power shedding ajoutent une étape supplémentaire en chauffage :
 
 - à la reprise, SmartPI arme d'abord un `I:HOLD` explicite,

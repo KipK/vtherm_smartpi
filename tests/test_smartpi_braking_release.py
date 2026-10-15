@@ -44,7 +44,6 @@ def _prepared(mode=VThermHvacMode_HEAT):
         now=case.now, current_temp=case.current, hvac_mode=case.mode,
         error_i=inputs["error"], dt_min=1.0, integrator_hold=False,
         block_positive_integral=False, block_negative_integral=False,
-        trajectory_shaping_active=False,
     )
     return case, inputs, release_inputs
 

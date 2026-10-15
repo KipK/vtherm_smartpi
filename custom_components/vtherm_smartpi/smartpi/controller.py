@@ -6,7 +6,6 @@ from math import isfinite
 from .const import (
     KI_MIN,
     OVERSHOOT_I_CLAMP_EPS_C,
-    TRAJECTORY_I_RUN_SCALE,
     clamp
 )
 from .deadband_output import ProportionalState
@@ -230,7 +229,6 @@ class SmartPIController:
         in_deadband: bool,
         integrator_hold: bool,
         deadband_c: float,
-        trajectory_shaping_active: bool = False,
         core_deadband: bool | None = None,
         block_positive_integral: bool = False,
         block_negative_integral: bool = False,
@@ -329,14 +327,6 @@ class SmartPIController:
                     elif guard_delta_mode == "unwind":
                         self.last_i_mode = f"I:GUARD_UNWIND({positive_integral_guard_mode})"
 
-                    if (
-                        trajectory_shaping_active
-                        and guard_delta_mode == "run"
-                        and d_integral > 0.0
-                    ):
-                        d_integral *= TRAJECTORY_I_RUN_SCALE
-                        self.last_i_mode = "I:RUN(traj_track)"
-                    
                     # Signed overshoot clamp — once the signed error is near/beyond
                     # zero we do not allow the integral to grow further.
                     if error <= OVERSHOOT_I_CLAMP_EPS_C:

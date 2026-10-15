@@ -369,8 +369,6 @@ The recovery slope is handled symmetrically:
 - in heating mode, a positive slope means moving toward the setpoint,
 - in cooling mode, the slope is logically inverted so the same physical reading remains valid.
 
-As long as the guard stays active, `TRAJECTORY_I_RUN_SCALE` may limit positive integral growth during the trajectory. Once the guard is released, that attenuation is no longer applied: the I branch returns to its normal dynamics to correct the static residual.
-
 Window resumes and power-shedding resumes in heating mode add one more stage:
 
 - on resume, SmartPI first arms an explicit `I:HOLD`,

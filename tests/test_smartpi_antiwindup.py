@@ -105,28 +105,6 @@ def test_observed_valve_deadband_case_uses_frozen_integral_only():
     assert ctl.u_pi != pytest.approx(raw_p_plus_i)
 
 
-def test_tracking_trajectory_reduces_free_integral_growth():
-    """Free I-run must grow more slowly while the trajectory is still tracking."""
-    ctl = SmartPIController("test_track_i_scale")
-    ctl.integral = 0.0
-
-    ctl.compute_pwm(
-        error=1.0,
-        error_p=1.0,
-        kp=0.1,
-        ki=0.1,
-        u_ff=0.0,
-        dt_min=10.0,
-        in_deadband=False,
-        integrator_hold=False,
-        deadband_c=0.0,
-        trajectory_shaping_active=True,
-    )
-
-    assert ctl.integral == pytest.approx(2.0)
-    assert ctl.last_i_mode == "I:RUN(traj_track)"
-
-
 @pytest.mark.asyncio
 async def test_guard_cut_cycle_completion_preserves_integral():
     """A completed zero-power guard-cut cycle must not drain the integral."""

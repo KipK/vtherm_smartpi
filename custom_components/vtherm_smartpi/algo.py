@@ -2678,7 +2678,6 @@ class SmartPI:
         self, *, now: float, current_temp: float, hvac_mode: VThermHvacMode,
         error_i: float, dt_min: float, integrator_hold: bool,
         block_positive_integral: bool, block_negative_integral: bool,
-        trajectory_shaping_active: bool,
     ) -> float | None:
         """Retire a completed braking episode only with a safe raw-P request."""
         manager = self.sp_mgr
@@ -2715,7 +2714,6 @@ class SmartPI:
             and integrator_hold is False and not ctl.integral_hold_active
             and block_positive_integral is False
             and block_negative_integral is False
-            and trajectory_shaping_active is False
         )
         decision = evaluate_braking_release(
             context=context, pi_snapshot=pi, phase=manager.trajectory_phase,
@@ -3090,7 +3088,6 @@ class SmartPI:
             in_deadband_now,
             integrator_hold,
             deadband_c=self.deadband_c,
-            trajectory_shaping_active=trajectory_i_active and block_positive_integral,
             core_deadband=in_core_deadband,
             block_positive_integral=block_positive_integral,
             block_negative_integral=block_negative_integral,
@@ -3105,7 +3102,6 @@ class SmartPI:
             error_i=error_i, dt_min=dt_min, integrator_hold=integrator_hold,
             block_positive_integral=block_positive_integral,
             block_negative_integral=block_negative_integral,
-            trajectory_shaping_active=trajectory_i_active and block_positive_integral,
         )
         if released_u is not None:
             u_cmd = released_u
