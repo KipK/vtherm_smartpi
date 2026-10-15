@@ -1621,6 +1621,11 @@ class SmartPI:
         """Convert actuator feedback to internal linear demand."""
         return self.valve_curve.invert(actuator_power)
 
+    def _linear_max_on(self) -> float | None:
+        """Return max_on_percent, an actuator limit in VT, in linear demand space."""
+        cap = self._max_on_percent
+        return self.valve_curve.invert(cap) if cap is not None and self.valve_curve.params else cap
+
     def configure_valve_linearization(
         self,
         enabled: bool,
@@ -2002,7 +2007,7 @@ class SmartPI:
             current_temp=current_temp,
             hvac_mode=hvac_mode,
             dt_est=self.dt_est,
-            max_on_percent=self._max_on_percent,
+            max_on_percent=self._linear_max_on(),
         )
 
         # Calibration state is now fully managed by CalibrationManager
@@ -2784,13 +2789,8 @@ class SmartPI:
             u_limited = clamp(u_cmd, prev_limited - max_step, prev_limited + max_step)
 
         # SATURATION & FINAL OUTPUT
-        self._set_linear_output(
-            clamp(
-                u_limited,
-                0.0,
-                self._max_on_percent if self._max_on_percent is not None else 1.0,
-            )
-        )
+        max_on = self._linear_max_on()
+        self._set_linear_output(clamp(u_limited, 0.0, 1.0 if max_on is None else max_on))
         return self._on_percent
 
     def _try_release_terminal_braking(
@@ -2854,15 +2854,14 @@ class SmartPI:
             return None
         raw_p = pi.project_p(raw_error)
         raw_command = pi.u_i + pi.u_ff + raw_p
+        max_on = self._linear_max_on()
         if (
             not finite(raw_command) or not 0.0 <= raw_command <= 1.0
             or raw_p < ctl.u_p or not 0.0 <= pi.u_ff + raw_p <= 1.0
             or not finite(dt_min) or dt_min <= 0.0
             or not self._output_initialized
             or abs(raw_command - previous_limited) > MAX_STEP_PER_MINUTE * dt_min
-            or (self._max_on_percent is not None
-                and (not finite(self._max_on_percent)
-                     or raw_command > self._max_on_percent))
+            or (max_on is not None and (not finite(max_on) or raw_command > max_on))
             or raw_command != decision.raw_requested_power
         ):
             return None

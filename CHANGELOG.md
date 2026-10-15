@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- In valve mode with linearization, `max_on_percent` limits the valve opening
+  sent to Versatile Thermostat, as Versatile Thermostat does: SmartPI caps its
+  linear demand at the curve inverse of `max_on_percent`. Before, the cap applied
+  to the linear demand gave a much smaller opening (13 % instead of 60 % for
+  `max_on_percent` 0.6 with the default curve). Switch mode and valves without
+  linearization are unchanged.
 - SmartPI attributes each applied command to its request through the
   applied-command receipts of Versatile Thermostat (`vtherm_api` 0.7.0 or later).
   The feed-forward trim and the bumpless transfer require a Versatile Thermostat
