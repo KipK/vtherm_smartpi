@@ -28,6 +28,10 @@ class ValveCurveParams:
             raise ValueError("invalid valve curve demand breakpoint")
 
 
+# Versatile Thermostat applies valve positions in whole percents
+# (round(on_percent * 100) before the dpercent and period filters).
+VALVE_POSITION_STEP = 0.01
+
 VALVE_CURVE_DEFAULTS = ValveCurveParams(
     min_valve=7.0,
     knee_demand=80.0,
@@ -107,6 +111,30 @@ class TwoSlopeValveCurve:
                 100.0 - p.knee_demand
             ) / (p.max_valve - p.knee_valve)
         return clamp_unit(demand / 100.0)
+
+
+def applied_output_deviates(
+    curve: ValveCurveProtocol,
+    valve_mode: bool,
+    requested: float,
+    applied: float,
+    epsilon: float,
+) -> bool:
+    """Return True when the applied linear output is not the rendering of the request.
+
+    A switch output must match the request within epsilon. A valve position is
+    the actuator request rounded to VALVE_POSITION_STEP, so the request renders
+    to the applied position whenever its actuator image lies within half a step
+    of it, i.e. inside the linear image of that half-step interval (the curve is
+    monotonic), widened by epsilon.
+    """
+    if not valve_mode:
+        return abs(requested - applied) > epsilon
+    position = curve.apply(applied)
+    half_step = 0.5 * VALVE_POSITION_STEP
+    low = curve.invert(position - half_step) - epsilon
+    high = curve.invert(position + half_step) + epsilon
+    return not low <= requested <= high
 
 
 def build_valve_curve(

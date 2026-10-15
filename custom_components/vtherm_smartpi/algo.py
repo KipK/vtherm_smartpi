@@ -136,6 +136,7 @@ from .smartpi.integral_guard import (
 )
 from .smartpi.valve_curve import (
     ValveCurveParams,
+    applied_output_deviates,
     build_valve_curve,
 )
 from .smartpi.const import (
@@ -1425,9 +1426,12 @@ class SmartPI:
             > FF_TRIM_TRANSFER_COMMAND_EPSILON
         ):
             return "application_output_limited"
-        if (
-            abs(self._last_u_limited - self._last_u_applied)
-            > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        if applied_output_deviates(
+            self.valve_curve,
+            self._valve_mode_enabled,
+            self._last_u_limited,
+            self._last_u_applied,
+            FF_TRIM_TRANSFER_COMMAND_EPSILON,
         ):
             return "application_timing_output"
         return None

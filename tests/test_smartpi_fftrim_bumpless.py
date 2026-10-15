@@ -17,6 +17,11 @@ from custom_components.vtherm_smartpi.smartpi.ff_trim import (
     FFTrimWindowProposal,
     prepare_bumpless_transfer,
 )
+from custom_components.vtherm_smartpi.smartpi.valve_curve import (
+    VALVE_POSITION_STEP,
+    applied_output_deviates,
+    build_valve_curve,
+)
 
 
 @pytest.mark.parametrize("integral_bias", (0.12, -0.08))
@@ -330,3 +335,132 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
     assert rejected is False
     assert algo._bumpless_transfer_state == "rejected"
     assert algo._ff_trim.last_transaction == transaction
+
+
+def _vt_rounded_position(curve, linear: float) -> float:
+    """Return the valve position Versatile Thermostat applies for one request."""
+    return round(curve.apply(linear) * 100) / 100
+
+
+@pytest.mark.parametrize("linearized", (False, True))
+def test_valve_rounding_is_not_an_applied_output_deviation(linearized: bool) -> None:
+    """Every correctly rounded valve position renders its own request."""
+    curve = build_valve_curve(linearized)
+    for index in range(50, 951):
+        requested = index / 1000
+        position = _vt_rounded_position(curve, requested)
+        applied = curve.invert(position)
+        assert not applied_output_deviates(curve, True, requested, applied, 0.001)
+        for offset in (-2 * VALVE_POSITION_STEP, 2 * VALVE_POSITION_STEP):
+            other = curve.invert(position + offset)
+            assert applied_output_deviates(curve, True, requested, other, 0.001)
+
+
+def test_switch_applied_output_deviation_keeps_the_epsilon_gate() -> None:
+    """Switch outputs keep the strict epsilon comparison in linear space."""
+    curve = build_valve_curve(False)
+
+    assert not applied_output_deviates(curve, False, 0.234, 0.2335, 0.001)
+    assert applied_output_deviates(curve, False, 0.234, 0.23, 0.001)
+    assert applied_output_deviates(curve, False, 0.23, 0.234, 0.001)
+
+
+def _deadband_transfer_algo(valve_mode: bool, linearized: bool, u_lin: float) -> SmartPI:
+    """Build an algorithm whose only open transfer condition is the applied output."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=5.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="bumpless-valve-rounding",
+    )
+    if valve_mode:
+        algo.configure_valve_linearization(linearized, valve_mode=True)
+    algo.Kp = 0.5
+    algo.Ki = 0.02
+    algo.gov.regime = GovernanceRegime.DEAD_BAND
+    algo.ctl.integral = 5.0
+    algo.ctl.u_ff = u_lin - 0.1
+    algo.ctl.u_p = 0.0
+    algo.ctl.u_i = 0.1
+    algo.ctl.u_pi = 0.1
+    algo.ctl.u_cmd = u_lin
+    algo.ctl.last_i_mode = "I:FREEZE(deadband)"
+    algo.ctl.last_sat = "NO_SAT"
+    algo._last_u_cmd = u_lin
+    algo._last_u_limited = u_lin
+    algo._last_u_applied = u_lin
+    algo._set_linear_output(u_lin)
+    algo._last_ff_result = FFResult(
+        u_ff1=u_lin - 0.1,
+        u_ff2=0.0,
+        u_ff_final=u_lin - 0.1,
+        u_ff3=0.0,
+        u_ff_trim=0.0,
+        u_ff_eff=u_lin - 0.1,
+        ff_reason="ff_none",
+    )
+    return algo
+
+
+@pytest.mark.parametrize(
+    ("linearized", "u_lin"),
+    ((False, 0.234), (True, 0.33), (True, 0.8975)),
+)
+def test_valve_rounded_receipt_keeps_bumpless_transfer_applicable(
+    linearized: bool, u_lin: float
+) -> None:
+    """A rounded valve position applies the transfer; one step less rejects it."""
+    algo = _deadband_transfer_algo(True, linearized, u_lin)
+    position = _vt_rounded_position(algo.valve_curve, u_lin)
+
+    algo.on_applied_power_updated(position, VThermHvacMode_HEAT)
+
+    assert abs(algo._last_u_applied - u_lin) > 0.001
+    assert algo._current_bumpless_context_rejection() is None
+
+    algo.on_applied_power_updated(position - VALVE_POSITION_STEP, VThermHvacMode_HEAT)
+
+    assert algo._current_bumpless_context_rejection() == "application_timing_output"
+
+
+def test_switch_applied_gap_still_rejects_bumpless_transfer() -> None:
+    """The same linear gap on a switch output keeps rejecting the transfer."""
+    algo = _deadband_transfer_algo(False, False, 0.234)
+
+    algo.on_applied_power_updated(0.23, VThermHvacMode_HEAT)
+
+    assert algo._current_bumpless_context_rejection() == "application_timing_output"
+
+    algo.on_applied_power_updated(0.2335, VThermHvacMode_HEAT)
+
+    assert algo._current_bumpless_context_rejection() is None
+
+
+def test_valve_rounded_transfer_moves_only_the_physical_share() -> None:
+    """The transfer stays zero-sum on the command that reaches the valve."""
+    algo = _deadband_transfer_algo(True, False, 0.5)
+    algo._last_u_cmd = algo._last_u_limited = algo.ctl.u_cmd = 0.5043
+    algo.on_applied_power_updated(0.50, VThermHvacMode_HEAT)
+    persistent = FFTrimPersistentResult(
+        ready=True,
+        reason="persistent_ready",
+        pending_count=3,
+        median_correction=0.10,
+        median_ff1=0.4,
+        median_physical_power_deficit=0.0,
+        median_integral_bias=0.10,
+        transfer_eligible=True,
+        transfer_reason="quasi_equilibrium",
+    )
+    command_before = algo._ff_trim.u_ff_trim + 0.4 + algo.Ki * algo.ctl.integral
+
+    assert algo._apply_bumpless_persistent_result(
+        persistent=persistent,
+        quality="valve_segmented_linear",
+    )
+    command_after = algo._ff_trim.u_ff_trim + 0.4 + algo.Ki * algo.ctl.integral
+    assert algo._applied_i_transfer > 0.0
+    assert algo._net_command_delta == pytest.approx(0.0, abs=1e-12)
+    assert command_after == pytest.approx(command_before, abs=1e-12)
+    assert _vt_rounded_position(algo.valve_curve, algo.ctl.u_cmd) == pytest.approx(0.50)
