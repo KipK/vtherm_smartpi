@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Anti-windup works per tick on the applicable limit (`max_on_percent`, governor
+  cap) and only drains the accumulated integral; the end-of-cycle tracking is
+  removed. Effect: no steady offset below the setpoint when Versatile
+  Thermostat holds back valve positions (`dpercent`), with possibly more
+  overshoot in that configuration. The `aw_du` diagnostic is the correction of
+  the last tick.
 - In valve mode with linearization, `max_on_percent` limits the valve opening
   sent to Versatile Thermostat, as Versatile Thermostat does: SmartPI caps its
   linear demand at the curve inverse of `max_on_percent`. Before, the cap applied

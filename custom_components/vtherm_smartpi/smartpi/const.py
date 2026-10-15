@@ -147,10 +147,6 @@ SETPOINT_BOOST_RATE = 0.50       # boosted rate limit (/min) vs MAX_STEP_PER_MIN
 SETPOINT_MODE_DELTA_C = 0.5      # °C threshold for mode change detection
 OVERSHOOT_I_CLAMP_EPS_C = 0.04  # Guard band below setpoint where integral cannot increase (°C)
 
-# Tracking anti-windup (back-calculation) tuned for slow thermal systems
-AW_TRACK_TAU_S = 120.0        # floor (s) on the tracking time constant, which otherwise follows Ti = Kp/Ki
-AW_TRACK_MAX_DELTA_I = 5.0    # safety clamp on integral correction per minute (scaled by elapsed time)
-
 LEARNING_PAUSE_RESUME_MIN = 20  # Pause learning after resume (window close, etc.) to allow stabilization. NB: Corrected duplication in original file comments
 
 # Periodic recalculation interval (seconds) for SmartPI

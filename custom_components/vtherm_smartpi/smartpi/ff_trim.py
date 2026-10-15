@@ -1294,7 +1294,6 @@ def evaluate_pi_eligibility_for_trim(
         "I:CLAMP",
         "I:SKIP",
         "I:RESET",
-        "I:BLEED",
         "I:HOLD",
     )
     if i_mode.startswith(blocked_prefixes):

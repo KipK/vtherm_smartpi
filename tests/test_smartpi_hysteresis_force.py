@@ -63,9 +63,6 @@ async def test_smartpi_hysteresis_forces_cycle():
     algo.guards.check_guard_cut.return_value = GuardAction.NONE
     algo.guards.check_guard_kick.return_value = GuardAction.NONE
 
-    # helper for update_realized_power
-    algo.update_realized_power = MagicMock()
-
     thermostat.prop_algorithm = algo
     thermostat.on_percent = algo.on_percent
 

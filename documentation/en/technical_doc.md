@@ -296,7 +296,7 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-The equations are normalized in the active demand direction (`+1` for HEAT, `-1` for COOL). A dynamic reserve is selected from measured-slope and model-travel evidence, bounded by policy, and converted into a thermal target bound. The bound tolerates the controller deadband beyond the target in the demand direction and subtracts the dynamic reserve, so the cap never demands a tighter landing from the nominal model than the band the controller already accepts. The governor solves the maximum command that respects this bound and inverts that cap into the admissible P reference. The cap is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic and tracking anti-windup observes the realized downstream command.
+The equations are normalized in the active demand direction (`+1` for HEAT, `-1` for COOL). A dynamic reserve is selected from measured-slope and model-travel evidence, bounded by policy, and converted into a thermal target bound. The bound tolerates the controller deadband beyond the target in the demand direction and subtracts the dynamic reserve, so the cap never demands a tighter landing from the nominal model than the band the controller already accepts. The governor solves the maximum command that respects this bound and inverts that cap into the admissible P reference. The cap is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic. The excess of the PI request above the cap is handled by the per-tick anti-windup (section 4.5).
 
 Thermal observations are prepared before PI evaluation. Reference inversion
 uses an immutable snapshot of the effective proportional gain, integral power
@@ -328,7 +328,7 @@ The same payload in both modes exposes trajectory and governor details under
 - `command_before_cap` and `command_after_cap`,
 - `prediction_shortfall_c`, `falsification_count` and `falsification_span_s`.
 
-Setpoint reference shaping remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed. The post-PI cap does not rewrite the integral and does not change the valve linearization curve.
+Setpoint reference shaping remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed. The post-PI cap does not change the valve linearization curve and does not rewrite `u_pi`; only the anti-windup of section 4.5 drains the accumulated integral.
 
 The current code also applies an explicit guard on positive integral growth during catch-up phases:
 
@@ -401,11 +401,18 @@ The restart therefore keeps only useful persistent PI memory, without restoring 
 Additional protections currently present are:
 
 - `SmartPIGuards`: `guard_cut` and `guard_kick`,
-- tracking anti-windup,
+- per-tick anti-windup on the applicable upper limit (see below),
 - signed integral guard during resumes, catch-up phases, and setpoint changes,
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
 - `I:HOLD` with source `vt_safety` while Versatile Thermostat safety mode applies its default power instead of the SmartPI command,
 - deadband hold logic.
+
+The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower (and, for the back-calculation, the governor cap when it is lower still). It has two parts:
+
+- conditional integration: the integral stops growing when the unconstrained request exceeds the applicable upper limit;
+- back-calculation: on every tick where the integral mode is `I:RUN`, `I:SKIP`, `I:GUARD` or `I:CLAMP`, the excess of the PI output (`u_ff + u_pi`, clamped to `[0, 1]`) above the lower of `max_on_percent` and the governor cap corrects the integral by `beta * excess / Ki`, with `beta = dt / max(Kp/Ki, dt)` (tracking time constant equal to `Ti = Kp/Ki`). The correction only moves the integral toward zero and stops at zero, so an excess carried by the proportional term alone never winds the integral in the opposite direction. The integral stays clamped to `±2/Ki`. Only the integral changes: `u_pi` keeps the decomposition that produced the command.
+
+The following are not treated as saturation: Versatile Thermostat quantization and valve retention (`dpercent`, period), minimum on/off times, and the rate limiter. The behavior is symmetric in HEAT and COOL, does not use Versatile Thermostat command receipts, and is identical with older Versatile Thermostat versions. The `aw_du` diagnostic is the correction (excess, `<= 0`) applied at the last tick.
 
 ### 4.6 Auto-calibration
 
@@ -514,7 +521,7 @@ bounded transaction applies
 `delta_u_i = -alpha * lambda * J`, hence
 `delta_u_cmd = alpha * lambda * D`. The same factor `alpha` handles trim
 authority, FF branch bounds, integral capacity, and command headroom. The
-transaction runs only at the post-anti-windup cycle boundary and is identical
+transaction runs only at the cycle boundary and is identical
 in the signed HEAT and COOL model power space.
 Transfers below the generic actuator-precision threshold remain ignored unless
 they strictly reduce opposing stored trim and integral contributions. This
@@ -649,7 +656,6 @@ acceptance or rejection without changing the learning decision.
 | `KI_SAFE`                     | `0.010` |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |
-| `AW_TRACK_TAU_S`              | `120.0` |
 | `SMARTPI_RECALC_INTERVAL_SEC` | `60`    |
 | `LEARNING_PAUSE_RESUME_MIN`   | `20`    |
 

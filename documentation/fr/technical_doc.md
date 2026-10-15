@@ -299,7 +299,7 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-Les équations sont normalisées dans le sens de la demande active (`+1` en HEAT, `-1` en COOL). Une réserve dynamique est sélectionnée à partir de la pente mesurée et du déplacement prédit par le modèle, puis bornée par la politique et convertie en limite thermique. Cette limite tolère la deadband du contrôleur au-delà de la cible dans le sens de la demande et retranche la réserve dynamique : le cap n'exige jamais du modèle nominal un atterrissage plus précis que la bande déjà acceptée par le contrôleur. Le gouverneur résout la commande maximale respectant cette limite et inverse ce cap pour obtenir la référence P admissible. Le cap est appliqué après le calcul PI normal et avant les contraintes douces ; `u_pi` reste donc le diagnostic PI brut et l'anti-windup par tracking observe la commande réellement obtenue en aval.
+Les équations sont normalisées dans le sens de la demande active (`+1` en HEAT, `-1` en COOL). Une réserve dynamique est sélectionnée à partir de la pente mesurée et du déplacement prédit par le modèle, puis bornée par la politique et convertie en limite thermique. Cette limite tolère la deadband du contrôleur au-delà de la cible dans le sens de la demande et retranche la réserve dynamique : le cap n'exige jamais du modèle nominal un atterrissage plus précis que la bande déjà acceptée par le contrôleur. Le gouverneur résout la commande maximale respectant cette limite et inverse ce cap pour obtenir la référence P admissible. Le cap est appliqué après le calcul PI normal et avant les contraintes douces ; `u_pi` reste donc le diagnostic PI brut. L'excès de la demande PI au-delà du cap est traité par l'anti-windup à chaque tick (section 4.5).
 
 Les observations thermiques sont préparées avant le calcul PI. L'inversion de
 référence utilise un instantané immuable du gain proportionnel effectif, de la
@@ -332,7 +332,7 @@ du gouverneur dans `live.analysis.trajectory` et `live.analysis.reference_govern
 - `command_before_cap` et `command_after_cap`,
 - `prediction_shortfall_c`, `falsification_count` et `falsification_span_s`.
 
-Le façonnage de référence reste limité à la branche P afin de préserver la consigne brute côté intégrale et d'éviter de perturber l'apprentissage. Le cap post-PI ne réécrit pas l'intégrale et ne change pas la courbe de linéarisation de vanne.
+Le façonnage de référence reste limité à la branche P afin de préserver la consigne brute côté intégrale et d'éviter de perturber l'apprentissage. Le cap post-PI ne change pas la courbe de linéarisation de vanne et ne réécrit pas `u_pi` ; seul l'anti-windup de la section 4.5 vide l'intégrale accumulée.
 
 Le code actuel applique aussi une garde explicite sur la croissance positive de l'intégrale pendant les phases de rattrapage :
 
@@ -405,11 +405,18 @@ Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer 
 Les protections complémentaires actuellement présentes sont :
 
 - `SmartPIGuards` : `guard_cut` et `guard_kick`,
-- anti-windup par tracking,
+- anti-windup à chaque tick sur la limite haute applicable (voir ci-dessous),
 - garde intégrale signée pendant les reprises, rattrapages et changements de consigne,
 - `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,
 - `I:HOLD` avec source `vt_safety` pendant que le mode sécurité de Versatile Thermostat applique sa puissance par défaut à la place de la commande SmartPI,
 - logique de maintien dans la deadband.
+
+L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse (et, pour la rétro-calculation, le cap du gouverneur lorsqu'il est plus bas encore). Il comporte deux parties :
+
+- intégration conditionnelle : l'intégrale cesse de croître lorsque la demande non contrainte dépasse la limite haute applicable ;
+- rétro-calculation : à chaque tick dont le mode intégral est `I:RUN`, `I:SKIP`, `I:GUARD` ou `I:CLAMP`, l'excès de la sortie PI (`u_ff + u_pi`, bornée à `[0, 1]`) au-delà de la plus basse des deux limites, `max_on_percent` et cap du gouverneur, corrige l'intégrale de `beta * excès / Ki`, avec `beta = dt / max(Kp/Ki, dt)` (constante de temps de poursuite égale à `Ti = Kp/Ki`). La correction ne déplace l'intégrale que vers zéro et s'arrête à zéro : un excès porté par le seul terme proportionnel n'entraîne jamais l'intégrale dans l'autre sens. L'intégrale reste bornée à `±2/Ki`. Seule l'intégrale change : `u_pi` conserve la décomposition qui a produit la commande.
+
+Ne sont pas traités comme une saturation : la quantification de Versatile Thermostat et la rétention de vanne (`dpercent`, période), les durées minimales on/off et le limiteur de pente. Le comportement est symétrique en HEAT et COOL, n'utilise pas les accusés de commande de Versatile Thermostat et est identique avec les anciennes versions de Versatile Thermostat. Le diagnostic `aw_du` est la correction (excès, `<= 0`) appliquée au dernier tick.
 
 Le calcul distingue aussi deux zones autour de la consigne :
 
@@ -527,7 +534,7 @@ transaction bornée applique
 `delta_u_i = -alpha * lambda * J`, donc
 `delta_u_cmd = alpha * lambda * D`. Le même facteur `alpha` respecte l'autorité du
 trim, les clamps FF, la capacité intégrale et la marge de commande. La
-transaction s'exécute uniquement à la frontière de cycle après anti-windup,
+transaction s'exécute uniquement à la frontière de cycle,
 dans le même espace de puissance signé en HEAT et COOL.
 Les transferts inférieurs au seuil générique de précision de l'actionneur
 restent ignorés, sauf lorsqu'ils réduisent strictement des contributions trim
@@ -668,7 +675,6 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `KI_SAFE`                     | `0.010` |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |
-| `AW_TRACK_TAU_S`              | `120.0` |
 | `SMARTPI_RECALC_INTERVAL_SEC` | `60`    |
 | `LEARNING_PAUSE_RESUME_MIN`   | `20`    |
 

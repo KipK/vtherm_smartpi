@@ -13,6 +13,9 @@ from .deadband_output import ProportionalState
 from .integral_guard import constrain_guarded_integral_delta
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
 
+# Integral modes in which the PI drives the actuator, so its integral tracks output limits.
+_TRACKED_I_MODES = ("I:RUN", "I:SKIP", "I:GUARD", "I:CLAMP")
+
 
 @dataclass(frozen=True)
 class IntegralPowerTransferResult:
@@ -86,6 +89,7 @@ class SmartPIController:
         # Setpoint landing command cap (post-PI governor)
         self.u_cmd_before_cap: float | None = None
         self.u_cmd_cap: float | None = None
+        self.last_aw_du: float = 0.0  # tracked excess of the last tick (<= 0)
 
         # Hysteresis State
         self.hysteresis_state: str = "off"
@@ -110,6 +114,7 @@ class SmartPIController:
         self._pi_output_snapshot = None
         self.u_cmd_before_cap = None
         self.u_cmd_cap = None
+        self.last_aw_du = 0.0
         self.hysteresis_state = "off"
 
     def apply_command_cap(self, u_cap: float | None) -> float:
@@ -232,11 +237,13 @@ class SmartPIController:
         positive_integral_guard_mode: str = "recovery_guard",
         deadband_allow_p: bool = False,
         integrator_hold_source: str = "external",
+        u_max: float = 1.0,
     ) -> float:
         """
         Main PID Calculation logic.
         Updates self.integral, self.u_pi, self.u_cmd.
-        Returns u_cmd (clamped 0-1).
+        Returns u_cmd (clamped 0-1). Conditional integration treats `u_max`,
+        the static upper output limit in linear demand space, as saturation.
         """
         self.last_integral_hold_source = "none"
         self.sat_i = False
@@ -267,7 +274,7 @@ class SmartPIController:
         u_pi_pre = kp * error_p_db + ki * self.integral
         u_raw_pre = u_ff + u_pi_pre
         
-        if u_raw_pre > 1.0:
+        if u_raw_pre > u_max:
             sat = "SAT_HI"
         elif u_raw_pre < 0.0:
             sat = "SAT_LO"
@@ -359,6 +366,49 @@ class SmartPIController:
         self.u_cmd = clamp(u_ff + u_pi, 0.0, 1.0)
 
         return self.u_cmd
+
+    def track_output_limit(
+        self,
+        u_max: float,
+        kp: float,
+        ki: float,
+        dt_min: float,
+    ) -> float:
+        """Back-calculate the integral toward a known upper limit below 1.
+
+        The limit is `u_max` (max_on_percent in linear space) or the governor
+        cap of this tick, whichever is lower. The excess of this tick's PI
+        request over it drains the integral with Tt = Ti = Kp/Ki, down to zero
+        at most: an excess carried by the proportional term alone does not
+        wind the integral in the opposite direction. The [0, 1] saturation
+        stays with conditional integration. Only the integral moves: u_i and
+        the PI snapshot keep the decomposition that produced the command.
+        Returns the tracked excess (<= 0).
+        """
+        self.last_aw_du = 0.0
+        if dt_min <= 0.0 or not self.last_i_mode.startswith(_TRACKED_I_MODES):
+            return 0.0
+        limit = u_max
+        if self.u_cmd_cap is not None:
+            limit = min(limit, max(float(self.u_cmd_cap), 0.0))
+        requested = clamp(self.u_ff + self.u_pi, 0.0, 1.0)
+        du = min(requested, limit) - requested
+        if du >= 0.0:
+            return 0.0
+        self._back_calculate(du, kp, ki, dt_min)
+        self.last_aw_du = du
+        return du
+
+    def _back_calculate(self, du: float, kp: float, ki: float, dt_min: float) -> None:
+        """Move the integral by beta * du / Ki toward zero only, never across it."""
+        ki_eff = max(ki, KI_MIN)
+        tt_min = max(kp, 1e-6) / ki_eff
+        beta = dt_min / max(tt_min, dt_min)
+        delta = beta * du / ki_eff
+        if self.integral * delta >= 0.0:
+            return
+        integral = self.integral + delta
+        self.integral = 0.0 if integral * self.integral < 0.0 else integral
 
     def apply_integral_power_transfer(
         self,

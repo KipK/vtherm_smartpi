@@ -63,7 +63,6 @@ from .smartpi.const import (
     GovernanceDecision,
     SmartPICalibrationPhase,
     TrajectoryPhase,
-    KI_MIN,
     MAX_STEP_PER_MINUTE,
     SETPOINT_BOOST_RATE,
     SETPOINT_MODE_DELTA_C,
@@ -77,8 +76,6 @@ from .smartpi.const import (
     AB_MIN_SAMPLES_B,
     DEFAULT_NEAR_BAND_DEG,
     CALIBRATION_TIMEOUT_MIN,
-    AW_TRACK_TAU_S,
-    AW_TRACK_MAX_DELTA_I,
     ERROR_FILTER_TAU,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     FF_TRIM_TRANSFER_COMMAND_EPSILON,
@@ -311,11 +308,10 @@ class SmartPI:
         # We want to pause learning on Resume, but NOT on Startup/Reboot
         self._startup_grace_period: bool = True
 
-        # Tracking anti-windup diagnostics
+        # Output chain diagnostics
         self._last_u_cmd: float = 0.0       # command after [0,1] clamp
         self._last_u_limited: float = 0.0   # after rate-limit and max_on_percent
         self._last_u_applied: float = 0.0   # candidate output after timing constraints
-        self._last_aw_du: float = 0.0       # tracking delta for diagnostics
         self._last_ff_trim_delta: float = 0.0
         self._last_fftrim_reject_reason: str = "none"
         self._last_fftrim_update_reason: str = "none"
@@ -448,7 +444,6 @@ class SmartPI:
         self._last_u_applied = 0.0
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
-        self._last_aw_du = 0.0
         self._last_ff_trim_delta = 0.0
         self._last_fftrim_reject_reason = "none"
         self._last_fftrim_update_reason = "none"
@@ -894,15 +889,9 @@ class SmartPI:
             # Reset governance regime tracking for new cycle
             self.gov.on_cycle_start()
 
-    async def on_cycle_completed(self, e_eff: float = None, elapsed_ratio: float = 1.0, cycle_duration_min: float = None, **_kw) -> None:
+    async def on_cycle_completed(self, e_eff: float = None, elapsed_ratio: float = 1.0, **_kw) -> None:
         """Handle end of cycle (learning)."""
         cycle_end_now = time.monotonic()
-
-        if e_eff is not None:
-            # Use the nominal cycle duration (provided by the scheduler) as dt_min for Astrom tracking.
-            # This is more accurate than measuring time since last calculate(), which can be short
-            # when a recalc timer fires mid-cycle.
-            self.update_realized_power(u_applied=e_eff, dt_min=cycle_duration_min, forced_by_timing=False, elapsed_ratio=elapsed_ratio)
 
         self._record_completed_fftrim_power(
             cycle_end_now=cycle_end_now,
@@ -1382,7 +1371,7 @@ class SmartPI:
         return True
 
     def _apply_pending_bumpless_at_cycle_boundary(self) -> None:
-        """Apply a prepared transaction only after cycle-end anti-windup."""
+        """Apply a prepared transaction at the cycle boundary."""
         persistent = self._pending_bumpless_persistent
         if persistent is None:
             return
@@ -1885,7 +1874,7 @@ class SmartPI:
 
     @property
     def aw_du(self) -> float:
-        return self._last_aw_du
+        return self.ctl.last_aw_du
 
     @property
     def forced_by_timing(self) -> bool:
@@ -2027,109 +2016,6 @@ class SmartPI:
         self._last_u_pi = self._on_percent
         self._last_u_cmd = self._on_percent
         self._last_u_limited = self._on_percent
-
-    def update_realized_power(
-        self,
-        u_applied: float | None = None,
-        dt_min: float = 0.0,
-        forced_by_timing: bool = False,
-        realized_percent: float | None = None,
-        elapsed_ratio: float = 1.0,
-        **_kwargs
-    ) -> None:
-        """Unified Astrom tracking AW based on realized energy. Single AW correction point.
-
-        Args:
-            u_applied: instantaneous duty cycle during the cycle's actual lifetime.
-            dt_min: nominal cycle duration in minutes (from scheduler config).
-            elapsed_ratio: fraction of the full cycle that actually ran (0..1).
-                The energy actually delivered relative to a full cycle is
-                u_applied * elapsed_ratio, which is comparable to the PI model output.
-        """
-        # Resolve argument name differences for compatibility with various tests.
-        # Realized cycle feedback is reported in actuator space.
-        val = realized_percent if realized_percent is not None else u_applied
-        if val is None:
-            return
-        val = self._to_linear_power(val)
-
-        # Pre-conditions
-        if dt_min <= 0 or abs(self.Ki) < 1e-6:
-            return
-
-        if forced_by_timing:
-            self._last_aw_du = 0.0
-            return
-
-        # Cascade policy: respect the integration decision made by compute_pwm (Path A)
-        i_mode = str(self.ctl.last_i_mode)
-        if any(
-            i_mode.startswith(prefix)
-            for prefix in (
-                "I:SKIP",
-                "I:FREEZE",
-                "I:GUARD",
-                "I:CLAMP",
-                "I:RESET",
-                "I:BLEED",
-                "I:OVERRIDE",
-                "I:HOLD",
-            )
-        ):
-            self._last_aw_du = 0.0
-            return
-
-        # Reference = what the PI model would have commanded within valid physical bounds [0, 1]
-        u_model = self.ctl.u_ff + (self.Kp * self.ctl.last_error_p_db + self.Ki * self.ctl.integral)
-        u_model_clamped = clamp(u_model, 0.0, 1.0)
-
-        # Reality = power actually delivered during the elapsed window
-        du = val - u_model_clamped
-
-        # Thermal Invariant for Tracking AW:
-        # We only apply tracking AW when downstream constraints (rate limits, shedding, cancelled cycles)
-        # PREVENT us from delivering the requested power (val < u_model_clamped -> du < 0).
-        # We never artificially inflate the integral if constraints force us to deliver MORE power (du > 0),
-        # nor do we drain it due to standard 0-100% saturation (handled perfectly by clamped u_model).
-        du = min(0.0, du)
-
-        self._last_aw_du = du
-
-        if abs(du) <= 0.001:
-            return
-
-        ki_eff = max(abs(self.Ki), KI_MIN)
-        kp_eff = max(abs(self.Kp), 1e-6)
-
-        # Åström tracking dynamics (Åström & Hägglund, §3.5):
-        # For a PI controller the tracking time constant Tt should equal the
-        # integral time constant Ti = Kp/Ki.  With Tt = Ti the 1/Ki
-        # amplification cancels out and dI = dt_min * du / Kp, which scales
-        # naturally with the proportional gain and avoids disproportionate
-        # integral corrections when Ki is small.
-        # AW_TRACK_TAU_S is kept as a floor to avoid infinitely slow tracking.
-        effective_dt_min = dt_min * elapsed_ratio
-        if effective_dt_min <= 0.001:
-            return
-
-        dt_sec = effective_dt_min * 60.0
-        Ti_sec = (kp_eff / ki_eff) * 60.0
-        Tt_sec = max(Ti_sec, AW_TRACK_TAU_S)
-        beta = clamp(dt_sec / max(Tt_sec, dt_sec), 0.0, 1.0)
-        dI = beta * (du / ki_eff)
-
-        # Per-cycle bound scaled by elapsed time
-        dI_max = AW_TRACK_MAX_DELTA_I * effective_dt_min
-        dI = clamp(dI, -dI_max, dI_max)
-
-        # Apply and clamp
-        i_max = 2.0 / ki_eff
-        old_i = self.integral
-        self.integral = clamp(self.integral + dI, -i_max, i_max)
-        _LOGGER.debug(
-            "%s - AW tracking: du=%.3f dI=%.4f (beta=%.2f) integral %.4f -> %.4f",
-            self._name, du, dI, beta, old_i, self.integral,
-        )
 
     def save_state(self) -> dict:
         """Save algorithm state for persistence."""
@@ -2888,6 +2774,7 @@ class SmartPI:
         Compute the next duty-cycle command.
         """
         self.ctl.last_integral_hold_source = "none"
+        self.ctl.last_aw_du = 0.0
 
         self._last_temperature_slope_h = float(slope) if isinstance(slope, (int, float)) else None
 
@@ -2939,7 +2826,6 @@ class SmartPI:
                 hvac_mode=hvac_mode,
             )
             self.ctl.last_i_mode = "I:OVERRIDE(guard_cut)"
-            self._last_aw_du = 0.0
             self._set_linear_output(0.0)
             self._last_calculate_time = None
             return
@@ -3202,6 +3088,8 @@ class SmartPI:
         # --- 11. PID Compute ---
         # Capture saturation state before compute_pwm updates it (used for SAT_HI exit detection)
         prev_sat_before_compute = self.ctl.last_sat
+        u_max = self._linear_max_on()
+        u_max = 1.0 if u_max is None else min(1.0, u_max)
 
         u_cmd = self.ctl.compute_pwm(
             error_i,
@@ -3220,6 +3108,7 @@ class SmartPI:
             positive_integral_guard_mode=positive_integral_guard_mode,
             deadband_allow_p=self._deadband_allow_p,
             integrator_hold_source=integrator_hold_source,
+            u_max=u_max,
         )
 
         released_u = self._try_release_terminal_braking(
@@ -3252,17 +3141,20 @@ class SmartPI:
             self.ctl.u_cmd_before_cap,
             u_cmd,
         )
+        # Anti-windup on the limits known at this tick (cap, max_on_percent).
+        # Rate limit and timing quantization are not saturations.
+        self.ctl.track_output_limit(u_max, self.Kp, self.Ki, dt_min)
 
         # --- 12. Soft Constraints ---
         u_limited = self._apply_soft_constraints(u_cmd, dt_min, setpoint_changed)
         self._last_u_limited = u_limited
 
-        # --- 13. Timing Constraints & Anti-Windup Tracking ---
+        # --- 13. Timing Constraints ---
         u_final = self.update_timing_constraints(self.u_prev, u_limited)
         self._set_linear_output(u_final)
         self._last_u_applied = u_final
 
-        # --- 13. Store the candidate output only (AW tracking deferred to on_cycle_completed) ---
+        # --- 13. Store the candidate output only ---
         self.ctl.finalize_cycle(u_limited, u_final)
 
         # --- 14. Update State & Diagnostics ---
