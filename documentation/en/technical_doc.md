@@ -404,6 +404,7 @@ Additional protections currently present are:
 - tracking anti-windup,
 - signed integral guard during resumes, catch-up phases, and setpoint changes,
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
+- `I:HOLD` with source `vt_safety` while Versatile Thermostat safety mode applies its default power instead of the SmartPI command,
 - deadband hold logic.
 
 ### 4.6 Auto-calibration

@@ -408,6 +408,7 @@ Les protections complémentaires actuellement présentes sont :
 - anti-windup par tracking,
 - garde intégrale signée pendant les reprises, rattrapages et changements de consigne,
 - `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,
+- `I:HOLD` avec source `vt_safety` pendant que le mode sécurité de Versatile Thermostat applique sa puissance par défaut à la place de la commande SmartPI,
 - logique de maintien dans la deadband.
 
 Le calcul distingue aussi deux zones autour de la consigne :

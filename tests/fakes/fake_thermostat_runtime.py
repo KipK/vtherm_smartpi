@@ -91,6 +91,11 @@ class FakeThermostatRuntime:
             return 0.0
         return self.prop_algorithm.on_percent
 
+    @property
+    def safety_manager(self) -> SimpleNamespace:
+        """Mirror VT: safety is detected while its default power applies."""
+        return SimpleNamespace(is_safety_detected=self.safety_default_on_percent is not None)
+
     def update_custom_attributes(self) -> None:
         """Track attribute refresh requests."""
         self._custom_attributes_updates += 1

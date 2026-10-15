@@ -396,6 +396,8 @@ class SmartPIHandler:
                 or t.cycle_scheduler is None
                 or not t.cycle_scheduler.is_cycle_running
             )
+            safety = getattr(getattr(t, "safety_manager", None), "is_safety_detected", False)
+            algo.vt_safety_override = safety is True
             t.prop_algorithm.calculate(
                 target_temp=t.target_temperature,
                 current_temp=t.current_temperature,

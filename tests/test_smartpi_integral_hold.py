@@ -303,3 +303,42 @@ def test_early_return_clears_previous_hold_source() -> None:
 
     assert pi.ctl.last_i_mode == "I:FREEZE(missing_sensor)"
     assert pi.ctl.last_integral_hold_source == "none"
+
+
+def test_vt_safety_override_holds_the_integral() -> None:
+    """While VT safety substitutes its power, the integral does not integrate."""
+    from unittest.mock import PropertyMock, patch
+
+    from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
+
+    def run(override: bool) -> tuple[float, float, SmartPI]:
+        pi = make_smartpi(deadband_c=0.0)
+        with (
+            patch("custom_components.vtherm_smartpi.algo.time.monotonic") as monotonic,
+            patch.object(SmartPI, "phase", new_callable=PropertyMock, return_value=SmartPIPhase.STABLE),
+        ):
+            for minute in range(4):
+                monotonic.return_value = 1000.0 + 60.0 * minute
+                pi.vt_safety_override = override and minute >= 2
+                if minute == 2:
+                    before = pi.ctl.integral
+                pi.calculate(
+                    target_temp=20.0,
+                    current_temp=19.5,
+                    ext_current_temp=5.0,
+                    slope=0.0,
+                    hvac_mode=VThermHvacMode_HEAT,
+                )
+        return before, pi.ctl.integral, pi
+
+    before, after, pi = run(override=True)
+    assert after == before
+    assert pi.ctl.last_i_mode == "I:HOLD"
+    assert pi.ctl.last_integral_hold_source == "vt_safety"
+    published = build_published_diagnostics(pi)
+    assert published["temperature"]["integral_hold_source"] == "vt_safety"
+
+    before_ref, after_ref, ref = run(override=False)
+    assert before_ref == before
+    assert after_ref != before_ref
+    assert ref.ctl.last_integral_hold_source != "vt_safety"

@@ -65,6 +65,9 @@ All notable changes to this project will be documented in this file.
   degree remap is active with valve linearization. The values are published
   under `live.valve`.
 - Internal cleanup of dead code.
+- While Versatile Thermostat safety mode applies its default power, the integral
+  is held (`integral_hold_source` `vt_safety`) instead of integrating the error
+  of a stale temperature.
 
 ## [0.4.0]
 

@@ -155,3 +155,58 @@ async def test_unknown_runtime_power_keeps_the_current_switch_state(fake_handler
     thermostat.cycle_scheduler.start_cycle.assert_not_awaited()
     thermostat.cycle_scheduler.cancel_cycle.assert_not_awaited()
     thermostat.async_underlying_entity_turn_off.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_safety_mode_flags_the_integral_hold_before_calculate(fake_handler_runtime) -> None:
+    """The VT safety state, read before calculate, drives the integral hold flag."""
+    thermostat = fake_handler_runtime
+    handler, algo = _make_handler(thermostat)
+    seen: list[bool] = []
+    real_calculate = algo.calculate
+    algo.calculate = lambda **kw: seen.append(algo.vt_safety_override)
+
+    thermostat.safety_default_on_percent = 0.25
+    await handler.control_heating(timestamp=None)
+    thermostat.safety_default_on_percent = None
+    await handler.control_heating(timestamp=None)
+
+    algo.calculate = real_calculate
+    assert seen == [True, False]
+    assert algo.vt_safety_override is False
+
+
+@pytest.mark.asyncio
+async def test_max_on_clamp_mismatch_is_not_a_safety_hold(fake_handler_runtime) -> None:
+    """A VT clamp of the runtime power outside safety mode never holds the integral."""
+    thermostat = fake_handler_runtime
+    handler, algo = _make_handler(thermostat)
+    seen: list[bool] = []
+
+    with patch.object(
+        type(thermostat), "on_percent", new_callable=PropertyMock, return_value=0.5
+    ):
+        await _control(handler, algo)
+        algo.calculate = lambda **kw: seen.append(algo.vt_safety_override)
+        await handler.control_heating(timestamp=None)
+
+    assert algo._command_ownership.last_binding.reason == "runtime_power_override"
+    assert seen == [False]
+    assert algo.vt_safety_override is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_without_safety_manager_never_holds(fake_handler_runtime) -> None:
+    """A runtime exposing no safety manager, or a non-boolean state, does not hold."""
+    thermostat = fake_handler_runtime
+    handler, algo = _make_handler(thermostat)
+    seen: list[bool] = []
+    algo.calculate = lambda **kw: seen.append(algo.vt_safety_override)
+
+    for manager in (None, MagicMock()):
+        with patch.object(
+            type(thermostat), "safety_manager", new_callable=PropertyMock, return_value=manager
+        ):
+            await handler.control_heating(timestamp=None)
+
+    assert seen == [False, False]

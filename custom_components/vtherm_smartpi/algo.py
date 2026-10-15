@@ -208,6 +208,7 @@ class SmartPI:
         self._valve_mode_enabled = bool(enable_valve_linearization)
         # VT valve settings seen by SmartPI; set by the handler in valve mode.
         self.valve_config_diag: dict[str, Any] | None = None
+        self.vt_safety_override = False  # set by the handler during VT safety mode
 
         self.deadband_c = float(deadband_c)
 
@@ -3189,6 +3190,8 @@ class SmartPI:
                     f"governance_{gov_freeze_reason_g.value}"
                 )
         integrator_hold = integrator_hold or gov_hold
+        if self.vt_safety_override:  # the PI does not drive the actuator
+            integrator_hold, integrator_hold_source = True, "vt_safety"
 
         # Deadband ENTRY: no bumpless transfer. The integral keeps its
         # naturally accumulated value and is simply frozen by compute_pwm.
