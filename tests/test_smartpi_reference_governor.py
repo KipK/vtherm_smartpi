@@ -16,14 +16,13 @@ from custom_components.vtherm_smartpi.smartpi.reference_governor import (
     PredictionSegment,
     ReferenceGovernorInput,
     ReferenceGovernorPolicy,
-    compute_dynamic_reserve_candidates,
+    compute_dynamic_reserve,
     evaluate_reference_governor,
     invert_p_reference_from_cap,
     normalize_model,
     normalize_signed,
     predict_segmented_1r1c,
     resolve_command_cap,
-    select_dynamic_reserve,
     signed_demand_delta,
 )
 
@@ -171,44 +170,37 @@ def test_prediction_rejects_invalid_segments(segment: PredictionSegment) -> None
 
 
 def test_dynamic_reserve_is_zero_bounded_and_signed() -> None:
-    flat = compute_dynamic_reserve_candidates(
+    flat = compute_dynamic_reserve(
         hvac_mode=VThermHvacMode_HEAT, measured_slope_h=0.0,
-        predicted_temperature_change_c=0.0, stop_deadtime_s=300.0,
-        rho_margin=1.0, margin_max_c=0.2,
+        stop_deadtime_s=300.0, rho_margin=1.0, margin_max_c=0.2,
     )
-    fast_cool = compute_dynamic_reserve_candidates(
+    fast_cool = compute_dynamic_reserve(
         hvac_mode=VThermHvacMode_COOL, measured_slope_h=-100.0,
-        predicted_temperature_change_c=-1.0, stop_deadtime_s=3600.0,
-        rho_margin=1.0, margin_max_c=0.2,
+        stop_deadtime_s=3600.0, rho_margin=1.0, margin_max_c=0.2,
     )
-    assert flat is not None and flat.reserve_c == 0.0
-    assert fast_cool is not None
-    assert fast_cool.slope_reserve_c == 0.2
-    assert fast_cool.model_reserve_c == 0.2
-    assert fast_cool.reserve_c == 0.2
-    assert compute_dynamic_reserve_candidates(
+    moving_away = compute_dynamic_reserve(
+        hvac_mode=VThermHvacMode_HEAT, measured_slope_h=-1.0,
+        stop_deadtime_s=600.0, rho_margin=1.0, margin_max_c=0.2,
+    )
+    assert flat == 0.0
+    assert fast_cool == 0.2
+    assert moving_away == 0.0
+    assert compute_dynamic_reserve(
         hvac_mode=VThermHvacMode_HEAT, measured_slope_h=float("inf"),
-        predicted_temperature_change_c=0.0, stop_deadtime_s=10.0,
-        rho_margin=1.0, margin_max_c=0.2,
+        stop_deadtime_s=10.0, rho_margin=1.0, margin_max_c=0.2,
     ) is None
 
 
-def test_dynamic_reserve_selector_exposes_each_candidate() -> None:
-    candidates = compute_dynamic_reserve_candidates(
-        hvac_mode=VThermHvacMode_HEAT,
-        measured_slope_h=0.72,
-        predicted_temperature_change_c=0.18,
-        stop_deadtime_s=600.0,
-        rho_margin=1.0,
-        margin_max_c=0.5,
+def test_dynamic_reserve_is_slope_travel_over_stop_deadtime() -> None:
+    reserve = compute_dynamic_reserve(
+        hvac_mode=VThermHvacMode_HEAT, measured_slope_h=0.72,
+        stop_deadtime_s=600.0, rho_margin=1.0, margin_max_c=0.5,
     )
-    assert candidates is not None
-    assert candidates.slope_reserve_c == pytest.approx(0.12)
-    assert candidates.model_reserve_c == pytest.approx(0.18)
-    assert select_dynamic_reserve(candidates, "slope") == pytest.approx(0.12)
-    assert select_dynamic_reserve(candidates, "model") == pytest.approx(0.18)
-    assert select_dynamic_reserve(candidates, "max") == pytest.approx(0.18)
-    assert select_dynamic_reserve(candidates, "unsupported") is None
+    assert reserve == pytest.approx(0.12)
+    assert compute_dynamic_reserve(
+        hvac_mode=VThermHvacMode_HEAT, measured_slope_h=None,
+        stop_deadtime_s=600.0, rho_margin=1.0, margin_max_c=0.5,
+    ) == 0.0
 
 
 @pytest.mark.parametrize(
@@ -326,7 +318,7 @@ def test_aggregate_kernel_returns_cap_and_conservative_reference() -> None:
             pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
         ),
         ReferenceGovernorPolicy(
-            reserve_selector="max", rho_margin=1.0, margin_max_c=0.2,
+            rho_margin=1.0, margin_max_c=0.2,
             prediction_horizon_min=5.0, command_comparison_epsilon=1e-9,
             reference_comparison_epsilon_c=1e-9,
         ),
@@ -353,7 +345,7 @@ def test_aggregate_bias_changes_cap_in_physical_direction(
         stop_deadtime_s=300.0, measured_slope_h=0.0,
         pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
     )
-    policy = ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9)
+    policy = ReferenceGovernorPolicy(1.0, 0.2, 5.0, 1e-9, 1e-9)
     baseline = evaluate_reference_governor(value, policy)
     explicit_zero = evaluate_reference_governor(
         replace(value, thermal_bias_c_per_min=0.0), policy
@@ -366,11 +358,6 @@ def test_aggregate_bias_changes_cap_in_physical_direction(
     assert biased.command_cap < baseline.command_cap
     assert biased.predicted_terminal_temp is not None
     assert baseline.predicted_terminal_temp is not None
-    assert biased.reserve_candidates is not None
-    assert baseline.reserve_candidates is not None
-    assert biased.reserve_candidates.model_reserve_c >= (
-        baseline.reserve_candidates.model_reserve_c
-    )
     invalid = evaluate_reference_governor(
         replace(value, thermal_bias_c_per_min=float("nan")), policy
     )
@@ -378,7 +365,7 @@ def test_aggregate_bias_changes_cap_in_physical_direction(
     assert invalid.command_cap is None
 
 
-def test_explicit_prediction_horizon_can_exceed_cycle_and_changes_reserve() -> None:
+def test_explicit_prediction_horizon_can_exceed_cycle() -> None:
     base = ReferenceGovernorInput(
         target_temp=30.0, nominal_reference=30.0, current_temp=20.0,
         ext_temp=20.0, hvac_mode=VThermHvacMode_HEAT, a=0.4, b=0.02,
@@ -390,7 +377,7 @@ def test_explicit_prediction_horizon_can_exceed_cycle_and_changes_reserve() -> N
     short = evaluate_reference_governor(
         base,
         ReferenceGovernorPolicy(
-            reserve_selector="max", rho_margin=1.0, margin_max_c=10.0,
+            rho_margin=1.0, margin_max_c=10.0,
             prediction_horizon_min=base.cycle_min,
             command_comparison_epsilon=1e-9,
             reference_comparison_epsilon_c=1e-9,
@@ -399,32 +386,17 @@ def test_explicit_prediction_horizon_can_exceed_cycle_and_changes_reserve() -> N
     long_horizon = evaluate_reference_governor(
         base,
         ReferenceGovernorPolicy(
-            reserve_selector="max", rho_margin=1.0, margin_max_c=10.0,
+            rho_margin=1.0, margin_max_c=10.0,
             prediction_horizon_min=10.0,
             command_comparison_epsilon=1e-9,
             reference_comparison_epsilon_c=1e-9,
         ),
     )
 
-    assert short.reserve_candidates is not None
-    assert long_horizon.reserve_candidates is not None
-    expected_short_change = (base.a / base.b) * (1.0 - exp(-base.b * base.cycle_min))
-    expected_long_change = (base.a / base.b) * (1.0 - exp(-base.b * 10.0))
-    assert short.reserve_candidates.model_reserve_c == pytest.approx(expected_short_change)
-    assert long_horizon.reserve_candidates.model_reserve_c == pytest.approx(expected_long_change)
     assert long_horizon.predicted_terminal_temp > short.predicted_terminal_temp
-    assert long_horizon.dynamic_reserve_c > short.dynamic_reserve_c
 
 
-@pytest.mark.parametrize(
-    ("selector", "expected_reserve"),
-    [
-        ("slope", pytest.approx(0.06)),
-        ("model", pytest.approx((0.4 / 0.02) * (1.0 - exp(-0.02 * 1.0)) * 1.0)),
-        ("max", pytest.approx((0.4 / 0.02) * (1.0 - exp(-0.02 * 1.0)) * 1.0)),
-    ],
-)
-def test_aggregate_uses_selected_reserve_variant(selector, expected_reserve) -> None:
+def test_aggregate_uses_slope_reserve() -> None:
     decision = evaluate_reference_governor(
         ReferenceGovernorInput(
             target_temp=21.0, nominal_reference=21.0, current_temp=20.0,
@@ -434,17 +406,12 @@ def test_aggregate_uses_selected_reserve_variant(selector, expected_reserve) -> 
             pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
         ),
         ReferenceGovernorPolicy(
-            reserve_selector=selector, rho_margin=1.0, margin_max_c=0.5,
+            rho_margin=1.0, margin_max_c=0.5,
             prediction_horizon_min=1.0, command_comparison_epsilon=1e-9,
             reference_comparison_epsilon_c=1e-9,
         ),
     )
-    assert decision.reserve_candidates is not None
-    assert decision.dynamic_reserve_c == expected_reserve
-    assert decision.reserve_candidates.slope_reserve_c == pytest.approx(0.06)
-    assert decision.reserve_candidates.model_reserve_c == pytest.approx(
-        (0.4 / 0.02) * (1.0 - exp(-0.02 * 1.0)) * 1.0
-    )
+    assert decision.dynamic_reserve_c == pytest.approx(0.06)
 
 
 def test_reference_comparison_epsilon_prevents_constraint_chatter() -> None:
@@ -456,7 +423,6 @@ def test_reference_comparison_epsilon_prevents_constraint_chatter() -> None:
         pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
     )
     common = dict(
-        reserve_selector="slope",
         rho_margin=1.0,
         margin_max_c=0.8,
         prediction_horizon_min=1.0,
@@ -482,26 +448,6 @@ def test_reference_comparison_epsilon_prevents_constraint_chatter() -> None:
     assert tolerant.active is False
 
 
-def test_aggregate_rejects_unsupported_reserve_selector() -> None:
-    value = ReferenceGovernorInput(
-        target_temp=21.0, nominal_reference=21.0, current_temp=20.0,
-        ext_temp=20.0, hvac_mode=VThermHvacMode_HEAT, a=0.4, b=0.02,
-        committed_u=0.0, next_cycle_u=1.0, remaining_cycle_min=0.0,
-        cycle_min=1.0, stop_deadtime_s=600.0, measured_slope_h=0.0,
-        pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
-    )
-    decision = evaluate_reference_governor(
-        value,
-        ReferenceGovernorPolicy(
-            reserve_selector="unsupported", rho_margin=1.0, margin_max_c=0.5,
-            prediction_horizon_min=1.0, command_comparison_epsilon=1e-9,
-            reference_comparison_epsilon_c=1e-9,
-        ),
-    )
-    assert decision.reason == "unsupported_reserve_selector"
-    assert decision.reserve_candidates is None
-
-
 def test_aggregate_bypasses_nonpositive_signed_demand() -> None:
     value = ReferenceGovernorInput(
         target_temp=20.0, nominal_reference=20.25, current_temp=21.0,
@@ -513,7 +459,7 @@ def test_aggregate_bypasses_nonpositive_signed_demand() -> None:
     decision = evaluate_reference_governor(
         value,
         ReferenceGovernorPolicy(
-            reserve_selector="max", rho_margin=1.0, margin_max_c=0.5,
+            rho_margin=1.0, margin_max_c=0.5,
             prediction_horizon_min=10.0, command_comparison_epsilon=1e-9,
             reference_comparison_epsilon_c=1e-9,
         ),
@@ -522,7 +468,6 @@ def test_aggregate_bypasses_nonpositive_signed_demand() -> None:
     assert decision.reason == "no_positive_demand"
     assert decision.command_cap is None
     assert decision.admissible_reference == value.nominal_reference
-    assert decision.reserve_candidates is None
 
 
 def test_aggregate_kernel_fails_closed_on_nonfinite_model_input() -> None:
@@ -536,7 +481,7 @@ def test_aggregate_kernel_fails_closed_on_nonfinite_model_input() -> None:
     decision = evaluate_reference_governor(
         base,
         ReferenceGovernorPolicy(
-            reserve_selector="max", rho_margin=1.0, margin_max_c=0.2,
+            rho_margin=1.0, margin_max_c=0.2,
             prediction_horizon_min=5.0, command_comparison_epsilon=1e-9,
             reference_comparison_epsilon_c=1e-9,
         ),
@@ -569,7 +514,7 @@ def test_kernel_rejects_missing_or_invalid_pi_snapshot(invalid: object) -> None:
     )
     decision = evaluate_reference_governor(
         base,
-        ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9),
+        ReferenceGovernorPolicy(1.0, 0.2, 5.0, 1e-9, 1e-9),
     )
     assert decision.reason == "invalid_pi_snapshot"
     assert decision.command_cap is None
@@ -590,7 +535,7 @@ def test_frozen_or_pending_p_cannot_invent_reference_constraint(mode, a, externa
         stop_deadtime_s=300.0, measured_slope_h=0.0,
         pi_snapshot=PIOutputSnapshot(1.0, 0.0, 0.0, ProportionalState(0.1, True, False, 0, None)),
     )
-    policy = ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9)
+    policy = ReferenceGovernorPolicy(1.0, 0.2, 5.0, 1e-9, 1e-9)
     for state in (
         base.pi_snapshot.p_state,
         ProportionalState(0.1, True, True, 0, None),
@@ -614,16 +559,16 @@ def test_tolerance_moves_the_bound_beyond_the_target_in_the_demand_direction(
         target_temp=21.0, nominal_reference=21.0, current_temp=21.0 - direction * 1.0,
         ext_temp=external, hvac_mode=mode, a=a, b=0.02,
         committed_u=1.0, next_cycle_u=1.0, remaining_cycle_min=0.0,
-        cycle_min=10.0, stop_deadtime_s=300.0, measured_slope_h=0.0,
+        cycle_min=10.0, stop_deadtime_s=300.0, measured_slope_h=direction * 2.4,
         pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
     )
     strict = evaluate_reference_governor(
         governor_input,
-        ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9),
+        ReferenceGovernorPolicy(1.0, 0.2, 5.0, 1e-9, 1e-9),
     )
     tolerant = evaluate_reference_governor(
         governor_input,
-        ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9, tolerance_c=0.05),
+        ReferenceGovernorPolicy(1.0, 0.2, 5.0, 1e-9, 1e-9, tolerance_c=0.05),
     )
     assert strict.target_bound is not None and tolerant.target_bound is not None
     assert tolerant.target_bound - strict.target_bound == pytest.approx(direction * 0.05)
@@ -642,7 +587,7 @@ def test_negative_tolerance_fails_closed() -> None:
             cycle_min=10.0, stop_deadtime_s=300.0, measured_slope_h=0.0,
             pi_snapshot=pi_snapshot(1.0, 0.0, 0.0, 0.05),
         ),
-        ReferenceGovernorPolicy("max", 1.0, 0.2, 5.0, 1e-9, 1e-9, tolerance_c=-0.01),
+        ReferenceGovernorPolicy(1.0, 0.2, 5.0, 1e-9, 1e-9, tolerance_c=-0.01),
     )
     assert invalid.reason == "invalid_tolerance"
     assert invalid.command_cap is None

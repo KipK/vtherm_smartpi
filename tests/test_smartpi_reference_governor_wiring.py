@@ -363,7 +363,7 @@ def _enter_governed(case, now):
             active=True, reason="cap", nominal_reference=case.target,
             admissible_reference=case.current, command_cap=0.25,
             predicted_terminal_temp=case.target, target_bound=case.target,
-            reserve_candidates=None, dynamic_reserve_c=0.0,
+            dynamic_reserve_c=0.0,
             constraint_active=True, coast_required=False,
         ),
         now, case.smartpi._cycle_min,

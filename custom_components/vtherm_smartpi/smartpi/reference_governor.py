@@ -9,15 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import Iterable, Literal
+from typing import Iterable
 
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL, VThermHvacMode_HEAT
 from .controller import PIOutputSnapshot
 from .deadband_output import ProportionalState
 from .thermal_model import propagate_1r1c
-
-ReserveSelector = Literal["slope", "model", "max"]
-_RESERVE_SELECTORS = frozenset(("slope", "model", "max"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,19 +44,9 @@ class SignedModel:
 
 
 @dataclass(frozen=True, slots=True)
-class DynamicReserveCandidates:
-    """Reserve values from measured slope, model travel, and their maximum."""
-
-    slope_reserve_c: float
-    model_reserve_c: float
-    reserve_c: float
-
-
-@dataclass(frozen=True, slots=True)
 class ReferenceGovernorPolicy:
     """Explicit policy values used by one pure governor evaluation."""
 
-    reserve_selector: ReserveSelector
     rho_margin: float
     margin_max_c: float
     prediction_horizon_min: float
@@ -124,13 +111,17 @@ class ReferenceGovernorDecision:
     command_cap: float | None
     predicted_terminal_temp: float | None
     target_bound: float | None
-    reserve_candidates: DynamicReserveCandidates | None
     dynamic_reserve_c: float
     constraint_active: bool
     coast_required: bool
 
 
-def _finite(value: object) -> float | None:
+def is_finite_number(value: object) -> bool:
+    """Return whether the value is an exact int or float that is finite."""
+    return type(value) in (int, float) and isfinite(value)
+
+
+def finite_float(value: object) -> float | None:
     """Return a finite float, or None for an invalid numeric value."""
     if isinstance(value, bool):
         return None
@@ -152,7 +143,7 @@ def _direction(hvac_mode: VThermHvacMode | None) -> float | None:
 
 def normalize_signed(value: float, hvac_mode: VThermHvacMode) -> float | None:
     """Normalize a physical delta into the active demand direction."""
-    numeric = _finite(value)
+    numeric = finite_float(value)
     direction = _direction(hvac_mode)
     if numeric is None or direction is None:
         return None
@@ -165,8 +156,8 @@ def signed_demand_delta(
     hvac_mode: VThermHvacMode,
 ) -> float | None:
     """Return ``direction * (target_temp - current_temp)``."""
-    target = _finite(target_temp)
-    current = _finite(current_temp)
+    target = finite_float(target_temp)
+    current = finite_float(current_temp)
     if target is None or current is None:
         return None
     return normalize_signed(target - current, hvac_mode)
@@ -182,8 +173,8 @@ def normalize_model(
     The physical contract is ``a > 0`` for HEAT, ``a < 0`` for COOL, and
     ``b > 0`` for both modes.  The returned active gain is always positive.
     """
-    a_value = _finite(a)
-    b_value = _finite(b)
+    a_value = finite_float(a)
+    b_value = finite_float(b)
     direction = _direction(hvac_mode)
     if a_value is None or b_value is None or direction is None:
         return None
@@ -240,9 +231,9 @@ def predict_segmented_1r1c(
     Segment durations may be zero.  Negative durations, out-of-range
     commands, invalid models, and nonfinite intermediates fail closed.
     """
-    current = _finite(current_temp)
-    external = _finite(ext_temp)
-    thermal_bias = _finite(thermal_bias_c_per_min)
+    current = finite_float(current_temp)
+    external = finite_float(ext_temp)
+    thermal_bias = finite_float(thermal_bias_c_per_min)
     model = normalize_model(a, b, hvac_mode)
     if current is None or external is None or thermal_bias is None or model is None:
         return None
@@ -255,8 +246,8 @@ def predict_segmented_1r1c(
     for segment in segment_values:
         if not isinstance(segment, PredictionSegment):
             return None
-        horizon = _finite(segment.horizon_min)
-        command = _finite(segment.command)
+        horizon = finite_float(segment.horizon_min)
+        command = finite_float(segment.command)
         if (
             horizon is None
             or command is None
@@ -297,24 +288,23 @@ def _bounded_reserve(value: float, margin_max_c: float) -> float | None:
     return min(max(value, 0.0), margin_max_c)
 
 
-def compute_dynamic_reserve_candidates(
+def compute_dynamic_reserve(
     *,
     hvac_mode: VThermHvacMode,
     measured_slope_h: float | None,
-    predicted_temperature_change_c: float | None,
     stop_deadtime_s: float,
     rho_margin: float,
     margin_max_c: float,
-) -> DynamicReserveCandidates | None:
-    """Return slope, model, and maximum-prudent dynamic reserve candidates.
+) -> float | None:
+    """Return the slope-based dynamic reserve in degrees.
 
-    The model change is expected to have been predicted over the same
-    slowdown horizon as ``stop_deadtime_s``.  Missing optional evidence
-    contributes zero; invalid supplied evidence fails closed.
+    The reserve is ``rho_margin`` times the temperature travel at the measured
+    slope over the stop dead time, bounded by ``margin_max_c``.  A missing
+    slope contributes zero; invalid supplied evidence fails closed.
     """
-    deadtime = _finite(stop_deadtime_s)
-    rho = _finite(rho_margin)
-    margin_max = _finite(margin_max_c)
+    deadtime = finite_float(stop_deadtime_s)
+    rho = finite_float(rho_margin)
+    margin_max = finite_float(margin_max_c)
     direction = _direction(hvac_mode)
     if (
         deadtime is None
@@ -327,47 +317,15 @@ def compute_dynamic_reserve_candidates(
     ):
         return None
 
-    slope = 0.0 if measured_slope_h is None else _finite(measured_slope_h)
-    model_change = (
-        0.0
-        if predicted_temperature_change_c is None
-        else _finite(predicted_temperature_change_c)
-    )
-    if slope is None or model_change is None:
+    slope = 0.0 if measured_slope_h is None else finite_float(measured_slope_h)
+    if slope is None:
         return None
 
-    signed_slope = direction * slope
-    signed_model_change = direction * model_change
     try:
-        slope_value = rho * max(signed_slope, 0.0) * deadtime / 3600.0
-        model_value = rho * max(signed_model_change, 0.0)
+        slope_value = rho * max(direction * slope, 0.0) * deadtime / 3600.0
     except OverflowError:
         return None
-    slope_reserve = _bounded_reserve(slope_value, margin_max)
-    model_reserve = _bounded_reserve(model_value, margin_max)
-    if slope_reserve is None or model_reserve is None:
-        return None
-    return DynamicReserveCandidates(
-        slope_reserve_c=slope_reserve,
-        model_reserve_c=model_reserve,
-        reserve_c=max(slope_reserve, model_reserve),
-    )
-
-
-def select_dynamic_reserve(
-    candidates: DynamicReserveCandidates,
-    selector: str,
-) -> float | None:
-    """Select one observable reserve candidate without applying hidden policy."""
-    if not isinstance(candidates, DynamicReserveCandidates):
-        return None
-    if selector == "slope":
-        return candidates.slope_reserve_c
-    if selector == "model":
-        return candidates.model_reserve_c
-    if selector == "max":
-        return candidates.reserve_c
-    return None
+    return _bounded_reserve(slope_value, margin_max)
 
 
 def resolve_command_cap(
@@ -381,12 +339,12 @@ def resolve_command_cap(
     command_comparison_epsilon: float,
 ) -> CommandCapDecision | None:
     """Solve and bound the command that reaches a directional temperature bound."""
-    current = _finite(current_temp)
-    bound = _finite(target_bound)
-    passive = _finite(passive_temp)
-    physical_gain = _finite(gain_u)
-    requested = _finite(requested_u)
-    comparison_epsilon = _finite(command_comparison_epsilon)
+    current = finite_float(current_temp)
+    bound = finite_float(target_bound)
+    passive = finite_float(passive_temp)
+    physical_gain = finite_float(gain_u)
+    requested = finite_float(requested_u)
+    comparison_epsilon = finite_float(command_comparison_epsilon)
     direction = _direction(hvac_mode)
     if (
         current is None
@@ -429,14 +387,14 @@ def invert_p_reference_from_cap(
     current temperature is returned because a deadzone has a non-unique
     inverse there. The snapshot carries the effective post-compute I/FF terms.
     """
-    cap = _finite(command_cap)
-    current = _finite(current_temp)
+    cap = finite_float(command_cap)
+    current = finite_float(current_temp)
     if not _valid_pi_snapshot(pi_snapshot):
         return None
-    kp_value = _finite(pi_snapshot.kp)
-    i_power = _finite(pi_snapshot.u_i)
-    feedforward = _finite(pi_snapshot.u_ff)
-    threshold = _finite(pi_snapshot.p_state.threshold)
+    kp_value = finite_float(pi_snapshot.kp)
+    i_power = finite_float(pi_snapshot.u_i)
+    feedforward = finite_float(pi_snapshot.u_ff)
+    threshold = finite_float(pi_snapshot.p_state.threshold)
     direction = _direction(hvac_mode)
     if (
         cap is None
@@ -480,7 +438,7 @@ def _valid_pi_snapshot(value: object) -> bool:
         return False
     state = value.p_state
     numeric = (value.kp, value.u_i, value.u_ff, state.deadband_c)
-    if not all(type(item) in (int, float) and _finite(item) is not None for item in numeric):
+    if not all(type(item) in (int, float) and finite_float(item) is not None for item in numeric):
         return False
     return (
         value.kp > 0.0
@@ -495,8 +453,8 @@ def _valid_pi_snapshot(value: object) -> bool:
 
 def _invalid_decision(governor_input: ReferenceGovernorInput, reason: str) -> ReferenceGovernorDecision:
     """Return an explicit no-decision result for invalid aggregate input."""
-    nominal = _finite(governor_input.nominal_reference)
-    current = _finite(governor_input.current_temp)
+    nominal = finite_float(governor_input.nominal_reference)
+    current = finite_float(governor_input.current_temp)
     fallback = current if current is not None else nominal
     if fallback is None:
         fallback = 0.0
@@ -508,7 +466,6 @@ def _invalid_decision(governor_input: ReferenceGovernorInput, reason: str) -> Re
         command_cap=None,
         predicted_terminal_temp=None,
         target_bound=None,
-        reserve_candidates=None,
         dynamic_reserve_c=0.0,
         constraint_active=False,
         coast_required=False,
@@ -549,19 +506,13 @@ def evaluate_reference_governor(
 ) -> ReferenceGovernorDecision:
     """Evaluate one predictive decision without applying runtime activation policy.
 
-    The selector and all timing/margin values are supplied by the immutable
-    policy so this kernel does not choose runtime activation policy.
+    All timing and margin values are supplied by the immutable policy so this
+    kernel does not choose runtime activation policy.
     """
     if not isinstance(governor_input, ReferenceGovernorInput):
         raise TypeError("governor_input must be ReferenceGovernorInput")
     if not isinstance(policy, ReferenceGovernorPolicy):
         raise TypeError("policy must be ReferenceGovernorPolicy")
-    if (
-        not isinstance(policy.reserve_selector, str)
-        or policy.reserve_selector not in _RESERVE_SELECTORS
-    ):
-        return _invalid_decision(governor_input, "unsupported_reserve_selector")
-
     numeric_fields = (
         governor_input.target_temp,
         governor_input.nominal_reference,
@@ -580,7 +531,7 @@ def evaluate_reference_governor(
         policy.reference_comparison_epsilon_c,
         policy.tolerance_c,
     )
-    normalized_fields = tuple(_finite(value) for value in numeric_fields)
+    normalized_fields = tuple(finite_float(value) for value in numeric_fields)
     if any(value is None for value in normalized_fields):
         return _invalid_decision(governor_input, "invalid_numeric_input")
     (
@@ -625,8 +576,8 @@ def evaluate_reference_governor(
     model = normalize_model(governor_input.a, governor_input.b, governor_input.hvac_mode)
     if model is None:
         return _invalid_decision(governor_input, "invalid_model")
-    a_value = _finite(governor_input.a)
-    b_value = _finite(governor_input.b)
+    a_value = finite_float(governor_input.a)
+    b_value = finite_float(governor_input.b)
     if a_value is None or b_value is None:
         return _invalid_decision(governor_input, "invalid_model")
 
@@ -642,24 +593,11 @@ def evaluate_reference_governor(
             command_cap=None,
             predicted_terminal_temp=None,
             target_bound=None,
-            reserve_candidates=None,
             dynamic_reserve_c=0.0,
             constraint_active=False,
             coast_required=False,
         )
 
-    nominal_prediction = _predict_two_segments(
-        current_temp=current_temp,
-        ext_temp=ext_temp,
-        a=a_value,
-        b=b_value,
-        hvac_mode=governor_input.hvac_mode,
-        first_horizon=remaining_cycle_min,
-        first_command=committed_u,
-        second_horizon=prediction_horizon,
-        second_command=next_cycle_u,
-        thermal_bias_c_per_min=thermal_bias_c_per_min,
-    )
     passive_prediction = _predict_two_segments(
         current_temp=current_temp,
         ext_temp=ext_temp,
@@ -672,23 +610,18 @@ def evaluate_reference_governor(
         second_command=0.0,
         thermal_bias_c_per_min=thermal_bias_c_per_min,
     )
-    if nominal_prediction is None or passive_prediction is None:
+    if passive_prediction is None:
         return _invalid_decision(governor_input, "prediction_failed")
 
-    model_change = nominal_prediction.terminal_temp - current_temp
-    reserves = compute_dynamic_reserve_candidates(
+    selected_reserve = compute_dynamic_reserve(
         hvac_mode=governor_input.hvac_mode,
         measured_slope_h=governor_input.measured_slope_h,
-        predicted_temperature_change_c=model_change,
         stop_deadtime_s=stop_deadtime_s,
         rho_margin=rho_margin,
         margin_max_c=margin_max_c,
     )
-    if reserves is None:
-        return _invalid_decision(governor_input, "invalid_reserve_evidence")
-    selected_reserve = select_dynamic_reserve(reserves, policy.reserve_selector)
     if selected_reserve is None:
-        return _invalid_decision(governor_input, "unsupported_reserve_selector")
+        return _invalid_decision(governor_input, "invalid_reserve_evidence")
     direction = model.direction
     # The bound tolerates the accepted terminal band beyond the target and
     # keeps the dynamic reserve for stored thermal energy.
@@ -766,7 +699,6 @@ def evaluate_reference_governor(
         command_cap=cap_decision.command_cap,
         predicted_terminal_temp=terminal_prediction.terminal_temp,
         target_bound=target_bound,
-        reserve_candidates=reserves,
         dynamic_reserve_c=selected_reserve,
         constraint_active=constraint_active,
         coast_required=cap_decision.coast_required,

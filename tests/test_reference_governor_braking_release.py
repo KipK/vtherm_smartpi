@@ -61,7 +61,6 @@ def test_late_release_proposes_only_conditional_model_admission(mode):
 
     assert result.release_candidate
     assert result.model_admissible
-    assert not result.authoritative
     assert result.reason == "release_candidate"
     assert result.raw_requested_power == pytest.approx(0.311478696)
     assert result.raw_projected_power == pytest.approx(74.0 / 240.0)
@@ -209,7 +208,6 @@ def test_incomplete_invalid_or_unsupported_inputs_fail_closed(field, value, reas
     inputs[field] = value
     result = evaluate_braking_release(**inputs)
     assert not result.release_candidate
-    assert not result.authoritative
     assert result.reason == reason
 
 

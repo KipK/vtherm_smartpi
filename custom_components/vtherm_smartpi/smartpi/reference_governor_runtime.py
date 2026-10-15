@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
 
-from .reference_governor import ReferenceGovernorDecision
+from .reference_governor import ReferenceGovernorDecision, finite_float
 
 _HANDOFF_EVALUATION_COUNT = 3
 _SECONDS_PER_MINUTE = 60.0
@@ -22,9 +22,6 @@ class ReferenceGovernorPhase(str, Enum):
     HANDOFF = "handoff"
 
 
-# The longer name is convenient for callers that keep phase types explicit.
-ReferenceGovernorRuntimePhase = ReferenceGovernorPhase
-
 
 @dataclass(frozen=True, slots=True)
 class ReferenceGovernorRuntimeDecision:
@@ -37,11 +34,6 @@ class ReferenceGovernorRuntimeDecision:
     handoff_ready: bool
     reason: str
     kernel_decision: ReferenceGovernorDecision
-
-    @property
-    def kernel_evidence(self) -> ReferenceGovernorDecision:
-        """Return the pure kernel decision carried by this runtime output."""
-        return self.kernel_decision
 
 
 class ReferenceGovernorRuntime:
@@ -82,23 +74,16 @@ class ReferenceGovernorRuntime:
         """Return the target associated with the current arm request."""
         return self._target_temp
 
-    def arm(
-        self,
-        target_temp: float,
-        now_monotonic: float,
-        *,
-        force: bool = False,
-    ) -> None:
+    def arm(self, target_temp: float, now_monotonic: float) -> None:
         """Arm a target and clear prior runtime evidence.
 
         A changed target always starts a fresh runtime episode.  Repeating an
         identical target is idempotent so an incidental duplicate callback
-        cannot erase governed or handoff state.  Callers may explicitly use
-        ``force=True`` when they need to restart the same target.
+        cannot erase governed or handoff state.
         """
         target = self._require_finite(target_temp, "target_temp")
         now = self._require_finite(now_monotonic, "now_monotonic")
-        if self._target_temp == target and not force:
+        if self._target_temp == target:
             return
         self._target_temp = target
         self._armed = True
@@ -160,7 +145,7 @@ class ReferenceGovernorRuntime:
         if not isinstance(kernel_decision, ReferenceGovernorDecision):
             raise TypeError("kernel_decision must be ReferenceGovernorDecision")
 
-        now = self._finite(now_monotonic)
+        now = finite_float(now_monotonic)
         if now is None:
             return self._abort(kernel_decision, "invalid_timestamp")
 
@@ -188,7 +173,7 @@ class ReferenceGovernorRuntime:
 
         if self._phase is ReferenceGovernorPhase.IDLE:
             if kernel_decision.reason == _NO_POSITIVE_DEMAND_REASON:
-                cycle_seconds = self._finite(cycle_min)
+                cycle_seconds = finite_float(cycle_min)
                 if cycle_seconds is None or cycle_seconds <= 0.0:
                     return self._abort(kernel_decision, "invalid_cycle")
                 cycle_seconds *= _SECONDS_PER_MINUTE
@@ -208,7 +193,7 @@ class ReferenceGovernorRuntime:
                 reason=kernel_decision.reason,
             )
 
-        cycle_seconds = self._finite(cycle_min)
+        cycle_seconds = finite_float(cycle_min)
         if cycle_seconds is None or cycle_seconds <= 0.0:
             return self._abort(kernel_decision, "invalid_cycle")
         cycle_seconds *= _SECONDS_PER_MINUTE
@@ -225,20 +210,9 @@ class ReferenceGovernorRuntime:
         return self._handoff_output(kernel_decision, cycle_seconds)
 
     @staticmethod
-    def _finite(value: object) -> float | None:
-        """Return a finite number, excluding booleans."""
-        if isinstance(value, bool):
-            return None
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError, OverflowError):
-            return None
-        return numeric if isfinite(numeric) else None
-
-    @classmethod
-    def _require_finite(cls, value: object, name: str) -> float:
+    def _require_finite(value: object, name: str) -> float:
         """Validate an explicit arm argument."""
-        numeric = cls._finite(value)
+        numeric = finite_float(value)
         if numeric is None:
             raise ValueError(f"{name} must be finite")
         return numeric
@@ -246,9 +220,9 @@ class ReferenceGovernorRuntime:
     @classmethod
     def _is_constraining(cls, decision: ReferenceGovernorDecision) -> bool:
         """Return whether a decision is a valid constraining kernel result."""
-        cap = cls._finite(decision.command_cap)
-        admissible = cls._finite(decision.admissible_reference)
-        nominal = cls._finite(decision.nominal_reference)
+        cap = finite_float(decision.command_cap)
+        admissible = finite_float(decision.admissible_reference)
+        nominal = finite_float(decision.nominal_reference)
         return (
             isinstance(decision.reason, str)
             and (
@@ -274,8 +248,8 @@ class ReferenceGovernorRuntime:
     @classmethod
     def _is_valid_unconstrained(cls, decision: ReferenceGovernorDecision) -> bool:
         """Apply the narrow release policy documented on the runtime class."""
-        nominal = cls._finite(decision.nominal_reference)
-        admissible = cls._finite(decision.admissible_reference)
+        nominal = finite_float(decision.nominal_reference)
+        admissible = finite_float(decision.admissible_reference)
         if (
             nominal is None
             or admissible is None
@@ -288,7 +262,7 @@ class ReferenceGovernorRuntime:
         if not isinstance(decision.reason, str):
             return False
         if decision.reason == _UNCONSTRAINED_REASON:
-            cap = cls._finite(decision.command_cap)
+            cap = finite_float(decision.command_cap)
             return cap is None or 0.0 <= cap <= 1.0
         if decision.reason != _NO_POSITIVE_DEMAND_REASON:
             return False
@@ -385,13 +359,13 @@ class ReferenceGovernorRuntime:
         prior_target: float | None = None,
     ) -> float:
         """Return nominal, admissible, or prior-target fallback output."""
-        nominal = cls._finite(decision.nominal_reference)
+        nominal = finite_float(decision.nominal_reference)
         if nominal is not None:
             return nominal
-        admissible = cls._finite(decision.admissible_reference)
+        admissible = finite_float(decision.admissible_reference)
         if admissible is not None:
             return admissible
-        target = cls._finite(prior_target)
+        target = finite_float(prior_target)
         return target if target is not None else 0.0
 
     @staticmethod

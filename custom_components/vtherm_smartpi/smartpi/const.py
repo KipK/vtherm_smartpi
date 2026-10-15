@@ -192,7 +192,6 @@ TRAJECTORY_BRAKE_RELEASE_HYST_C = 0.10   # Extra signed-error margin to keep an 
 TRAJECTORY_RELEASE_TAU_FACTOR = 0.5      # Make the return to the raw target faster than braking while staying smooth
 TRAJECTORY_BUMPLESS_MAX_U_DELTA = 0.03   # Maximum allowed proportional command step when releasing trajectory
 # Signed setpoint reference-governor policy.
-REFERENCE_GOVERNOR_RESERVE_SELECTOR = "slope"
 REFERENCE_GOVERNOR_RHO_MARGIN = 1.0
 REFERENCE_GOVERNOR_MARGIN_MAX_C = 0.05
 REFERENCE_GOVERNOR_COMMAND_EPSILON = 1e-6

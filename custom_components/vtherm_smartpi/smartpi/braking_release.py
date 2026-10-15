@@ -7,15 +7,15 @@ from math import isfinite
 
 from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from .const import (
-    DEADBAND_HYSTERESIS, REFERENCE_GOVERNOR_MARGIN_MAX_C, REFERENCE_GOVERNOR_RESERVE_SELECTOR,
+    DEADBAND_HYSTERESIS, REFERENCE_GOVERNOR_MARGIN_MAX_C,
     REFERENCE_GOVERNOR_RHO_MARGIN, TRAJECTORY_BUMPLESS_MAX_U_DELTA,
     TRAJECTORY_COMPLETE_EPS_C, TrajectoryPhase,
 )
 from .controller import PIOutputSnapshot
 from .reference_governor import (
     PredictionSegment, SegmentedPrediction, _valid_pi_snapshot,
-    compute_dynamic_reserve_candidates, normalize_model,
-    predict_segmented_1r1c, select_dynamic_reserve,
+    compute_dynamic_reserve, is_finite_number, normalize_model,
+    predict_segmented_1r1c,
 )
 from .reference_governor_authority import (
     ReferenceGovernorAuthorityContext,
@@ -48,11 +48,6 @@ class BrakingReleaseDecision:
     dynamic_reserve_c: float | None = None
     target_band_bound_c: float | None = None
     command_deltas: tuple[float, ...] = ()
-    authoritative: bool = False
-
-
-def _finite_number(value) -> bool:
-    return type(value) in (int, float) and isfinite(value)
 
 
 def evaluate_braking_release(
@@ -103,9 +98,9 @@ def evaluate_braking_release(
         profile_nominal, deadband_c, cycle_min,
         previous_requested_power, previous_projected_power,
     )
-    if not all(_finite_number(value) for value in numbers):
+    if not all(is_finite_number(value) for value in numbers):
         return reject("invalid_numeric_evidence")
-    if context.measured_slope_h is not None and not _finite_number(context.measured_slope_h):
+    if context.measured_slope_h is not None and not is_finite_number(context.measured_slope_h):
         return reject("invalid_slope")
     if (context.hvac_mode not in (VThermHvacMode_HEAT, VThermHvacMode_COOL)
             or normalize_model(context.a, context.b, context.hvac_mode) is None):
@@ -149,18 +144,14 @@ def evaluate_braking_release(
         return reject("raw_forecast_failed")
     peak = max(direction * (temperature - context.target_temp)
                for temperature in (context.current_temp, *prediction.temperatures))
-    reserves = compute_dynamic_reserve_candidates(
+    reserve = compute_dynamic_reserve(
         hvac_mode=context.hvac_mode, measured_slope_h=context.measured_slope_h,
-        predicted_temperature_change_c=prediction.terminal_temp - context.current_temp,
         stop_deadtime_s=context.stop_deadtime_s,
         rho_margin=REFERENCE_GOVERNOR_RHO_MARGIN,
         margin_max_c=REFERENCE_GOVERNOR_MARGIN_MAX_C,
     )
-    if reserves is None:
-        return reject("invalid_reserve_evidence")
-    reserve = select_dynamic_reserve(reserves, REFERENCE_GOVERNOR_RESERVE_SELECTOR)
     if reserve is None:
-        return reject("invalid_reserve_selector")
+        return reject("invalid_reserve_evidence")
     # Compare both commands against every existing command boundary. A small
     # proportional-reference difference alone does not establish continuity.
     deltas = tuple(abs(value - previous) for value in (requested, projected)

@@ -319,8 +319,7 @@ def test_authority_result_is_immutable_and_carries_both_evidence_layers() -> Non
     result = resolve(authority, 0.90, 1.0, 10.0)
 
     assert isinstance(result, ReferenceGovernorAuthorityDecision)
-    assert result.kernel_evidence is result.kernel_decision
-    assert result.runtime_evidence is result.runtime_decision
+    assert result.runtime_decision.kernel_decision is result.kernel_decision
     with pytest.raises(FrozenInstanceError):
         result.command_cap = None
 

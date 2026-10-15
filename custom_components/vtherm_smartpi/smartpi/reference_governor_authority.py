@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
 
 from ..hvac_mode import (
     VThermHvacMode,
@@ -14,7 +13,6 @@ from .const import (
     REFERENCE_GOVERNOR_COMMAND_EPSILON,
     REFERENCE_GOVERNOR_MARGIN_MAX_C,
     REFERENCE_GOVERNOR_REFERENCE_EPSILON_C,
-    REFERENCE_GOVERNOR_RESERVE_SELECTOR,
     REFERENCE_GOVERNOR_RHO_MARGIN,
 )
 from .controller import PIOutputSnapshot
@@ -27,6 +25,7 @@ from .reference_governor import (
     ReferenceGovernorInput,
     ReferenceGovernorPolicy,
     evaluate_reference_governor,
+    finite_float,
 )
 from .reference_governor_runtime import (
     ReferenceGovernorPhase,
@@ -65,16 +64,6 @@ class ReferenceGovernorAuthorityDecision:
     reason: str
     kernel_decision: ReferenceGovernorDecision
     runtime_decision: ReferenceGovernorRuntimeDecision
-
-    @property
-    def kernel_evidence(self) -> ReferenceGovernorDecision:
-        """Return the pure kernel evidence carried by this result."""
-        return self.kernel_decision
-
-    @property
-    def runtime_evidence(self) -> ReferenceGovernorRuntimeDecision:
-        """Return the runtime state-machine evidence carried by this result."""
-        return self.runtime_decision
 
 
 class ReferenceGovernorAuthority:
@@ -124,8 +113,8 @@ class ReferenceGovernorAuthority:
     ) -> ReferenceGovernorAuthorityContext:
         """Capture one cycle, or capture an explicit fail-open bypass."""
         self._pending_context = None
-        target = self._finite(target_temp)
-        nominal = self._finite(nominal_reference)
+        target = finite_float(target_temp)
+        nominal = finite_float(nominal_reference)
         reference = nominal if nominal is not None else target
         if reference is None:
             reference = 0.0
@@ -133,37 +122,37 @@ class ReferenceGovernorAuthority:
         bypass_reason = self._validation_reason(
             target=target,
             nominal=nominal,
-            current=self._finite(current_temp),
-            external=self._finite(ext_temp),
+            current=finite_float(current_temp),
+            external=finite_float(ext_temp),
             hvac_mode=hvac_mode,
             trajectory_active=trajectory_active,
             trajectory_source=trajectory_source,
             model_reliable=model_reliable,
-            a=self._finite(a),
-            b=self._finite(b),
+            a=finite_float(a),
+            b=finite_float(b),
             deadtime_reliable=deadtime_reliable,
-            deadtime=self._finite(stop_deadtime_s),
-            committed=self._finite(committed_u),
-            remaining=self._finite(remaining_cycle_min),
-            slope=None if measured_slope_h is None else self._finite(measured_slope_h),
+            deadtime=finite_float(stop_deadtime_s),
+            committed=finite_float(committed_u),
+            remaining=finite_float(remaining_cycle_min),
+            slope=None if measured_slope_h is None else finite_float(measured_slope_h),
             slope_input=measured_slope_h,
-            now=self._finite(now_monotonic),
+            now=finite_float(now_monotonic),
         )
 
-        external = self._finite(ext_temp)
+        external = finite_float(ext_temp)
         context = ReferenceGovernorAuthorityContext(
             target_temp=target if target is not None else reference,
             nominal_reference=reference,
-            current_temp=self._finite(current_temp) or 0.0,
+            current_temp=finite_float(current_temp) or 0.0,
             ext_temp=external if external is not None else 0.0,
             hvac_mode=hvac_mode,
-            a=self._finite(a) or 1.0,
-            b=self._finite(b) or 0.01,
-            committed_u=self._finite(committed_u) or 0.0,
-            remaining_cycle_min=self._finite(remaining_cycle_min) or 0.0,
-            stop_deadtime_s=self._finite(stop_deadtime_s) or 1.0,
+            a=finite_float(a) or 1.0,
+            b=finite_float(b) or 0.01,
+            committed_u=finite_float(committed_u) or 0.0,
+            remaining_cycle_min=finite_float(remaining_cycle_min) or 0.0,
+            stop_deadtime_s=finite_float(stop_deadtime_s) or 1.0,
             measured_slope_h=(
-                None if measured_slope_h is None else self._finite(measured_slope_h)
+                None if measured_slope_h is None else finite_float(measured_slope_h)
             ),
             bypass_reason=bypass_reason,
         )
@@ -178,7 +167,7 @@ class ReferenceGovernorAuthority:
                 self._runtime.reset()
                 self._falsification.reset()
             elif target_changed or self._runtime.target_temp is None:
-                self._runtime.arm(target, self._finite(now_monotonic) or 0.0)
+                self._runtime.arm(target, finite_float(now_monotonic) or 0.0)
         elif bypass_reason is not None:
             self._runtime.reset()
             self._falsification.reset()
@@ -199,26 +188,18 @@ class ReferenceGovernorAuthority:
         if context is None:
             return None
         if context.bypass_reason is not None:
-            return self._bypass_result(
-                context.bypass_reason, context.nominal_reference, now_monotonic
-            )
+            return self._bypass_result(context.bypass_reason, context.nominal_reference)
 
-        requested = self._finite(requested_u)
-        cycle = self._finite(cycle_min)
+        requested = finite_float(requested_u)
+        cycle = finite_float(cycle_min)
         if requested is None or not 0.0 <= requested <= 1.0:
-            return self._bypass_result(
-                "authority_invalid_requested_u", context.nominal_reference, now_monotonic
-            )
+            return self._bypass_result("authority_invalid_requested_u", context.nominal_reference)
         if cycle is None or cycle <= 0.0:
-            return self._bypass_result(
-                "authority_invalid_cycle", context.nominal_reference, now_monotonic
-            )
+            return self._bypass_result("authority_invalid_cycle", context.nominal_reference)
         if pi_snapshot is None:
-            return self._bypass_result(
-                "authority_missing_pi_snapshot", context.nominal_reference, now_monotonic
-            )
+            return self._bypass_result("authority_missing_pi_snapshot", context.nominal_reference)
 
-        deadband_c = max(self._finite(pi_snapshot.p_state.deadband_c) or 0.0, 0.0)
+        deadband_c = max(finite_float(pi_snapshot.p_state.deadband_c) or 0.0, 0.0)
         kernel_decision = evaluate_reference_governor(
             ReferenceGovernorInput(
                 target_temp=context.target_temp,
@@ -238,7 +219,6 @@ class ReferenceGovernorAuthority:
                 thermal_bias_c_per_min=thermal_bias_c_per_min,
             ),
             ReferenceGovernorPolicy(
-                reserve_selector=REFERENCE_GOVERNOR_RESERVE_SELECTOR,
                 rho_margin=REFERENCE_GOVERNOR_RHO_MARGIN,
                 margin_max_c=REFERENCE_GOVERNOR_MARGIN_MAX_C,
                 prediction_horizon_min=context.stop_deadtime_s / 60.0,
@@ -281,17 +261,6 @@ class ReferenceGovernorAuthority:
         """Clear all transient state at a load boundary; nothing is restored."""
         del state
         self.reset()
-
-    @staticmethod
-    def _finite(value: object) -> float | None:
-        """Return a finite number, excluding booleans."""
-        if isinstance(value, bool):
-            return None
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError, OverflowError):
-            return None
-        return numeric if isfinite(numeric) else None
 
     @classmethod
     def _validation_reason(cls, **values: object) -> str | None:
@@ -339,7 +308,6 @@ class ReferenceGovernorAuthority:
         self,
         reason: str,
         nominal_reference: float,
-        now_monotonic: object,
     ) -> ReferenceGovernorAuthorityDecision:
         """Reset runtime and publish a no-cap result for invalid context."""
         self._runtime.reset()
@@ -353,16 +321,18 @@ class ReferenceGovernorAuthority:
             command_cap=None,
             predicted_terminal_temp=None,
             target_bound=None,
-            reserve_candidates=None,
             dynamic_reserve_c=0.0,
             constraint_active=False,
             coast_required=False,
         )
-        safe_now = self._finite(now_monotonic)
-        runtime_decision = self._runtime.consume(
-            decision,
-            0.0 if safe_now is None else safe_now,
-            1.0,
+        runtime_decision = ReferenceGovernorRuntimeDecision(
+            phase=ReferenceGovernorPhase.IDLE,
+            effective_reference=nominal_reference,
+            command_cap=None,
+            shaping_active=False,
+            handoff_ready=False,
+            reason=reason,
+            kernel_decision=decision,
         )
         return self._result(decision, runtime_decision)
 

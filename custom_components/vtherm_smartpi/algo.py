@@ -45,7 +45,7 @@ import logging
 import time
 from dataclasses import replace
 from datetime import datetime
-from math import exp, isfinite
+from math import exp
 from typing import Any, Dict, Optional
 
 from .hvac_mode import (
@@ -95,6 +95,7 @@ from .smartpi.braking_release import (
     evaluate_braking_release,
     project_zero_delay_switch_power,
 )
+from .smartpi.reference_governor import is_finite_number
 from .smartpi.learning_window import LearningWindowManager
 from .smartpi.deadband import DeadbandManager
 from .smartpi.calibration import CalibrationManager
@@ -2686,12 +2687,9 @@ class SmartPI:
         pi = ctl.pi_output_snapshot
         if context is None or pi is None:
             return None
-        def finite(value: object) -> bool:
-            return type(value) in (int, float) and isfinite(value)
-
         previous_limited = self._last_u_limited
-        if (not finite(previous_limited) or not 0.0 <= previous_limited <= 1.0
-                or not finite(self._cycle_min) or self._cycle_min <= 0.0):
+        if (not is_finite_number(previous_limited) or not 0.0 <= previous_limited <= 1.0
+                or not is_finite_number(self._cycle_min) or self._cycle_min <= 0.0):
             return None
         previous_projected = project_zero_delay_switch_power(
             previous_limited, self._cycle_min
@@ -2735,12 +2733,12 @@ class SmartPI:
         raw_command = pi.u_i + pi.u_ff + raw_p
         max_on = self._linear_max_on()
         if (
-            not finite(raw_command) or not 0.0 <= raw_command <= 1.0
+            not is_finite_number(raw_command) or not 0.0 <= raw_command <= 1.0
             or raw_p < ctl.u_p or not 0.0 <= pi.u_ff + raw_p <= 1.0
-            or not finite(dt_min) or dt_min <= 0.0
+            or not is_finite_number(dt_min) or dt_min <= 0.0
             or not self._output_initialized
             or abs(raw_command - previous_limited) > MAX_STEP_PER_MINUTE * dt_min
-            or (max_on is not None and (not finite(max_on) or raw_command > max_on))
+            or (max_on is not None and (not is_finite_number(max_on) or raw_command > max_on))
             or raw_command != decision.raw_requested_power
         ):
             return None

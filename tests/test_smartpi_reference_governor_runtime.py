@@ -36,7 +36,6 @@ def kernel(
         command_cap=cap,
         predicted_terminal_temp=predicted,
         target_bound=target_bound,
-        reserve_candidates=None,
         dynamic_reserve_c=reserve,
         constraint_active=constraint_active,
         coast_required=coast,
@@ -93,7 +92,6 @@ def test_runtime_outputs_are_immutable_and_carry_kernel_evidence() -> None:
     assert isinstance(output, ReferenceGovernorRuntimeDecision)
     assert hasattr(output, "__slots__")
     assert output.kernel_decision is evidence
-    assert output.kernel_evidence is evidence
     with pytest.raises(FrozenInstanceError):
         output.phase = ReferenceGovernorPhase.IDLE
 
@@ -360,18 +358,13 @@ def test_completed_runtime_cannot_reactivate_until_changed_target_is_armed() -> 
     assert rearmed.command_cap == 0.4
 
 
-def test_same_target_arm_is_idempotent_unless_forced() -> None:
+def test_same_target_arm_is_idempotent() -> None:
     runtime = ReferenceGovernorRuntime()
     runtime.arm(22.0, 0.0)
     runtime.consume(constrained(), 1.0, 10.0)
     runtime.arm(22.0, 2.0)
     still_governed = runtime.consume(unconstrained(), 3.0, 10.0)
     assert still_governed.phase is ReferenceGovernorPhase.HANDOFF
-
-    runtime.arm(22.0, 4.0, force=True)
-    reset_to_idle = runtime.consume(unconstrained(), 5.0, 10.0)
-    assert reset_to_idle.phase is ReferenceGovernorPhase.IDLE
-    assert runtime.armed is True
 
 
 def test_reset_and_load_state_clear_all_runtime_evidence() -> None:

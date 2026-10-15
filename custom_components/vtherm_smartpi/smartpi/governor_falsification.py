@@ -13,14 +13,13 @@ episode.  Evidence is transient and never persisted.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
 
 from ..hvac_mode import VThermHvacMode
 from .const import (
     REFERENCE_GOVERNOR_FALSIFICATION_COUNT,
     REFERENCE_GOVERNOR_FALSIFICATION_MAX_SLOPE_H,
 )
-from .reference_governor import ReferenceGovernorDecision, _direction
+from .reference_governor import ReferenceGovernorDecision, _direction, finite_float
 
 _SECONDS_PER_MINUTE = 60.0
 _MAX_PENDING_RECORDS = 256
@@ -46,17 +45,6 @@ class PredictionFalsificationDecision:
     shortfall_span_s: float = 0.0
     last_shortfall_c: float | None = None
     tolerance_c: float | None = None
-
-
-def _finite(value: object) -> float | None:
-    """Return a finite number, excluding booleans."""
-    if isinstance(value, bool):
-        return None
-    try:
-        numeric = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return numeric if isfinite(numeric) else None
 
 
 class GovernorPredictionFalsification:
@@ -108,14 +96,14 @@ class GovernorPredictionFalsification:
         inherits stale shortfalls.  At most one matured promise is judged per
         observation, the freshest one, so one measurement cannot count twice.
         """
-        now = _finite(now_monotonic)
-        tolerance = _finite(tolerance_c)
+        now = finite_float(now_monotonic)
+        tolerance = finite_float(tolerance_c)
         direction = _direction(hvac_mode)
         if now is None or tolerance is None or tolerance < 0.0 or direction is None:
             self.reset()
             return PredictionFalsificationDecision(False, "invalid_evidence")
 
-        predicted = _finite(decision.predicted_terminal_temp)
+        predicted = finite_float(decision.predicted_terminal_temp)
         constraining = (
             decision.reason == "cap"
             and decision.active is True
@@ -127,11 +115,11 @@ class GovernorPredictionFalsification:
             self.reset()
             return PredictionFalsificationDecision(False, "not_constraining")
 
-        current = _finite(current_temp)
-        target = _finite(target_temp)
-        deadtime = _finite(stop_deadtime_s)
-        remaining = _finite(remaining_cycle_min)
-        cycle = _finite(cycle_min)
+        current = finite_float(current_temp)
+        target = finite_float(target_temp)
+        deadtime = finite_float(stop_deadtime_s)
+        remaining = finite_float(remaining_cycle_min)
+        cycle = finite_float(cycle_min)
         if (
             current is None
             or target is None
@@ -172,7 +160,7 @@ class GovernorPredictionFalsification:
             else 0.0
         )
         required_span = deadtime + cycle * _SECONDS_PER_MINUTE
-        slope = None if measured_slope_h is None else _finite(measured_slope_h)
+        slope = None if measured_slope_h is None else finite_float(measured_slope_h)
         slope_allows = (
             slope is not None
             and direction * slope <= REFERENCE_GOVERNOR_FALSIFICATION_MAX_SLOPE_H
