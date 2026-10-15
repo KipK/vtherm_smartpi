@@ -1,6 +1,7 @@
 # pylint: disable=line-too-long, abstract-method
 """SmartPI algorithm handler for the plugin runtime."""
 
+import copy
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -57,6 +58,7 @@ _LOGGER = logging.getLogger(__name__)
 STORAGE_VERSION = 1
 STORAGE_KEY = "vtherm_smartpi.{}"
 LEGACY_STORAGE_KEY = "versatile_thermostat.smartpi.{}"
+SMARTPI_PROFILE_STORE_VERSION = 1
 
 class SmartPIHandler:
     """Handler for SmartPI-specific logic."""
@@ -80,6 +82,12 @@ class SmartPIHandler:
         self._allow_pwm_cycle_force: bool = False
         self._valve_linearization_configured: bool = False
         self._valve_curve_params: ValveCurveParams | None = None
+        # Profiles for seasonal switching
+        self._profiles: dict[str, dict] = {}
+        self._active_profile: str | None = None
+        self._unassigned_legacy_state: dict | None = None
+        self._profiles_loaded = False
+        self._load_failed = False
 
     def init_algorithm(self):
         """Initialize SmartPI algorithm."""
@@ -226,26 +234,116 @@ class SmartPIHandler:
         return config
 
     async def async_added_to_hass(self):
-        """Load persistent data."""
+        """Load persistent SmartPI seasonal profile data."""
         t = self._thermostat
-        if self._store:
-            try:
-                data = await self._store.async_load()
-                if data is None and self._legacy_store is not None:
-                    data = await self._legacy_store.async_load()
-                    if data is not None:
-                        t.hass.async_create_task(self._store.async_save(data))
-                if data and t.prop_algorithm:
-                    t.prop_algorithm.load_state(data)
-                    _LOGGER.debug("%s - SmartPI state loaded", t)
-            except Exception as e:
-                _LOGGER.error("%s - Failed to load SmartPI state: %s", t, e)
+
+        if not self._store:
+            return
+
+        try:
+            data = await self._store.async_load()
+
+            _LOGGER.debug(
+                "%s - SmartPI storage loaded: type=%s, keys=%s",
+                t,
+                type(data).__name__,
+                list(data.keys()) if isinstance(data, dict) else None,
+            )
+
+            # Existing legacy storage-key migration already present in SmartPI.
+            if data is None and self._legacy_store is not None:
+                data = await self._legacy_store.async_load()
+
+                if data is not None:
+                    t.hass.async_create_task(self._store.async_save(data))
+
+            if not data:
+                return
+
+            if not isinstance(data, dict) or (
+                "profile_store_version" in data and not self._is_profile_store(data)
+            ):
+                # Unsupported or corrupt format: don't interpret it and don't overwrite it.
+                self._load_failed = True
+                _LOGGER.error(
+                    "%s - SmartPI storage has an unsupported format; "
+                    "leaving it untouched and not saving",
+                    t,
+                )
+                return
+
+            # New seasonal-profile format.
+            if self._is_profile_store(data):
+                self._profiles = dict(data.get("profiles", {}))
+
+                _LOGGER.debug(
+                    "%s - Loaded seasonal profiles: %s",
+                    t,
+                    {
+                        key: len(str(value))
+                        for key, value in self._profiles.items()
+                    },
+                )
+
+            # Old SmartPI format: migrate the whole existing state into
+            # the profile indicated by its persisted estimator HVAC mode.
+            else:
+                profile = self._profile_from_algorithm_state(data)
+
+                _LOGGER.info(
+                    "%s - Legacy state detected profile=%s, est_mode=%s",
+                    t,
+                    profile,
+                    data.get("est_state", {}).get("model_hvac_mode")
+                    if isinstance(data, dict)
+                    else None,
+                )
+
+                if profile is not None:
+                    self._profiles[profile] = data
+
+                    _LOGGER.info(
+                        "%s - Migrated legacy SmartPI state into %s profile",
+                        t,
+                        profile,
+                    )
+
+                    # Persist migrated representation immediately.
+                    t.hass.async_create_task(
+                        self._store.async_save(self._build_profile_store())
+                    )
+
+                else:
+                    _LOGGER.warning(
+                        "%s - Legacy SmartPI state has no identifiable HVAC mode; "
+                        "keeping it unassigned until an active mode is known",
+                        t,
+                    )
+
+                    # Temporarily retain it for assignment later.
+                    self._unassigned_legacy_state = data
+
+            # Do NOT restore a HEAT or COOL profile here.
+            #
+            # The thermostat may still be OFF while HA is restoring entities.
+            # The correct profile will be loaded immediately before the first
+            # active HEAT/COOL calculation.
+
+        except Exception as e:
+            self._load_failed = True
+            _LOGGER.error("%s - Failed to load SmartPI state: %s", t, e)
+        finally:
+            self._profiles_loaded = True
 
     async def async_startup(self):
         """Startup actions."""
-        # Initialize the cycle start state if possible to enable first-cycle learning
         t = self._thermostat
+
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
+            # Restore/select the correct seasonal model before any startup
+            # recalculation or cycle management can occur.
+            self._ensure_active_profile()
+
             # Check availability of sensors
             if t.current_temperature is not None and t.current_outdoor_temperature is not None:
                 _LOGGER.debug("%s - SmartPI startup: ready for cycle management", t)
@@ -254,15 +352,41 @@ class SmartPIHandler:
         await self.on_state_changed(True)
 
     async def _async_save(self):
-        """Save SmartPI state to storage."""
+        """Save SmartPI state to the profile actually loaded in memory."""
         t = self._thermostat
-        if self._store and t.prop_algorithm:
-            try:
-                data = t.prop_algorithm.save_state()
-                t.hass.async_create_task(self._store.async_save(data))
-                _LOGGER.debug("%s - SmartPI state saved", t)
-            except Exception as e:
-                _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
+
+        if self._load_failed:
+            return
+
+        if not self._store or not t.prop_algorithm:
+            return
+
+        active_profile = self._active_profile
+
+        if active_profile is None:
+            return
+
+        try:
+            state = t.prop_algorithm.save_state()
+            state_profile = self._profile_from_algorithm_state(state)
+
+            if state_profile is not None and state_profile != active_profile:
+                _LOGGER.debug(
+                    "%s - Refusing SmartPI profile save: "
+                    "active=%s but live model=%s",
+                    t,
+                    active_profile,
+                    state_profile,
+                )
+                return
+
+            self._profiles[active_profile] = copy.deepcopy(state)
+
+            data = self._build_profile_store()
+            t.hass.async_create_task(self._store.async_save(data))
+
+        except Exception as e:
+            _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
     def remove(self):
         """Cleanup and save state on removal."""
@@ -412,6 +536,10 @@ class SmartPIHandler:
             force = False
 
         if t.prop_algorithm:
+            # Select/restore the correct seasonal HEAT/COOL model before
+            # SmartPI processes the current HVAC mode.
+            self._ensure_active_profile()
+
             # Learning update
             current_temp = t.current_temperature
 
@@ -763,3 +891,131 @@ class SmartPIHandler:
             self.update_attributes()
             t.async_write_ha_state()
             await self._async_save()
+
+    # Seasonal profile handling
+    def _profile_key(self, hvac_mode) -> str | None:
+        """Return the persistence profile corresponding to an active HVAC mode."""
+        if hvac_mode == VThermHvacMode_HEAT:
+            return "heat"
+        if hvac_mode == VThermHvacMode_COOL:
+            return "cool"
+        return None
+
+
+    def _profile_from_algorithm_state(self, state: dict) -> str | None:
+        """Try to determine which HVAC mode a legacy SmartPI state belongs to."""
+        try:
+            raw_mode = state.get("est_state", {}).get("model_hvac_mode")
+        except AttributeError:
+            return None
+
+        if raw_mode is None:
+            return None
+
+        mode = str(raw_mode).lower()
+
+        if "heat" in mode:
+            return "heat"
+        if "cool" in mode:
+            return "cool"
+
+        return None
+
+
+    def _build_profile_store(self) -> dict:
+        """Build the outer persistence envelope containing seasonal profiles."""
+        return {
+            "profile_store_version": SMARTPI_PROFILE_STORE_VERSION,
+            "profiles": copy.deepcopy(self._profiles),
+        }
+
+
+    def _is_profile_store(self, data: dict) -> bool:
+        """Return True if persisted data uses the seasonal-profile format."""
+        return (
+            isinstance(data, dict)
+            and data.get("profile_store_version") == SMARTPI_PROFILE_STORE_VERSION
+            and isinstance(data.get("profiles"), dict)
+        )
+
+    def _ensure_active_profile(self) -> None:
+        """Ensure SmartPI is using the profile for the current HVAC mode."""
+        if not self._profiles_loaded:
+            return
+
+        t = self._thermostat
+        algo = t.prop_algorithm
+
+        if algo is None:
+            return
+
+        wanted = self._profile_key(t.vtherm_hvac_mode)
+
+        # OFF is not a separate model.
+        if wanted is None:
+            return
+
+        # Already using the correct seasonal model.
+        if wanted == self._active_profile:
+            return
+
+        # Preserve the model we're leaving.
+        active_profile = self._active_profile
+
+        if active_profile is not None:
+            state = algo.save_state()
+            state_profile = self._profile_from_algorithm_state(state)
+
+            if state_profile in (None, active_profile):
+                self._profiles[active_profile] = copy.deepcopy(state)
+            else:
+                _LOGGER.debug(
+                    "%s - Not saving outgoing SmartPI profile %s: "
+                    "live algorithm reports %s",
+                    t,
+                    active_profile,
+                    state_profile,
+                )
+
+        # Handle an old persisted state whose mode could not be identified.
+        # Assign it to the first active mode after upgrade, matching the old
+        # single-model behaviour as closely as possible.
+        if (
+            wanted not in self._profiles
+            and self._unassigned_legacy_state is not None
+        ):
+            self._profiles[wanted] = self._unassigned_legacy_state
+            self._unassigned_legacy_state = None
+
+            _LOGGER.info(
+                "%s - Assigned unclassified legacy SmartPI state to %s profile",
+                t,
+                wanted,
+            )
+
+        # Restore an existing profile if we have one.
+        if wanted in self._profiles:
+            algo.load_state(copy.deepcopy(self._profiles[wanted]))
+
+            _LOGGER.info(
+                "%s - SmartPI seasonal profile switched to %s",
+                t,
+                wanted,
+            )
+
+        else:
+            # Important:
+            # Do NOT reset the algorithm here.
+            #
+            # SmartPI's existing ensure_hvac_mode() logic will see the
+            # HEAT<->COOL transition during calculate(), discard the old
+            # mode-dependent A state, FF trim/twin where appropriate,
+            # and retain the reusable passive B model.
+            _LOGGER.info(
+                "%s - No saved SmartPI %s profile; "
+                "initializing it from the current reusable model",
+                t,
+                wanted,
+            )
+
+        self._active_profile = wanted
