@@ -115,6 +115,8 @@ Le code n'utilise plus de constante `WINDOW_MIN_MINUTES`. L'apprentissage repose
 - applique une pause après reprise (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - ancre le début de fenêtre après la fin du temps mort quand c'est nécessaire,
 - surveille la stabilité de puissance via le coefficient de variation (`U_CV_MAX`),
+  évalué dès que la puissance moyenne de la fenêtre atteint `U_CV_MIN_MEAN = 0.05`
+  (en dessous, une puissance qui revient dans une fenêtre OFF n'est pas détectée par ce contrôle),
 - prolonge la fenêtre tant que la pente n'est pas jugée robuste,
 - abandonne après `DT_MAX_MIN = 240` minutes si aucun signal robuste n'émerge.
 

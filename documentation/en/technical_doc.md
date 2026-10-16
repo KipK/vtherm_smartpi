@@ -112,6 +112,8 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
 - applies a post-resume pause (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - anchors the window start after the dead-time end when needed,
 - monitors power stability through the coefficient of variation (`U_CV_MAX`),
+  evaluated once the window mean power reaches `U_CV_MIN_MEAN = 0.05` (below
+  it, power returning in an OFF window is not detected by this check),
 - extends the window while the slope is not yet considered robust,
 - gives up after `DT_MAX_MIN = 240` minutes if no robust signal emerges.
 

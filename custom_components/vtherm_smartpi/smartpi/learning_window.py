@@ -55,7 +55,8 @@ class LearningWindowManager:
         self._t_int_s: float = 0.0
         self._u_first: float | None = None
 
-        # Cumulative time spent in sliding-start state (across consecutive ticks)
+        # Time spent sliding the window start, summed over the window life:
+        # ticks in the expected direction do not clear it.
         self._sliding_elapsed_s: float = 0.0
 
         # Power variance tracking (Welford online algorithm)
@@ -175,7 +176,11 @@ class LearningWindowManager:
 
     @property
     def _u_cv(self) -> float:
-        """Return coefficient of variation of u in the window."""
+        """Return coefficient of variation of u in the window.
+
+        It is 0 while the window mean power is below U_CV_MIN_MEAN, so power
+        returning in an OFF window is not seen until the mean reaches it.
+        """
         if self._u_mean < U_CV_MIN_MEAN:
             return 0.0  # Mean too low, CV not meaningful
         return self._u_std / self._u_mean
@@ -293,8 +298,12 @@ class LearningWindowManager:
                 self.reset()
             return deadtime_skip_count_a, deadtime_skip_count_b
 
-        # Setpoint changes do not reset an active window: the power-transition
-        # guard closes it when u changes, and OFF/B cooling is setpoint-independent.
+        # Setpoint changes do not reset an active window by themselves: the
+        # ON/A gate below closes a window that started ON (u_first > U_ON_MIN)
+        # on the observation where the setpoint changes.
+        # A power change closes a window through the power CV check (which
+        # acts only once the window mean power reaches U_CV_MIN_MEAN) or
+        # through a governance regime transition within the cycle.
 
         # --- Governance gate (thermal domain: a/b learning) ---
         # During calibration, bypass governance to allow A/B learning
@@ -530,9 +539,10 @@ class LearningWindowManager:
             b_wrong_dir = (u_eff_pre < U_OFF_MAX and oriented_dT > 0)
             a_wrong_dir = (u_eff_pre > U_ON_MIN and oriented_dT < 0)
             if b_wrong_dir or a_wrong_dir:
-                # Accumulate sliding duration cumulatively across consecutive ticks.
-                # Using a per-tick window_dt_min would reset the timer every slide,
-                # making DT_MAX_MIN unreachable when dt_s is small.
+                # Accumulate the sliding duration over the window life (ticks
+                # in the expected direction do not clear it). Using a per-tick
+                # window_dt_min would reset the timer every slide, making
+                # DT_MAX_MIN unreachable when dt_s is small.
                 self._sliding_elapsed_s += dt_s
                 if self._sliding_elapsed_s < DT_MAX_MIN * 60:
                     self._start_ts = now
