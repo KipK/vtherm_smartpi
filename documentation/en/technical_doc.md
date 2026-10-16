@@ -469,7 +469,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | ---------------------- | ----------------------------------------------------------- |
 | `const.py`             | constants, enums, governance matrix                         |
 | `ab_estimator.py`      | slope estimation and `ABEstimator`                          |
-| `deadtime_estimator.py` | `DeadTimeEstimator`                                        |
+| `deadtime_estimator.py` | `DeadTimeEstimator`, active-episode starts and dead-time window |
 | `ab_aggregator.py`     | median or weighted-median aggregation of `a/b` measurements |
 | `ab_drift.py`          | persistent drift detection and recentering for `a/b`, with one candidate sequence per channel |
 | `learning_window.py`   | learning-window management and guardrails                   |

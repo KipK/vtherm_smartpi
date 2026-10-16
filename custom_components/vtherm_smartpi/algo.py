@@ -81,7 +81,11 @@ from .smartpi.const import (
     clamp,
 )
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
-from .smartpi.deadtime_estimator import DeadTimeEstimator
+from .smartpi.deadtime_estimator import (
+    DeadTimeEstimator,
+    deadtime_window_active,
+    update_episode_starts,
+)
 from .smartpi.ab_estimator import ABEstimator
 from .smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 from .smartpi.diagnostics import build_published_diagnostics
@@ -1083,29 +1087,12 @@ class SmartPI:
     @property
     def in_deadtime_window(self) -> bool:
         """Check if we are currently inside the estimated dead time window."""
-        now = time.monotonic()
-
-        # Check Heat Deadtime
-        if self.dt_est.deadtime_heat_reliable and self._t_heat_episode_start is not None and self.dt_est.deadtime_heat_s is not None:
-            dt_s = self.dt_est.deadtime_heat_s
-            t_start = self._t_heat_episode_start
-            # Robustness: ensure both are real numbers (not MagicMock)
-            if isinstance(dt_s, (int, float)) and isinstance(t_start, (int, float)):
-                elapsed = now - t_start
-                if elapsed < dt_s:
-                    return True
-
-        # Check Cool Deadtime
-        if self.dt_est.deadtime_cool_reliable and self._t_cool_episode_start is not None and self.dt_est.deadtime_cool_s is not None:
-            dt_s = self.dt_est.deadtime_cool_s
-            t_start = self._t_cool_episode_start
-            # Robustness: ensure both are real numbers (not MagicMock)
-            if isinstance(dt_s, (int, float)) and isinstance(t_start, (int, float)):
-                elapsed = now - t_start
-                if elapsed < dt_s:
-                    return True
-
-        return False
+        return deadtime_window_active(
+            self.dt_est,
+            self._t_heat_episode_start,
+            self._t_cool_episode_start,
+            time.monotonic(),
+        )
 
     # Phase 2: Helper for Near-Band Auto-Calculation
     def update_near_band_auto(self, hvac_mode: VThermHvacMode, current_temp: float, ext_temp: Optional[float]) -> None:
@@ -2219,33 +2206,15 @@ class SmartPI:
         )
 
     def _update_deadtime_episode_status(self, u_applied: float, hvac_mode: VThermHvacMode, now: float) -> None:
-        """
-        Update the start timestamps for heating/cooling episodes.
-        Used for in_deadtime_window property.
-        """
-        # Determine if active based on u > 0 and mode
-        is_heating = (u_applied > 0.01) and (hvac_mode == VThermHvacMode_HEAT)
-        is_cooling = (u_applied > 0.01) and (hvac_mode == VThermHvacMode_COOL)
-
-        # Heat Episode Logic
-        if is_heating:
-            if self._t_heat_episode_start is None:
-                self._t_heat_episode_start = now
-                _LOGGER.debug("%s - DeadTime: Heating episode started at %s", self._name, now)
-        else:
-            if self._t_heat_episode_start is not None:
-                _LOGGER.debug("%s - DeadTime: Heating episode stopped", self._name)
-            self._t_heat_episode_start = None
-
-        # Cool Episode Logic
-        if is_cooling:
-            if self._t_cool_episode_start is None:
-                self._t_cool_episode_start = now
-                _LOGGER.debug("%s - DeadTime: Cooling episode started at %s", self._name, now)
-        else:
-            if self._t_cool_episode_start is not None:
-                _LOGGER.debug("%s - DeadTime: Cooling episode stopped", self._name)
-            self._t_cool_episode_start = None
+        """Update the heating/cooling episode starts used by in_deadtime_window."""
+        self._t_heat_episode_start, self._t_cool_episode_start = update_episode_starts(
+            u_applied,
+            hvac_mode,
+            now,
+            self._t_heat_episode_start,
+            self._t_cool_episode_start,
+            self._name,
+        )
 
     def get_published_diagnostics(self) -> Dict[str, Any]:
         """Return the canonical SmartPI live diagnostics."""

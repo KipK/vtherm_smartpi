@@ -475,7 +475,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | ---------------------- | -------------------------------------------------------- |
 | `const.py`             | constantes, enums, matrice de gouvernance                |
 | `ab_estimator.py`      | estimation de pente et `ABEstimator`                     |
-| `deadtime_estimator.py` | `DeadTimeEstimator`                                     |
+| `deadtime_estimator.py` | `DeadTimeEstimator`, débuts d’épisode actif et fenêtre de temps mort |
 | `ab_aggregator.py`     | agrégation médiane ou médiane pondérée des mesures `a/b` |
 | `ab_drift.py`          | détection et recentrage de dérive persistante sur `a/b`, avec une séquence de candidats par canal |
 | `learning_window.py`   | gestion des fenêtres d'apprentissage et de leurs gardes  |
