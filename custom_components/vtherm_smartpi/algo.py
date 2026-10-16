@@ -91,11 +91,6 @@ from .smartpi.governance import SmartPIGovernance
 from .smartpi.setpoint import SmartPISetpointManager
 from .smartpi.guards import SmartPIGuards
 from .smartpi.controller import SmartPIController
-from .smartpi.braking_release import (
-    evaluate_braking_release,
-    project_zero_delay_switch_power,
-)
-from .smartpi.reference_governor import is_finite_number
 from .smartpi.learning_window import LearningWindowManager
 from .smartpi.deadband import DeadbandManager
 from .smartpi.calibration import CalibrationManager
@@ -757,8 +752,6 @@ class SmartPI:
         a_learning_block_reason = None
         if setpoint_changed:
             a_learning_block_reason = "skip: setpoint transition"
-        elif self.sp_mgr.setpoint_landing_active:
-            a_learning_block_reason = "skip: setpoint landing"
 
         # Delegate to LearningWindowManager
         self._deadtime_skip_count_a, self._deadtime_skip_count_b = self.learn_win.update(
@@ -987,8 +980,6 @@ class SmartPI:
             flags.append("saturated_low")
         if self.sp_mgr.trajectory_active:
             flags.append("trajectory")
-        if self.sp_mgr.governor_active:
-            flags.append("reference_governor")
         current_phase = self.phase
         if current_phase != SmartPIPhase.STABLE:
             flags.append(f"phase_{current_phase.value}")
@@ -1394,8 +1385,6 @@ class SmartPI:
             return "application_saturated"
         if self.sp_mgr.trajectory_active:
             return "application_trajectory"
-        if self.sp_mgr.governor_active:
-            return "application_reference_governor"
         if self.calibration_mgr.state != SmartPICalibrationPhase.IDLE:
             return "application_calibration"
         if self.guards.guard_cut_active or self.guards.guard_kick_active:
@@ -2386,7 +2375,6 @@ class SmartPI:
         remaining_cycle_min: float = 0.0,
         resumed_from_off: bool = False,
         startup_first_run: bool = False,
-        slope_h: float | None = None,
     ) -> tuple[float, bool, float, float, float | None]:
         """Setpoint filtering and boost logic.
 
@@ -2430,7 +2418,6 @@ class SmartPI:
                 remaining_cycle_min=remaining_cycle_min,
                 now_monotonic=now_monotonic,
                 allow_disturbance_trigger=allow_disturbance_trigger,
-                temperature_slope_h=slope_h,
             )
         else:
             # Bypass shaping outside STABLE and on the first cycle after a
@@ -2668,79 +2655,6 @@ class SmartPI:
         self._set_linear_output(clamp(u_limited, 0.0, 1.0 if max_on is None else max_on))
         return self._on_percent
 
-    def _try_release_terminal_braking(
-        self, *, now: float, current_temp: float, hvac_mode: VThermHvacMode,
-        error_i: float, dt_min: float, integrator_hold: bool,
-        block_positive_integral: bool, block_negative_integral: bool,
-    ) -> float | None:
-        """Retire a completed braking episode only with a safe raw-P request."""
-        manager = self.sp_mgr
-        ctl = self.ctl
-        context = manager._reference_governor_authority.pending_context
-        pi = ctl.pi_output_snapshot
-        if context is None or pi is None:
-            return None
-        previous_limited = self._last_u_limited
-        if (not is_finite_number(previous_limited) or not 0.0 <= previous_limited <= 1.0
-                or not is_finite_number(self._cycle_min) or self._cycle_min <= 0.0):
-            return None
-        previous_projected = project_zero_delay_switch_power(
-            previous_limited, self._cycle_min
-        )
-        direction = -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0
-        raw_error = direction * (context.target_temp - context.current_temp)
-        current = (
-            manager._reference_governor_prepared_at == now
-            and now == self._last_calculate_time
-            and context.current_temp == current_temp
-            and context.hvac_mode == hvac_mode
-            and context.target_temp == manager._last_user_target_temp
-            and error_i == raw_error
-            and manager.reference_governor_authority_selected
-            and manager._reference_governor_authority_episode
-        )
-        branch_complete = (
-            ctl.last_i_mode == "I:RUN" and ctl.last_sat == "NO_SAT"
-            and not ctl.sat_p and not ctl.sat_i
-            and integrator_hold is False and not ctl.integral_hold_active
-            and block_positive_integral is False
-            and block_negative_integral is False
-        )
-        decision = evaluate_braking_release(
-            context=context, pi_snapshot=pi, phase=manager.trajectory_phase,
-            profile_nominal=manager._trajectory.current_setpoint,
-            deadband_c=self.deadband_c, cycle_min=self._cycle_min,
-            previous_requested_power=self._last_u_cmd,
-            previous_projected_power=previous_projected,
-            guard_active=(self.integral_guard.active or self.guards.guard_cut_active
-                          or self.guards.guard_kick_active),
-            context_is_current=bool(current),
-            post_pi_branch_complete=bool(branch_complete),
-            zero_delay_switch=(self._valve_mode_enabled is False
-                               and self._minimal_activation_delay == 0
-                               and self._minimal_deactivation_delay == 0),
-        )
-        if not decision.release_candidate:
-            return None
-        raw_p = pi.project_p(raw_error)
-        raw_command = pi.u_i + pi.u_ff + raw_p
-        max_on = self._linear_max_on()
-        if (
-            not is_finite_number(raw_command) or not 0.0 <= raw_command <= 1.0
-            or raw_p < ctl.u_p or not 0.0 <= pi.u_ff + raw_p <= 1.0
-            or not is_finite_number(dt_min) or dt_min <= 0.0
-            or not self._output_initialized
-            or abs(raw_command - previous_limited) > MAX_STEP_PER_MINUTE * dt_min
-            or (max_on is not None and (not is_finite_number(max_on) or raw_command > max_on))
-            or raw_command != decision.raw_requested_power
-        ):
-            return None
-        u_cmd = ctl.restore_proportional_reference(raw_error)
-        self._last_error_p = raw_error
-        manager.set_passthrough(context.target_temp)
-        _LOGGER.debug("%s - Terminal braking released with raw P", self._name)
-        return u_cmd
-
     def calculate(
         self,
         target_temp: float | None,
@@ -2846,7 +2760,6 @@ class SmartPI:
             remaining_cycle_min,
             resumed_from_off,
             startup_first_run,
-            slope_h=slope,
         )
 
         # Clear cycle regimes on setpoint change to prevent REGIME_TRANSITION freeze
@@ -3086,36 +2999,7 @@ class SmartPI:
             u_max=u_max,
         )
 
-        released_u = self._try_release_terminal_braking(
-            now=now, current_temp=current_temp, hvac_mode=hvac_mode,
-            error_i=error_i, dt_min=dt_min, integrator_hold=integrator_hold,
-            block_positive_integral=block_positive_integral,
-            block_negative_integral=block_negative_integral,
-        )
-        if released_u is not None:
-            u_cmd = released_u
-
-        # --- 11b. Setpoint-response command cap (post-PI governor) ---
-        authority_selected = self.sp_mgr.reference_governor_authority_selected
-        authority_decision = None
-        if self.sp_mgr.reference_governor_authority_pending:
-            authority_decision = self.sp_mgr.resolve_reference_governor(
-                requested_u=u_cmd,
-                now_monotonic=now,
-                cycle_min=self._cycle_min,
-                pi_snapshot=self.ctl.pi_output_snapshot,
-            )
-        command_cap = (
-            authority_decision.command_cap
-            if authority_selected and authority_decision is not None
-            else None
-        )
-        u_cmd = self.ctl.apply_command_cap(command_cap)
-        self.sp_mgr.record_reference_governor_command(
-            self.ctl.u_cmd_before_cap,
-            u_cmd,
-        )
-        # Anti-windup on the limits known at this tick (cap, max_on_percent).
+        # Anti-windup on the limit known at this tick (max_on_percent).
         # Rate limit and timing quantization are not saturations.
         self.ctl.track_output_limit(u_max, self.Kp, self.Ki, dt_min)
 

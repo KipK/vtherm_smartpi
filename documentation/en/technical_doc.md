@@ -105,8 +105,6 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
   setpoint changes, so a window cannot span the old and new regimes,
 - keeps early active ascent after that observation eligible for `a` under the
   existing dead-time, power-stability, robust-slope, FF3, and governance guards,
-- blocks ordinary ON/`a` learning once late-braking trajectory/reference-governor
-  control starts and until handoff is complete,
 - keeps passive OFF/`b` learning under its existing physical guards; calibration
   keeps its dedicated learning contract and disturbance-only responses are not
   blocked by this setpoint gate,
@@ -282,24 +280,19 @@ The principle is:
 - a significant setpoint change arms late braking once; HEAT and COOL then use the same signed braking-window equations,
 - disturbance-triggered entry continues to require the significant-gap threshold,
 - the exact learned 1R1C model, the passive-response dead time of the mode (`deadtime_cool` in HEAT, `deadtime_heat` in COOL), the remaining cycle latency, and the committed cycle power are used to detect the braking zone,
-- a smooth late-braking trajectory proposes an independent nominal P reference near the target,
-- for HEAT and COOL setpoint trajectories, the predictive reference governor derives an admissible P reference and can constrain the internal command after PI computation,
+- a smooth late-braking trajectory then shapes the P reference toward a braking target below the raw target in the demand direction,
 - when braking is no longer needed, the filtered reference returns progressively to the raw target before the trajectory stops,
 - for a trajectory triggered by a setpoint change, entering the `release` phase keeps that phase locked until the trajectory ends, with no return to `tracking`,
-- crossing the target does not terminate an armed setpoint episode; the runtime
-  keeps consuming no-demand observations until its handoff is confirmed,
-- the P reference remains bounded by the raw target during that handoff: it
-  never exceeds the target in HEAT and never falls below it in COOL,
-- `trajectory_active` indicates whether the analytical trajectory is running,
-- the governor ends the episode only after the constraint remains inactive for repeated, time-separated evaluations spanning a control cycle; invalid context fails open without restoring a stale cap.
-- the governor also retires its episode when its own terminal prediction is falsified: while a cap is active, each prediction is compared with the room temperature measured once the stop dead time has elapsed; when the room repeatedly stays short of the promise by more than the deadband and the maximum dynamic reserve, over at least the stop dead time plus one cycle, without rising in the demand direction, the cap fails open with reason `prediction_falsified_below_target` and the raw PI request is restored.
+- during `release`, the P reference stays on the demand side of the measured room temperature without crossing the raw target: it never exceeds the target in HEAT and never falls below it in COOL,
+- the trajectory ends once it is in `release`, the P reference and the room are both within `0.05 °C` of the target, and switching P back to the raw target changes the proportional command by at most `0.03`,
+- the trajectory also ends as soon as the room reaches or crosses the target in the demand direction, or on any real setpoint change; the P branch then uses the raw target again,
+- `trajectory_active` indicates whether the analytical trajectory is running.
 
-The thermal twin, FF3, braking-entry prediction and governor share a pure
+The thermal twin, FF3 and the braking-entry prediction share a pure
 constant-power 1R1C propagation function. Each consumer retains its own horizons,
-delay policy and input validation. The governor uses the nominal thermal model,
-without an estimated disturbance correction.
+delay policy and input validation.
 
-The governor uses the discrete 1R1C form in internal linear command space:
+The propagation uses the discrete 1R1C form in internal linear command space:
 
 $$
 \alpha = e^{-b \cdot h}
@@ -309,39 +302,23 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-The equations are normalized in the active demand direction (`+1` for HEAT, `-1` for COOL). A dynamic reserve is derived from the measured slope over the stop dead time, bounded by policy, and converted into a thermal target bound. The bound tolerates the controller deadband beyond the target in the demand direction and subtracts the dynamic reserve, so the cap never demands a tighter landing from the nominal model than the band the controller already accepts. The governor solves the maximum command that respects this bound and inverts that cap into the admissible P reference. The cap is applied after normal PI computation and before soft constraints, so `u_pi` remains the raw PI diagnostic. The excess of the PI request above the cap is handled by the per-tick anti-windup (section 4.5).
-
-Thermal observations are prepared before PI evaluation. Reference inversion
-uses an immutable snapshot of the effective proportional gain, integral power
-and feedforward after that evaluation. Its P projection shares the controller's
-deadband, P allowance and edge-persistence rules without advancing controller
-state a second time. References producing equivalent P commands do not create
-a reference-only constraint; the thermal command cap still takes precedence.
+The braking entry predicts the signed change in the active demand direction (`+1` for HEAT, `-1` for COOL) over the remaining cycle, the passive dead time and any queued next-cycle power. The braking gap is that predicted change multiplied by `TRAJECTORY_BRAKE_GAIN = 1.20`.
 
 The canonical `live.setpoint` block publishes the summary:
 
 - `filtered_setpoint`,
 - `trajectory_active`,
 - `trajectory_source`,
-- `governor_active`,
-- `governor_phase`,
-- `governor_reason`,
-- `governor_command_cap`,
-- `governor_coast_required`.
+- `boost_active`.
 
-The same payload in both modes exposes trajectory and governor details under
-`live.analysis.trajectory` and `live.analysis.reference_governor`:
+The same payload in both modes exposes trajectory details under
+`live.analysis.trajectory`:
 
 - `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` and `phase`,
 - `pending_target_change_braking`, `braking_needed` and `model_ready`,
-- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` and `bumpless_ready`,
-- `active`, `phase`, `reason`, `nominal_reference` and `admissible_reference`,
-- `command_cap`, `constraint_active`, `dynamic_reserve_c`, `predicted_terminal_temperature` and `target_bound`,
-- `coast_required` and `handoff_ready`,
-- `command_before_cap` and `command_after_cap`,
-- `prediction_shortfall_c`, `falsification_count` and `falsification_span_s`.
+- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` and `bumpless_ready`.
 
-Setpoint reference shaping remains limited to the P branch so the integral path keeps the raw setpoint untouched and learning is not disturbed. The post-PI cap does not change the valve linearization curve and does not rewrite `u_pi`; only the anti-windup of section 4.5 drains the accumulated integral.
+Setpoint reference shaping is limited to the P branch, so the integral path keeps the raw setpoint untouched. No command cap is applied after the PI computation: the PI command goes straight to the soft constraints (rate limiter, `max_on_percent`) and then to the timing constraints.
 
 The current code also applies an explicit guard on positive integral growth during catch-up phases:
 
@@ -420,10 +397,10 @@ Additional protections currently present are:
 - `I:HOLD` with source `governance_sensor_invalid` while no outdoor temperature has been received yet (`DEGRADED` regime),
 - freeze of P and I inside the core deadband.
 
-The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower (and, for the back-calculation, the governor cap when it is lower still). It has two parts:
+The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower. It has two parts:
 
 - conditional integration: the integral stops growing when the unconstrained request exceeds the applicable upper limit;
-- back-calculation: on every tick where the integral mode is `I:RUN`, `I:SKIP`, `I:GUARD` or `I:CLAMP`, the excess of the PI output (`u_ff + u_pi`, clamped to `[0, 1]`) above the lower of `max_on_percent` and the governor cap corrects the integral by `beta * excess / Ki`, with `beta = dt / max(Kp/Ki, dt)` (tracking time constant equal to `Ti = Kp/Ki`). The correction only moves the integral toward zero and stops at zero, so an excess carried by the proportional term alone never winds the integral in the opposite direction. The integral stays clamped to `±2/Ki`. Only the integral changes: `u_pi` keeps the decomposition that produced the command.
+- back-calculation: on every tick where the integral mode is `I:RUN`, `I:SKIP`, `I:GUARD` or `I:CLAMP`, the excess of the PI output (`u_ff + u_pi`, clamped to `[0, 1]`) above the linear image of `max_on_percent` corrects the integral by `beta * excess / Ki`, with `beta = dt / max(Kp/Ki, dt)` (tracking time constant equal to `Ti = Kp/Ki`). The correction only moves the integral toward zero and stops at zero, so an excess carried by the proportional term alone never winds the integral in the opposite direction. The integral stays clamped to `±2/Ki`. Only the integral changes: `u_pi` keeps the decomposition that produced the command.
 
 The following are not treated as saturation: Versatile Thermostat quantization and valve retention (`dpercent`, period), minimum on/off times, and the rate limiter. The behavior is symmetric in HEAT and COOL, does not use Versatile Thermostat command receipts, and is identical with older Versatile Thermostat versions. The `aw_du` diagnostic is the correction (excess, `<= 0`) applied at the last tick.
 
@@ -480,7 +457,7 @@ The forced cycle is managed by `CalibrationManager`:
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis                  |
 | `deadband.py`          | deadband and near-band                                      |
-| `setpoint.py`          | analytical setpoint trajectory and signed reference-governor orchestration |
+| `setpoint.py`          | analytical setpoint trajectory for the P reference          |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
 | `command_ownership.py` | request identifiers, frozen snapshots and binding of the scheduler applied-command receipts |

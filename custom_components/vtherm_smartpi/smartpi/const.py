@@ -191,13 +191,6 @@ TRAJECTORY_BRAKE_GAIN = 1.20             # Safety factor applied to the predicte
 TRAJECTORY_BRAKE_RELEASE_HYST_C = 0.10   # Extra signed-error margin to keep an active trajectory in tracking
 TRAJECTORY_RELEASE_TAU_FACTOR = 0.5      # Make the return to the raw target faster than braking while staying smooth
 TRAJECTORY_BUMPLESS_MAX_U_DELTA = 0.03   # Maximum allowed proportional command step when releasing trajectory
-# Signed setpoint reference-governor policy.
-REFERENCE_GOVERNOR_RHO_MARGIN = 1.0
-REFERENCE_GOVERNOR_MARGIN_MAX_C = 0.05
-REFERENCE_GOVERNOR_COMMAND_EPSILON = 1e-6
-REFERENCE_GOVERNOR_REFERENCE_EPSILON_C = 1e-9
-REFERENCE_GOVERNOR_FALSIFICATION_COUNT = 3        # Consecutive matured prediction shortfalls required before a persistent cap fails open
-REFERENCE_GOVERNOR_FALSIFICATION_MAX_SLOPE_H = 0.12 # °C/h — demand-direction slope above which stored energy may still justify the cap
 INTEGRAL_GUARD_RELEASE_ERROR_RATIO = 2.0 # Release positive-I guard only once the residual error is close to deadband scale
 INTEGRAL_GUARD_RELEASE_SLOPE_RATIO = 0.35 # Release positive-I guard when the signed recovery slope has collapsed enough
 INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H = 0.12 # Absolute signed-slope floor (°C/h) below which stabilization may be accepted

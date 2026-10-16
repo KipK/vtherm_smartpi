@@ -17,14 +17,9 @@ from .const import (
     TRAJECTORY_MIN_P_ERROR_RATIO,
     TRAJECTORY_RELEASE_TAU_FACTOR as DEFAULT_RELEASE_TAU_FACTOR,
 )
-from .controller import PIOutputSnapshot
-from .reference_governor_authority import (
-    ReferenceGovernorAuthority,
-    ReferenceGovernorAuthorityDecision,
-)
 from .trajectory import SmartPITrajectoryGenerator
 from .thermal_model import propagate_1r1c
-from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL, VThermHvacMode_HEAT
+from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,15 +67,6 @@ class SmartPISetpointManager:
         self._last_bumpless_u_delta: float | None = None
         self._last_bumpless_ready: bool | None = None
         self._trajectory_source: str = "none"
-        self._reference_governor_authority = ReferenceGovernorAuthority()
-        self._reference_governor_prepared_at: float | None = None
-        self._reference_governor_authority_decision: (
-            ReferenceGovernorAuthorityDecision | None
-        ) = None
-        self._reference_governor_authority_selected = False
-        self._reference_governor_authority_episode = False
-        self._governor_u_cmd_before_cap: float | None = None
-        self._governor_u_cmd_after_cap: float | None = None
 
     @property
     def trajectory_active(self) -> bool:
@@ -118,14 +104,6 @@ class SmartPISetpointManager:
         return self._pending_target_change_braking
 
     @property
-    def setpoint_landing_active(self) -> bool:
-        """Return whether an authoritative user setpoint landing is active."""
-        return (
-            self._reference_governor_authority_episode
-            and self._trajectory_source == "setpoint"
-        )
-
-    @property
     def trajectory_model_ready(self) -> bool:
         """Latest model readiness flag used by the trajectory manager."""
         return self._last_model_ready
@@ -160,148 +138,10 @@ class SmartPISetpointManager:
         """Source of the currently active trajectory."""
         return self._trajectory_source
 
-    @property
-    def reference_governor_authority_decision(
-        self,
-    ) -> ReferenceGovernorAuthorityDecision | None:
-        """Return the latest authoritative post-PI governor decision."""
-        return self._reference_governor_authority_decision
-
-    @property
-    def reference_governor_authority_pending(self) -> bool:
-        """Return whether this cycle has an authoritative context to resolve."""
-        return self._reference_governor_authority.pending_context is not None
-
-    @property
-    def reference_governor_authority_selected(self) -> bool:
-        """Return whether this cycle uses the authoritative governor path."""
-        return self._reference_governor_authority_selected
-
-    @property
-    def reference_governor_authority_nominal_reference(self) -> float | None:
-        """Return the independent nominal reference prepared for this cycle."""
-        context = self._reference_governor_authority.pending_context
-        return None if context is None else context.nominal_reference
-
-    @property
-    def governor_active(self) -> bool:
-        """Return whether the authoritative governor shapes this episode."""
-        decision = self._reference_governor_authority_decision
-        return decision.shaping_active if decision is not None else False
-
-    @property
-    def governor_phase(self) -> str:
-        """Return the authoritative runtime phase."""
-        decision = self._reference_governor_authority_decision
-        return decision.phase.value if decision is not None else "idle"
-
-    @property
-    def governor_reason(self) -> str:
-        """Return the latest authoritative decision reason."""
-        decision = self._reference_governor_authority_decision
-        return decision.reason if decision is not None else "inactive"
-
-    @property
-    def governor_nominal_reference(self) -> float | None:
-        """Return the nominal reference evaluated by the governor."""
-        decision = self._reference_governor_authority_decision
-        return decision.kernel_decision.nominal_reference if decision is not None else None
-
-    @property
-    def governor_admissible_reference(self) -> float | None:
-        """Return the reference admitted by the authoritative runtime."""
-        decision = self._reference_governor_authority_decision
-        return decision.effective_reference if decision is not None else None
-
-    @property
-    def governor_command_cap(self) -> float | None:
-        """Return the authoritative command cap."""
-        decision = self._reference_governor_authority_decision
-        return decision.command_cap if decision is not None else None
-
-    @property
-    def governor_constraint_active(self) -> bool:
-        """Return whether the kernel detected an active thermal constraint."""
-        decision = self._reference_governor_authority_decision
-        return (
-            decision.kernel_decision.constraint_active
-            if decision is not None
-            else False
-        )
-
-    @property
-    def governor_dynamic_reserve_c(self) -> float | None:
-        """Return the dynamic thermal reserve selected by the kernel."""
-        decision = self._reference_governor_authority_decision
-        return decision.kernel_decision.dynamic_reserve_c if decision is not None else None
-
-    @property
-    def governor_predicted_terminal_temperature(self) -> float | None:
-        """Return the terminal temperature predicted by the kernel."""
-        decision = self._reference_governor_authority_decision
-        return (
-            decision.kernel_decision.predicted_terminal_temp
-            if decision is not None
-            else None
-        )
-
-    @property
-    def governor_target_bound(self) -> float | None:
-        """Return the signed-mode thermal target bound."""
-        decision = self._reference_governor_authority_decision
-        return decision.kernel_decision.target_bound if decision is not None else None
-
-    @property
-    def governor_coast_required(self) -> bool:
-        """Return whether zero command is required by the kernel."""
-        decision = self._reference_governor_authority_decision
-        return decision.kernel_decision.coast_required if decision is not None else False
-
-    @property
-    def governor_handoff_ready(self) -> bool:
-        """Return whether the runtime completed its non-constraining handoff."""
-        decision = self._reference_governor_authority_decision
-        return decision.handoff_ready if decision is not None else False
-
-    @property
-    def governor_prediction_shortfall_c(self) -> float | None:
-        """Return the last matured signed shortfall between cap promise and measurement."""
-        evidence = self._reference_governor_authority.last_falsification
-        return evidence.last_shortfall_c if evidence is not None else None
-
-    @property
-    def governor_falsification_count(self) -> int:
-        """Return the run of consecutive matured shortfalls beyond tolerance."""
-        evidence = self._reference_governor_authority.last_falsification
-        return evidence.consecutive_shortfalls if evidence is not None else 0
-
-    @property
-    def governor_falsification_span_s(self) -> float:
-        """Return the duration covered by the current shortfall run, in seconds."""
-        evidence = self._reference_governor_authority.last_falsification
-        return evidence.shortfall_span_s if evidence is not None else 0.0
-
-    @property
-    def governor_u_cmd_before_cap(self) -> float | None:
-        """Return the PI command observed before the governor cap."""
-        return self._governor_u_cmd_before_cap
-
-    @property
-    def governor_u_cmd_after_cap(self) -> float | None:
-        """Return the command emitted after the governor cap."""
-        return self._governor_u_cmd_after_cap
-
     def _reset_trajectory(self) -> None:
         """Reset the trajectory state only."""
         self._trajectory.reset()
         self._trajectory_source = "none"
-        self._reference_governor_authority.reset()
-        self._reference_governor_prepared_at = None
-        self._reference_governor_authority_decision = None
-        self._reference_governor_authority_selected = False
-        self._reference_governor_authority_episode = False
-        self._governor_u_cmd_before_cap = None
-        self._governor_u_cmd_after_cap = None
 
     def _clear_pending_target_change_braking(self) -> None:
         """Forget any delayed braking request inherited from a setpoint increase."""
@@ -358,11 +198,6 @@ class SmartPISetpointManager:
 
     def load_state(self, state: dict):
         """Load state from persistence."""
-        self._reference_governor_authority.load_state()
-        self._reference_governor_prepared_at = None
-        self._reference_governor_authority_decision = None
-        self._reference_governor_authority_selected = False
-        self._reference_governor_authority_episode = False
         if not state:
             return
 
@@ -556,70 +391,6 @@ class SmartPISetpointManager:
         """Return True once the measured temperature is close enough to target."""
         return _signed_delta(target_temp, current_temp, hvac_mode) <= TRAJECTORY_COMPLETE_EPS_C
 
-    def record_reference_governor_command(
-        self, before: float | None, after: float | None
-    ) -> None:
-        """Record command values around the authoritative governor cap."""
-        self._governor_u_cmd_before_cap = before
-        self._governor_u_cmd_after_cap = after
-
-    def resolve_reference_governor(
-        self,
-        *,
-        requested_u: float,
-        now_monotonic: float,
-        cycle_min: float,
-        pi_snapshot: PIOutputSnapshot,
-    ) -> ReferenceGovernorAuthorityDecision | None:
-        """Resolve the prepared governor context with the true PI request."""
-        self._reference_governor_prepared_at = None
-        result = self._reference_governor_authority.resolve(
-            requested_u=requested_u,
-            now_monotonic=now_monotonic,
-            cycle_min=cycle_min,
-            pi_snapshot=pi_snapshot,
-        )
-        if result is None:
-            return None
-
-        self._reference_governor_authority_decision = result
-        if result.handoff_ready:
-            target = self._last_user_target_temp
-            if target is not None:
-                # Completion belongs to the governor. Clear the nominal
-                # trajectory only after its non-constraining handoff proof.
-                self.set_passthrough(target)
-                self._reference_governor_authority_decision = result
-        return result
-
-    def _authoritative_reference_for_cycle(
-        self,
-        *,
-        nominal_reference: float,
-        current_temp: float,
-        hvac_mode: VThermHvacMode | None,
-    ) -> float:
-        """Apply the previous admissible reference without mutating the profile."""
-        decision = self._reference_governor_authority_decision
-        if decision is None or not decision.shaping_active:
-            return nominal_reference
-        direction = -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0
-        nominal_error = max(
-            direction * (nominal_reference - current_temp),
-            0.0,
-        )
-        if nominal_error <= 0.0:
-            return nominal_reference
-        admissible_error = direction * (
-            decision.effective_reference - current_temp
-        )
-        minimum_error = min(TRAJECTORY_COMPLETE_EPS_C, nominal_error)
-        bounded_error = min(
-            max(admissible_error, minimum_error),
-            nominal_error,
-        )
-        return current_temp + direction * bounded_error
-
     def filter_setpoint(
         self,
         target_temp: float,
@@ -639,8 +410,6 @@ class SmartPISetpointManager:
         remaining_cycle_min: float = 0.0,
         now_monotonic: float | None = None,
         allow_disturbance_trigger: bool = True,
-        *,
-        temperature_slope_h: float | None = None,
     ) -> float:
         """Return SP_for_P for the proportional path.
 
@@ -650,18 +419,12 @@ class SmartPISetpointManager:
         ``stop_deadtime_s`` is the dead time of the passive response after
         active power stops for ``hvac_mode``.
         """
-        self._reference_governor_prepared_at = None
         if not self.enabled:
             self._clear_pending_target_change_braking()
             self.set_passthrough(target_temp)
             return target_temp
 
-        self._reference_governor_authority_selected = False
         if current_temp is None:
-            self._reference_governor_authority.reset()
-            self._reference_governor_authority_decision = None
-            self._governor_u_cmd_before_cap = None
-            self._governor_u_cmd_after_cap = None
             return self.effective_setpoint if self.effective_setpoint is not None else target_temp
 
         if now_monotonic is None:
@@ -673,9 +436,6 @@ class SmartPISetpointManager:
         self._last_next_cycle_u_ref = max(float(next_cycle_u_ref), 0.0)
         self._last_bumpless_u_delta = None
         self._last_bumpless_ready = None
-        # Command diagnostics are refreshed after the PI request is resolved.
-        self._governor_u_cmd_before_cap = None
-        self._governor_u_cmd_after_cap = None
 
         if self.filtered_setpoint is None:
             self.filtered_setpoint = target_temp
@@ -705,19 +465,8 @@ class SmartPISetpointManager:
             self.set_passthrough(target_temp)
             return target_temp
 
-        # Keep an armed setpoint episode alive long enough for the runtime
-        # to observe no_positive_demand and complete its HANDOFF sequence.
-        preserve_governor_episode = (
-            signed_error <= 0.0
-            and self._reference_governor_authority_episode
-            and self._trajectory_source == "setpoint"
-            and self.trajectory_active
-            and self._reference_governor_authority.runtime.armed
-        )
-
-        # Already at or beyond target in the active direction. A disarmed or
-        # invalid episode remains fail-safe passthrough.
-        if signed_error <= 0.0 and not preserve_governor_episode:
+        # Already at or beyond target in the active direction.
+        if signed_error <= 0.0:
             self._clear_pending_target_change_braking()
             self.set_passthrough(target_temp)
             return target_temp
@@ -780,7 +529,7 @@ class SmartPISetpointManager:
             else:
                 # A significant target change has already passed the arming
                 # threshold. The signed model uses the same braking window in
-                # HEAT and COOL; the governor owns the thermal reserve.
+                # HEAT and COOL.
                 setpoint_entry_error = signed_error
                 setpoint_braking_window = (
                     self._pending_target_change_braking
@@ -825,7 +574,8 @@ class SmartPISetpointManager:
         )
         if not self.trajectory_active and braking_needed and tau_brake_min is not None:
             # Remember whether the trajectory responds to a user target or
-            # a disturbance; only the former enters the reference governor.
+            # a disturbance; a setpoint trajectory never leaves its release
+            # phase once entered.
             trajectory_source = (
                 "setpoint"
                 if self._pending_target_change_braking
@@ -838,15 +588,10 @@ class SmartPISetpointManager:
                 now_monotonic=now_monotonic,
             )
             self._trajectory_source = trajectory_source
-            self._reference_governor_authority_episode = (
-                trajectory_source == "setpoint"
-                and hvac_mode in (VThermHvacMode_HEAT, VThermHvacMode_COOL)
-            )
             self._clear_pending_target_change_braking()
         elif self.trajectory_active:
             # A setpoint trajectory progresses monotonically through its
-            # phases. The governor handles later constraint variations without
-            # sending the nominal profile back from release to tracking.
+            # phases: once in release it never returns to tracking.
             trajectory_phase = (
                 TrajectoryPhase.RELEASE
                 if release_locked
@@ -912,49 +657,6 @@ class SmartPISetpointManager:
             else:
                 sp_for_p = min(sp_for_p, target_temp)
             self._trajectory.current_setpoint = sp_for_p
-
-        if (
-            self._trajectory_source == "setpoint"
-            and hvac_mode in (VThermHvacMode_HEAT, VThermHvacMode_COOL)
-        ):
-            self._reference_governor_authority_episode = True
-        if self._reference_governor_authority_episode:
-            authority_context = self._reference_governor_authority.prepare(
-                target_temp=target_temp,
-                nominal_reference=sp_for_p,
-                current_temp=current_temp,
-                hvac_mode=hvac_mode,
-                trajectory_active=self.trajectory_active,
-                trajectory_source=self._trajectory_source,
-                a=a,
-                b=b,
-                ext_temp=ext_current_temp,
-                committed_u=u_ref,
-                remaining_cycle_min=remaining_cycle_min,
-                stop_deadtime_s=stop_deadtime_s,
-                measured_slope_h=temperature_slope_h,
-                model_reliable=tau_reliable,
-                deadtime_reliable=stop_deadtime_reliable,
-                now_monotonic=now_monotonic,
-            )
-            self._reference_governor_authority_selected = True
-            self._reference_governor_prepared_at = now_monotonic
-        if self._reference_governor_authority_selected:
-            # The profile remains an independent nominal proposal. The
-            # previous post-PI decision supplies this cycle's P reference;
-            # this cycle's true PI request will resolve the next decision.
-            if authority_context.bypass_reason is None:
-                sp_for_p = self._authoritative_reference_for_cycle(
-                    nominal_reference=sp_for_p,
-                    current_temp=current_temp,
-                    hvac_mode=hvac_mode,
-                )
-            if hvac_mode == VThermHvacMode_COOL:
-                sp_for_p = max(sp_for_p, target_temp)
-            elif hvac_mode == VThermHvacMode_HEAT:
-                sp_for_p = min(sp_for_p, target_temp)
-            self.effective_setpoint = sp_for_p
-            return sp_for_p
 
         # Finish only when both the room and P reference are near the target
         # and the handoff cannot create a large proportional output step.

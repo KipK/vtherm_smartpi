@@ -108,8 +108,6 @@ Le code n'utilise plus de constante `WINDOW_MIN_MINUTES`. L'apprentissage repose
 - conserve l'éligibilité de la montée active initiale suivant cette observation
   pour `a`, sous les garde-fous existants de temps mort, stabilité de puissance,
   pente robuste, FF3 et gouvernance,
-- bloque l'apprentissage ON/`a` ordinaire dès le début du freinage tardif de la
-  trajectoire ou du gouverneur de référence, jusqu'à la fin du handoff,
 - conserve l'apprentissage passif OFF/`b` sous ses garde-fous physiques existants ;
   la calibration conserve son contrat dédié et les réponses dues uniquement à une
   perturbation ne sont pas bloquées par ce gate de consigne,
@@ -280,26 +278,19 @@ Le principe est le suivant :
 - un changement de consigne significatif arme une seule fois le freinage tardif ; HEAT et COOL utilisent ensuite les mêmes équations signées de fenêtre de freinage,
 - un déclenchement dû à une perturbation continue d'exiger le seuil d'écart significatif,
 - le modèle 1R1C appris, le temps mort de réponse passive du mode (`deadtime_cool` en HEAT, `deadtime_heat` en COOL), la latence restante du cycle et la puissance engagée sur le cycle servent à détecter cette zone de freinage,
-- une trajectoire de freinage tardif douce propose une référence P nominale indépendante près de la cible,
-- pour les trajectoires de consigne HEAT et COOL, le gouverneur de référence prédictif détermine une référence P admissible et peut contraindre la commande interne après le calcul PI,
+- une trajectoire de freinage tardif douce façonne alors la référence P vers une cible de freinage située en deçà de la consigne brute dans le sens de la demande,
 - lorsque le freinage n'est plus nécessaire, la référence filtrée remonte progressivement vers la consigne brute avant l'arrêt de la trajectoire,
 - pour une trajectoire issue d'un changement de consigne, l'entrée en phase `release` verrouille ensuite cette phase jusqu'à la fin de la trajectoire, sans retour vers `tracking`,
-- le franchissement de la consigne ne termine pas un épisode de consigne armé ; le
-  runtime continue de consommer les observations sans demande jusqu'à la
-  confirmation de son handoff,
-- la référence P reste bornée par la consigne brute pendant ce handoff : elle ne
-  dépasse jamais la cible en HEAT et ne descend jamais sous celle-ci en COOL,
-- `trajectory_active` indique si la trajectoire analytique est en cours,
-- le gouverneur termine l'épisode seulement après que la contrainte est restée inactive pendant plusieurs évaluations séparées dans le temps et couvrant un cycle de contrôle ; un contexte invalide échoue en mode ouvert sans restaurer un ancien cap.
-- le gouverneur retire aussi son épisode lorsque sa propre prédiction terminale est falsifiée : tant qu'un cap est actif, chaque prédiction est comparée à la température mesurée une fois le temps mort d'arrêt écoulé ; lorsque la pièce reste de façon répétée en deçà de la promesse de plus que la deadband et la réserve dynamique maximale, pendant au moins le temps mort d'arrêt plus un cycle, sans monter dans le sens de la demande, le cap s'ouvre avec la raison `prediction_falsified_below_target` et la demande PI brute est restaurée.
+- pendant `release`, la référence P reste du côté de la demande par rapport à la température mesurée de la pièce, sans franchir la consigne brute : elle ne dépasse jamais la cible en HEAT et ne descend jamais sous celle-ci en COOL,
+- la trajectoire se termine une fois en `release`, lorsque la référence P et la pièce sont toutes deux à moins de `0,05 °C` de la cible et que le retour de P à la consigne brute modifie la commande proportionnelle d'au plus `0,03`,
+- la trajectoire se termine aussi dès que la pièce atteint ou franchit la cible dans le sens de la demande, ou lors de tout changement réel de consigne ; la branche P utilise alors de nouveau la consigne brute,
+- `trajectory_active` indique si la trajectoire analytique est en cours.
 
-Le jumeau thermique, FF3, la prédiction d'entrée en freinage et le gouverneur
-partagent une fonction pure de propagation 1R1C à puissance constante. Chaque
-consommateur conserve ses horizons, sa politique de retard et ses validations.
-Le gouverneur utilise le modèle thermique nominal, sans correction estimée de
-perturbation.
+Le jumeau thermique, FF3 et la prédiction d'entrée en freinage partagent une
+fonction pure de propagation 1R1C à puissance constante. Chaque consommateur
+conserve ses horizons, sa politique de retard et ses validations.
 
-Le gouverneur utilise la forme discrète du modèle 1R1C dans l'espace de commande interne linéaire :
+La propagation utilise la forme discrète du modèle 1R1C dans l'espace de commande interne linéaire :
 
 $$
 \alpha = e^{-b \cdot h}
@@ -309,40 +300,23 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-Les équations sont normalisées dans le sens de la demande active (`+1` en HEAT, `-1` en COOL). Une réserve dynamique est dérivée de la pente mesurée sur le temps mort d'arrêt, puis bornée par la politique et convertie en limite thermique. Cette limite tolère la deadband du contrôleur au-delà de la cible dans le sens de la demande et retranche la réserve dynamique : le cap n'exige jamais du modèle nominal un atterrissage plus précis que la bande déjà acceptée par le contrôleur. Le gouverneur résout la commande maximale respectant cette limite et inverse ce cap pour obtenir la référence P admissible. Le cap est appliqué après le calcul PI normal et avant les contraintes douces ; `u_pi` reste donc le diagnostic PI brut. L'excès de la demande PI au-delà du cap est traité par l'anti-windup à chaque tick (section 4.5).
-
-Les observations thermiques sont préparées avant le calcul PI. L'inversion de
-référence utilise un instantané immuable du gain proportionnel effectif, de la
-puissance intégrale et du feedforward après ce calcul. Sa projection P partage
-les règles de zone morte, d'autorisation du P et de persistance au bord du
-contrôleur, sans faire avancer son état une seconde fois. Des références
-produisant des commandes P équivalentes ne créent pas de contrainte de référence
-seule ; le plafond thermique de commande reste prioritaire.
+L'entrée en freinage prédit la variation signée dans le sens de la demande active (`+1` en HEAT, `-1` en COOL) sur le reste du cycle, le temps mort passif et l'éventuelle puissance déjà prévue pour le cycle suivant. L'écart de freinage vaut cette variation prédite multipliée par `TRAJECTORY_BRAKE_GAIN = 1.20`.
 
 Le bloc canonique `live.setpoint` publie le résumé :
 
 - `filtered_setpoint`,
 - `trajectory_active`,
 - `trajectory_source`,
-- `governor_active`,
-- `governor_phase`,
-- `governor_reason`,
-- `governor_command_cap`,
-- `governor_coast_required`.
+- `boost_active`.
 
-Le même payload dans les deux modes expose les détails de trajectoire et
-du gouverneur dans `live.analysis.trajectory` et `live.analysis.reference_governor` :
+Le même payload dans les deux modes expose les détails de trajectoire dans
+`live.analysis.trajectory` :
 
 - `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` et `phase`,
 - `pending_target_change_braking`, `braking_needed` et `model_ready`,
-- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` et `bumpless_ready`,
-- `active`, `phase`, `reason`, `nominal_reference` et `admissible_reference`,
-- `command_cap`, `constraint_active`, `dynamic_reserve_c`, `predicted_terminal_temperature` et `target_bound`,
-- `coast_required` et `handoff_ready`,
-- `command_before_cap` et `command_after_cap`,
-- `prediction_shortfall_c`, `falsification_count` et `falsification_span_s`.
+- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` et `bumpless_ready`.
 
-Le façonnage de référence reste limité à la branche P afin de préserver la consigne brute côté intégrale et d'éviter de perturber l'apprentissage. Le cap post-PI ne change pas la courbe de linéarisation de vanne et ne réécrit pas `u_pi` ; seul l'anti-windup de la section 4.5 vide l'intégrale accumulée.
+Le façonnage de référence est limité à la branche P, ce qui laisse la consigne brute intacte côté intégrale. Aucun plafond de commande n'est appliqué après le calcul PI : la commande PI passe directement par les contraintes douces (limiteur de pente, `max_on_percent`) puis par les contraintes de temporisation.
 
 Le code actuel applique aussi une garde explicite sur la croissance positive de l'intégrale pendant les phases de rattrapage :
 
@@ -421,10 +395,10 @@ Les protections complémentaires actuellement présentes sont :
 - `I:HOLD` avec source `governance_sensor_invalid` tant qu'aucune température extérieure n'a été reçue (régime `DEGRADED`),
 - gel de P et I dans la deadband centrale.
 
-L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse (et, pour la rétro-calculation, le cap du gouverneur lorsqu'il est plus bas encore). Il comporte deux parties :
+L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse. Il comporte deux parties :
 
 - intégration conditionnelle : l'intégrale cesse de croître lorsque la demande non contrainte dépasse la limite haute applicable ;
-- rétro-calculation : à chaque tick dont le mode intégral est `I:RUN`, `I:SKIP`, `I:GUARD` ou `I:CLAMP`, l'excès de la sortie PI (`u_ff + u_pi`, bornée à `[0, 1]`) au-delà de la plus basse des deux limites, `max_on_percent` et cap du gouverneur, corrige l'intégrale de `beta * excès / Ki`, avec `beta = dt / max(Kp/Ki, dt)` (constante de temps de poursuite égale à `Ti = Kp/Ki`). La correction ne déplace l'intégrale que vers zéro et s'arrête à zéro : un excès porté par le seul terme proportionnel n'entraîne jamais l'intégrale dans l'autre sens. L'intégrale reste bornée à `±2/Ki`. Seule l'intégrale change : `u_pi` conserve la décomposition qui a produit la commande.
+- rétro-calculation : à chaque tick dont le mode intégral est `I:RUN`, `I:SKIP`, `I:GUARD` ou `I:CLAMP`, l'excès de la sortie PI (`u_ff + u_pi`, bornée à `[0, 1]`) au-delà de l'image linéaire de `max_on_percent` corrige l'intégrale de `beta * excès / Ki`, avec `beta = dt / max(Kp/Ki, dt)` (constante de temps de poursuite égale à `Ti = Kp/Ki`). La correction ne déplace l'intégrale que vers zéro et s'arrête à zéro : un excès porté par le seul terme proportionnel n'entraîne jamais l'intégrale dans l'autre sens. L'intégrale reste bornée à `±2/Ki`. Seule l'intégrale change : `u_pi` conserve la décomposition qui a produit la commande.
 
 Ne sont pas traités comme une saturation : la quantification de Versatile Thermostat et la rétention de vanne (`dpercent`, période), les durées minimales on/off et le limiteur de pente. Le comportement est symétrique en HEAT et COOL, n'utilise pas les accusés de commande de Versatile Thermostat et est identique avec les anciennes versions de Versatile Thermostat. Le diagnostic `aw_du` est la correction (excès, `<= 0`) appliquée au dernier tick.
 
@@ -488,7 +462,7 @@ Le cycle forcé est géré par `CalibrationManager` :
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
 | `deadband.py`          | deadband et near-band                                    |
-| `setpoint.py`          | trajectoire analytique et orchestration du gouverneur signé |
+| `setpoint.py`          | trajectoire analytique de la référence P                    |
 | `integral_guard.py`    | garde de croissance positive de l'intégrale              |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |

@@ -16,10 +16,6 @@ class ProportionalState:
     edge_count: int
     edge_sign: float | None
 
-    @property
-    def threshold(self) -> float:
-        return proportional_threshold(self.deadband_c, self.deadband_allow_p)
-
     def project(self, error_p: float) -> tuple[float, str, int, float | None]:
         """Return the P error, mode and next persistence state for one sample."""
         shaped, mode = deadband_proportional_error(

@@ -11,12 +11,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     TrajectoryPhase,
 )
-from custom_components.vtherm_smartpi.smartpi.controller import PIOutputSnapshot
-from custom_components.vtherm_smartpi.smartpi.deadband_output import ProportionalState
 from custom_components.vtherm_smartpi.smartpi.setpoint import SmartPISetpointManager
-from custom_components.vtherm_smartpi.smartpi.reference_governor_runtime import (
-    ReferenceGovernorPhase,
-)
 from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
@@ -27,10 +22,6 @@ B_TEST = 0.02  # tau = 50 min
 A_TEST = 0.4
 EXT_TEST = 5.0
 STOP_DEADTIME_TEST_S = 240.0
-
-
-def snapshot() -> PIOutputSnapshot:
-    return PIOutputSnapshot(1.0, 0.0, 0.0, ProportionalState(0.05, False, False, 0, None))
 
 
 def _make_manager(enabled: bool = True) -> SmartPISetpointManager:
@@ -53,7 +44,6 @@ def _filter(
     u_ref: float = 1.0,
     next_u_ref: float = 0.0,
     cycle_min: float = 10.0,
-    temperature_slope_h: float | None = None,
 ):
     return manager.filter_setpoint(
         target_temp=target,
@@ -72,7 +62,6 @@ def _filter(
         cycle_min=cycle_min,
         remaining_cycle_min=remaining_cycle_min,
         now_monotonic=now,
-        temperature_slope_h=temperature_slope_h,
     )
 
 
@@ -124,7 +113,7 @@ class TestTrajectoryActivation:
         assert manager.trajectory_start_setpoint == pytest.approx(21.0)
         assert manager.trajectory_target_setpoint < 21.0
 
-    def test_armed_setpoint_enters_governance_below_arming_threshold(self):
+    def test_armed_setpoint_enters_trajectory_below_arming_threshold(self):
         manager = _make_manager()
         _filter(manager, target=19.0, current=19.0, now=0.0)
         _filter(manager, target=21.0, current=19.0, now=60.0)
@@ -140,9 +129,6 @@ class TestTrajectoryActivation:
         assert result == pytest.approx(21.0)
         assert manager.trajectory_active is True
         assert manager.trajectory_source == "setpoint"
-        assert manager.reference_governor_authority_selected is True
-        assert manager.reference_governor_authority_pending is True
-        assert manager.governor_active is False
 
     @pytest.mark.parametrize(
         (
@@ -178,7 +164,7 @@ class TestTrajectoryActivation:
             ),
         ],
     )
-    def test_governed_episode_survives_target_crossing_until_handoff(
+    def test_setpoint_trajectory_ends_on_target_crossing(
         self,
         hvac_mode,
         initial_target,
@@ -190,48 +176,24 @@ class TestTrajectoryActivation:
         ext_temp,
     ):
         manager = _make_manager()
-        _filter(
-            manager,
-            target=initial_target,
-            current=initial_current,
-            now=0.0,
-            hvac_mode=hvac_mode,
-            a=a,
-            ext_temp=ext_temp,
-            next_u_ref=0.9,
-            temperature_slope_h=0.01,
-        )
-        _filter(
-            manager,
-            target=target,
-            current=initial_current,
-            now=60.0,
-            hvac_mode=hvac_mode,
-            a=a,
-            ext_temp=ext_temp,
-            next_u_ref=0.9,
-            temperature_slope_h=0.01,
-        )
-        _filter(
-            manager,
-            target=target,
-            current=pre_crossing,
-            now=120.0,
-            hvac_mode=hvac_mode,
-            a=a,
-            ext_temp=ext_temp,
-            next_u_ref=0.9,
-            temperature_slope_h=0.01,
-        )
-        governed = manager.resolve_reference_governor(
-            requested_u=0.9,
-            now_monotonic=120.0,
-            cycle_min=10.0,
-            pi_snapshot=snapshot(),
-        )
+        for current, step_target, now in (
+            (initial_current, initial_target, 0.0),
+            (initial_current, target, 60.0),
+            (pre_crossing, target, 120.0),
+        ):
+            _filter(
+                manager,
+                target=step_target,
+                current=current,
+                now=now,
+                hvac_mode=hvac_mode,
+                a=a,
+                ext_temp=ext_temp,
+                next_u_ref=0.9,
+            )
 
-        assert governed is not None
-        assert governed.phase is ReferenceGovernorPhase.GOVERNED
+        assert manager.trajectory_active is True
+        assert manager.trajectory_source == "setpoint"
 
         crossing_reference = _filter(
             manager,
@@ -241,50 +203,15 @@ class TestTrajectoryActivation:
             hvac_mode=hvac_mode,
             a=a,
             ext_temp=ext_temp,
-            temperature_slope_h=0.01,
             next_u_ref=0.9,
         )
 
         assert crossing_reference == pytest.approx(target)
         assert manager.effective_setpoint == pytest.approx(target)
-        assert manager.trajectory_active is True
-        assert manager.reference_governor_authority_pending is True
-        first_handoff = manager.resolve_reference_governor(
-            requested_u=0.4,
-            now_monotonic=180.0,
-            cycle_min=10.0,
-            pi_snapshot=snapshot(),
-        )
-        assert first_handoff is not None
-        assert first_handoff.phase is ReferenceGovernorPhase.HANDOFF
-        assert first_handoff.handoff_ready is False
-
-        for now in (480.0, 780.0):
-            _filter(
-                manager,
-                target=target,
-                current=crossing,
-                now=now,
-                hvac_mode=hvac_mode,
-                a=a,
-                ext_temp=ext_temp,
-                temperature_slope_h=0.01,
-                next_u_ref=0.9,
-            )
-            result = manager.resolve_reference_governor(
-                requested_u=0.4,
-                now_monotonic=now,
-                cycle_min=10.0,
-                pi_snapshot=snapshot(),
-            )
-
-        assert result is not None
-        assert result.phase is ReferenceGovernorPhase.IDLE
-        assert result.handoff_ready is True
         assert manager.trajectory_active is False
-        assert manager.governor_handoff_ready is True
+        assert manager.trajectory_phase == TrajectoryPhase.IDLE
 
-    def test_small_disturbance_does_not_reuse_setpoint_governance(self):
+    def test_small_disturbance_does_not_arm_a_trajectory(self):
         manager = _make_manager()
         _filter(manager, target=21.0, current=21.0, now=0.0)
 
@@ -294,7 +221,6 @@ class TestTrajectoryActivation:
         assert result == pytest.approx(21.0)
         assert manager.trajectory_active is False
         assert manager.trajectory_source == "none"
-        assert manager.reference_governor_authority_decision is None
 
     def test_arms_on_significant_disturbance_without_setpoint_change(self):
         manager = _make_manager()
@@ -306,39 +232,6 @@ class TestTrajectoryActivation:
         assert manager.trajectory_active is True
         assert manager.trajectory_start_setpoint == pytest.approx(21.0)
         assert manager.trajectory_target_setpoint < 21.0
-        assert manager.reference_governor_authority_selected is False
-        assert manager.reference_governor_authority_pending is False
-
-    def test_authority_bypasses_invalid_model_on_active_setpoint_trajectory(self):
-        manager = _make_manager()
-        _filter(manager, target=21.0, current=21.0, now=0.0)
-        _filter(manager, target=22.0, current=21.0, now=60.0)
-        _filter(
-            manager,
-            target=22.0,
-            current=21.7,
-            now=120.0,
-            temperature_slope_h=0.01,
-        )
-
-        _filter(
-            manager,
-            target=22.0,
-            current=21.7,
-            now=180.0,
-            a=0.0,
-        )
-
-        assert manager.trajectory_active is True
-        assert manager.reference_governor_authority_selected is True
-        result = manager.resolve_reference_governor(
-            requested_u=0.5,
-            now_monotonic=180.0,
-            cycle_min=10.0,
-            pi_snapshot=snapshot(),
-        )
-        assert result is not None
-        assert result.kernel_decision.reason == "authority_invalid_model"
 
     def test_remaining_cycle_time_can_advance_braking_entry(self):
         manager = _make_manager()
@@ -806,28 +699,18 @@ class TestTrajectoryProgression:
         assert result <= 20.5
         assert manager.trajectory_phase in {TrajectoryPhase.RELEASE, TrajectoryPhase.IDLE}
 
-    def test_stops_after_target_is_reached_and_handoff_is_confirmed(self):
+    def test_stops_when_target_is_reached(self):
         manager = _make_manager()
         _filter(manager, target=19.0, current=19.0, now=0.0)
         _filter(manager, target=21.0, current=19.0, now=60.0)
         _filter(manager, target=21.0, current=20.6, now=120.0)
+        assert manager.trajectory_active is True
 
         result = _filter(manager, target=21.0, current=21.0, now=180.0)
 
         assert result == 21.0
-        assert manager.trajectory_active is True
-        for now in (180.0, 480.0, 780.0):
-            _filter(manager, target=21.0, current=21.0, now=now)
-            decision = manager.resolve_reference_governor(
-                requested_u=0.0, now_monotonic=now, cycle_min=10.0,
-                pi_snapshot=snapshot(),
-            )
-            assert decision is not None
-            assert decision.handoff_ready is (now == 780.0)
-
         assert manager.trajectory_active is False
         assert manager.trajectory_phase == TrajectoryPhase.IDLE
-        assert manager.reference_governor_authority_decision.handoff_ready is True
 
     def test_demand_reduction_returns_to_passthrough(self):
         manager = _make_manager()
@@ -839,7 +722,6 @@ class TestTrajectoryProgression:
 
         assert result == 20.0
         assert manager.trajectory_active is False
-        assert manager.reference_governor_authority_decision is None
 
     def test_restarts_smoothly_on_further_demand_increase(self):
         manager = _make_manager()
@@ -869,7 +751,6 @@ class TestTrajectoryProgression:
 
         assert result == pytest.approx(23.0)
         assert manager.trajectory_active is True
-        assert manager.reference_governor_authority_selected is False
 
 
 class TestStatePersistence:
@@ -936,18 +817,17 @@ class TestReset:
         assert manager.effective_setpoint is None
         assert manager.trajectory_active is False
         assert manager.trajectory_phase == TrajectoryPhase.IDLE
-        assert manager.reference_governor_authority_decision is None
 
 
 class TestStopDeadtimeSelection:
-    """The braking horizon and governor use the passive response dead time."""
+    """The braking horizon uses the passive response dead time."""
 
     @pytest.mark.parametrize(
         ("hvac_mode", "expected_stop_deadtime_s"),
         [(VThermHvacMode_HEAT, 120.0), (VThermHvacMode_COOL, 600.0)],
         ids=["heat_uses_fall_delay", "cool_uses_rise_delay"],
     )
-    def test_braking_and_governor_use_passive_deadtime(
+    def test_braking_uses_passive_deadtime(
         self, hvac_mode, expected_stop_deadtime_s
     ):
         direction = 1.0 if hvac_mode == VThermHvacMode_HEAT else -1.0
@@ -975,18 +855,7 @@ class TestStopDeadtimeSelection:
             horizons_min.append(kwargs["horizon_min"])
             return original_prediction(**kwargs)
 
-        governor_deadtimes = []
-        authority = manager._reference_governor_authority
-        original_prepare = authority.prepare
-
-        def record_prepare(**kwargs):
-            governor_deadtimes.append(
-                (kwargs["stop_deadtime_s"], kwargs["deadtime_reliable"])
-            )
-            return original_prepare(**kwargs)
-
         manager._compute_predicted_signed_change = record_prediction
-        authority.prepare = record_prepare
 
         target = 22.0
         ext_temp = target - direction * 17.0
@@ -1003,11 +872,9 @@ class TestStopDeadtimeSelection:
                 hvac_mode=hvac_mode,
                 dt_min=1.0,
                 now_monotonic=60.0 * index,
-                slope_h=direction * 0.01,
             )
 
         assert horizons_min == [pytest.approx(expected_stop_deadtime_s / 60.0)]
         assert manager.trajectory_active is True
         assert manager.trajectory_source == "setpoint"
         assert manager.trajectory_tau_ref_min >= expected_stop_deadtime_s / 60.0
-        assert governor_deadtimes == [(expected_stop_deadtime_s, True)]

@@ -514,14 +514,12 @@ def test_diagnostic_sensor_builds_stable_envelope_and_deduplicates(hass) -> None
         "live": live.get_published_diagnostics(),
         "history": {
             "temperature": {"indoor": 20.5},
-            "setpoint": {"filtered_setpoint": 21.0, "nominal_reference": None},
+            "setpoint": {"filtered_setpoint": 21.0},
             "power": {
                 "applied_percent": 30.0,
                 "command_percent": 35.0,
                 "pi_percent": 20.0,
                 "ff_percent": 15.0,
-                "governor_cap_percent": None,
-                "before_governor_cap_percent": None,
             },
             "model": {"a": 0.05, "b": 0.001},
         },
@@ -531,17 +529,12 @@ def test_diagnostic_sensor_builds_stable_envelope_and_deduplicates(hass) -> None
     assert sensor._update_from_climate() is False
 
 
-def test_diagnostic_sensor_records_governor_cap_changes_without_changing_live(hass, monkeypatch):
-    """Recorder additions retain null transitions and sensor deduplication."""
+def test_diagnostic_sensor_records_history_changes_without_changing_live(hass, monkeypatch):
+    """Recorder history follows the live payload and keeps sensor deduplication."""
     climate_entity_id = "climate.test_vtherm"
     hass.states.async_set(climate_entity_id, "heat")
     algo = DummySmartPI(SmartPIPhase.STABLE)
     payload = algo.get_published_diagnostics()
-    payload["analysis"] = {"reference_governor": {
-        "nominal_reference": 20.987654,
-        "command_cap": 0.287468,
-        "command_before_cap": 0.311479,
-    }}
     # Each publication must own its payload, as in the production builder.
     monkeypatch.setattr(algo, "get_published_diagnostics", lambda: deepcopy(payload))
     hass.data["climate"] = SimpleNamespace(entities=[SimpleNamespace(
@@ -550,18 +543,15 @@ def test_diagnostic_sensor_records_governor_cap_changes_without_changing_live(ha
     sensor = SmartPIDiagnosticSensor(hass, climate_entity_id, "test-vtherm")
 
     assert sensor._update_from_climate() is True
-    assert sensor.extra_state_attributes["history"]["power"]["governor_cap_percent"] == 28.7
+    assert sensor.extra_state_attributes["history"]["power"]["command_percent"] == 35.0
     assert sensor.extra_state_attributes["live"] == payload
     assert sensor._update_from_climate() is False
 
-    payload["analysis"]["reference_governor"].update(
-        command_cap=None, nominal_reference=None
-    )
+    payload["power"]["command_percent"] = 28.7
     assert sensor._update_from_climate() is True
     history = sensor.extra_state_attributes["history"]
-    assert history["power"]["governor_cap_percent"] is None
-    assert history["setpoint"]["nominal_reference"] is None
-    assert history["power"]["before_governor_cap_percent"] == 31.1
+    assert history["power"]["command_percent"] == 28.7
+    assert history["setpoint"]["filtered_setpoint"] == 21.0
     assert sensor._unrecorded_attributes == frozenset({"live"})
     assert sensor._update_from_climate() is False
 

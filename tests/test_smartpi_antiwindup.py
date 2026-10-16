@@ -212,7 +212,7 @@ def test_resume_after_override_does_not_integrate_gap(override):
 
 
 # ---------------------------------------------------------------------------
-# Per-tick anti-windup on the known output limits (cap, max_on_percent)
+# Per-tick anti-windup on the known output limit (max_on_percent)
 # ---------------------------------------------------------------------------
 
 KP, KI, TI_MIN = 0.5, 0.05, 10.0  # Ti = Kp / Ki
@@ -260,7 +260,6 @@ async def test_unlimited_request_change_does_not_move_integral_at_cycle_end():
     ctl = _ctl_with_request(0.50)
     before = ctl.integral
     _compute(ctl)
-    ctl.apply_command_cap(None)
     assert ctl.track_output_limit(1.0, KP, KI, 1.0) == 0.0
     assert ctl.last_i_mode == "I:RUN"
     assert ctl.integral == pytest.approx(before + 0.5 * 1.0)
@@ -295,7 +294,6 @@ def test_max_on_is_the_conditional_integration_limit_and_excess_drains():
     before = ctl.integral
     _compute(ctl, u_max=0.6)
     u_i = ctl.u_i
-    ctl.apply_command_cap(None)
     du = ctl.track_output_limit(0.6, KP, KI, 1.0)
     beta = 1.0 / TI_MIN
     assert du == pytest.approx(-0.3)
@@ -317,7 +315,6 @@ def test_calculate_uses_linear_max_on_as_static_limit(valve_curve):
     request = min(max(ctl.u_ff + ctl.u_pi, 0.0), 1.0)
     assert request > limit
     assert ctl.last_i_mode == "I:SKIP(SAT_HI)"
-    assert ctl.u_cmd_cap is None
     beta = 1.0 / max(algo.Kp / algo.Ki, 1.0)
     assert algo.aw_du == pytest.approx(limit - request)
     assert algo.integral == pytest.approx(max(before + beta * (limit - request) / algo.Ki, 0.0))
@@ -326,20 +323,14 @@ def test_calculate_uses_linear_max_on_as_static_limit(valve_curve):
     assert algo.on_percent <= 0.6 + 1e-9
 
 
-def test_governor_cap_drains_excess_with_tt_equal_ti():
-    """Cap 0.3 below a 0.5 request: dI = dt * (-0.2) / (Ki * Ti) per tick."""
+def test_static_limit_drains_excess_with_tt_equal_ti():
+    """Limit 0.3 below a 0.5 request: dI = dt * (-0.2) / (Ki * Ti) per tick."""
     ctl = _ctl_with_request(0.5)
     _compute(ctl, dt_min=0.0)  # request stays 0.5
     after_integration = ctl.integral
-    ctl.apply_command_cap(0.3)
-    du = ctl.track_output_limit(1.0, KP, KI, 1.0)
+    du = ctl.track_output_limit(0.3, KP, KI, 1.0)
     assert du == pytest.approx(-0.2)
     assert ctl.integral - after_integration == pytest.approx(1.0 * -0.2 / (KI * TI_MIN))
-    # The tightest of cap and static limit applies.
-    ctl = _ctl_with_request(0.5)
-    _compute(ctl, dt_min=0.0)
-    ctl.apply_command_cap(0.45)
-    assert ctl.track_output_limit(0.3, KP, KI, 1.0) == pytest.approx(-0.2)
 
 
 def test_heat_and_cool_track_the_limit_identically():
@@ -415,9 +406,8 @@ def test_tracking_follows_the_integral_mode(i_mode, tracked):
     ctl = _ctl_with_request(0.5)
     _compute(ctl, dt_min=0.0)
     ctl.last_i_mode = i_mode
-    ctl.apply_command_cap(0.3)
     before = ctl.integral
-    du = ctl.track_output_limit(1.0, KP, KI, 1.0)
+    du = ctl.track_output_limit(0.3, KP, KI, 1.0)
     if tracked:
         assert du == pytest.approx(-0.2)
         assert ctl.integral < before
@@ -437,7 +427,7 @@ def test_ownership_snapshot_keeps_the_tick_decomposition():
     assert algo.aw_du < 0.0
     request_id = algo.stage_command(VThermHvacMode_HEAT)
     snapshot = algo._command_ownership._requests[request_id]
-    assert snapshot.u_i == algo.ctl.u_i == algo.ctl.pi_output_snapshot.u_i
+    assert snapshot.u_i == algo.ctl.u_i
     assert algo.Ki * algo.integral != pytest.approx(snapshot.u_i)
 
 
@@ -480,7 +470,6 @@ def test_proportional_excess_does_not_wind_the_integral_down(integral_power):
     before = ctl.integral
     _compute(ctl, error=2.0, u_ff=0.0, dt_min=0.0, u_max=0.5)  # Kp*e = 1.0 > 0.5
     assert ctl.last_i_mode == "I:SKIP(SAT_HI)"
-    ctl.apply_command_cap(None)
     du = ctl.track_output_limit(0.5, KP, KI, 1.0)
     assert du == pytest.approx(min(0.5, ctl.u_ff + ctl.u_pi) - min(1.0, ctl.u_ff + ctl.u_pi))
     assert du < 0.0
@@ -492,8 +481,7 @@ def test_drain_stops_at_zero_integral():
     ctl = SmartPIController("aw")
     ctl.integral = 0.01 / KI  # Ki*I = 0.01, far below the 0.6 excess step
     _compute(ctl, error=1.5, u_ff=0.0, dt_min=0.0)  # v = 0.76
-    ctl.apply_command_cap(0.1)
-    ctl.track_output_limit(1.0, KP, KI, 5.0)  # beta * du = 0.5 * -0.66 = -0.33
+    ctl.track_output_limit(0.1, KP, KI, 5.0)  # beta * du = 0.5 * -0.66 = -0.33
     assert ctl.integral == 0.0
 
 

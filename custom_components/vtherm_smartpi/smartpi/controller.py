@@ -28,23 +28,6 @@ class IntegralPowerTransferResult:
     new_i_power: float
 
 
-@dataclass(frozen=True, slots=True)
-class PIOutputSnapshot:
-    """Effective post-compute PI terms and this tick's pure P projection.
-
-    P persistence is captured before its evaluation so a projection replays
-    the same tick, rather than advancing the edge counter a second time.
-    """
-
-    kp: float
-    u_i: float
-    u_ff: float
-    p_state: ProportionalState
-
-    def project_p(self, error_p: float) -> float:
-        return self.p_state.project(error_p)[0] * self.kp
-
-
 class SmartPIController:
     """
     PID Controller for Smart-PI.
@@ -83,11 +66,6 @@ class SmartPIController:
         self.integral_hold_mode: str = "none"
         self._deadband_edge_count: int = 0
         self._deadband_edge_sign: float | None = None
-        self._pi_output_snapshot: PIOutputSnapshot | None = None
-
-        # Setpoint landing command cap (post-PI governor)
-        self.u_cmd_before_cap: float | None = None
-        self.u_cmd_cap: float | None = None
         self.last_aw_du: float = 0.0  # tracked excess of the last tick (<= 0)
 
         # Hysteresis State
@@ -110,43 +88,8 @@ class SmartPIController:
         self.last_integral_hold_source = "none"
         self._deadband_edge_count = 0
         self._deadband_edge_sign = None
-        self._pi_output_snapshot = None
-        self.u_cmd_before_cap = None
-        self.u_cmd_cap = None
         self.last_aw_du = 0.0
         self.hysteresis_state = "off"
-
-    def apply_command_cap(self, u_cap: float | None) -> float:
-        """Apply the setpoint-response command cap to u_cmd."""
-        self.u_cmd_before_cap = self.u_cmd
-        self.u_cmd_cap = u_cap
-        if u_cap is None:
-            return self.u_cmd
-        self.u_cmd = clamp(self.u_cmd, 0.0, max(float(u_cap), 0.0))
-        return self.u_cmd
-
-    def restore_proportional_reference(self, error_p: float) -> float:
-        """Replay P from the current input snapshot without integrating again.
-
-        The caller must prove that the restored request leaves PI protections
-        and downstream output limits nonbinding.
-        """
-        snapshot = self._pi_output_snapshot
-        if snapshot is None:
-            raise ValueError("proportional restoration requires a PI snapshot")
-        p_error, p_mode, p_count, p_sign = snapshot.p_state.project(error_p)
-        self.last_error_p_db = p_error
-        self.deadband_p_mode = p_mode
-        self._deadband_edge_count = p_count
-        self._deadband_edge_sign = p_sign
-        self.u_p = snapshot.kp * p_error
-        self.u_pi = self.u_p + snapshot.u_i
-        self.u_cmd = snapshot.u_i + snapshot.u_ff + self.u_p
-        return self.u_cmd
-
-    @property
-    def pi_output_snapshot(self) -> PIOutputSnapshot | None:
-        return self._pi_output_snapshot
 
     @property
     def integral_hold_active(self) -> bool:
@@ -287,7 +230,7 @@ class SmartPIController:
         
         if freeze_deadband:
             # Deadband mode: integral is frozen; P term is damped near the edge when allowed.
-            # No extra maintenance governor is applied on top of the PI state.
+            # No extra maintenance logic is applied on top of the PI state.
             self.last_i_mode = "I:FREEZE(deadband)"
 
             self.integral = clamp(self.integral, -i_max, i_max)
@@ -342,12 +285,6 @@ class SmartPIController:
         self.u_i = ki * self.integral
         self.u_pi = u_pi
         self.u_ff = u_ff
-        self._pi_output_snapshot = PIOutputSnapshot(
-            kp=kp,
-            u_i=self.u_i,
-            u_ff=u_ff,
-            p_state=p_state,
-        )
 
         if not freeze_deadband:
             self.u_hold = 0.0
@@ -366,23 +303,19 @@ class SmartPIController:
     ) -> float:
         """Back-calculate the integral toward a known upper limit below 1.
 
-        The limit is `u_max` (max_on_percent in linear space) or the governor
-        cap of this tick, whichever is lower. The excess of this tick's PI
-        request over it drains the integral with Tt = Ti = Kp/Ki, down to zero
-        at most: an excess carried by the proportional term alone does not
-        wind the integral in the opposite direction. The [0, 1] saturation
-        stays with conditional integration. Only the integral moves: u_i and
-        the PI snapshot keep the decomposition that produced the command.
+        The limit is `u_max` (max_on_percent in linear space). The excess of
+        this tick's PI request over it drains the integral with Tt = Ti = Kp/Ki,
+        down to zero at most: an excess carried by the proportional term alone
+        does not wind the integral in the opposite direction. The [0, 1]
+        saturation stays with conditional integration. Only the integral
+        moves: u_i keeps the decomposition that produced the command.
         Returns the tracked excess (<= 0).
         """
         self.last_aw_du = 0.0
         if dt_min <= 0.0 or not self.last_i_mode.startswith(_TRACKED_I_MODES):
             return 0.0
-        limit = u_max
-        if self.u_cmd_cap is not None:
-            limit = min(limit, max(float(self.u_cmd_cap), 0.0))
         requested = clamp(self.u_ff + self.u_pi, 0.0, 1.0)
-        du = min(requested, limit) - requested
+        du = min(requested, u_max) - requested
         if du >= 0.0:
             return 0.0
         self._back_calculate(du, kp, ki, dt_min)

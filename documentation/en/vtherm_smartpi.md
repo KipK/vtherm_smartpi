@@ -267,7 +267,7 @@ At that point, SmartPI:
 
 Near the target temperature, SmartPI tries to avoid constant micro-corrections. The result should be steadier regulation with fewer unnecessary corrections than a fixed TPI.
 
-During a setpoint change in HEAT or COOL, the setpoint filter also uses the learned model to manage the final approach to the target. The proportional branch follows a governed reference, while the raw setpoint remains available to the integral branch. Near the target, SmartPI can cap the internal demand when the model predicts that committed thermal energy is enough to reach the setpoint. The dynamic reserve and time-confirmed handoff slow the approach without holding the room at a fixed offset from the target.
+During a setpoint change in HEAT or COOL, the setpoint filter also uses the learned model to manage the final approach to the target. When the model predicts that the heat or cold already committed will carry the room close to the target, the proportional branch follows a smooth braking trajectory, while the raw setpoint remains available to the integral branch. The trajectory then returns progressively to the raw target and ends once the room and the reference are close to it.
 
 With `FF3`, enabled by default, SmartPI can also apply a small predictive correction near the setpoint when it detects a credible external disturbance context.
 
@@ -357,7 +357,7 @@ Other useful blocks under `live`:
 - `temperature`: measured temperature, error, integral state,
 - `model`: learned `a`, `b`, confidence, and dead times,
 - `feedforward`: feed-forward and FF3 status,
-- `setpoint`: filtered setpoint and reference-governor information,
+- `setpoint`: filtered setpoint and trajectory information,
 - `autocalib`: automatic supervision state,
 - `calibration`: forced calibration state.
 
@@ -366,11 +366,7 @@ In normal mode, the `setpoint` block can show:
 - `filtered_setpoint`: reference followed by the proportional branch,
 - `trajectory_active`: whether a setpoint trajectory is active,
 - `trajectory_source`: why the trajectory is active,
-- `governor_active`: whether predictive reference or command shaping is active,
-- `governor_phase`: current `idle`, `governed`, or `handoff` phase,
-- `governor_reason`: reason for the latest governor decision,
-- `governor_command_cap`: internal HEAT/COOL demand cap,
-- `governor_coast_required`: whether zero command is required by the prediction.
+- `boost_active`: whether the setpoint boost is active.
 
 Advanced values used by the supplied card are always available under
 `live.analysis`. Debug mode does not add or remove published fields: it allows

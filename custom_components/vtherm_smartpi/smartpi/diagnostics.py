@@ -245,27 +245,6 @@ def _build_analysis_diagnostics(diag: Dict[str, Any]) -> Dict[str, Any]:
             "bumpless_delta": diag["trajectory_bumpless_u_delta"],
             "bumpless_ready": diag["trajectory_bumpless_ready"],
         },
-        "reference_governor": {
-            "active": diag["governor_active"],
-            "phase": diag["governor_phase"],
-            "reason": diag["governor_reason"],
-            "nominal_reference": diag["governor_nominal_reference"],
-            "admissible_reference": diag["governor_admissible_reference"],
-            "command_cap": diag["governor_command_cap"],
-            "constraint_active": diag["governor_constraint_active"],
-            "dynamic_reserve_c": diag["governor_dynamic_reserve_c"],
-            "predicted_terminal_temperature": diag[
-                "governor_predicted_terminal_temperature"
-            ],
-            "target_bound": diag["governor_target_bound"],
-            "coast_required": diag["governor_coast_required"],
-            "handoff_ready": diag["governor_handoff_ready"],
-            "command_before_cap": diag["governor_u_cmd_before_cap"],
-            "command_after_cap": diag["governor_u_cmd_after_cap"],
-            "prediction_shortfall_c": diag["governor_prediction_shortfall_c"],
-            "falsification_count": diag["governor_falsification_count"],
-            "falsification_span_s": diag["governor_falsification_span_s"],
-        },
         "deadtime": {
             "state": diag["deadtime_state"],
             "last_power": diag["deadtime_last_power"],
@@ -456,11 +435,6 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "trajectory_active": diag["setpoint_trajectory_active"],
             "trajectory_source": diag["trajectory_source"],
             "boost_active": diag["setpoint_boost_active"],
-            "governor_active": diag["governor_active"],
-            "governor_phase": diag["governor_phase"],
-            "governor_reason": diag["governor_reason"],
-            "governor_command_cap": diag["governor_command_cap"],
-            "governor_coast_required": diag["governor_coast_required"],
         },
         "autocalib": {
             "state": diag["autocalib_state"],
@@ -680,52 +654,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             if algo.sp_mgr.trajectory_bumpless_u_delta is not None else None
         ),
         "trajectory_bumpless_ready": algo.sp_mgr.trajectory_bumpless_ready,
-        # Signed HEAT/COOL setpoint reference governor
-        "governor_active": algo.sp_mgr.governor_active,
-        "governor_phase": algo.sp_mgr.governor_phase,
-        "governor_reason": algo.sp_mgr.governor_reason,
-        "governor_nominal_reference": (
-            round(algo.sp_mgr.governor_nominal_reference, 3)
-            if algo.sp_mgr.governor_nominal_reference is not None else None
-        ),
-        "governor_admissible_reference": (
-            round(algo.sp_mgr.governor_admissible_reference, 3)
-            if algo.sp_mgr.governor_admissible_reference is not None else None
-        ),
-        "governor_command_cap": (
-            round(algo.sp_mgr.governor_command_cap, 6)
-            if algo.sp_mgr.governor_command_cap is not None else None
-        ),
-        "governor_constraint_active": algo.sp_mgr.governor_constraint_active,
-        "governor_dynamic_reserve_c": (
-            round(algo.sp_mgr.governor_dynamic_reserve_c, 3)
-            if algo.sp_mgr.governor_dynamic_reserve_c is not None else None
-        ),
-        "governor_predicted_terminal_temperature": (
-            round(algo.sp_mgr.governor_predicted_terminal_temperature, 3)
-            if algo.sp_mgr.governor_predicted_terminal_temperature is not None
-            else None
-        ),
-        "governor_target_bound": (
-            round(algo.sp_mgr.governor_target_bound, 3)
-            if algo.sp_mgr.governor_target_bound is not None else None
-        ),
-        "governor_coast_required": algo.sp_mgr.governor_coast_required,
-        "governor_handoff_ready": algo.sp_mgr.governor_handoff_ready,
-        "governor_u_cmd_before_cap": (
-            round(algo.sp_mgr.governor_u_cmd_before_cap, 6)
-            if algo.sp_mgr.governor_u_cmd_before_cap is not None else None
-        ),
-        "governor_u_cmd_after_cap": (
-            round(algo.sp_mgr.governor_u_cmd_after_cap, 6)
-            if algo.sp_mgr.governor_u_cmd_after_cap is not None else None
-        ),
-        "governor_prediction_shortfall_c": (
-            round(algo.sp_mgr.governor_prediction_shortfall_c, 3)
-            if algo.sp_mgr.governor_prediction_shortfall_c is not None else None
-        ),
-        "governor_falsification_count": algo.sp_mgr.governor_falsification_count,
-        "governor_falsification_span_s": round(algo.sp_mgr.governor_falsification_span_s, 1),
         # Anti-windup tracking diagnostics
         "u_cmd": round(algo.u_cmd, 6),
         "u_limited": round(algo.u_limited, 6),

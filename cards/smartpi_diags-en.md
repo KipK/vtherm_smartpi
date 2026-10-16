@@ -25,7 +25,6 @@
 {% set analysis_control = analysis.get('control', {}) %}
 {% set analysis_learning = analysis.get('learning', {}) %}
 {% set analysis_trajectory = analysis.get('trajectory', {}) %}
-{% set analysis_governor = analysis.get('reference_governor', {}) %}
 {% set analysis_deadtime = analysis.get('deadtime', {}) %}
 {% set analysis_governance = analysis.get('governance', {}) %}
 {% set analysis_ff = analysis.get('feedforward', {}) %}
@@ -170,11 +169,6 @@
 {% set trajectory_active = setpoint.get('trajectory_active', false) %}
 {% set published_filtered_sp = setpoint.get('filtered_setpoint') %}
 {% set trajectory_source_pub = setpoint.get('trajectory_source', 'none') %}
-{% set governor_active = setpoint.get('governor_active', false) %}
-{% set governor_phase = setpoint.get('governor_phase', 'idle') %}
-{% set governor_reason = setpoint.get('governor_reason', 'inactive') %}
-{% set governor_command_cap = setpoint.get('governor_command_cap') %}
-{% set governor_coast = setpoint.get('governor_coast_required', false) %}
 
 {% set autocalib_state = autocalib.get('state', 'unknown') %}
 {% set autocalib_degraded = autocalib.get('model_degraded', false) %}
@@ -287,16 +281,7 @@
 {% set traj_next_cycle_u_ref = analysis_trajectory.get('next_cycle_reference') %}
 {% set traj_bumpless_u_delta = analysis_trajectory.get('bumpless_delta') %}
 {% set traj_bumpless_ready = analysis_trajectory.get('bumpless_ready') %}
-{% set governor_nominal_reference = analysis_governor.get('nominal_reference') %}
-{% set governor_admissible_reference = analysis_governor.get('admissible_reference') %}
-{% set governor_constraint_active = analysis_governor.get('constraint_active', false) %}
-{% set governor_dynamic_reserve = analysis_governor.get('dynamic_reserve_c') %}
-{% set governor_predicted_temperature = analysis_governor.get('predicted_terminal_temperature') %}
-{% set governor_target_bound = analysis_governor.get('target_bound') %}
-{% set governor_handoff_ready = analysis_governor.get('handoff_ready', false) %}
 {% set temperature_slope_h = analysis_control.get('temperature_slope_h') %}
-{% set governor_u_cmd_before_cap = analysis_governor.get('command_before_cap') %}
-{% set governor_u_cmd_after_cap = analysis_governor.get('command_after_cap') %}
 {% set learn_u_avg = analysis_learning.get('window_mean_power') %}
 {% set learn_u_cv = analysis_learning.get('window_power_cv') %}
 {% set learn_u_std = analysis_learning.get('window_power_std') %}
@@ -484,7 +469,6 @@
 {%- if has_analysis %} · {{ cycle_min }} min{% endif %}
  · `{{ mode }}`
 {%- if trajectory_active %} · 🎯 trajectory{% endif %}
-{%- if governor_active %} · 🎛️ governor{% if governor_coast %} (coast){% endif %}{% endif %}
 {%- if ff3_status == 'active' %} · 🔮 FF3{% endif %}
 {%- if has_analysis and control.get('in_deadband', false) %} · 💤 DB{% elif has_analysis and control.get('in_near_band', false) %} · 〰️ NB{% endif %}
 {%- if autocalib_degraded %} · ⚠️ degraded model{% endif %}
@@ -536,32 +520,11 @@
 | `u_ref` cycle+1 | {% if traj_next_cycle_u_ref is not none %}{{ (traj_next_cycle_u_ref | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | `u_delta` bumpless | {% if traj_bumpless_u_delta is not none %}{{ (traj_bumpless_u_delta | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | Bumpless ready | {% if traj_bumpless_ready is sameas true %}yes{% elif traj_bumpless_ready is sameas false %}no{% else %}—{% endif %} |
-{% endif %}
-
-{% if has_analysis %}
-### 🎛️ Reference governor
-
-| Signal | Value |
-|---|---:|
-| Active | {% if governor_active %}yes{% else %}no{% endif %} |
-| Phase | `{{ governor_phase }}` |
-| Reason | `{{ governor_reason }}` |
-| Command cap | {% if governor_command_cap is not none %}{{ (governor_command_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
-| Nominal reference | {% if governor_nominal_reference is not none %}{{ governor_nominal_reference | float | round(3) }}°C{% else %}—{% endif %} |
-| Admissible reference | {% if governor_admissible_reference is not none %}{{ governor_admissible_reference | float | round(3) }}°C{% else %}—{% endif %} |
-| Predicted terminal temperature | {% if governor_predicted_temperature is not none %}{{ governor_predicted_temperature | float | round(3) }}°C{% else %}—{% endif %} |
-| Target bound | {% if governor_target_bound is not none %}{{ governor_target_bound | float | round(3) }}°C{% else %}—{% endif %} |
-| Dynamic reserve | {% if governor_dynamic_reserve is not none %}{{ governor_dynamic_reserve | float | round(3) }}°C{% else %}—{% endif %} |
-| Constraint active | {% if governor_constraint_active %}yes{% else %}no{% endif %} |
-| Coast required | {% if governor_coast %}yes{% else %}no{% endif %} |
-| Handoff ready | {% if governor_handoff_ready %}yes{% else %}no{% endif %} |
 | Temperature slope | {% if temperature_slope_h is not none %}{{ temperature_slope_h | float | round(3) }}°C/h{% else %}—{% endif %} |
-| `u_cmd` before cap | {% if governor_u_cmd_before_cap is not none %}{{ (governor_u_cmd_before_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
-| `u_cmd` after cap | {% if governor_u_cmd_after_cap is not none %}{{ (governor_u_cmd_after_cap | float * 100) | round(2) }}%{% else %}—{% endif %} |
+{% endif %}
 
 ---
 
-{% endif %}
 ### ⚡ Command
 
 {% if has_analysis %}
@@ -582,9 +545,6 @@
 | Hysteresis | `{{ hyst_state }}`{% if has_analysis and hyst_guard %} · guard active{% endif %} |
 {% if not has_analysis -%}
 | Restart | `{{ restart_reason }}` |
-{% endif -%}
-{% if governor_command_cap is not none -%}
-| Governor cap | {{ (governor_command_cap | float * 100) | round(1) }}% |
 {% endif -%}
 {% if valve_linearization_enabled -%}
 | SmartPI demand | {{ linear_next_cycle | round(1) }}% |

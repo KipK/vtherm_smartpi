@@ -267,7 +267,7 @@ Quand le modèle thermique devient fiable, SmartPI bascule dans son mode normal 
 
 Près de la température cible, SmartPI cherche à éviter les micro-corrections permanentes. Le résultat attendu est une régulation plus stable, avec moins de corrections inutiles qu'un TPI fixe.
 
-Lors d'un changement de consigne en HEAT ou COOL, le filtre de consigne utilise aussi le modèle appris pour gérer l'approche finale de la cible. La branche proportionnelle suit une référence gouvernée, tandis que la consigne brute reste disponible pour la branche intégrale. Près de la cible, SmartPI peut plafonner la demande interne quand le modèle prédit que l'énergie thermique déjà engagée suffit à atteindre la consigne. La réserve dynamique et le handoff confirmé dans le temps ralentissent l'approche sans maintenir la pièce à un écart fixe de la cible.
+Lors d'un changement de consigne en HEAT ou COOL, le filtre de consigne utilise aussi le modèle appris pour gérer l'approche finale de la cible. Lorsque le modèle prédit que la chaleur ou le froid déjà engagés amèneront la pièce près de la cible, la branche proportionnelle suit une trajectoire de freinage douce, tandis que la consigne brute reste disponible pour la branche intégrale. La trajectoire revient ensuite progressivement vers la consigne brute et se termine lorsque la pièce et la référence en sont proches.
 
 Avec `FF3`, activé par défaut, SmartPI peut aussi appliquer une petite correction prédictive près de la consigne lorsqu'il détecte un contexte crédible de perturbation externe.
 
@@ -358,7 +358,7 @@ Autres blocs utiles sous `live` :
 - `temperature` : température mesurée, erreur, état de l'intégrale,
 - `model` : `a`, `b`, niveau de confiance et temps morts appris,
 - `feedforward` : état du feed-forward et de FF3,
-- `setpoint` : informations de consigne filtrée et du gouverneur de référence,
+- `setpoint` : informations de consigne filtrée et de trajectoire,
 - `autocalib` : état de la supervision automatique,
 - `calibration` : état d'une calibration forcée.
 
@@ -367,11 +367,7 @@ En mode normal, le bloc `setpoint` peut contenir :
 - `filtered_setpoint` : référence suivie par la branche proportionnelle,
 - `trajectory_active` : indique si une trajectoire de consigne est active,
 - `trajectory_source` : indique pourquoi la trajectoire est active,
-- `governor_active` : indique si le façonnage prédictif de référence ou de commande est actif,
-- `governor_phase` : phase courante `idle`, `governed` ou `handoff`,
-- `governor_reason` : raison de la dernière décision du gouverneur,
-- `governor_command_cap` : cap de demande interne HEAT/COOL,
-- `governor_coast_required` : indique si la prédiction impose une commande nulle.
+- `boost_active` : indique si le boost de consigne est actif.
 
 Les valeurs avancées utilisées par la carte fournie sont toujours disponibles
 dans `live.analysis`. Le mode debug n'ajoute ni ne retire de champs publiés : il

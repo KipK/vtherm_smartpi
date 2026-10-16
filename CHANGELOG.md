@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- The setpoint landing governor is removed: no command cap after the PI, no
+  prediction falsification and no terminal braking release. The late-braking
+  setpoint trajectory remains on the P branch and ends through its own
+  completion (release near the target with a bumpless P step, target reached,
+  or setpoint change). ON/`a` learning is no longer blocked while a setpoint
+  trajectory runs; only the setpoint-change observation is rejected.
+  Diagnostics removed: `live.analysis.reference_governor`,
+  `live.setpoint.governor_active`, `governor_phase`, `governor_reason`,
+  `governor_command_cap`, `governor_coast_required`, and the Recorder series
+  `history.setpoint.nominal_reference`, `history.power.governor_cap_percent`
+  and `history.power.before_governor_cap_percent` (`schema_version` stays 2).
+  Effect on the B4 bench: switch landings practically unchanged; with valve
+  position retention (`dpercent` 10) landings overshoot 0.05 to 0.25 °C more
+  on some setpoint steps, while the governor was worse on as many other rows.
 - Outdoor sensor without a value: SmartPI keeps using the last valid outdoor
   temperature for the feed-forward, the setpoint model and the near band, with
   no age limit, and the integral keeps integrating; gains, learning and the FF
@@ -24,8 +38,8 @@ All notable changes to this project will be documented in this file.
   `DEGRADED` regime until a first outdoor temperature has been received.
   Effect: smaller steady error after setpoint or regime
   changes, and the FF trim learns more often.
-- Anti-windup works per tick on the applicable limit (`max_on_percent`, governor
-  cap) and only drains the accumulated integral; the end-of-cycle tracking is
+- Anti-windup works per tick on the applicable limit (`max_on_percent`) and
+  only drains the accumulated integral; the end-of-cycle tracking is
   removed. Effect: no steady offset below the setpoint when Versatile
   Thermostat holds back valve positions (`dpercent`), with possibly more
   overshoot in that configuration. The `aw_du` diagnostic is the correction of
