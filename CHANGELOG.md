@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Dead time: the published `deadtime_heat_s` / `deadtime_cool_s` are the median
+  of the last 6 detections of each channel instead of their mean, so a single
+  aberrant detection (for example a response already under way at the power
+  step) does not shift the learning windows and the gains. The value is
+  recomputed from the stored detections at startup.
 - Heating guard cut: the output is forced to 0 as soon as the measured
   temperature exceeds `setpoint + near_band_above` while the heater is active,
   without waiting for the filtered error to be inside the near-band, which

@@ -53,7 +53,8 @@ class DeadTimeEstimator:
         self.cool_peak_temp: float | None = None
         self._waiting_power_on: bool | None = None
 
-        # History for averaging
+        # Last detections; the published dead time is their median so that a
+        # single aberrant detection does not move it.
         self._history_heat = deque(maxlen=6)
         self._history_cool = deque(maxlen=6)
 
@@ -367,12 +368,12 @@ class DeadTimeEstimator:
 
     def _add_sample_heat(self, dt: float):
         self._history_heat.append(dt)
-        self.deadtime_heat_s = statistics.mean(self._history_heat)
+        self.deadtime_heat_s = statistics.median(self._history_heat)
         self.deadtime_heat_reliable = len(self._history_heat) >= 1
 
     def _add_sample_cool(self, dt: float):
         self._history_cool.append(dt)
-        self.deadtime_cool_s = statistics.mean(self._history_cool)
+        self.deadtime_cool_s = statistics.median(self._history_cool)
         self.deadtime_cool_reliable = len(self._history_cool) >= 1
 
     def save_state(self) -> dict:
@@ -411,6 +412,11 @@ class DeadTimeEstimator:
         self._history_heat = deque(hh, maxlen=6)
         hc = state.get("history_cool", [])
         self._history_cool = deque(hc, maxlen=6)
+        # The published value is the median of the restored detections.
+        if self._history_heat:
+            self.deadtime_heat_s = statistics.median(self._history_heat)
+        if self._history_cool:
+            self.deadtime_cool_s = statistics.median(self._history_cool)
 
         # An in-progress detection is not restored: the actuator state during
         # the outage is unknown, so a response spanning it is not attributable.
