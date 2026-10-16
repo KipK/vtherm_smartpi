@@ -1180,6 +1180,33 @@ class SmartPI:
                 self._name, self.est.learn_ok_count_a, tau_info.reliable,
             )
 
+    def _force_off_output(
+        self,
+        reason: str,
+        invalidated_hvac_mode: VThermHvacMode | None,
+    ) -> None:
+        """Zero the output and committed command; drop FF3, FF trim and episode context."""
+        self._set_linear_output(0.0)
+        self._committed_on_percent = 0.0
+        self._actuator_committed_on_percent = 0.0
+        self.ff3_state.reset(reason)
+        self.fftrim_coord.invalidate_context(
+            reason,
+            now_monotonic=time.monotonic(),
+            hvac_mode=invalidated_hvac_mode,
+        )
+        self._last_u_applied = 0.0
+        self.ctl.u_prev = 0.0
+        self._last_u_cmd = 0.0
+        self._last_u_pi = 0.0
+        self._last_u_limited = 0.0
+        self._t_heat_episode_start = None
+        self._t_cool_episode_start = None
+        self._output_initialized = True
+        self._last_calculate_time = None
+        self._current_cycle_start_monotonic = None
+        self.resume_hold.clear()
+
     def _validate_and_handle_off(
         self,
         target_temp: float | None,
@@ -1209,29 +1236,10 @@ class SmartPI:
             return True
 
         if hvac_mode == VThermHvacMode_OFF:
-            self._set_linear_output(0.0)
-            self._committed_on_percent = 0.0
-            self._actuator_committed_on_percent = 0.0
-            self.ff3_state.reset("hvac_off")
-            self.fftrim_coord.invalidate_context(
-                "hvac_off",
-                now_monotonic=time.monotonic(),
-                hvac_mode=self._last_hvac_mode,
-            )
-            self._last_u_applied = 0.0
-            self.ctl.u_prev = 0.0
-            self._last_u_cmd = 0.0
-            self._last_u_pi = 0.0
-            self._last_u_limited = 0.0
+            self._force_off_output("hvac_off", self._last_hvac_mode)
             self.ctl.last_i_mode = "I:FREEZE(hvac_off)"
             self.deadband_mgr.in_deadband = False
             self.deadband_mgr.in_near_band = False
-            self._output_initialized = True
-            self._last_calculate_time = None
-            self._current_cycle_start_monotonic = None
-            self._t_heat_episode_start = None
-            self._t_cool_episode_start = None
-            self.resume_hold.clear()
             self._last_restart_reason = (
                 "window"
                 if off_reason == HVAC_OFF_REASON_WINDOW_DETECTION
@@ -1241,31 +1249,12 @@ class SmartPI:
 
         # Handle explicit force off (shedding, windows)
         if power_shedding:
-            self._set_linear_output(0.0)
-            self._committed_on_percent = 0.0
-            self._actuator_committed_on_percent = 0.0
-            self.ff3_state.reset("power_shedding")
-            self.fftrim_coord.invalidate_context(
-                "power_shedding",
-                now_monotonic=time.monotonic(),
-                hvac_mode=hvac_mode,
-            )
-            self._last_u_applied = 0.0
-            self._t_heat_episode_start = None
-            self._t_cool_episode_start = None
-            self.ctl.u_prev = 0.0
-            self._last_u_cmd = 0.0
-            self._last_u_pi = 0.0
-            self._last_u_limited = 0.0
+            self._force_off_output("power_shedding", hvac_mode)
             # We update regime to PERTURBED but SKIP PID calculation
             self.gov.on_cycle_start()
             self.gov.update_regime(GovernanceRegime.PERTURBED)
             _, reason = self.gov.decide_update("thermal")
             self.ctl.last_i_mode = f"I:RESET({reason.value})"
-            self._output_initialized = True
-            self._last_calculate_time = None
-            self._current_cycle_start_monotonic = None
-            self.resume_hold.clear()
             self._last_restart_reason = "power_shedding"
             return True
 
