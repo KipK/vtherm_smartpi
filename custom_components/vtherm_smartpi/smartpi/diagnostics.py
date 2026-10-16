@@ -464,6 +464,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     fftrim_last_transaction = _build_fftrim_transaction(
         algo._ff_trim.last_transaction
     )
+    coord = algo.fftrim_coord
     tau_info = algo.est.tau_reliability()
     ff_result = algo._last_ff_result
     twin_diag = getattr(algo, '_last_twin_diag', None) or {}
@@ -541,19 +542,19 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "u_ff2": round(u_ff2, 6),
         "u_ff_final": round(u_ff_final, 6),
         "u_ff3": round(u_ff3, 6),
-        "ff2_trim_delta": round(algo._last_ff_trim_delta, 6),
+        "ff2_trim_delta": round(coord.last_ff_trim_delta, 6),
         "ff2_authority": round(ff2_authority, 6),
         "ff2_frozen": algo._ff_trim.frozen,
         "ff2_freeze_reason": algo._ff_trim.freeze_reason,
-        "fftrim_last_reject_reason": algo._last_fftrim_reject_reason,
-        "fftrim_last_update_reason": algo._last_fftrim_update_reason,
+        "fftrim_last_reject_reason": coord.last_reject_reason,
+        "fftrim_last_update_reason": coord.last_update_reason,
         "fftrim_stationary_last_reject_reason": fftrim_observer[
             "last_reject_reason"
         ],
         "fftrim_last_result": fftrim_last_result,
         "fftrim_last_transaction": fftrim_last_transaction,
-        "fftrim_windows_since_update": int(algo._cycles_since_fftrim_update),
-        "fftrim_observation_mode": algo._fftrim_observation_mode,
+        "fftrim_windows_since_update": int(coord.windows_since_update),
+        "fftrim_observation_mode": coord.observation_mode,
         "fftrim_observer_state": fftrim_observer["state"],
         "fftrim_window_duration_s": round(
             float(fftrim_observer["window_duration_s"]), 3
@@ -586,19 +587,19 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "fftrim_periodic_last_reject_reason": fftrim_periodic[
             "last_reject_reason"
         ],
-        "fftrim_requested_trim_delta": round(algo._requested_trim_delta, 6),
-        "fftrim_stored_trim_delta": round(algo._stored_trim_delta, 6),
-        "fftrim_applied_trim_delta": round(algo._applied_trim_delta, 6),
-        "fftrim_transferable_i_power": round(algo._transferable_i_power, 6),
-        "fftrim_requested_i_transfer": round(algo._requested_i_transfer, 6),
-        "fftrim_applied_i_transfer": round(algo._applied_i_transfer, 6),
-        "fftrim_net_command_delta": round(algo._net_command_delta, 6),
-        "fftrim_bumpless_transfer_state": algo._bumpless_transfer_state,
-        "fftrim_bumpless_transfer_reason": algo._bumpless_transfer_reason,
+        "fftrim_requested_trim_delta": round(coord.requested_trim_delta, 6),
+        "fftrim_stored_trim_delta": round(coord.stored_trim_delta, 6),
+        "fftrim_applied_trim_delta": round(coord.applied_trim_delta, 6),
+        "fftrim_transferable_i_power": round(coord.transferable_i_power, 6),
+        "fftrim_requested_i_transfer": round(coord.requested_i_transfer, 6),
+        "fftrim_applied_i_transfer": round(coord.applied_i_transfer, 6),
+        "fftrim_net_command_delta": round(coord.net_command_delta, 6),
+        "fftrim_bumpless_transfer_state": coord.transfer_state,
+        "fftrim_bumpless_transfer_reason": coord.transfer_reason,
         "fftrim_transfer_pending_engagement": (
-            algo._transfer_pending_request_id is not None
+            coord.transfer_pending_request_id is not None
         ),
-        "fftrim_transfer_quality": algo._transfer_quality,
+        "fftrim_transfer_quality": coord.transfer_quality,
         "command_ownership": command_ownership,
         # Effective feed-forward and FF3
         "u_ff_eff": round(ff_result.u_ff_eff, 6) if ff_result else 0.0,

@@ -479,6 +479,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `setpoint.py`          | analytical setpoint trajectory for the P reference          |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
+| `ff_trim_runtime.py`   | `FFTrimCoordinator`: routing of trim observer results, bumpless trim/integral transactions at the cycle boundary, transfer state |
 | `command_ownership.py` | request identifiers, frozen snapshots and binding of the scheduler applied-command receipts |
 | `ff_trim_periodic.py`  | phase-closed periodic-equilibrium window selection          |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
@@ -516,6 +517,7 @@ self._ff_trim = FFTrim()
 self._fftrim_observer = CausalFFTrimObserver(cycle_min, self._causal_power_trace)
 self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
 self._command_ownership = CommandOwnershipTracker()
+self.fftrim_coord = FFTrimCoordinator(self)
 self._ab_confidence = ABConfidence()
 ```
 

@@ -63,7 +63,7 @@ def _representative_smartpi() -> SmartPI:
     )
     # Repeated proposals commit one FF trim transaction.
     for _ in range(3):
-        algo._apply_fftrim_observer_result(result, count_window=False)
+        algo.fftrim_coord.apply_observer_result(result, count_window=False)
     algo._fftrim_observer.publish_external_result(result)
     # A healthy twin adds the analysis.twin subtree.
     algo._last_twin_diag = {"status": "ok", "model_reliable": True}

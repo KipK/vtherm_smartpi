@@ -226,12 +226,12 @@ async def test_pre_transfer_identical_command_does_not_confirm_engagement():
     algo = _new_switch_algo("switch-engagement")
     _configure_switch_ownership_context(algo, power=0.5)
     request_id = algo.stage_command(VThermHvacMode_HEAT)
-    algo._transfer_pending_request_id = algo._command_ownership.last_staged_id
+    algo.fftrim_coord.transfer_pending_request_id = algo._command_ownership.last_staged_id
 
     await algo.on_command_receipt(make_receipt(request_id, 0.5))
     await algo.on_command_receipt(make_receipt(request_id, 0.5, is_repeat=True))
 
-    assert algo._transfer_pending_request_id == request_id
+    assert algo.fftrim_coord.transfer_pending_request_id == request_id
 
 
 @pytest.mark.asyncio
@@ -240,18 +240,18 @@ async def test_different_post_transfer_request_confirms_engagement():
     algo = _new_switch_algo("switch-engagement")
     _configure_switch_ownership_context(algo, power=0.5)
     request_id = algo.stage_command(VThermHvacMode_HEAT)
-    algo._transfer_pending_request_id = algo._command_ownership.last_staged_id
+    algo.fftrim_coord.transfer_pending_request_id = algo._command_ownership.last_staged_id
     await algo.on_command_receipt(make_receipt(request_id, 0.5))
 
     # An untagged command applied meanwhile proves nothing.
     await algo.on_command_receipt(make_receipt(None, 0.25))
-    assert algo._transfer_pending_request_id == request_id
+    assert algo.fftrim_coord.transfer_pending_request_id == request_id
 
     _configure_switch_ownership_context(algo, power=0.6)
     request_id = algo.stage_command(VThermHvacMode_HEAT)
     await algo.on_command_receipt(make_receipt(request_id, 0.6))
 
-    assert algo._transfer_pending_request_id is None
+    assert algo.fftrim_coord.transfer_pending_request_id is None
 
 
 def test_switch_requests_are_transient_and_reset_with_cycle_state():
@@ -259,14 +259,14 @@ def test_switch_requests_are_transient_and_reset_with_cycle_state():
     algo = _new_switch_algo("switch-sequence-reset")
     _configure_switch_ownership_context(algo, power=0.5)
     request_id = algo.stage_command(VThermHvacMode_HEAT)
-    algo._transfer_pending_request_id = request_id
+    algo.fftrim_coord.transfer_pending_request_id = request_id
 
     state = algo.save_state()
     assert "command_ownership" not in state
     assert "request_sequence" not in state
 
     algo.reset_cycle_state()
-    assert algo._transfer_pending_request_id is None
+    assert algo.fftrim_coord.transfer_pending_request_id is None
     binding = algo._command_ownership.bind_receipt(make_receipt(request_id, 0.5))
     assert binding.reason == "ownership_request_unknown"
 
@@ -279,7 +279,7 @@ def test_switch_requests_are_transient_and_reset_with_cycle_state():
         saved_state=state,
     )
     assert restored._command_ownership.last_staged_id > request_id
-    assert restored._transfer_pending_request_id is None
+    assert restored.fftrim_coord.transfer_pending_request_id is None
     assert (
         restored._command_ownership.bind_receipt(make_receipt(request_id, 0.5)).reason
         == "ownership_request_unknown"

@@ -302,7 +302,7 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
     )
     request_id = algo.stage_command(VThermHvacMode_HEAT)
 
-    updated = algo._apply_bumpless_persistent_result(
+    updated = algo.fftrim_coord.apply_bumpless_persistent_result(
         persistent=persistent,
         quality="switch_cycle_equivalent",
     )
@@ -311,11 +311,11 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
     assert algo._ff_trim.u_ff_trim == pytest.approx(0.008)
     assert algo.Ki * algo.integral == pytest.approx(0.095)
     assert algo.ctl.u_cmd == pytest.approx(0.503)
-    assert algo._applied_trim_delta == pytest.approx(0.008)
-    assert algo._applied_i_transfer == pytest.approx(0.005)
-    assert algo._net_command_delta == pytest.approx(0.003)
-    assert algo._bumpless_transfer_state == "applied"
-    assert algo._transfer_pending_request_id == request_id
+    assert algo.fftrim_coord.applied_trim_delta == pytest.approx(0.008)
+    assert algo.fftrim_coord.applied_i_transfer == pytest.approx(0.005)
+    assert algo.fftrim_coord.net_command_delta == pytest.approx(0.003)
+    assert algo.fftrim_coord.transfer_state == "applied"
+    assert algo.fftrim_coord.transfer_pending_request_id == request_id
     transaction = algo._ff_trim.last_transaction
     assert transaction is not None
     assert transaction.observation_mode == "stationary"
@@ -327,13 +327,13 @@ def test_smartpi_applies_trim_and_integral_as_one_post_aw_transaction() -> None:
     assert transaction.net_command_delta == pytest.approx(0.003)
 
     algo.gov.regime = GovernanceRegime.HOLD
-    rejected = algo._apply_bumpless_persistent_result(
+    rejected = algo.fftrim_coord.apply_bumpless_persistent_result(
         persistent=persistent,
         quality="switch_cycle_equivalent",
     )
 
     assert rejected is False
-    assert algo._bumpless_transfer_state == "rejected"
+    assert algo.fftrim_coord.transfer_state == "rejected"
     assert algo._ff_trim.last_transaction == transaction
 
 
@@ -417,11 +417,11 @@ def test_valve_rounded_receipt_keeps_bumpless_transfer_applicable(
     algo.on_applied_power_updated(position, VThermHvacMode_HEAT)
 
     assert abs(algo._last_u_applied - u_lin) > 0.001
-    assert algo._current_bumpless_context_rejection() is None
+    assert algo.fftrim_coord.current_bumpless_context_rejection() is None
 
     algo.on_applied_power_updated(position - VALVE_POSITION_STEP, VThermHvacMode_HEAT)
 
-    assert algo._current_bumpless_context_rejection() == "application_timing_output"
+    assert algo.fftrim_coord.current_bumpless_context_rejection() == "application_timing_output"
 
 
 def test_switch_applied_gap_still_rejects_bumpless_transfer() -> None:
@@ -430,11 +430,11 @@ def test_switch_applied_gap_still_rejects_bumpless_transfer() -> None:
 
     algo.on_applied_power_updated(0.23, VThermHvacMode_HEAT)
 
-    assert algo._current_bumpless_context_rejection() == "application_timing_output"
+    assert algo.fftrim_coord.current_bumpless_context_rejection() == "application_timing_output"
 
     algo.on_applied_power_updated(0.2335, VThermHvacMode_HEAT)
 
-    assert algo._current_bumpless_context_rejection() is None
+    assert algo.fftrim_coord.current_bumpless_context_rejection() is None
 
 
 def test_valve_rounded_transfer_moves_only_the_physical_share() -> None:
@@ -455,12 +455,12 @@ def test_valve_rounded_transfer_moves_only_the_physical_share() -> None:
     )
     command_before = algo._ff_trim.u_ff_trim + 0.4 + algo.Ki * algo.ctl.integral
 
-    assert algo._apply_bumpless_persistent_result(
+    assert algo.fftrim_coord.apply_bumpless_persistent_result(
         persistent=persistent,
         quality="valve_segmented_linear",
     )
     command_after = algo._ff_trim.u_ff_trim + 0.4 + algo.Ki * algo.ctl.integral
-    assert algo._applied_i_transfer > 0.0
-    assert algo._net_command_delta == pytest.approx(0.0, abs=1e-12)
+    assert algo.fftrim_coord.applied_i_transfer > 0.0
+    assert algo.fftrim_coord.net_command_delta == pytest.approx(0.0, abs=1e-12)
     assert command_after == pytest.approx(command_before, abs=1e-12)
     assert _vt_rounded_position(algo.valve_curve, algo.ctl.u_cmd) == pytest.approx(0.50)

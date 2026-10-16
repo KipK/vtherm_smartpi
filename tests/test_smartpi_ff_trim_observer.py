@@ -324,7 +324,7 @@ def test_generic_recalculation_without_measurement_id_keeps_window() -> None:
     )
     diagnostics_before = dict(algo._fftrim_observer.diagnostics)
 
-    algo._record_fftrim_thermal_measurement(
+    algo.fftrim_coord.record_thermal_measurement(
         now_monotonic=180.0,
         measurement_id=None,
         current_temp=20.0,
@@ -360,7 +360,7 @@ def test_repeated_measurement_identity_does_not_reapply_trim_gates() -> None:
     )
     diagnostics_before = dict(algo._fftrim_observer.diagnostics)
 
-    algo._record_fftrim_thermal_measurement(
+    algo.fftrim_coord.record_thermal_measurement(
         now_monotonic=180.0,
         measurement_id="sensor-1",
         current_temp=20.1,

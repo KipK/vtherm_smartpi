@@ -461,7 +461,7 @@ def test_applied_periodic_transaction_survives_live_rejection_until_reset() -> N
         target_trim=0.0,
     )
     assert (
-        algo._apply_fftrim_observer_result(
+        algo.fftrim_coord.apply_observer_result(
             quiet_result,
             count_window=False,
         )
@@ -470,7 +470,7 @@ def test_applied_periodic_transaction_survives_live_rejection_until_reset() -> N
     assert algo._ff_trim.last_transaction is None
 
     for proposal_index in range(3):
-        updated = algo._apply_fftrim_observer_result(
+        updated = algo.fftrim_coord.apply_observer_result(
             periodic_result,
             count_window=False,
         )
@@ -506,15 +506,15 @@ def test_applied_periodic_transaction_survives_live_rejection_until_reset() -> N
         correction=None,
         target_trim=None,
     )
-    algo._apply_fftrim_observer_result(rejected_result, count_window=False)
+    algo.fftrim_coord.apply_observer_result(rejected_result, count_window=False)
 
-    assert algo._requested_trim_delta == pytest.approx(0.0)
-    assert algo._stored_trim_delta == pytest.approx(0.0)
-    assert algo._applied_trim_delta == pytest.approx(0.0)
-    assert algo._transferable_i_power == pytest.approx(0.0)
-    assert algo._requested_i_transfer == pytest.approx(0.0)
-    assert algo._applied_i_transfer == pytest.approx(0.0)
-    assert algo._net_command_delta == pytest.approx(0.0)
+    assert algo.fftrim_coord.requested_trim_delta == pytest.approx(0.0)
+    assert algo.fftrim_coord.stored_trim_delta == pytest.approx(0.0)
+    assert algo.fftrim_coord.applied_trim_delta == pytest.approx(0.0)
+    assert algo.fftrim_coord.transferable_i_power == pytest.approx(0.0)
+    assert algo.fftrim_coord.requested_i_transfer == pytest.approx(0.0)
+    assert algo.fftrim_coord.applied_i_transfer == pytest.approx(0.0)
+    assert algo.fftrim_coord.net_command_delta == pytest.approx(0.0)
     assert algo._ff_trim.last_transaction == transaction
 
     published = build_published_diagnostics(algo)["feedforward"]["fftrim"]
@@ -539,7 +539,7 @@ def test_applied_periodic_transaction_survives_live_rejection_until_reset() -> N
 
     algo._ff_trim.unfreeze()
     for _ in range(3):
-        algo._apply_fftrim_observer_result(
+        algo.fftrim_coord.apply_observer_result(
             periodic_result,
             count_window=False,
         )
