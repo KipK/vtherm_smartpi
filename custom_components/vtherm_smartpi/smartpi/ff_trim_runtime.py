@@ -1,7 +1,8 @@
 """FF trim runtime coordination for SmartPI.
 
 Freezes the control decomposition of each scheduler request for command
-ownership, routes the causal and periodic FF trim observer results through the
+ownership, freezes the trim on unreliable regimes and after a reboot,
+routes the causal and periodic FF trim observer results through the
 persistent trim safeguards, applies bumpless trim/integral transactions at
 the post-anti-windup cycle boundary, and feeds the distinct VT thermal
 measurements to both observers.
@@ -9,11 +10,12 @@ measurements to both observers.
 SmartPI owns the trim, the observers, the causal power trace and the
 controller; the coordinator reads and updates them through the SmartPI
 instance it is built with and owns only the transient transfer state
-published under ``feedforward.fftrim``.
+published under ``feedforward.fftrim`` and the post-reboot freeze countdown.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
@@ -27,6 +29,7 @@ from .causal_power_trace import ControlOwnershipSnapshot
 from .command_ownership import CommandOwnershipSnapshot
 from .const import (
     ABConfidenceState,
+    FF_TRIM_REBOOT_FREEZE_CYCLES,
     FF_TRIM_TRANSFER_COMMAND_EPSILON,
     FF_TRIM_TRANSFER_MAX_POWER_RANGE,
     GovernanceRegime,
@@ -47,12 +50,17 @@ from .valve_curve import applied_output_deviates
 if TYPE_CHECKING:
     from ..algo import SmartPI
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class FFTrimCoordinator:
     """FF trim observation routing and bumpless transfer for one SmartPI."""
 
     def __init__(self, spi: SmartPI) -> None:
         self._spi = spi
+        # Post-reboot freeze countdown (cycles remaining before unfreeze);
+        # a learning reset keeps it.
+        self.reboot_freeze_remaining: int = 0
         self.reset()
 
     def reset(self) -> None:
@@ -77,6 +85,44 @@ class FFTrimCoordinator:
         self.transfer_quality: str = "unavailable"
         self.pending_persistent: FFTrimPersistentResult | None = None
         self.pending_quality: str = "unavailable"
+
+    def freeze_after_reboot(self) -> None:
+        """Freeze trim learning for the first ticks after a state restore."""
+        self._spi._ff_trim.freeze("reboot")
+        self.reboot_freeze_remaining = FF_TRIM_REBOOT_FREEZE_CYCLES
+
+    def update_trim_freeze(self, regime: GovernanceRegime) -> None:
+        """Count down the reboot freeze, then freeze or release the trim for this tick."""
+        spi = self._spi
+        # Post-reboot freeze countdown
+        if self.reboot_freeze_remaining > 0:
+            self.reboot_freeze_remaining -= 1
+            if self.reboot_freeze_remaining == 0:
+                spi._ff_trim.unfreeze()
+                _LOGGER.debug("%s - FFv2: post-reboot freeze lifted", spi._name)
+
+        # Freeze conditions for trim
+        ab_state = spi._ab_confidence.state
+        is_saturated = regime == GovernanceRegime.SATURATED
+        is_perturbed = regime == GovernanceRegime.PERTURBED
+        is_degraded = regime == GovernanceRegime.DEGRADED
+
+        if self.reboot_freeze_remaining > 0:
+            spi._ff_trim.freeze("reboot")
+        elif ab_state in (ABConfidenceState.AB_BAD, ABConfidenceState.AB_DEGRADED):
+            spi._ff_trim.freeze(f"ab_{ab_state.value}")
+        elif spi._last_ff_result is not None and spi._last_ff_result.warmup_scale < 1.0:
+            spi._ff_trim.freeze("ff_warmup")
+        elif is_saturated and spi.ctl.last_sat == "SAT_HI":
+            spi._ff_trim.freeze("saturated_high")
+        elif is_saturated and spi.ctl.last_sat != "SAT_LO":
+            spi._ff_trim.freeze("saturated")
+        elif is_perturbed:
+            spi._ff_trim.freeze("perturbed")
+        elif is_degraded:
+            spi._ff_trim.freeze("degraded")
+        else:
+            spi._ff_trim.unfreeze()
 
     def reset_observation_runtime(self) -> None:
         """Reset causal power, measurement identity, and logical windows."""

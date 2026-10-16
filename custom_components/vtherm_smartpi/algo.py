@@ -115,11 +115,7 @@ from .smartpi.integral_guard import (
     integral_guard_release_error_threshold,
 )
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
-from .smartpi.const import (
-    ABConfidenceState,
-    FF_TRIM_REBOOT_FREEZE_CYCLES,
-    ENABLE_ADAPTIVE_TINT_FILTER,
-)
+from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
 from .smartpi.timestamp_utils import (
     elapsed_wall_minutes,
     normalize_wall_timestamp,
@@ -334,9 +330,6 @@ class SmartPI:
 
         # Last complete FFResult (used by diagnostics and on_cycle_completed)
         self._last_ff_result: FFResult | None = None
-
-        # FFv2 post-reboot freeze countdown (cycles remaining before unfreeze)
-        self._ff_v2_reboot_freeze_remaining: int = 0
 
         # --- Safety-First Governance (Delegated to self.gov) ---
         if saved_state:
@@ -1358,8 +1351,7 @@ class SmartPI:
         self.fftrim_coord.last_ff_trim_delta = float(state.get("ff_trim_delta", 0.0))
         self.tint_filter.load_state(state.get("tint_filter_state", {}))
         # Freeze trim learning briefly after reboot.
-        self._ff_trim.freeze("reboot")
-        self._ff_v2_reboot_freeze_remaining = FF_TRIM_REBOOT_FREEZE_CYCLES
+        self.fftrim_coord.freeze_after_reboot()
 
         self.set_learning_enabled(bool(state.get("learning_enabled", True)))
 
@@ -2295,35 +2287,7 @@ class SmartPI:
             )
 
         # --- 14c. FFv2: freeze management for trim ---
-        # Post-reboot freeze countdown
-        if self._ff_v2_reboot_freeze_remaining > 0:
-            self._ff_v2_reboot_freeze_remaining -= 1
-            if self._ff_v2_reboot_freeze_remaining == 0:
-                self._ff_trim.unfreeze()
-                _LOGGER.debug("%s - FFv2: post-reboot freeze lifted", self._name)
-
-        # Freeze conditions for trim
-        ab_state = self._ab_confidence.state
-        is_saturated = regime == GovernanceRegime.SATURATED
-        is_perturbed = regime == GovernanceRegime.PERTURBED
-        is_degraded = regime == GovernanceRegime.DEGRADED
-
-        if self._ff_v2_reboot_freeze_remaining > 0:
-            self._ff_trim.freeze("reboot")
-        elif ab_state in (ABConfidenceState.AB_BAD, ABConfidenceState.AB_DEGRADED):
-            self._ff_trim.freeze(f"ab_{ab_state.value}")
-        elif self._last_ff_result is not None and self._last_ff_result.warmup_scale < 1.0:
-            self._ff_trim.freeze("ff_warmup")
-        elif is_saturated and self.ctl.last_sat == "SAT_HI":
-            self._ff_trim.freeze("saturated_high")
-        elif is_saturated and self.ctl.last_sat != "SAT_LO":
-            self._ff_trim.freeze("saturated")
-        elif is_perturbed:
-            self._ff_trim.freeze("perturbed")
-        elif is_degraded:
-            self._ff_trim.freeze("degraded")
-        else:
-            self._ff_trim.unfreeze()
+        self.fftrim_coord.update_trim_freeze(regime)
 
         # --- 14d. Causally aligned FF trim observation ---
         self.fftrim_coord.record_thermal_measurement(
