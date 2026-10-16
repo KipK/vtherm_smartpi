@@ -393,13 +393,13 @@ Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer 
 `DeadbandManager` gère :
 
 - une deadband symétrique avec hystérésis absolue (`DEADBAND_HYSTERESIS = 0.025`),
-- une near-band asymétrique en chauffage,
-- un calcul automatique de near-band si `deadtime_heat` et le modèle sont exploitables,
+- une near-band asymétrique en chauffage ; en refroidissement, la near-band utilise la valeur configurée `near_band_deg` des deux côtés de la consigne,
+- un calcul automatique de near-band en chauffage uniquement, si `deadtime_heat` et le modèle sont exploitables,
 - un repli sur les seuils configurés sinon.
 
 Les protections complémentaires actuellement présentes sont :
 
-- `SmartPIGuards` : `guard_cut` et `guard_kick`,
+- `SmartPIGuards` (chauffage uniquement) : `guard_cut` force la sortie à 0 lorsque la température mesurée dépasse `setpoint + near_band_above` pendant que le chauffage est actif, jusqu'à ce qu'elle redescende à ce seuil diminué de `NEAR_BAND_HYSTERESIS_C = 0.05°C` ; `guard_kick` relance le cycle lorsque, dans la near-band, la température descend sous `setpoint - near_band_below` alors que la commande est inférieure à 99 %. En refroidissement, aucune des deux gardes n'agit et la near-band n'est pas calculée automatiquement,
 - anti-windup à chaque tick sur la limite haute applicable (voir ci-dessous),
 - garde intégrale signée pendant les reprises, rattrapages et changements de consigne,
 - `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,

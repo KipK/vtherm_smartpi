@@ -3,10 +3,10 @@ import pytest
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, PropertyMock
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
-from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.algo import SmartPI, SmartPIPhase
 from custom_components.vtherm_smartpi.smartpi.const import SmartPICalibrationPhase
-from custom_components.vtherm_smartpi.smartpi.guards import GuardAction
+from custom_components.vtherm_smartpi.smartpi.guards import GuardAction, SmartPIGuards
 
 
 def _make_thermostat():
@@ -284,5 +284,69 @@ async def test_smartpi_near_band_transition_can_force_cycle_when_enabled():
     await handler.control_heating(timestamp=datetime.now())
 
     thermostat.cycle_scheduler.start_cycle.assert_called_once()
+    _, _, force = thermostat.cycle_scheduler.start_cycle.call_args[0]
+    assert force is True
+
+
+def _cut(guards, current_temp, device_active=True, hvac_mode=VThermHvacMode_HEAT):
+    return guards.check_guard_cut(
+        current_temp=current_temp,
+        target_temp=20.0,
+        near_band_above=0.2,
+        is_device_active=device_active,
+        hvac_mode=hvac_mode,
+        is_calibration=False,
+    )
+
+
+def test_guard_cut_threshold_does_not_depend_on_near_band_state():
+    """The cut triggers above SP + near_band_above while the device is active, holds, then resets."""
+    guards = SmartPIGuards()
+
+    assert _cut(guards, 20.2) == GuardAction.NONE
+    assert _cut(guards, 20.25, device_active=False) == GuardAction.NONE
+    assert _cut(guards, 20.25) == GuardAction.CUT_TRIGGER
+    assert guards.guard_cut_active is True
+    assert guards.guard_cut_count == 1
+    assert _cut(guards, 20.16) == GuardAction.CUT_MAINTAIN
+    assert _cut(guards, 20.15) == GuardAction.CUT_RESET
+    assert guards.guard_cut_active is False
+
+
+def test_guard_cut_is_inactive_in_cool():
+    """COOL keeps no guard cut."""
+    guards = SmartPIGuards()
+
+    assert _cut(guards, 19.0, hvac_mode=VThermHvacMode_COOL) == GuardAction.NONE
+    assert _cut(guards, 21.0, hvac_mode=VThermHvacMode_COOL) == GuardAction.NONE
+    assert guards.guard_cut_active is False
+
+
+@pytest.mark.asyncio
+async def test_handler_guard_cut_triggers_outside_filtered_near_band():
+    """A temperature above SP + near_band_above with the heater on forces the cut even when the
+    filtered near-band flag is False (slow overshoot)."""
+    thermostat = _make_thermostat()
+    thermostat.current_temperature = 20.3
+    thermostat.current_outdoor_temperature = 10.0
+    thermostat.last_temperature_slope = 0.0
+    thermostat.power_manager = None
+    thermostat.is_device_active = True
+    thermostat.cycle_scheduler.is_cycle_running = False
+
+    handler = SmartPIHandler(thermostat)
+    algo = _make_algo(on_percent=0.0)
+    algo.guards = SmartPIGuards()
+    algo.in_near_band = False
+    algo.deadband_mgr.near_band_above_deg = 0.2
+    algo.deadband_mgr.near_band_below_deg = 0.4
+    algo.calculated_on_percent = 0.0
+    algo.calculate = MagicMock()
+    thermostat.prop_algorithm = algo
+
+    await handler.control_heating(timestamp=datetime.now())
+
+    assert algo.guards.guard_cut_active is True
+    assert algo._last_restart_reason == "guard_cut"
     _, _, force = thermostat.cycle_scheduler.start_cycle.call_args[0]
     assert force is True

@@ -60,13 +60,16 @@ class SmartPIGuards:
         current_temp: float,
         target_temp: float,
         near_band_above: float,
-        in_near_band: bool,
         is_device_active: bool,
         hvac_mode: VThermHvacMode,
         is_calibration: bool
     ) -> str:
         """
-        Check for Guard Cut condition.
+        Check for Guard Cut condition (HEAT only).
+
+        Triggers when the measured temperature exceeds target + near_band_above
+        while the heater is active; resets at or below that threshold minus
+        NEAR_BAND_HYSTERESIS_C.
         Returns: GuardAction.CUT_TRIGGER, CUT_MAINTAIN, CUT_RESET, or NONE.
         """
         # Pre-conditions
@@ -95,12 +98,8 @@ class SmartPIGuards:
                 _LOGGER.debug("Guard cut active, maintaining OFF")
                 return GuardAction.CUT_MAINTAIN
 
-        elif (
-            in_near_band
-            and current_temp > threshold_above
-            and is_device_active
-        ):
-            # Trigger
+        elif current_temp > threshold_above and is_device_active:
+            # Trigger on the measured temperature, whatever the filtered near-band state
             self._guard_cut_active = True
             self._guard_cut_count += 1
             _LOGGER.warning(

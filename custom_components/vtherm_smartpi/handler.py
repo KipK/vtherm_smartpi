@@ -361,7 +361,6 @@ class SmartPIHandler:
                 current_temp=current_temp,
                 target_temp=t.target_temperature,
                 near_band_above=algo.deadband_mgr.near_band_above_deg,
-                in_near_band=algo.in_near_band,
                 is_device_active=t.is_device_active,
                 hvac_mode=t.vtherm_hvac_mode,
                 is_calibration=(algo.phase == SmartPIPhase.CALIBRATION)

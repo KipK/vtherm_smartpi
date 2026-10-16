@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Heating guard cut: the output is forced to 0 as soon as the measured
+  temperature exceeds `setpoint + near_band_above` while the heater is active,
+  without waiting for the filtered error to be inside the near-band, which
+  limits slow overshoots after setpoint steps. The guard cut, the guard kick
+  and the automatic near-band sizing act in heating mode only (documented).
 - Diagnostics: the effective integral time `Ti = Kp / Ki` of the applied gains is
   published in minutes as `control.ti_min` (`None` when `Ki` is not positive)
   and shown in the diagnostic cards.

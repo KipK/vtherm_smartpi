@@ -394,13 +394,13 @@ The restart therefore keeps only useful persistent PI memory, without restoring 
 `DeadbandManager` handles:
 
 - a symmetric deadband with absolute hysteresis (`DEADBAND_HYSTERESIS = 0.025`),
-- an asymmetric near-band in heating mode,
-- automatic near-band sizing when `deadtime_heat` and the model are usable,
+- an asymmetric near-band in heating mode; in cooling mode the near-band uses the configured `near_band_deg` on both sides of the setpoint,
+- automatic near-band sizing in heating mode only, when `deadtime_heat` and the model are usable,
 - fallback to configured thresholds otherwise.
 
 Additional protections currently present are:
 
-- `SmartPIGuards`: `guard_cut` and `guard_kick`,
+- `SmartPIGuards` (heating mode only): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus `NEAR_BAND_HYSTERESIS_C = 0.05°C`; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized,
 - per-tick anti-windup on the applicable upper limit (see below),
 - signed integral guard during resumes, catch-up phases, and setpoint changes,
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
