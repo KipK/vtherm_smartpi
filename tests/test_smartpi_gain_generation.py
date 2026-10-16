@@ -135,7 +135,7 @@ def test_ownership_snapshot_uses_the_scheduler_generation() -> None:
             current_temp=20.0 - error,
             e_p=error,
         )
-        snapshot = algo._build_command_ownership_snapshot(VThermHvacMode_HEAT)
+        snapshot = algo.fftrim_coord.build_command_snapshot(VThermHvacMode_HEAT)
         generations.append(snapshot.gain_generation)
         gains.append((algo.Kp, algo.Ki))
 

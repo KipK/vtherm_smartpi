@@ -1,6 +1,7 @@
 """FF trim runtime coordination for SmartPI.
 
-Routes the causal and periodic FF trim observer results through the
+Freezes the control decomposition of each scheduler request for command
+ownership, routes the causal and periodic FF trim observer results through the
 persistent trim safeguards, applies bumpless trim/integral transactions at
 the post-anti-windup cycle boundary, and feeds the distinct VT thermal
 measurements to both observers.
@@ -22,12 +23,15 @@ from ..hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
 )
+from .causal_power_trace import ControlOwnershipSnapshot
+from .command_ownership import CommandOwnershipSnapshot
 from .const import (
     ABConfidenceState,
     FF_TRIM_TRANSFER_COMMAND_EPSILON,
     FF_TRIM_TRANSFER_MAX_POWER_RANGE,
     GovernanceRegime,
     SmartPICalibrationPhase,
+    SmartPIPhase,
     clamp,
 )
 from .ff_trim import (
@@ -146,6 +150,102 @@ class FFTrimCoordinator:
                 deadtime_s=deadtime_s,
                 deadtime_reliable=deadtime_reliable,
             )
+
+    def _constraint_flags(self, actual_ff3: float) -> tuple[str, ...]:
+        """Return downstream constraints attached to the current command."""
+        spi = self._spi
+        flags: list[str] = []
+        if spi.ctl.last_sat == "SAT_HI":
+            flags.append("saturated_high")
+        elif spi.ctl.last_sat == "SAT_LO":
+            flags.append("saturated_low")
+        if spi.sp_mgr.trajectory_active:
+            flags.append("trajectory")
+        current_phase = spi.phase
+        if current_phase != SmartPIPhase.STABLE:
+            flags.append(f"phase_{current_phase.value}")
+        if spi.guards.guard_cut_active or spi.guards.guard_kick_active:
+            flags.append("guard")
+        if spi._setpoint_changed_in_cycle:
+            flags.append("setpoint_changed")
+        if (
+            spi._resume_deadtime_hold_source != IntegralGuardSource.NONE
+            or spi._resume_deadtime_hold_started
+        ):
+            flags.append("recovery")
+        if spi._last_forced_by_timing:
+            flags.append("timing")
+        if (
+            abs(spi._last_u_cmd - spi._last_u_limited)
+            > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            flags.append("output_limited")
+        if (
+            abs(spi._last_u_limited - spi._last_u_applied)
+            > FF_TRIM_TRANSFER_COMMAND_EPSILON
+        ):
+            flags.append("timing_output")
+        if abs(actual_ff3) > FF_TRIM_TRANSFER_COMMAND_EPSILON:
+            flags.append("ff3")
+        return tuple(sorted(set(flags)))
+
+    def build_command_snapshot(
+        self,
+        hvac_mode: VThermHvacMode,
+    ) -> CommandOwnershipSnapshot | None:
+        """Freeze the control decomposition that produced an actuator request."""
+        spi = self._spi
+        ff_result = spi._last_ff_result
+        if ff_result is None:
+            return None
+
+        trim = spi._ff_trim.u_ff_trim if ff_result.trim_applied else 0.0
+        visible_ff = clamp(ff_result.u_ff1 + trim, 0.0, 1.0)
+        actual_ff3 = spi.ctl.u_ff - visible_ff
+        return CommandOwnershipSnapshot(
+            hvac_mode=str(hvac_mode),
+            u_ff1=float(ff_result.u_ff1),
+            trim_stored=float(spi._ff_trim.u_ff_trim),
+            u_ff_visible=float(visible_ff),
+            u_ff3=float(actual_ff3),
+            u_p=float(spi.ctl.u_p),
+            u_i=float(spi.ctl.u_i),
+            ki=float(spi.Ki),
+            gain_generation=spi.gain_scheduler.generation,
+            u_cmd=float(spi._last_u_cmd),
+            u_limited=float(spi._last_u_limited),
+            regime=spi.gov.regime,
+            i_mode=spi.ctl.last_i_mode,
+            constraint_flags=self._constraint_flags(actual_ff3),
+        )
+
+    @staticmethod
+    def to_control_ownership_snapshot(
+        snapshot: CommandOwnershipSnapshot | None,
+        linear_committed_power: float,
+        *,
+        quality: str,
+    ) -> ControlOwnershipSnapshot | None:
+        """Convert an accepted frozen binding for the FF trim observer."""
+        if snapshot is None:
+            return None
+        return ControlOwnershipSnapshot(
+            u_ff1=snapshot.u_ff1,
+            trim_stored=snapshot.trim_stored,
+            u_ff_visible=snapshot.u_ff_visible,
+            u_ff3=snapshot.u_ff3,
+            u_p=snapshot.u_p,
+            u_i=snapshot.u_i,
+            ki=snapshot.ki,
+            gain_generation=snapshot.gain_generation,
+            u_cmd=snapshot.u_cmd,
+            u_limited=snapshot.u_limited,
+            linear_committed_power=float(linear_committed_power),
+            regime=snapshot.regime,
+            i_mode=snapshot.i_mode,
+            quality=quality,
+            constraint_flags=snapshot.constraint_flags,
+        )
 
     def deadtime_context(
         self,

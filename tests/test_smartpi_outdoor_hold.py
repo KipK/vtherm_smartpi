@@ -168,7 +168,7 @@ def test_ownership_snapshot_excludes_a_trim_that_is_not_applied() -> None:
     pi = _make_pi()
     _ticks(pi, [(0.0, None), (60.0, None)])
     pi._ff_trim.u_ff_trim = 0.05
-    snapshot = pi._build_command_ownership_snapshot(VThermHvacMode_HEAT)
+    snapshot = pi.fftrim_coord.build_command_snapshot(VThermHvacMode_HEAT)
     assert snapshot.u_ff_visible == 0.0
     assert snapshot.u_ff3 == 0.0
     assert snapshot.trim_stored == pytest.approx(0.05)

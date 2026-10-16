@@ -78,7 +78,6 @@ from .smartpi.const import (
     CALIBRATION_TIMEOUT_MIN,
     ERROR_FILTER_TAU,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
-    FF_TRIM_TRANSFER_COMMAND_EPSILON,
     clamp,
 )
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
@@ -99,10 +98,7 @@ from .smartpi.ff3 import FF3Result, compute_ff3
 from .smartpi.ff3_eligibility import (
     build_ff3_disturbance_context,
 )
-from .smartpi.causal_power_trace import (
-    CausalPowerTrace,
-    ControlOwnershipSnapshot,
-)
+from .smartpi.causal_power_trace import CausalPowerTrace
 from .smartpi.thermal_measurement import ThermalMeasurementSource
 from .smartpi.ff_trim import CausalFFTrimObserver, FFTrim
 from .smartpi.ff_trim_periodic import PeriodicFFTrimObserver
@@ -726,7 +722,7 @@ class SmartPI:
     def stage_command(self, hvac_mode: VThermHvacMode) -> int:
         """Freeze the control context of the next scheduler request and return its id."""
         return self._command_ownership.stage(
-            self._build_command_ownership_snapshot(hvac_mode),
+            self.fftrim_coord.build_command_snapshot(hvac_mode),
             self.on_percent,
         )
 
@@ -800,7 +796,7 @@ class SmartPI:
             self._ff3_active_cycle = self._ff3_pending_active
         linear_power = self._set_committed_actuator_output(actuator_power)
         valve = self._valve_mode_enabled
-        ownership = self._to_fftrim_ownership_snapshot(
+        ownership = FFTrimCoordinator.to_control_ownership_snapshot(
             snapshot,
             linear_power,
             quality="valve_segmented_linear" if valve else "switch_cycle_equivalent",
@@ -851,100 +847,6 @@ class SmartPI:
 
         elapsed_min = max(0.0, (now_monotonic - self._current_cycle_start_monotonic) / 60.0)
         return max(0.0, self._cycle_min - elapsed_min)
-
-    def _build_ownership_constraint_flags(self, actual_ff3: float) -> tuple[str, ...]:
-        """Return downstream constraints attached to the current command."""
-        flags: list[str] = []
-        if self.ctl.last_sat == "SAT_HI":
-            flags.append("saturated_high")
-        elif self.ctl.last_sat == "SAT_LO":
-            flags.append("saturated_low")
-        if self.sp_mgr.trajectory_active:
-            flags.append("trajectory")
-        current_phase = self.phase
-        if current_phase != SmartPIPhase.STABLE:
-            flags.append(f"phase_{current_phase.value}")
-        if self.guards.guard_cut_active or self.guards.guard_kick_active:
-            flags.append("guard")
-        if self._setpoint_changed_in_cycle:
-            flags.append("setpoint_changed")
-        if (
-            self._resume_deadtime_hold_source != IntegralGuardSource.NONE
-            or self._resume_deadtime_hold_started
-        ):
-            flags.append("recovery")
-        if self._last_forced_by_timing:
-            flags.append("timing")
-        if (
-            abs(self._last_u_cmd - self._last_u_limited)
-            > FF_TRIM_TRANSFER_COMMAND_EPSILON
-        ):
-            flags.append("output_limited")
-        if (
-            abs(self._last_u_limited - self._last_u_applied)
-            > FF_TRIM_TRANSFER_COMMAND_EPSILON
-        ):
-            flags.append("timing_output")
-        if abs(actual_ff3) > FF_TRIM_TRANSFER_COMMAND_EPSILON:
-            flags.append("ff3")
-        return tuple(sorted(set(flags)))
-
-    def _build_command_ownership_snapshot(
-        self,
-        hvac_mode: VThermHvacMode,
-    ) -> CommandOwnershipSnapshot | None:
-        """Freeze the control decomposition that produced an actuator request."""
-        ff_result = self._last_ff_result
-        if ff_result is None:
-            return None
-
-        trim = self._ff_trim.u_ff_trim if ff_result.trim_applied else 0.0
-        visible_ff = clamp(ff_result.u_ff1 + trim, 0.0, 1.0)
-        actual_ff3 = self.ctl.u_ff - visible_ff
-        return CommandOwnershipSnapshot(
-            hvac_mode=str(hvac_mode),
-            u_ff1=float(ff_result.u_ff1),
-            trim_stored=float(self._ff_trim.u_ff_trim),
-            u_ff_visible=float(visible_ff),
-            u_ff3=float(actual_ff3),
-            u_p=float(self.ctl.u_p),
-            u_i=float(self.ctl.u_i),
-            ki=float(self.Ki),
-            gain_generation=self.gain_scheduler.generation,
-            u_cmd=float(self._last_u_cmd),
-            u_limited=float(self._last_u_limited),
-            regime=self.gov.regime,
-            i_mode=self.ctl.last_i_mode,
-            constraint_flags=self._build_ownership_constraint_flags(actual_ff3),
-        )
-
-    @staticmethod
-    def _to_fftrim_ownership_snapshot(
-        snapshot: CommandOwnershipSnapshot | None,
-        linear_committed_power: float,
-        *,
-        quality: str,
-    ) -> ControlOwnershipSnapshot | None:
-        """Convert an accepted frozen binding for the FF trim observer."""
-        if snapshot is None:
-            return None
-        return ControlOwnershipSnapshot(
-            u_ff1=snapshot.u_ff1,
-            trim_stored=snapshot.trim_stored,
-            u_ff_visible=snapshot.u_ff_visible,
-            u_ff3=snapshot.u_ff3,
-            u_p=snapshot.u_p,
-            u_i=snapshot.u_i,
-            ki=snapshot.ki,
-            gain_generation=snapshot.gain_generation,
-            u_cmd=snapshot.u_cmd,
-            u_limited=snapshot.u_limited,
-            linear_committed_power=float(linear_committed_power),
-            regime=snapshot.regime,
-            i_mode=snapshot.i_mode,
-            quality=quality,
-            constraint_flags=snapshot.constraint_flags,
-        )
 
     @property
     def a(self) -> float:
