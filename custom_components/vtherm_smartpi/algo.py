@@ -97,7 +97,12 @@ from .smartpi.learning_window import LearningWindowManager
 from .smartpi.deadband import DeadbandManager
 from .smartpi.calibration import CalibrationManager
 from .smartpi.gains import GainScheduler
-from .smartpi.feedforward import compute_ff, FFResult
+from .smartpi.feedforward import (
+    FFResult,
+    compute_ff,
+    compute_ff_gain,
+    compute_ff_warmup_scale,
+)
 from .smartpi.ff3 import FF3Result, FF3RuntimeState, compute_ff3
 from .smartpi.ff3_eligibility import (
     build_ff3_disturbance_context,
@@ -1587,22 +1592,13 @@ class SmartPI:
         )
 
         # --- FFv2: compute signed k_ff from the active mono-mode model ---
-        model_ready = (
-            len(self.est.a_meas_hist) >= AB_MIN_SAMPLES_A
-            and len(self.est.b_meas_hist) >= AB_MIN_SAMPLES_B
+        k_ff = compute_ff_gain(self.est, hvac_mode, self._tau_reliable)
+        warmup_scale = compute_ff_warmup_scale(
+            learn_ok_count=self.est.learn_ok_count,
+            ff_warmup_ok_count=self.ff_warmup_ok_count,
+            cycles_since_reset=self._cycles_since_reset,
+            ff_warmup_cycles=self.ff_warmup_cycles,
         )
-        model_sign_valid = (
-            self.est.a < -1e-6
-            if hvac_mode == VThermHvacMode_COOL
-            else self.est.a > 1e-6
-        )
-        if model_ready and self._tau_reliable and model_sign_valid:
-            k_ff = clamp(self.est.b / self.est.a, -3.0, 3.0)
-        else:
-            k_ff = 0.0
-        learn_scale = clamp(self.est.learn_ok_count / float(self.ff_warmup_ok_count), 0.0, 1.0)
-        time_scale = clamp(self._cycles_since_reset / float(self.ff_warmup_cycles), 0.0, 1.0)
-        warmup_scale = clamp(learn_scale * time_scale, 0.0, 1.0)
 
         # Save previous FF state before computing the new FFResult
         prev_ff_result = self._last_ff_result

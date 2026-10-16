@@ -484,7 +484,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `deadband.py`          | deadband et near-band                                    |
 | `setpoint.py`          | trajectoire analytique de la référence P                    |
 | `integral_guard.py`    | garde directionnelle de l'intégrale et maintien I:HOLD après reprise de fenêtre ou de délestage |
-| `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
+| `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`, gain FF signé `b/a` et facteur de montée en charge |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator` : décomposition de commande figée des requêtes du scheduler, routage des résultats des observateurs de trim, transactions bumpless trim/intégrale à la frontière de cycle, état de transfert |
 | `command_ownership.py` | identifiants de requête, snapshots figés et rattachement des reçus de commande appliquée du scheduler |

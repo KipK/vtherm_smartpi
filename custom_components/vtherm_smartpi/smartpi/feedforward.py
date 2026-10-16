@@ -15,9 +15,14 @@ Chain:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .const import clamp
+from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
+from .const import AB_MIN_SAMPLES_A, AB_MIN_SAMPLES_B, clamp
 from .ff_trim import FFTrim
+
+if TYPE_CHECKING:
+    from .ab_estimator import ABEstimator
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,39 @@ class FFResult:
     ff_reason: str         # Diagnostic reason string for the current FF state
     warmup_scale: float = 1.0  # FF1 warmup factor in [0, 1]; the trim stays frozen below 1
     trim_applied: bool = True  # False without outdoor temperature (no FF1 to correct)
+
+
+def compute_ff_gain(
+    estimator: ABEstimator,
+    hvac_mode: VThermHvacMode,
+    tau_reliable: bool,
+) -> float:
+    """Return the signed FF gain b / a of the active mono-mode model, 0 when unusable."""
+    model_ready = (
+        len(estimator.a_meas_hist) >= AB_MIN_SAMPLES_A
+        and len(estimator.b_meas_hist) >= AB_MIN_SAMPLES_B
+    )
+    model_sign_valid = (
+        estimator.a < -1e-6
+        if hvac_mode == VThermHvacMode_COOL
+        else estimator.a > 1e-6
+    )
+    if model_ready and tau_reliable and model_sign_valid:
+        return clamp(estimator.b / estimator.a, -3.0, 3.0)
+    return 0.0
+
+
+def compute_ff_warmup_scale(
+    *,
+    learn_ok_count: int,
+    ff_warmup_ok_count: int,
+    cycles_since_reset: int,
+    ff_warmup_cycles: int,
+) -> float:
+    """Return the FF1 warmup factor: learned-sample ramp times cycle ramp, in [0, 1]."""
+    learn_scale = clamp(learn_ok_count / float(ff_warmup_ok_count), 0.0, 1.0)
+    time_scale = clamp(cycles_since_reset / float(ff_warmup_cycles), 0.0, 1.0)
+    return clamp(learn_scale * time_scale, 0.0, 1.0)
 
 
 def compute_ff(

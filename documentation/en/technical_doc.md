@@ -478,7 +478,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `deadband.py`          | deadband and near-band                                      |
 | `setpoint.py`          | analytical setpoint trajectory for the P reference          |
 | `integral_guard.py`    | directional integral guard and the I:HOLD after a window or power-shedding resume |
-| `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
+| `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration, signed FF gain `b/a` and warmup scale |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator`: frozen control decomposition of scheduler requests, routing of trim observer results, bumpless trim/integral transactions at the cycle boundary, transfer state |
 | `command_ownership.py` | request identifiers, frozen snapshots and binding of the scheduler applied-command receipts |
