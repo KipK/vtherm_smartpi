@@ -19,6 +19,7 @@ from .const import (
     AB_MIN_SAMPLES_B,
     FF_TRIM_EPSILON,
     FF_TRIM_RHO,
+    clamp,
 )
 
 if TYPE_CHECKING:
@@ -456,6 +457,66 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     }
 
 
+def _bootstrap_progress(algo: SmartPI) -> int | None:
+    """
+    Progress of the bootstrap (hysteresis) phase in percent (0-100).
+    Returns None if not in Hysteresis phase.
+    """
+    if algo.phase != SmartPIPhase.HYSTERESIS:
+        return None
+
+    total_needed = AB_MIN_SAMPLES_A + AB_MIN_SAMPLES_B
+    current_count = min(len(algo.est.a_meas_hist), AB_MIN_SAMPLES_A) + min(
+        len(algo.est.b_meas_hist), AB_MIN_SAMPLES_B
+    )
+
+    pct = (current_count / total_needed) * 100.0
+    return int(clamp(pct, 0, 100))
+
+
+def _bootstrap_state(algo: SmartPI) -> str | None:
+    """
+    Detailed state message for the bootstrap process.
+    Returns None if not in Hysteresis phase.
+
+    Two steps:
+      step1: waiting for deadtimes (A/B collection blocked per mode)
+      step2: both deadtimes acquired, collecting initial emeas (<AB_MIN_SAMPLES_A/B)
+    The HYSTERESIS phase ends once both sample targets are reached.
+    """
+    if algo.phase != SmartPIPhase.HYSTERESIS:
+        return None
+
+    nb_a = len(algo.est.a_meas_hist)
+    nb_b = len(algo.est.b_meas_hist)
+
+    dt_est = algo.dt_est
+    dt_heat_ok = dt_est.deadtime_heat_reliable
+    dt_cool_ok = dt_est.deadtime_cool_reliable
+
+    # Step 1: at least one deadtime missing
+    if not (dt_heat_ok and dt_cool_ok):
+        heat_str = (
+            f"{int(dt_est.deadtime_heat_s)}s"
+            if dt_heat_ok and dt_est.deadtime_heat_s is not None
+            else "null"
+        )
+        cool_str = (
+            f"{int(dt_est.deadtime_cool_s)}s"
+            if dt_cool_ok and dt_est.deadtime_cool_s is not None
+            else "null"
+        )
+        parts = [f"step1 - deadtime: heat:{heat_str} cool:{cool_str}"]
+        if dt_heat_ok and nb_a > 0:
+            parts.append(f"[A:{nb_a}/{AB_MIN_SAMPLES_A}]")
+        if dt_cool_ok and nb_b > 0:
+            parts.append(f"[B:{nb_b}/{AB_MIN_SAMPLES_B}]")
+        return " ".join(parts)
+
+    # Step 2: both deadtimes acquired, collecting initial emeas
+    return f"step2 - collecting emeas: A:{nb_a}/{AB_MIN_SAMPLES_A} B:{nb_b}/{AB_MIN_SAMPLES_B}"
+
+
 def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the complete SmartPI diagnostics payload."""
     fftrim_last_result = _build_fftrim_result(
@@ -709,9 +770,9 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
 
     # --- Bootstrap / Learning Diagnostics ---
     # Only added if available (Hysteresis phase)
-    if algo.bootstrap_progress is not None:
-        diag["bootstrap_progress"] = algo.bootstrap_progress
-        diag["bootstrap_state"] = algo.bootstrap_state
+    if _bootstrap_progress(algo) is not None:
+        diag["bootstrap_progress"] = _bootstrap_progress(algo)
+        diag["bootstrap_state"] = _bootstrap_state(algo)
 
 
     # --- Thermal Twin / ETA (diagnostics-only) ---

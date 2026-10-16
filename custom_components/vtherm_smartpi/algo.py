@@ -954,57 +954,6 @@ class SmartPI:
         return self.gov.last_decision_gains.value
 
     @property
-    def bootstrap_progress(self) -> int | None:
-        """
-        Progress of the bootstrap (hysteresis) phase in percent (0-100).
-        Returns None if not in Hysteresis phase.
-        """
-        if self.phase != SmartPIPhase.HYSTERESIS:
-            return None
-
-        total_needed = AB_MIN_SAMPLES_A + AB_MIN_SAMPLES_B
-        current_count = min(len(self.est.a_meas_hist), AB_MIN_SAMPLES_A) + min(
-            len(self.est.b_meas_hist), AB_MIN_SAMPLES_B
-        )
-
-        pct = (current_count / total_needed) * 100.0
-        return int(clamp(pct, 0, 100))
-
-    @property
-    def bootstrap_state(self) -> str | None:
-        """
-        Detailed state message for the bootstrap process.
-        Returns None if not in Hysteresis phase.
-
-        Two steps:
-          step1: waiting for deadtimes (A/B collection blocked per mode)
-          step2: both deadtimes acquired, collecting initial emeas (<AB_MIN_SAMPLES_A/B)
-        The HYSTERESIS phase ends once both sample targets are reached.
-        """
-        if self.phase != SmartPIPhase.HYSTERESIS:
-            return None
-
-        nb_a = len(self.est.a_meas_hist)
-        nb_b = len(self.est.b_meas_hist)
-
-        dt_heat_ok = self.dt_est.deadtime_heat_reliable
-        dt_cool_ok = self.dt_est.deadtime_cool_reliable
-
-        # Step 1: at least one deadtime missing
-        if not (dt_heat_ok and dt_cool_ok):
-            heat_str = f"{int(self.dt_est.deadtime_heat_s)}s" if dt_heat_ok and self.dt_est.deadtime_heat_s is not None else "null"
-            cool_str = f"{int(self.dt_est.deadtime_cool_s)}s" if dt_cool_ok and self.dt_est.deadtime_cool_s is not None else "null"
-            parts = [f"step1 - deadtime: heat:{heat_str} cool:{cool_str}"]
-            if dt_heat_ok and nb_a > 0:
-                parts.append(f"[A:{nb_a}/{AB_MIN_SAMPLES_A}]")
-            if dt_cool_ok and nb_b > 0:
-                parts.append(f"[B:{nb_b}/{AB_MIN_SAMPLES_B}]")
-            return " ".join(parts)
-
-        # Step 2: both deadtimes acquired, collecting initial emeas
-        return f"step2 - collecting emeas: A:{nb_a}/{AB_MIN_SAMPLES_A} B:{nb_b}/{AB_MIN_SAMPLES_B}"
-
-    @property
     def last_i_mode(self) -> str:
         return self.ctl.last_i_mode
 
