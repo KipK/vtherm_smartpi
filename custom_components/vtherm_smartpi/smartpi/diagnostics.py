@@ -97,7 +97,6 @@ def _build_fftrim_result(result: Any | None) -> Dict[str, Any] | None:
         return round(float(value), digits) if value is not None else None
 
     return {
-        "admissible": bool(result.admissible),
         "reason": str(result.reason),
         "observation_mode": str(result.observation_mode),
         "duration_s": round(float(result.duration_s), 3),
@@ -115,13 +114,9 @@ def _build_fftrim_result(result: Any | None) -> Dict[str, Any] | None:
         "mean_p_power": optional_round(result.mean_p_power),
         "mean_i_power": optional_round(result.mean_i_power),
         "mean_visible_ff_power": optional_round(result.mean_visible_ff_power),
-        "mean_ki": optional_round(result.mean_ki),
         "mean_delivery_residual": optional_round(result.mean_delivery_residual),
         "physical_power_deficit": optional_round(result.physical_power_deficit),
         "decomposed_correction": optional_round(result.decomposed_correction),
-        "transfer_eligible": bool(result.transfer_eligible),
-        "transfer_reason": str(result.transfer_reason),
-        "transfer_quality": str(result.transfer_quality),
     }
 
 

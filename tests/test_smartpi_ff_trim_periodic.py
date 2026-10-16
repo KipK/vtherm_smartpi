@@ -398,7 +398,6 @@ def test_admissible_result_survives_stationary_collection_and_rejection() -> Non
     assert collecting["stationary"]["state"] == "collecting"
     assert collecting["stationary"]["measurement_count"] == 1
     assert collecting["stationary"]["alignment_delay_s"] == 120.0
-    assert collecting["last_result"]["admissible"] is True
     assert collecting["last_result"]["observation_mode"] == "periodic"
     assert collecting["last_result"]["correction"] == pytest.approx(-0.01)
     assert collecting["last_result"]["mean_causal_power"] == pytest.approx(0.04)
@@ -414,7 +413,6 @@ def test_admissible_result_survives_stationary_collection_and_rejection() -> Non
         == "stationary_context_rejected"
     )
     assert rejected["periodic"]["last_reject_reason"] == "cycle_not_closed"
-    assert rejected["last_result"]["admissible"] is True
     assert rejected["last_result"]["observation_mode"] == "periodic"
     assert rejected["last_result"]["measurement_count"] == 7
     assert rejected["last_result"]["mean_causal_power"] == pytest.approx(0.04)

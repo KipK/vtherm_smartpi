@@ -9,6 +9,10 @@ All notable changes to this project will be documented in this file.
   without waiting for the filtered error to be inside the near-band, which
   limits slow overshoots after setpoint steps. The guard cut, the guard kick
   and the automatic near-band sizing act in heating mode only (documented).
+- Diagnostics: the five `feedforward.fftrim.last_result` fields `admissible`, `mean_ki`,
+  `transfer_eligible`, `transfer_reason` and `transfer_quality` are removed from the
+  published diagnostics (no consumer; `admissible` was always `true`). The transfer
+  reason and quality stay available under `feedforward.fftrim.transfer`.
 - Diagnostics: the effective integral time `Ti = Kp / Ki` of the applied gains is
   published in minutes as `control.ti_min` (`None` when `Ki` is not positive)
   and shown in the diagnostic cards.

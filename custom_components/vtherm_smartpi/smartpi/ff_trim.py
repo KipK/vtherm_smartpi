@@ -127,7 +127,6 @@ class CausalFFTrimResult:
     mean_p_power: float | None = None
     mean_i_power: float | None = None
     mean_visible_ff_power: float | None = None
-    mean_ki: float | None = None
     mean_delivery_residual: float | None = None
     physical_power_deficit: float | None = None
     decomposed_correction: float | None = None
@@ -215,7 +214,6 @@ class _OwnershipStats:
     mean_ff3: float
     mean_p: float
     mean_i: float
-    mean_ki: float
     mean_model_power: float
     mean_committed_power: float
     max_delivery_residual: float
@@ -655,13 +653,11 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
         mean_p_power = None
         mean_i_power = None
         mean_visible_ff_power = None
-        mean_ki = None
         mean_delivery_residual = None
         if ownership_stats is not None:
             mean_p_power = ownership_stats.mean_p
             mean_i_power = ownership_stats.mean_i
             mean_visible_ff_power = ownership_stats.mean_visible_ff
-            mean_ki = ownership_stats.mean_ki
             mean_delivery_residual = mean_power - ownership_stats.mean_model_power
             transfer_quality = ownership_stats.quality
             if observation_mode == "stationary":
@@ -718,7 +714,6 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             mean_p_power=mean_p_power,
             mean_i_power=mean_i_power,
             mean_visible_ff_power=mean_visible_ff_power,
-            mean_ki=mean_ki,
             mean_delivery_residual=mean_delivery_residual,
             physical_power_deficit=physical_power_deficit,
             decomposed_correction=decomposed_correction,
@@ -855,7 +850,6 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             "mean_p_power": result.mean_p_power,
             "mean_i_power": result.mean_i_power,
             "mean_visible_ff_power": result.mean_visible_ff_power,
-            "mean_ki": result.mean_ki,
             "mean_delivery_residual": result.mean_delivery_residual,
             "physical_power_deficit": result.physical_power_deficit,
             "decomposed_correction": result.decomposed_correction,
@@ -1058,7 +1052,6 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             mean_ff3=_mean("ff3"),
             mean_p=_mean("p"),
             mean_i=_mean("i"),
-            mean_ki=_mean("ki"),
             mean_model_power=_mean("model"),
             mean_committed_power=_mean("committed"),
             max_delivery_residual=max(abs(value) for value in residual_values),

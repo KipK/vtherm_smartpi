@@ -562,7 +562,6 @@ def test_causal_observer_time_weights_asynchronous_ownership() -> None:
     assert result.mean_ff1 == pytest.approx(0.35)
     assert result.mean_p_power == pytest.approx(0.0866666667)
     assert result.mean_i_power == pytest.approx(0.2633333333)
-    assert result.mean_ki == pytest.approx(0.0266666667)
     assert result.mean_delivery_residual == pytest.approx(0.0)
 
 
