@@ -178,7 +178,11 @@ Reliability becomes true as soon as at least one valid measurement has been capt
 $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
 3. compute $K_i = K_p / \tau$,
-4. clamp the gains and apply governance freezes.
+4. clamp the gains ($K_p \in [0.10, 5.0]$, $K_i \in [0.001, 0.050]$) and apply governance freezes.
+
+With typical room dynamics ($\tau$ of several hours) $K_p / \tau$ falls below
+`KI_MIN = 0.001`, so the applied $K_i$ is usually the floor `KI_MIN`; the
+near-band taper of $K_i$ is clamped to the same floor.
 
 `GainScheduler.generation` counts the changes of the untapered model gains
 (IMC/SIMC or safe gains). It advances only while the gains are not frozen and

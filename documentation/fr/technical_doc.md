@@ -181,7 +181,12 @@ La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée
 $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
 3. calcul de $K_i = K_p / \tau$,
-4. bornage des gains puis application des gels de gouvernance.
+4. bornage des gains ($K_p \in [0.10, 5.0]$, $K_i \in [0.001, 0.050]$) puis application des gels de gouvernance.
+
+Avec une dynamique de pièce typique ($\tau$ de plusieurs heures), $K_p / \tau$
+passe sous `KI_MIN = 0.001` : le $K_i$ appliqué vaut donc généralement le
+plancher `KI_MIN`, et l'atténuation de $K_i$ près de la consigne est bornée par
+ce même plancher.
 
 `GainScheduler.generation` compte les changements des gains du modèle non
 atténués (IMC/SIMC ou gains de sécurité). Elle n'avance que tant que les gains
