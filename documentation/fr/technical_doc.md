@@ -483,7 +483,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
 | `deadband.py`          | deadband et near-band                                    |
 | `setpoint.py`          | trajectoire analytique de la référence P                    |
-| `integral_guard.py`    | garde de croissance positive de l'intégrale              |
+| `integral_guard.py`    | garde directionnelle de l'intégrale et maintien I:HOLD après reprise de fenêtre ou de délestage |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`                        |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator` : décomposition de commande figée des requêtes du scheduler, routage des résultats des observateurs de trim, transactions bumpless trim/intégrale à la frontière de cycle, état de transfert |
@@ -516,6 +516,7 @@ self.calibration_mgr = CalibrationManager(name)
 self.gain_scheduler = GainScheduler(name)
 self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
 self.integral_guard = SmartPIIntegralGuard(name)
+self.resume_hold = ResumeDeadtimeHold()
 self.dt_est = DeadTimeEstimator()
 self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()

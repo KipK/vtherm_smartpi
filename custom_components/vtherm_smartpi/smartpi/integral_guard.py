@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING, Callable
 
+from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
 from .const import (
     DEADBAND_HYSTERESIS,
     INTEGRAL_GUARD_RELEASE_ERROR_RATIO,
@@ -11,6 +13,11 @@ from .const import (
     INTEGRAL_GUARD_RELEASE_PERSISTENCE,
     INTEGRAL_GUARD_RELEASE_SLOPE_RATIO,
 )
+
+
+if TYPE_CHECKING:
+    from .controller import SmartPIController
+    from .deadtime_estimator import DeadTimeEstimator
 
 
 class IntegralGuardSource(str, Enum):
@@ -30,6 +37,18 @@ def integral_guard_release_error_threshold(deadband_c: float) -> float:
         max(deadband_c, 0.0) * INTEGRAL_GUARD_RELEASE_ERROR_RATIO,
         max(deadband_c, 0.0) + max(DEADBAND_HYSTERESIS, 0.0),
     )
+
+
+def signed_recovery_slope_h(
+    slope_h: float | None,
+    hvac_mode: VThermHvacMode | None,
+) -> float | None:
+    """Return a signed slope where positive means moving toward the target."""
+    if slope_h is None:
+        return None
+    if hvac_mode == VThermHvacMode_COOL:
+        return -float(slope_h)
+    return float(slope_h)
 
 
 @dataclass(slots=True)
@@ -174,3 +193,110 @@ class SmartPIIntegralGuard:
             not self._block_positive,
             self._source.value,
         )
+
+
+class ResumeDeadtimeHold:
+    """Temporary I:HOLD after a window or power-shedding resume.
+
+    The hold covers the active dead time of the resumed episode; afterwards the
+    directional integral guard is armed only when the residual error is still
+    large.
+    """
+
+    def __init__(self) -> None:
+        self.clear()
+
+    def clear(self) -> None:
+        """Drop any pending or running resume hold."""
+        self.source: IntegralGuardSource = IntegralGuardSource.NONE
+        self.started: bool = False
+
+    def start(self, source: IntegralGuardSource) -> None:
+        """Request a hold for the resume `source`; it starts on the next update."""
+        self.source = source
+        self.started = False
+
+    @property
+    def active(self) -> bool:
+        """Return True while a resume hold is pending or running."""
+        return self.source != IntegralGuardSource.NONE or self.started
+
+    @staticmethod
+    def _should_arm_guard_after_deadtime(
+        *,
+        error_i: float,
+        in_core_deadband: bool,
+        deadband_c: float,
+    ) -> bool:
+        """Return True when a post-deadtime residual error still justifies a guard."""
+        if in_core_deadband or error_i <= 0.0:
+            return False
+        return abs(error_i) > integral_guard_release_error_threshold(deadband_c)
+
+    def update(
+        self,
+        *,
+        error_i: float,
+        in_core_deadband: bool,
+        deadband_c: float,
+        hvac_mode: VThermHvacMode,
+        dt_est: DeadTimeEstimator,
+        ctl: SmartPIController,
+        guard: SmartPIIntegralGuard,
+        in_deadtime_window: Callable[[], bool],
+    ) -> None:
+        """Manage the temporary I:HOLD window after a window/shedding resume."""
+        source = self.source
+        if source == IntegralGuardSource.NONE:
+            return
+
+        active_deadtime_s, active_deadtime_reliable = (
+            dt_est.active_deadtime(hvac_mode)
+        )
+        active_deadtime_ready = (
+            active_deadtime_reliable
+            and active_deadtime_s is not None
+            and active_deadtime_s > 0.0
+        )
+        if not active_deadtime_ready:
+            if ctl.integral_hold_mode == source.value:
+                ctl.clear_integral_hold()
+            if self._should_arm_guard_after_deadtime(
+                error_i=error_i,
+                in_core_deadband=in_core_deadband,
+                deadband_c=deadband_c,
+            ):
+                guard.arm(source)
+            self.source = IntegralGuardSource.NONE
+            self.started = False
+            return
+
+        if not self.started:
+            ctl.start_integral_hold(source.value)
+
+        if in_deadtime_window():
+            self.started = True
+            return
+
+        if self.started:
+            if ctl.integral_hold_mode == source.value:
+                ctl.clear_integral_hold()
+            if self._should_arm_guard_after_deadtime(
+                error_i=error_i,
+                in_core_deadband=in_core_deadband,
+                deadband_c=deadband_c,
+            ):
+                guard.arm(source)
+            self.source = IntegralGuardSource.NONE
+            self.started = False
+            return
+
+        if not self._should_arm_guard_after_deadtime(
+            error_i=error_i,
+            in_core_deadband=in_core_deadband,
+            deadband_c=deadband_c,
+        ):
+            if ctl.integral_hold_mode == source.value:
+                ctl.clear_integral_hold()
+            self.source = IntegralGuardSource.NONE
+            self.started = False

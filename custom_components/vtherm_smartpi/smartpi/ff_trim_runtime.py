@@ -44,7 +44,6 @@ from .ff_trim import (
     FFTrimWindowProposal,
     prepare_bumpless_transfer,
 )
-from .integral_guard import IntegralGuardSource
 from .valve_curve import applied_output_deviates
 
 if TYPE_CHECKING:
@@ -214,10 +213,7 @@ class FFTrimCoordinator:
             flags.append("guard")
         if spi._setpoint_changed_in_cycle:
             flags.append("setpoint_changed")
-        if (
-            spi._resume_deadtime_hold_source != IntegralGuardSource.NONE
-            or spi._resume_deadtime_hold_started
-        ):
+        if spi.resume_hold.active:
             flags.append("recovery")
         if spi._last_forced_by_timing:
             flags.append("timing")
@@ -625,10 +621,7 @@ class FFTrimCoordinator:
             return "application_guard"
         if spi._setpoint_changed_in_cycle:
             return "application_setpoint_changed"
-        if (
-            spi._resume_deadtime_hold_source != IntegralGuardSource.NONE
-            or spi._resume_deadtime_hold_started
-        ):
+        if spi.resume_hold.active:
             return "application_recovery"
         if spi.ff3_state.active_cycle or abs(spi.ff3_state.u_cycle) > 1e-9:
             return "application_ff3"

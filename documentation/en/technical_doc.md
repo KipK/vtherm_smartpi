@@ -477,6 +477,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis                  |
 | `deadband.py`          | deadband and near-band                                      |
 | `setpoint.py`          | analytical setpoint trajectory for the P reference          |
+| `integral_guard.py`    | directional integral guard and the I:HOLD after a window or power-shedding resume |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration                           |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator`: frozen control decomposition of scheduler requests, routing of trim observer results, bumpless trim/integral transactions at the cycle boundary, transfer state |
@@ -509,6 +510,7 @@ self.calibration_mgr = CalibrationManager(name)
 self.gain_scheduler = GainScheduler(name)
 self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
 self.integral_guard = SmartPIIntegralGuard(name)
+self.resume_hold = ResumeDeadtimeHold()
 self.dt_est = DeadTimeEstimator()
 self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()

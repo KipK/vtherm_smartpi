@@ -115,8 +115,9 @@ from .smartpi.command_ownership import (
 from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.integral_guard import (
     IntegralGuardSource,
+    ResumeDeadtimeHold,
     SmartPIIntegralGuard,
-    integral_guard_release_error_threshold,
+    signed_recovery_slope_h,
 )
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
@@ -311,8 +312,7 @@ class SmartPI:
         self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
         self._ab_confidence = ABConfidence()
         self._last_restart_reason: str = "none"
-        self._resume_deadtime_hold_source: IntegralGuardSource = IntegralGuardSource.NONE
-        self._resume_deadtime_hold_started: bool = False
+        self.resume_hold = ResumeDeadtimeHold()
 
         # Last complete FFResult (used by diagnostics and on_cycle_completed)
         self._last_ff_result: FFResult | None = None
@@ -404,8 +404,7 @@ class SmartPI:
         self.fftrim_coord.reset_observation_runtime()
         self._ab_confidence.reset()
         self._last_restart_reason = "none"
-        self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-        self._resume_deadtime_hold_started = False
+        self.resume_hold.clear()
         self._last_integral_guard_mode = "off"
 
         _LOGGER.info("%s - SmartPI learning and history reset", self._name)
@@ -503,29 +502,6 @@ class SmartPI:
             "enabled" if enabled else "paused",
         )
 
-    @staticmethod
-    def _signed_recovery_slope_h(
-        slope_h: float | None,
-        hvac_mode: VThermHvacMode | None,
-    ) -> float | None:
-        """Return a signed slope where positive means moving toward the target."""
-        if slope_h is None:
-            return None
-        if hvac_mode == VThermHvacMode_COOL:
-            return -float(slope_h)
-        return float(slope_h)
-
-    def _arm_integral_guard(
-        self,
-        source: IntegralGuardSource,
-        *,
-        block_positive: bool = True,
-    ) -> None:
-        """Arm the directional integral guard for a recovery phase."""
-        if source == IntegralGuardSource.NONE:
-            return
-        self.integral_guard.arm(source, block_positive=block_positive)
-
     def _update_integral_guard(
         self,
         *,
@@ -543,81 +519,10 @@ class SmartPI:
             release_error=release_error,
             deadband_c=self.deadband_c,
             in_core_deadband=in_core_deadband,
-            signed_recovery_slope_h=self._signed_recovery_slope_h(slope_h, hvac_mode),
+            signed_recovery_slope_h=signed_recovery_slope_h(slope_h, hvac_mode),
         )
         self._last_integral_guard_mode = decision.mode_suffix
         return decision.block_positive, decision.block_negative, decision.mode_suffix
-
-    def _should_arm_recovery_guard_after_deadtime(
-        self,
-        *,
-        error_i: float,
-        in_core_deadband: bool,
-    ) -> bool:
-        """Return True when a post-deadtime residual error still justifies a guard."""
-        if in_core_deadband or error_i <= 0.0:
-            return False
-        return abs(error_i) > integral_guard_release_error_threshold(self.deadband_c)
-
-    def _update_resume_deadtime_hold(
-        self,
-        *,
-        error_i: float,
-        in_core_deadband: bool,
-        hvac_mode: VThermHvacMode,
-    ) -> None:
-        """Manage the temporary I:HOLD window after a window/shedding resume."""
-        source = self._resume_deadtime_hold_source
-        if source == IntegralGuardSource.NONE:
-            return
-
-        active_deadtime_s, active_deadtime_reliable = (
-            self.dt_est.active_deadtime(hvac_mode)
-        )
-        active_deadtime_ready = (
-            active_deadtime_reliable
-            and active_deadtime_s is not None
-            and active_deadtime_s > 0.0
-        )
-        if not active_deadtime_ready:
-            if self.ctl.integral_hold_mode == source.value:
-                self.ctl.clear_integral_hold()
-            if self._should_arm_recovery_guard_after_deadtime(
-                error_i=error_i,
-                in_core_deadband=in_core_deadband,
-            ):
-                self._arm_integral_guard(source)
-            self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-            self._resume_deadtime_hold_started = False
-            return
-
-        if not self._resume_deadtime_hold_started:
-            self.ctl.start_integral_hold(source.value)
-
-        if self.in_deadtime_window:
-            self._resume_deadtime_hold_started = True
-            return
-
-        if self._resume_deadtime_hold_started:
-            if self.ctl.integral_hold_mode == source.value:
-                self.ctl.clear_integral_hold()
-            if self._should_arm_recovery_guard_after_deadtime(
-                error_i=error_i,
-                in_core_deadband=in_core_deadband,
-            ):
-                self._arm_integral_guard(source)
-            self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-            self._resume_deadtime_hold_started = False
-            return
-
-        if not self._should_arm_recovery_guard_after_deadtime(
-            error_i=error_i,
-            in_core_deadband=in_core_deadband,
-        ):
-            if self.ctl.integral_hold_mode == source.value:
-                self.ctl.clear_integral_hold()
-            self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-            self._resume_deadtime_hold_started = False
 
     def update_learning(
         self,
@@ -1220,8 +1125,7 @@ class SmartPI:
         self.fftrim_coord.reset_observation_runtime()
         self._last_u_applied = 0.0
         self._last_restart_reason = "none"
-        self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-        self._resume_deadtime_hold_started = False
+        self.resume_hold.clear()
         self._last_integral_guard_mode = "reboot_reset"
         self.twin.load_state(state.get("twin_state", {}))
 
@@ -1322,8 +1226,7 @@ class SmartPI:
             self._current_cycle_start_monotonic = None
             self._t_heat_episode_start = None
             self._t_cool_episode_start = None
-            self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-            self._resume_deadtime_hold_started = False
+            self.resume_hold.clear()
             self._last_restart_reason = (
                 "window"
                 if off_reason == HVAC_OFF_REASON_WINDOW_DETECTION
@@ -1357,8 +1260,7 @@ class SmartPI:
             self._output_initialized = True
             self._last_calculate_time = None
             self._current_cycle_start_monotonic = None
-            self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-            self._resume_deadtime_hold_started = False
+            self.resume_hold.clear()
             self._last_restart_reason = "power_shedding"
             return True
 
@@ -1897,13 +1799,12 @@ class SmartPI:
             signed_sp_delta = target_temp - old_target_temp if old_target_temp is not None else 0.0
             if hvac_mode == VThermHvacMode_COOL:
                 signed_sp_delta = -signed_sp_delta
-            self._arm_integral_guard(
+            self.integral_guard.arm(
                 IntegralGuardSource.SETPOINT_CHANGE,
                 block_positive=(signed_sp_delta >= 0.0),
             )
             self.gov.on_cycle_start()
-            self._resume_deadtime_hold_source = IntegralGuardSource.NONE
-            self._resume_deadtime_hold_started = False
+            self.resume_hold.clear()
             # Large changes restart the error history; the integral is preserved.
             if abs(target_temp - old_target_temp) >= SETPOINT_MODE_DELTA_C:
                 new_error = float(target_temp - current_temp)
@@ -1920,10 +1821,9 @@ class SmartPI:
             }:
                 self.integral_guard.reset()
                 self._last_integral_guard_mode = "resume_pending"
-                self._resume_deadtime_hold_source = resume_guard_source
-                self._resume_deadtime_hold_started = False
+                self.resume_hold.start(resume_guard_source)
             else:
-                self._arm_integral_guard(resume_guard_source)
+                self.integral_guard.arm(resume_guard_source)
 
         # --- 4. Learning & Calibration ---
         if (
@@ -2028,16 +1928,21 @@ class SmartPI:
         )
         in_deadband_now = self.deadband_mgr.in_deadband
         in_core_deadband = self._tau_reliable and abs(error_i) < max(self.deadband_c, 0.0)
-        self._update_resume_deadtime_hold(
+        self.resume_hold.update(
             error_i=error_i,
             in_core_deadband=in_core_deadband,
+            deadband_c=self.deadband_c,
             hvac_mode=hvac_mode,
+            dt_est=self.dt_est,
+            ctl=self.ctl,
+            guard=self.integral_guard,
+            in_deadtime_window=lambda: self.in_deadtime_window,
         )
         if (
             self.sp_mgr.trajectory_active
             and self.sp_mgr.trajectory_source == "disturbance"
         ):
-            self._arm_integral_guard(IntegralGuardSource.DISTURBANCE_RECOVERY)
+            self.integral_guard.arm(IntegralGuardSource.DISTURBANCE_RECOVERY)
         trajectory_i_active = (
             self.sp_mgr.trajectory_active
             and self.sp_mgr.trajectory_phase in (TrajectoryPhase.TRACKING, TrajectoryPhase.RELEASE)

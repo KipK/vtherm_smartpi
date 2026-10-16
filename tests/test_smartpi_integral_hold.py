@@ -146,7 +146,7 @@ class TestIntegralHoldDuringDeadtime:
         assert pi.ctl.integral_hold_mode == IntegralGuardSource.WINDOW_RESUME.value
         assert pi.ctl.last_i_mode == "I:HOLD(window_resume)"
         assert pi.integral_guard.active is False
-        assert pi._resume_deadtime_hold_source == IntegralGuardSource.WINDOW_RESUME
+        assert pi.resume_hold.source == IntegralGuardSource.WINDOW_RESUME
 
         pi._t_heat_episode_start = time.monotonic()
         pi.calculate(
@@ -159,7 +159,7 @@ class TestIntegralHoldDuringDeadtime:
 
         assert pi.ctl.integral_hold_mode == IntegralGuardSource.WINDOW_RESUME.value
         assert pi.ctl.last_i_mode == "I:HOLD(window_resume)"
-        assert pi._resume_deadtime_hold_started is True
+        assert pi.resume_hold.started is True
 
         pi._t_heat_episode_start = time.monotonic() - 301.0
         pi.calculate(
@@ -173,8 +173,8 @@ class TestIntegralHoldDuringDeadtime:
         assert pi.ctl.integral_hold_mode == "none"
         assert pi.integral_guard.active is True
         assert pi.integral_guard.source == IntegralGuardSource.WINDOW_RESUME
-        assert pi._resume_deadtime_hold_source == IntegralGuardSource.NONE
-        assert pi._resume_deadtime_hold_started is False
+        assert pi.resume_hold.source == IntegralGuardSource.NONE
+        assert pi.resume_hold.started is False
 
     def test_window_resume_skips_guard_when_residual_error_is_already_small(self):
         """A small residual after deadtime must release the hold without arming the guard."""
@@ -213,8 +213,8 @@ class TestIntegralHoldDuringDeadtime:
 
         assert pi.ctl.integral_hold_mode == "none"
         assert pi.integral_guard.active is False
-        assert pi._resume_deadtime_hold_source == IntegralGuardSource.NONE
-        assert pi._resume_deadtime_hold_started is False
+        assert pi.resume_hold.source == IntegralGuardSource.NONE
+        assert pi.resume_hold.started is False
 
     def test_power_shedding_resume_uses_same_deadtime_hold_policy(self):
         """A power-shedding resume must reuse the same post-deadtime decision path."""
@@ -235,7 +235,7 @@ class TestIntegralHoldDuringDeadtime:
         assert pi.ctl.last_i_mode == "I:HOLD(power_shedding_resume)"
 
         pi._t_heat_episode_start = time.monotonic() - 301.0
-        pi._resume_deadtime_hold_started = True
+        pi.resume_hold.started = True
         pi.calculate(
             target_temp=20.0,
             current_temp=18.0,
