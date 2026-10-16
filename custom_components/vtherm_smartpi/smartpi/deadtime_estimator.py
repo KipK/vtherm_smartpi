@@ -15,7 +15,10 @@ from ..hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
 )
+from .const import TIN_HISTORY_MAX_SAMPLES, TIN_HISTORY_RETENTION_MIN
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
+
+_TIN_HISTORY_RETENTION_S = TIN_HISTORY_RETENTION_MIN * 60.0
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,11 +64,16 @@ class DeadTimeEstimator:
         # Raw measured temperature history for external access (SmartPI learning).
         # Learning slopes rely on the quantisation of raw measurements: their
         # robustness guard counts distinct value jumps, which a filtered signal
-        # would inflate.
-        self._tin_history: Deque[Tuple[float, float]] = deque(maxlen=300)
+        # would inflate. Both histories keep the samples of the last
+        # TIN_HISTORY_RETENTION_MIN minutes (see _append_history).
+        self._tin_history: Deque[Tuple[float, float]] = deque(
+            maxlen=TIN_HISTORY_MAX_SAMPLES
+        )
         # Filtered temperature history, used only by the dead time inflection
         # lookback so that it stays consistent with the trough/peak tracking.
-        self._tin_lp_history: Deque[Tuple[float, float]] = deque(maxlen=300)
+        self._tin_lp_history: Deque[Tuple[float, float]] = deque(
+            maxlen=TIN_HISTORY_MAX_SAMPLES
+        )
 
     @property
     def tin_history(self) -> Deque[Tuple[float, float]]:
@@ -76,13 +84,20 @@ class DeadTimeEstimator:
     def _append_history(
         history: Deque[Tuple[float, float]], now: float, value: float
     ) -> None:
-        """Append a sample when the value changed or 60 seconds elapsed."""
+        """Append a sample when the value changed or 60 seconds elapsed.
+
+        Samples older than TIN_HISTORY_RETENTION_MIN are dropped, so the
+        history spans that duration independently of the sensor update rate.
+        """
         # Performance/Redundancy Gate: only append if temperature changed
         # or if more than 60 seconds passed since the last sample.
         # This prevents redundant points from high-frequency heartbeat triggers
         # while preserving high-resolution inflection points during transitions.
         if not history or abs(value - history[-1][1]) > 0.001 or now - history[-1][0] >= 60.0:
             history.append((now, value))
+        oldest_kept = now - _TIN_HISTORY_RETENTION_S
+        while history and history[0][0] < oldest_kept:
+            history.popleft()
 
     def reset(self):
         """Reset estimator state."""

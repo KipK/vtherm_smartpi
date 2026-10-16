@@ -256,6 +256,13 @@ AB_B_OUTDOOR_TARGET_MARGIN_C = 2.0
 U_CV_MAX = 0.30            # Maximum accepted CV of power over the learning window
 U_CV_MIN_MEAN = 0.05       # Minimum mean(u) to compute CV (avoids division by ~0)
 
+# Indoor temperature histories of the dead time estimator (learning slopes and
+# dead time inflection lookback). Samples are kept by age so that a learning
+# window or a dead time detection (both bounded by 240 min) is fully covered
+# whatever the sensor update rate; the sample cap only bounds memory.
+TIN_HISTORY_RETENTION_MIN = DT_MAX_MIN + 60
+TIN_HISTORY_MAX_SAMPLES = 1800
+
 
 # --- SmartPI Near Band Defaults ---
 DEFAULT_NEAR_BAND_DEG = 0.40

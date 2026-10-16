@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Learning: the indoor temperature history used for the learning slopes and
+  the dead-time detection keeps the last 300 minutes of samples whatever the
+  sensor update rate. With a sensor reporting more than once a minute, a long
+  learning window used only its last samples (about 75 minutes at one report
+  every 15 s) while its start temperature referred to the whole window.
 - Dead time: the published `deadtime_heat_s` / `deadtime_cool_s` are the median
   of the last 6 detections of each channel instead of their mean, so a single
   aberrant detection (for example a response already under way at the power
