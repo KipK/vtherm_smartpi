@@ -27,18 +27,18 @@ if TYPE_CHECKING:
 
 def _effective_ff3_reason_disabled(algo: SmartPI) -> str:
     """Return an FF3 disabled reason consistent with the current runtime state."""
-    if algo._last_ff3_reason_disabled == "config_disabled":
+    if algo.ff3_state.reason_disabled == "config_disabled":
         return "config_disabled"
 
-    if algo._last_ff3_enabled or abs(algo.u_ff3) > 1e-9:
+    if algo.ff3_state.enabled or abs(algo.u_ff3) > 1e-9:
         return "none"
     if algo.deadband_mgr.in_deadband:
         return "deadband"
     if not algo.deadband_mgr.in_near_band:
         return "not_near_band"
-    if algo._last_ff3_reason_disabled in {"deadband", "not_near_band"}:
+    if algo.ff3_state.reason_disabled in {"deadband", "not_near_band"}:
         return "pending_cycle_boundary"
-    return algo._last_ff3_reason_disabled
+    return algo.ff3_state.reason_disabled
 
 
 def _build_ff3_status(diag: Dict[str, Any]) -> str:
@@ -603,21 +603,21 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "command_ownership": command_ownership,
         # Effective feed-forward and FF3
         "u_ff_eff": round(ff_result.u_ff_eff, 6) if ff_result else 0.0,
-        "ff3_enabled": algo._last_ff3_enabled,
+        "ff3_enabled": algo.ff3_state.enabled,
         "ff3_reason_disabled": _effective_ff3_reason_disabled(algo),
-        "ff3_selected_candidate": round(algo._last_ff3_selected_candidate, 6),
-        "ff3_horizon_cycles": algo._last_ff3_horizon_cycles,
-        "ff3_raw_reason_disabled": algo._last_ff3_raw_reason_disabled,
-        "ff3_deadtime_cycles": algo._last_ff3_deadtime_cycles,
-        "ff3_horizon_capped": algo._last_ff3_horizon_capped,
-        "ff3_action_sensitivity": round(algo._last_ff3_action_sensitivity, 6),
-        "ff3_prediction_quality": algo._last_ff3_prediction_quality,
-        "ff3_authority_factor": round(algo._last_ff3_authority_factor, 6),
-        "ff3_disturbance_active": algo._last_ff3_disturbance_active,
-        "ff3_disturbance_reason": algo._last_ff3_disturbance_reason,
-        "ff3_disturbance_kind": algo._last_ff3_disturbance_kind,
-        "ff3_residual_persistent": algo._last_ff3_residual_persistent,
-        "ff3_dynamic_coherent": algo._last_ff3_dynamic_coherent,
+        "ff3_selected_candidate": round(algo.ff3_state.selected_candidate, 6),
+        "ff3_horizon_cycles": algo.ff3_state.horizon_cycles,
+        "ff3_raw_reason_disabled": algo.ff3_state.raw_reason_disabled,
+        "ff3_deadtime_cycles": algo.ff3_state.deadtime_cycles,
+        "ff3_horizon_capped": algo.ff3_state.horizon_capped,
+        "ff3_action_sensitivity": round(algo.ff3_state.action_sensitivity, 6),
+        "ff3_prediction_quality": algo.ff3_state.prediction_quality,
+        "ff3_authority_factor": round(algo.ff3_state.authority_factor, 6),
+        "ff3_disturbance_active": algo.ff3_state.disturbance_active,
+        "ff3_disturbance_reason": algo.ff3_state.disturbance_reason,
+        "ff3_disturbance_kind": algo.ff3_state.disturbance_kind,
+        "ff3_residual_persistent": algo.ff3_state.residual_persistent,
+        "ff3_dynamic_coherent": algo.ff3_state.dynamic_coherent,
         "twin_status": twin_status,
         "ff3_twin_usable": ff3_twin_usable,
         "integral_hold_mode": algo.ctl.integral_hold_mode,

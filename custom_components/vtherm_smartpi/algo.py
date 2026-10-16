@@ -94,7 +94,7 @@ from .smartpi.deadband import DeadbandManager
 from .smartpi.calibration import CalibrationManager
 from .smartpi.gains import GainScheduler
 from .smartpi.feedforward import compute_ff, FFResult
-from .smartpi.ff3 import FF3Result, compute_ff3
+from .smartpi.ff3 import FF3Result, FF3RuntimeState, compute_ff3
 from .smartpi.ff3_eligibility import (
     build_ff3_disturbance_context,
 )
@@ -232,29 +232,11 @@ class SmartPI:
         self._last_u_pi: float = 0.0
         self._last_ff_reason: str = "ff_none"
         self._last_u_ff3: float = 0.0
-        self._u_ff3_cycle: float = 0.0
-        self._u_ff3_pending: float = 0.0
-        self._ff3_active_cycle: bool = False
-        self._ff3_pending_active: bool = False
+        self.ff3_state = FF3RuntimeState()
 
         self._cycle_boundary_pending: bool = True  # Force boundary on first run
         self._current_cycle_start_monotonic: float | None = None
 
-        self._last_ff3_enabled: bool = False
-        self._last_ff3_reason_disabled: str = "config_disabled"
-        self._last_ff3_selected_candidate: float = 0.0
-        self._last_ff3_horizon_cycles: int = 1
-        self._last_ff3_disturbance_active: bool = False
-        self._last_ff3_disturbance_reason: str = "none"
-        self._last_ff3_disturbance_kind: str = "none"
-        self._last_ff3_residual_persistent: bool = False
-        self._last_ff3_dynamic_coherent: bool = False
-        self._last_ff3_prediction_quality: str = "unavailable"
-        self._last_ff3_authority_factor: float = 0.0
-        self._last_ff3_deadtime_cycles: int = 0
-        self._last_ff3_horizon_capped: bool = False
-        self._last_ff3_action_sensitivity: float = 0.0
-        self._last_ff3_raw_reason_disabled: str = "config_disabled"
         self._tau_reliable: bool = False
         self._last_integral_guard_mode: str = "off"
 
@@ -352,23 +334,6 @@ class SmartPI:
         """Create the diagnostics-only thermal twin with its fixed settings."""
         return ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 
-    def _reset_ff3_runtime(self, reason: str) -> None:
-        """Clear the FF3 cycle command and its last decision, disabled for `reason`."""
-        self._u_ff3_cycle = 0.0
-        self._u_ff3_pending = 0.0
-        self._ff3_active_cycle = False
-        self._ff3_pending_active = False
-        self._last_ff3_enabled = False
-        self._last_ff3_reason_disabled = reason
-        self._last_ff3_selected_candidate = 0.0
-        self._last_ff3_horizon_cycles = 1
-        self._last_ff3_prediction_quality = "unavailable"
-        self._last_ff3_authority_factor = 0.0
-        self._last_ff3_deadtime_cycles = 0
-        self._last_ff3_horizon_capped = False
-        self._last_ff3_action_sensitivity = 0.0
-        self._last_ff3_raw_reason_disabled = reason
-
     def reset_learning(self) -> None:
         """Reset all learned parameters to defaults."""
         self.est.reset()
@@ -386,12 +351,8 @@ class SmartPI:
         self._last_u_pi = 0.0
         self._last_ff_reason = "ff_none"
         self._last_u_ff3 = 0.0
-        self._reset_ff3_runtime("reset")
-        self._last_ff3_disturbance_active = False
-        self._last_ff3_disturbance_reason = "none"
-        self._last_ff3_disturbance_kind = "none"
-        self._last_ff3_residual_persistent = False
-        self._last_ff3_dynamic_coherent = False
+        self.ff3_state.reset("reset")
+        self.ff3_state.clear_disturbance_context()
         self._last_u_cmd = 0.0
         self._last_u_limited = 0.0
         self._last_u_applied = 0.0
@@ -693,7 +654,7 @@ class SmartPI:
             current_temp=current_temp,
             ext_temp=ext_temp,
             u_active=u_active,
-            ff3_active=self._ff3_active_cycle,
+            ff3_active=self.ff3_state.active_cycle,
             estimator=self.est,
             dt_est=self.dt_est,
             governance=self.gov,
@@ -785,8 +746,7 @@ class SmartPI:
         """Commit applied actuator power and its ownership to the causal trace."""
         now = time.monotonic()
         if cycle_start:
-            self._u_ff3_cycle = self._u_ff3_pending
-            self._ff3_active_cycle = self._ff3_pending_active
+            self.ff3_state.start_cycle()
         linear_power = self._set_committed_actuator_output(actuator_power)
         valve = self._valve_mode_enabled
         ownership = FFTrimCoordinator.to_control_ownership_snapshot(
@@ -1407,7 +1367,7 @@ class SmartPI:
             self._set_linear_output(0.0)
             self._committed_on_percent = 0.0
             self._actuator_committed_on_percent = 0.0
-            self._reset_ff3_runtime("hvac_off")
+            self.ff3_state.reset("hvac_off")
             self.fftrim_coord.invalidate_context(
                 "hvac_off",
                 now_monotonic=time.monotonic(),
@@ -1440,7 +1400,7 @@ class SmartPI:
             self._set_linear_output(0.0)
             self._committed_on_percent = 0.0
             self._actuator_committed_on_percent = 0.0
-            self._reset_ff3_runtime("power_shedding")
+            self.ff3_state.reset("power_shedding")
             self.fftrim_coord.invalidate_context(
                 "power_shedding",
                 now_monotonic=time.monotonic(),
@@ -1549,7 +1509,7 @@ class SmartPI:
     ) -> float:
         """Return the FF3 value to inject in the current calculation."""
         if not cycle_boundary:
-            return self._u_ff3_cycle
+            return self.ff3_state.u_cycle
 
         ff3_context = build_ff3_disturbance_context(
             twin_diag=self._last_twin_diag,
@@ -1588,35 +1548,15 @@ class SmartPI:
             b=self.est.b,
             deadtime_heat_s=self.dt_est.deadtime_heat_s,
         )
-        self._u_ff3_pending = ff3_result.u_ff3_applied
-        self._ff3_pending_active = abs(ff3_result.u_ff3_applied) > 1e-9
-        self._last_ff3_enabled = ff3_result.enabled
-        self._last_ff3_reason_disabled = ff3_result.reason_disabled
-        self._last_ff3_selected_candidate = ff3_result.selected_candidate
-        self._last_ff3_horizon_cycles = ff3_result.horizon_cycles
-        self._last_ff3_disturbance_active = ff3_context.disturbance_active
-        self._last_ff3_disturbance_reason = ff3_context.reason
-        self._last_ff3_disturbance_kind = ff3_context.disturbance_kind
-        self._last_ff3_residual_persistent = ff3_context.residual_persistent
-        self._last_ff3_dynamic_coherent = ff3_context.dynamic_coherent
-        self._last_ff3_prediction_quality = ff3_context.prediction_quality
-        self._last_ff3_authority_factor = ff3_context.authority_factor
-        self._last_ff3_raw_reason_disabled = ff3_result.reason_disabled
-        self._last_ff3_deadtime_cycles = ff3_result.deadtime_cycles
-        self._last_ff3_horizon_capped = ff3_result.horizon_capped
-        self._last_ff3_action_sensitivity = ff3_result.action_sensitivity
-        return self._u_ff3_pending
+        return self.ff3_state.record(ff3_result, ff3_context)
 
     def _disable_ff3_for_next_cycle_in_deadband(self) -> None:
         """Keep the current FF3 contribution but prevent it from being reused next cycle."""
-        if abs(self._u_ff3_pending) > 1e-9 or self._ff3_pending_active:
+        if self.ff3_state.disable_pending():
             _LOGGER.debug(
                 "%s - Deadband active: disabling pending FF3 for the next cycle",
                 self._name,
             )
-
-        self._u_ff3_pending = 0.0
-        self._ff3_pending_active = False
 
     def _manage_setpoint(
         self,

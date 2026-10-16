@@ -10,7 +10,7 @@ FF3 is a conservative pseudo-MPC layer:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..hvac_mode import VThermHvacMode_HEAT
 from .const import (
@@ -34,6 +34,9 @@ from .ff3_predictor import (
     predict_ff3_open_loop,
 )
 from .thermal_twin_1r1c import ThermalTwin1R1C
+
+if TYPE_CHECKING:
+    from .ff3_eligibility import FF3DisturbanceContext
 
 
 @dataclass(frozen=True)
@@ -316,3 +319,73 @@ def compute_ff3(
         action_sensitivity=action_sensitivity,
         prediction_quality=prediction_quality,
     )
+
+
+class FF3RuntimeState:
+    """FF3 command latched per scheduler cycle and its last cycle-boundary decision.
+
+    The value computed at a cycle boundary stays pending until the scheduler
+    starts the next cycle, then applies over that whole cycle.
+    """
+
+    def __init__(self) -> None:
+        self.reset("config_disabled")
+        self.clear_disturbance_context()
+
+    def reset(self, reason: str) -> None:
+        """Clear the FF3 cycle command and its last decision, disabled for `reason`."""
+        self.u_cycle: float = 0.0
+        self.u_pending: float = 0.0
+        self.active_cycle: bool = False
+        self.pending_active: bool = False
+        self.enabled: bool = False
+        self.reason_disabled: str = reason
+        self.selected_candidate: float = 0.0
+        self.horizon_cycles: int = 1
+        self.prediction_quality: str = "unavailable"
+        self.authority_factor: float = 0.0
+        self.deadtime_cycles: int = 0
+        self.horizon_capped: bool = False
+        self.action_sensitivity: float = 0.0
+        self.raw_reason_disabled: str = reason
+
+    def clear_disturbance_context(self) -> None:
+        """Clear the last disturbance context seen at a cycle boundary."""
+        self.disturbance_active: bool = False
+        self.disturbance_reason: str = "none"
+        self.disturbance_kind: str = "none"
+        self.residual_persistent: bool = False
+        self.dynamic_coherent: bool = False
+
+    def start_cycle(self) -> None:
+        """Latch the pending FF3 command for the cycle the scheduler starts."""
+        self.u_cycle = self.u_pending
+        self.active_cycle = self.pending_active
+
+    def record(self, result: FF3Result, context: FF3DisturbanceContext) -> float:
+        """Store a cycle-boundary decision as pending and return its FF3 value."""
+        self.u_pending = result.u_ff3_applied
+        self.pending_active = abs(result.u_ff3_applied) > 1e-9
+        self.enabled = result.enabled
+        self.reason_disabled = result.reason_disabled
+        self.selected_candidate = result.selected_candidate
+        self.horizon_cycles = result.horizon_cycles
+        self.disturbance_active = context.disturbance_active
+        self.disturbance_reason = context.reason
+        self.disturbance_kind = context.disturbance_kind
+        self.residual_persistent = context.residual_persistent
+        self.dynamic_coherent = context.dynamic_coherent
+        self.prediction_quality = context.prediction_quality
+        self.authority_factor = context.authority_factor
+        self.raw_reason_disabled = result.reason_disabled
+        self.deadtime_cycles = result.deadtime_cycles
+        self.horizon_capped = result.horizon_capped
+        self.action_sensitivity = result.action_sensitivity
+        return self.u_pending
+
+    def disable_pending(self) -> bool:
+        """Drop the pending FF3 command; return True when one was pending."""
+        was_pending = abs(self.u_pending) > 1e-9 or self.pending_active
+        self.u_pending = 0.0
+        self.pending_active = False
+        return was_pending

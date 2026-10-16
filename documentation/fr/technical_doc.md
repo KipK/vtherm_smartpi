@@ -490,7 +490,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `command_ownership.py` | identifiants de requête, snapshots figés et rattachement des reçus de commande appliquée du scheduler |
 | `ff_trim_periodic.py`  | sélection de fenêtres d’équilibre périodique par phase   |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |
-| `ff3.py`               | correction prédictive bornée FF3                         |
+| `ff3.py`               | correction prédictive bornée FF3 et son état d’exécution par cycle (`FF3RuntimeState`) |
 | `governance.py`        | décisions de gel                                         |
 | `calibration.py`       | FSM de calibration forcée                                |
 | `autocalib.py`         | supervision et déclenchement automatique                 |
@@ -520,6 +520,7 @@ self.dt_est = DeadTimeEstimator()
 self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()
 self.autocalib = AutoCalibTrigger(name)
+self.ff3_state = FF3RuntimeState()
 self._ff_trim = FFTrim()
 self._fftrim_observer = CausalFFTrimObserver(cycle_min, self._causal_power_trace)
 self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)

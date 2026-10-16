@@ -555,18 +555,18 @@ async def test_smartpi_ff3_is_latched_on_cycle_start():
         use_ff3=True,
     )
 
-    algo._u_ff3_pending = 0.05
-    algo._ff3_pending_active = True
+    algo.ff3_state.u_pending = 0.05
+    algo.ff3_state.pending_active = True
 
-    assert algo._u_ff3_cycle == 0.0
-    assert algo._ff3_active_cycle is False
+    assert algo.ff3_state.u_cycle == 0.0
+    assert algo.ff3_state.active_cycle is False
 
     await algo.on_cycle_started(300.0, 300.0, 0.4, VThermHvacMode_HEAT)
 
-    assert algo._u_ff3_cycle == pytest.approx(0.05)
-    assert algo._ff3_active_cycle is True
-    assert algo._last_ff3_deadtime_cycles == 0
-    assert algo._last_ff3_horizon_capped is False
+    assert algo.ff3_state.u_cycle == pytest.approx(0.05)
+    assert algo.ff3_state.active_cycle is True
+    assert algo.ff3_state.deadtime_cycles == 0
+    assert algo.ff3_state.horizon_capped is False
 
 @pytest.mark.asyncio
 async def test_smartpi_power_stability_abort():

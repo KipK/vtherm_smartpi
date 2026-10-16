@@ -483,7 +483,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `command_ownership.py` | request identifiers, frozen snapshots and binding of the scheduler applied-command receipts |
 | `ff_trim_periodic.py`  | phase-closed periodic-equilibrium window selection          |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
-| `ff3.py`               | bounded FF3 predictive correction                           |
+| `ff3.py`               | bounded FF3 predictive correction and its per-cycle runtime state (`FF3RuntimeState`) |
 | `governance.py`        | freeze decisions                                            |
 | `calibration.py`       | forced-calibration FSM                                      |
 | `autocalib.py`         | supervision and automatic triggering                        |
@@ -513,6 +513,7 @@ self.dt_est = DeadTimeEstimator()
 self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()
 self.autocalib = AutoCalibTrigger(name)
+self.ff3_state = FF3RuntimeState()
 self._ff_trim = FFTrim()
 self._fftrim_observer = CausalFFTrimObserver(cycle_min, self._causal_power_trace)
 self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)

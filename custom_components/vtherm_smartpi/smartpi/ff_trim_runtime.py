@@ -630,7 +630,7 @@ class FFTrimCoordinator:
             or spi._resume_deadtime_hold_started
         ):
             return "application_recovery"
-        if spi._ff3_active_cycle or abs(spi._u_ff3_cycle) > 1e-9:
+        if spi.ff3_state.active_cycle or abs(spi.ff3_state.u_cycle) > 1e-9:
             return "application_ff3"
         if spi._last_forced_by_timing:
             return "application_timing"
@@ -766,7 +766,7 @@ class FFTrimCoordinator:
             hvac_mode=mode,
             saturated=spi.ctl.last_sat != "NO_SAT",
             trajectory_active=spi.sp_mgr.trajectory_active,
-            ff3_active=spi._ff3_active_cycle,
+            ff3_active=spi.ff3_state.active_cycle,
             setpoint_changed=setpoint_changed,
             outside_temperature_available=(
                 measurement.outside_temperature is not None
