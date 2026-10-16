@@ -37,6 +37,7 @@
 {% set restart_reason = control.get('restart_reason', 'none') %}
 {% set kp = control.get('kp') %}
 {% set ki = control.get('ki') %}
+{% set ti_min = control.get('ti_min') %}
 {% set t_in = temp.get('indoor') %}
 {% set t_set = state_attr(climate_entity, 'temperature') %}
 {% set c_attrs = states[climate_entity].attributes if states(climate_entity) else {} %}
@@ -576,6 +577,7 @@
 {% endif -%}
 | `Kp` | {% if kp is not none %}{{ kp | float | round(4) }}{% else %}—{% endif %} |
 | `Ki` | {% if ki is not none %}{{ ki | float | round(5) }}{% else %}—{% endif %} |
+| `Ti` | {% if ti_min is not none %}{{ ti_min | float | round(0) | int }} min{% else %}—{% endif %} |
 {% if has_analysis -%}
 | `tau` | {% if tau_s is not none %}{{ tau_s | float | round(1) }} min{% else %}—{% endif %} |
 | `kp_source` | `{{ kp_src }}` |

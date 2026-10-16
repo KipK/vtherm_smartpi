@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Diagnostics: the effective integral time `Ti = Kp / Ki` of the applied gains is
+  published in minutes as `control.ti_min` (`None` when `Ki` is not positive)
+  and shown in the diagnostic cards.
 - Automatic calibration: a calibration is judged on the parameters that
   triggered it (`a`, `b`, dead times; a manual request on the dead times), `b`
   is only monitored when the indoor-outdoor gradient and the outdoor

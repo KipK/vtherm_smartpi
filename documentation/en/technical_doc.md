@@ -184,6 +184,14 @@ With typical room dynamics ($\tau$ of several hours) $K_p / \tau$ falls below
 `KI_MIN = 0.001`, so the applied $K_i$ is usually the floor `KI_MIN`; the
 near-band taper of $K_i$ is clamped to the same floor.
 
+The effective integral time $T_i = K_p / K_i$ of the applied gains is published
+in minutes as `control.ti_min` (`None` when $K_i \le 0$). With $K_i$ on the
+floor, $T_i$ still follows the room inertia through $K_p$
+($K_p = 1 / (|a| (\lambda + L))$ grows with $\tau$): bench values are about
+146 min for $\tau \approx 3$ h, 247 min for $\tau \approx 5$ h and 390 min for
+$\tau \approx 8$ h. In a fast room ($\tau \approx 1$ h), $K_p / \tau$ is above the
+floor and $K_i$ follows the model.
+
 `GainScheduler.generation` counts the changes of the untapered model gains
 (IMC/SIMC or safe gains). It advances only while the gains are not frozen and
 is not advanced by the near-band taper. The periodic FF-trim window rejects a

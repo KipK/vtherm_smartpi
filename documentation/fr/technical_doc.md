@@ -188,6 +188,14 @@ passe sous `KI_MIN = 0.001` : le $K_i$ appliqué vaut donc généralement le
 plancher `KI_MIN`, et l'atténuation de $K_i$ près de la consigne est bornée par
 ce même plancher.
 
+Le temps intégral effectif $T_i = K_p / K_i$ des gains appliqués est publié en
+minutes dans `control.ti_min` (`None` quand $K_i \le 0$). Avec $K_i$ sur le
+plancher, $T_i$ suit tout de même l'inertie de la pièce par $K_p$
+($K_p = 1 / (|a| (\lambda + L))$ croît avec $\tau$) : les valeurs de banc sont
+d'environ 146 min pour $\tau \approx 3$ h, 247 min pour $\tau \approx 5$ h et
+390 min pour $\tau \approx 8$ h. Dans une pièce rapide ($\tau \approx 1$ h),
+$K_p / \tau$ est au-dessus du plancher et $K_i$ suit le modèle.
+
 `GainScheduler.generation` compte les changements des gains du modèle non
 atténués (IMC/SIMC ou gains de sécurité). Elle n'avance que tant que les gains
 ne sont pas gelés et n'est pas avancée par l'atténuation en bande proche. La

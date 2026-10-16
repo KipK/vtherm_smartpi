@@ -285,6 +285,13 @@ def _build_analysis_diagnostics(diag: Dict[str, Any]) -> Dict[str, Any]:
     return analysis
 
 
+def _integral_time_min(kp: float, ki: float) -> float | None:
+    """Return the effective integral time Kp / Ki in minutes, None when Ki <= 0."""
+    if ki is None or kp is None or ki <= 0.0:
+        return None
+    return round(kp / ki, 1)
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the canonical SmartPI live diagnostics."""
     diag = _build_full_diagnostics(algo)
@@ -296,6 +303,7 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             "hysteresis_state": diag["hysteresis_state"],
             "kp": diag["Kp"],
             "ki": diag["Ki"],
+            "ti_min": _integral_time_min(diag["Kp"], diag["Ki"]),
             "restart_reason": diag["restart_reason"],
             "saturation_state": diag["sat"],
             "in_deadband": diag["in_deadband"],

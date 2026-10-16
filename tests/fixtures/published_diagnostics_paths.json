@@ -121,6 +121,7 @@
   "control.phase",
   "control.restart_reason",
   "control.saturation_state",
+  "control.ti_min",
   "feedforward",
   "feedforward.deadband_p_mode",
   "feedforward.deadband_power_source",

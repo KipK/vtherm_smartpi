@@ -47,7 +47,7 @@ Le bloc `live` est organisé par responsabilité :
 
 | Bloc | Contenu |
 |---|---|
-| `control` | Phase, mode, gains, saturation et bandes de régulation |
+| `control` | Phase, mode, gains (`kp`, `ki`), temps intégral effectif `ti_min` (minutes), saturation et bandes de régulation |
 | `power` | Puissances du cycle courant et suivant, PI/FF, limites et puissance appliquée |
 | `temperature` | Températures intérieure/extérieure, erreurs et état de l'intégrale |
 | `model` | Modèle A/B, confiance, constante de temps et temps morts |

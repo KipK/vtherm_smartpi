@@ -47,7 +47,7 @@ The `live` block is organized by responsibility:
 
 | Block | Content |
 |---|---|
-| `control` | Phase, regulation mode, gains, saturation and regulation bands |
+| `control` | Phase, regulation mode, gains (`kp`, `ki`), effective integral time `ti_min` (minutes), saturation and regulation bands |
 | `power` | Current and next-cycle power, PI/FF split, limits and applied power |
 | `temperature` | Indoor/outdoor temperatures, errors and integral state |
 | `model` | A/B model, confidence, time constant and dead times |

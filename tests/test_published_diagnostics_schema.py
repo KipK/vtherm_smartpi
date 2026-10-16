@@ -96,3 +96,15 @@ def test_published_diagnostics_key_paths_match_fixture() -> None:
         f"Published diagnostics paths changed. Missing: {missing}. "
         f"Unexpected: {unexpected}."
     )
+
+
+def test_published_integral_time_follows_applied_gains() -> None:
+    """ti_min is Kp / Ki in minutes, None when Ki is not positive."""
+    algo = _representative_smartpi()
+
+    algo.Kp = 0.5
+    algo.Ki = 0.004
+    assert algo.get_published_diagnostics()["control"]["ti_min"] == 125.0
+
+    algo.Ki = 0.0
+    assert algo.get_published_diagnostics()["control"]["ti_min"] is None
