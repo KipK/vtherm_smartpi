@@ -282,6 +282,9 @@ Useful points to know:
 - a reference snapshot is stored once the model becomes reliable,
 - a rolling snapshot is refreshed over time,
 - if cooling dead time cannot be learned for a long time, SmartPI can still continue with a partial snapshot,
+- a recalibration is judged on the parameters that triggered it; the outdoor-dependent `b` is only monitored when the weather allows it to be learned,
+- a failed attempt is retried after about 6 hours,
+- if the room cannot reach a calibration threshold (for example when it is warm outside), the cycle stops at once, no attempt is counted and the next one waits 24 hours,
 - after repeated unsuccessful recalibration attempts, SmartPI continues to run and reports a degraded model in diagnostics.
 
 ## Recommended settings

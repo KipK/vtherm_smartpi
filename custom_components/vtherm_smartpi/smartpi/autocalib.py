@@ -25,6 +25,8 @@ from .const import (
     AUTOCALIB_MAX_RETRIES,
     AUTOCALIB_RETRY_DELAY_H,
     AUTOCALIB_EXIT_NEW_OBS_MIN,
+    AB_B_MIN_PASSIVE_GRADIENT_C,
+    AB_B_OUTDOOR_TARGET_MARGIN_C,
     GovernanceRegime,
     SmartPIPhase,
     SmartPICalibrationPhase,
@@ -90,7 +92,9 @@ class AutoCalibTrigger:
         self._triggered_params: list[str] = []
 
         # Schedule helpers
-        self._next_check_ts: float | None = None          # wall-clock
+        # Earliest wall-clock time of the next scheduled trigger (retry or
+        # retry after an unreachable cycle); None when nothing is scheduled
+        self._next_check_ts: float | None = None
         self._last_hourly_check_ts: float | None = None   # wall-clock
 
         # Post-calib tracking
@@ -376,11 +380,12 @@ class AutoCalibTrigger:
             )
             return None
 
-        # Snapshot must be old enough (≥ 5 days)
+        # Snapshot must be old enough (≥ 5 days), unless a re-trigger is scheduled
         if self._snapshot_ts is None:
             return None
+        scheduled = self._next_check_ts is not None
         snap_age_h = (now_wall - self._snapshot_ts) / 3600.0
-        if snap_age_h < AUTOCALIB_SNAPSHOT_PERIOD_H:
+        if snap_age_h < AUTOCALIB_SNAPSHOT_PERIOD_H and not scheduled:
             _LOGGER.debug(
                 "%s - AutoCalib: snapshot too recent (%.1fh < %dh), skipping",
                 self._name, snap_age_h, AUTOCALIB_SNAPSHOT_PERIOD_H,
@@ -392,6 +397,13 @@ class AutoCalibTrigger:
         if stagnating:
             # Trigger calibration
             return self._do_trigger(now_wall, algo, stagnating)
+
+        if scheduled:
+            # The stagnation that required the scheduled re-trigger is gone
+            self._next_check_ts = None
+            self._retry_count = 0
+            if snap_age_h < AUTOCALIB_SNAPSHOT_PERIOD_H:
+                return None
 
         # §4.0.3 Rolling snapshot check (5-day period from last significant event)
         # If we reached here, age >= 120h and we are NOT stagnating. The model is progressing healthily.
@@ -423,6 +435,12 @@ class AutoCalibTrigger:
         regime = algo.gov.regime
         if regime == GovernanceRegime.PERTURBED:
             return False, "perturbed_regime"
+
+        # A scheduled re-trigger replaces the cooldown with its own delay
+        if self._next_check_ts is not None:
+            if now_wall < self._next_check_ts:
+                return False, f"retry_delay ({(self._next_check_ts - now_wall) / 3600.0:.1f}h left)"
+            return True, "ok"
 
         # Cooldown: no calibration within last 24h
         if self._last_trigger_ts is not None:
@@ -484,11 +502,17 @@ class AutoCalibTrigger:
         converged_b = tau_rel and mad_b is not None and mad_b < 0.20
 
         if no_progress_b and poor_quality_b and not converged_b:
-            _LOGGER.debug(
-                "%s - AutoCalib: stagnation detected on 'b' (delta=%d, tau_rel=%s, mad=%.3f)",
-                self._name, count_b_delta, tau_rel, mad_b if mad_b is not None else -1,
-            )
-            stagnating.append("b")
+            if not self._b_learnable(algo, ext_temp, current_temp):
+                _LOGGER.debug(
+                    "%s - AutoCalib: 'b' stagnant but passive gradient insufficient — no trigger",
+                    self._name,
+                )
+            else:
+                _LOGGER.debug(
+                    "%s - AutoCalib: stagnation detected on 'b' (delta=%d, tau_rel=%s, mad=%.3f)",
+                    self._name, count_b_delta, tau_rel, mad_b if mad_b is not None else -1,
+                )
+                stagnating.append("b")
 
         # --- Deadtime heat (§4.2) ---
         if not algo.dt_est.deadtime_heat_reliable and not self._snap_dt_heat_ok:
@@ -528,12 +552,29 @@ class AutoCalibTrigger:
 
         return stagnating
 
+    @staticmethod
+    def _b_learnable(algo: "SmartPI", ext_temp: float | None, current_temp: float | None) -> bool:
+        """True when the passive gradient allows `b` to be learned (same limits as the learning window)."""
+        if ext_temp is None or current_temp is None:
+            return False
+        target = algo._last_target_temp
+        if algo._last_hvac_mode == VThermHvacMode_COOL:
+            return (
+                ext_temp - current_temp >= AB_B_MIN_PASSIVE_GRADIENT_C
+                and (target is None or ext_temp >= target + AB_B_OUTDOOR_TARGET_MARGIN_C)
+            )
+        return (
+            current_temp - ext_temp >= AB_B_MIN_PASSIVE_GRADIENT_C
+            and (target is None or ext_temp <= target - AB_B_OUTDOOR_TARGET_MARGIN_C)
+        )
+
     def _do_trigger(
         self, now_wall: float, algo: "SmartPI", triggered_params: list[str]
     ) -> AutoCalibEvent:
         """§4.3 — Trigger calibration and update state."""
         self._triggered_params = list(triggered_params)
         self._last_trigger_ts = now_wall
+        self._next_check_ts = None
         # Store learn counts at trigger start for post-calib comparison
         self._post_calib_snap_a = algo.est.learn_ok_count_a
         self._post_calib_snap_b = algo.est.learn_ok_count_b
@@ -600,7 +641,26 @@ class AutoCalibTrigger:
             # Revert to waiting/idle to not penalize the model for an external interrupt (HVAC OFF, manual cancellation...)
             self._state = AutoCalibState.WAITING_SNAPSHOT
             self._triggered_params = []
+            self._next_check_ts = None
             return None
+
+        if result == SmartPICalibrationResult.UNREACHABLE:
+            # A threshold the model cannot reach says nothing about the estimates:
+            # no retry is consumed and the next attempt waits for the cooldown
+            self._state = AutoCalibState.MONITORING
+            self._next_check_ts = now_wall + AUTOCALIB_COOLDOWN_H * 3600.0
+            _LOGGER.warning(
+                "%s - AutoCalib: calibration thresholds unreachable (params=%s), next attempt after %dh",
+                self._name, self._triggered_params, AUTOCALIB_COOLDOWN_H,
+            )
+            return AutoCalibEvent(
+                event_type="smartpi_autocalib_unreachable",
+                payload={
+                    "name": self._name,
+                    "triggered_params": list(self._triggered_params),
+                    "retry_count": self._retry_count,
+                },
+            )
 
         return self._check_post_calib(now_wall, algo)
 
@@ -624,17 +684,26 @@ class AutoCalibTrigger:
             or self._snap_dt_cool_unavailable  # winter fallback active
         )
 
-        all_ok = criteria_a and criteria_b and criteria_dt_heat and criteria_dt_cool
+        criteria = {
+            "a": criteria_a,
+            "b": criteria_b,
+            "deadtime_heat": criteria_dt_heat,
+            "deadtime_cool": criteria_dt_cool,
+        }
+        # Only the parameters that triggered the calibration are required; a
+        # manual request is judged on the dead times the cycle measures.
+        required = [p for p in self._triggered_params if p in criteria] or [
+            "deadtime_heat", "deadtime_cool",
+        ]
+        all_ok = all(criteria[p] for p in required)
 
-        missing = []
-        if not criteria_a:
-            missing.append(f"a(new={new_a}<{AUTOCALIB_EXIT_NEW_OBS_MIN})")
-        if not criteria_b:
-            missing.append(f"b(new={new_b}<{AUTOCALIB_EXIT_NEW_OBS_MIN})")
-        if not criteria_dt_heat:
-            missing.append("deadtime_heat")
-        if not criteria_dt_cool:
-            missing.append("deadtime_cool")
+        details = {
+            "a": f"a(new={new_a}<{AUTOCALIB_EXIT_NEW_OBS_MIN})",
+            "b": f"b(new={new_b}<{AUTOCALIB_EXIT_NEW_OBS_MIN})",
+            "deadtime_heat": "deadtime_heat",
+            "deadtime_cool": "deadtime_cool",
+        }
+        missing = [details[p] for p in required if not criteria[p]]
 
         if all_ok:
             # §5.1 Positive exit
@@ -643,13 +712,7 @@ class AutoCalibTrigger:
             self._take_snapshot(now_wall, algo, reason="post_calib")
             self._state = AutoCalibState.MONITORING
 
-            improved = [
-                p for p in self._triggered_params
-                if (p == "a" and criteria_a)
-                or (p == "b" and criteria_b)
-                or (p == "deadtime_heat" and criteria_dt_heat)
-                or (p == "deadtime_cool" and criteria_dt_cool)
-            ]
+            improved = [p for p in self._triggered_params if criteria.get(p)]
 
             _LOGGER.info(
                 "%s - AutoCalib: positive exit (improved=%s)", self._name, improved
@@ -668,13 +731,10 @@ class AutoCalibTrigger:
 
         if self._retry_count < AUTOCALIB_MAX_RETRIES:
             # Schedule retry
-            retry_ts = now_wall + AUTOCALIB_RETRY_DELAY_H * 3600.0
-            self._next_check_ts = retry_ts
-            self._state = AutoCalibState.MONITORING  # will re-trigger at next check
-            # Force snapshot_ts to be old enough to re-trigger in AUTOCALIB_RETRY_DELAY_H
-            self._snapshot_ts = now_wall - (AUTOCALIB_SNAPSHOT_PERIOD_H * 3600.0)
-            # Override last_trigger_ts to enforce cooldown = retry delay
-            self._last_trigger_ts = now_wall - (AUTOCALIB_COOLDOWN_H * 3600.0)
+            # The retry is guarded by _next_check_ts instead of the cooldown
+            # and does not wait for the snapshot period.
+            self._next_check_ts = now_wall + AUTOCALIB_RETRY_DELAY_H * 3600.0
+            self._state = AutoCalibState.MONITORING
 
             _LOGGER.warning(
                 "%s - AutoCalib: partial exit (retry %d/%d, missing=%s)",
@@ -727,6 +787,7 @@ class AutoCalibTrigger:
             effective_dt_cool_unavail = True
 
         self._snapshot_ts = now_wall
+        self._next_check_ts = None
         self._snap_ok_count_a = algo.est.learn_ok_count_a
         self._snap_ok_count_b = algo.est.learn_ok_count_b
         self._snap_dt_heat_ok = algo.dt_est.deadtime_heat_reliable

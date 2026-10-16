@@ -420,21 +420,26 @@ Implemented behavior:
 - hourly check loop,
 - cooldown guard `AUTOCALIB_COOLDOWN_H = 24` hours,
 - stagnation thresholds `AUTOCALIB_A_MAD_THRESHOLD = 0.25` and `AUTOCALIB_B_MAD_THRESHOLD = 0.30`,
-- positive exit only after at least `AUTOCALIB_EXIT_NEW_OBS_MIN = 1` new observation on both `a` and `b`, plus coherent dead times,
+- `b` stagnation is only evaluated while `b` can be learned: the indoor-outdoor gradient is at least `AB_B_MIN_PASSIVE_GRADIENT_C` and the outdoor temperature is at least `AB_B_OUTDOOR_TARGET_MARGIN_C` away from the setpoint on the passive side (below it in HEAT, above it in COOL), the limits of the learning window; without an outdoor or indoor temperature `b` is not evaluated,
+- positive exit is evaluated on the parameters that triggered the calibration (`triggered_params`): a triggering `a` or `b` needs at least `AUTOCALIB_EXIT_NEW_OBS_MIN = 1` new observation, a triggering dead time must be reliable; a manual request (`manual_request`) is judged on `deadtime_heat` and `deadtime_cool`,
 - up to `AUTOCALIB_MAX_RETRIES = 3` attempts,
-- planned retry delay `AUTOCALIB_RETRY_DELAY_H = 6` hours.
+- a failed attempt schedules the retry `AUTOCALIB_RETRY_DELAY_H = 6` hours later: until then the cooldown guard is replaced by this delay and the retry does not wait for the snapshot period. The scheduled time is published as `autocalib.next_check_ts` and cleared when the retry starts, when a snapshot is taken or when the stagnation that required it is gone (the retry counter is then reset).
 
 `AutoCalibTrigger` publishes its transitions on the Home Assistant event bus through the handler:
 `smartpi_autocalib_snapshot_taken`, `smartpi_autocalib_triggered`, `smartpi_autocalib_success`,
-`smartpi_autocalib_retry` and `smartpi_autocalib_degraded`. Every event payload carries `entity_id`
+`smartpi_autocalib_retry`, `smartpi_autocalib_degraded` and `smartpi_autocalib_unreachable`. Every event payload carries `entity_id`
 (the climate entity, for example `climate.salon`) and `name` (the thermostat name, for example `Salon`),
-followed by event-specific fields.
+followed by event-specific fields (`smartpi_autocalib_unreachable`: `triggered_params` and `retry_count`).
 
 The forced cycle is managed by `CalibrationManager`:
 
 - `COOL_DOWN` down to `sp - 0.3°C`,
 - `HEAT_UP`,
 - `COOL_DOWN_FINAL` back to `sp`.
+
+Before and during each phase the manager checks, with the thermal twin, that the threshold of the phase can be reached. A phase driven at full power converges to `T_steady_max` and a passive phase to `T_steady_passive`; the threshold is reachable when that equilibrium lies beyond it by `CALIBRATION_REACHABILITY_MARGIN_C = 0.5°C` (HEAT: passive `COOL_DOWN` and `COOL_DOWN_FINAL`, full-power `HEAT_UP`; COOL: full-power `COOL_DOWN` and `COOL_DOWN_FINAL`, passive `HEAT_UP`). The check only applies while the twin is usable (`status` ok, `model_reliable`, past its warm-up, valid equilibrium, and `cooling_model_available` in COOL). When the threshold is not reachable the cycle ends at once with the result `Unreachable`, distinct from `Cancelled` (HVAC OFF, timeout of `CALIBRATION_TIMEOUT_MIN = 600` minutes, reset): `last_calibration_time` is not set, `AutoCalibTrigger` consumes no retry and publishes `smartpi_autocalib_unreachable`, and the next attempt waits `AUTOCALIB_COOLDOWN_H` hours (`autocalib.next_check_ts`). The equilibrium at full power does not account for `max_on_percent`. The result is not a published diagnostic: `calibration.state` carries the phase only.
+
+`CalibrationManager.take_completed_result()` returns, once, the result of a run that ended (`Success`, `Cancelled`, `Unreachable`), so that the handler reports every run to `AutoCalibTrigger`, including one that ends in the tick that started it.
 
 ---
 

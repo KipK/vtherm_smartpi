@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 from .const import (
+    CALIBRATION_REACHABILITY_MARGIN_C,
     HYST_LOWER_C,
     HYST_UPPER_C,
     SmartPICalibrationPhase,
@@ -64,9 +65,13 @@ class CalibrationManager:
         self._calibration_start_time: float | None = None
         self._force_calibration_requested: bool = False
         self._calibration_result: SmartPICalibrationResult = SmartPICalibrationResult.PENDING
+        # Result of a run that ended since the last take_completed_result() (runtime only)
+        self._completed_result: SmartPICalibrationResult | None = None
 
     def reset(self) -> None:
         """Reset calibration state to initial values."""
+        if self.is_calibrating:
+            self._completed_result = SmartPICalibrationResult.CANCELLED
         self._calibration_state = SmartPICalibrationPhase.IDLE
         self._calibration_start_time = None
         self._force_calibration_requested = False
@@ -105,6 +110,50 @@ class CalibrationManager:
         self._calibration_state = SmartPICalibrationPhase.IDLE
         self._calibration_start_time = None
         self._calibration_result = SmartPICalibrationResult.CANCELLED
+        self._completed_result = self._calibration_result
+
+    def take_completed_result(self) -> SmartPICalibrationResult | None:
+        """Return the result of a run that ended since the last call, then forget it."""
+        result, self._completed_result = self._completed_result, None
+        return result
+
+    def _unreachable_phase(self, target_temp: float, is_cool: bool, twin_diag: dict | None) -> str | None:
+        """Name the current phase when the reliable twin cannot reach its threshold.
+
+        A phase driven at full power converges to T_steady_max and a passive
+        one to T_steady_passive. The threshold is reachable when that
+        equilibrium lies beyond it by CALIBRATION_REACHABILITY_MARGIN_C.
+        Returns None when the twin is not reliable or the phase is reachable.
+        """
+        diag = twin_diag or {}
+        if (
+            diag.get("status") != "ok"
+            or diag.get("model_reliable") is not True
+            or diag.get("warming_up") is True
+            or (is_cool and diag.get("cooling_model_available") is not True)
+        ):
+            return None
+        phase = self._calibration_state
+        going_up = phase == SmartPICalibrationPhase.HEAT_UP
+        threshold = {
+            SmartPICalibrationPhase.COOL_DOWN: target_temp - HYST_LOWER_C,
+            SmartPICalibrationPhase.HEAT_UP: target_temp + HYST_UPPER_C,
+            SmartPICalibrationPhase.COOL_DOWN_FINAL: target_temp,
+        }[phase]
+        active = not is_cool if going_up else is_cool
+        key = "T_steady_max" if active else "T_steady_passive"
+        level = diag.get(key)
+        if level is None or diag.get(f"{key}_valid") is not True:
+            return None
+        margin = CALIBRATION_REACHABILITY_MARGIN_C
+        unreachable = level < threshold + margin if going_up else level > threshold - margin
+        if not unreachable:
+            return None
+        _LOGGER.warning(
+            "%s - Calibration %s unreachable: %s=%.2f for threshold %.2f",
+            self._name, phase.value, key, level, threshold,
+        )
+        return phase.value
 
     def check_and_start(
         self,
@@ -153,6 +202,7 @@ class CalibrationManager:
         hvac_mode,  # VThermHvacMode
         dt_est: "DeadTimeEstimator",
         max_on_percent: float | None,
+        twin_diag: dict | None = None,
     ) -> CalibrationResult:
         """
         Execute calibration state machine.
@@ -163,7 +213,9 @@ class CalibrationManager:
             hvac_mode: Current HVAC mode (VThermHvacMode)
             dt_est: DeadTimeEstimator instance for feeding measurements
             max_on_percent: Maximum on_percent allowed
-            
+            twin_diag: Latest thermal twin diagnostics, used to end the cycle
+                with UNREACHABLE when a threshold cannot be reached
+
         Returns:
             CalibrationResult with on_percent (or None if not calibrating)
         """
@@ -180,6 +232,7 @@ class CalibrationManager:
         if hvac_mode == VThermHvacMode_OFF:
             self._calibration_state = SmartPICalibrationPhase.IDLE
             self._calibration_result = SmartPICalibrationResult.CANCELLED
+            self._completed_result = self._calibration_result
             return CalibrationResult(
                 on_percent=0.0,
                 phase=SmartPICalibrationPhase.IDLE,
@@ -192,6 +245,19 @@ class CalibrationManager:
         on_low = 1.0 if is_cool else 0.0
         on_high = 0.0 if is_cool else 1.0
         
+        unreachable_phase = self._unreachable_phase(target_temp, is_cool, twin_diag)
+        if unreachable_phase is not None:
+            self._calibration_state = SmartPICalibrationPhase.IDLE
+            self._calibration_start_time = None
+            self._calibration_result = SmartPICalibrationResult.UNREACHABLE
+            self._completed_result = self._calibration_result
+            return CalibrationResult(
+                on_percent=0.0,
+                phase=SmartPICalibrationPhase.IDLE,
+                result=self._calibration_result,
+                message=f"unreachable_{unreachable_phase}",
+            )
+
         on_percent: float = 0.0
         message: str = ""
 
@@ -227,6 +293,7 @@ class CalibrationManager:
                 self._last_calibration_time = time.time()
                 self._calibration_start_time = None
                 self._calibration_result = SmartPICalibrationResult.SUCCESS
+                self._completed_result = self._calibration_result
                 message = "completed"
                 
                 # Check success (logging)

@@ -339,6 +339,8 @@ def test_autocalib_stagnation_trigger():
     mock_algo.dt_est.deadtime_cool_reliable = True
     mock_algo.est.a = 0.5
     mock_algo.est.b = 0.02
+    mock_algo._last_hvac_mode = VThermHvacMode_HEAT
+    mock_algo._last_target_temp = 21.0
 
     # Test stagnation evaluation directly
     stagnating = ac._evaluate_stagnation(mock_algo, ext_temp=5.0, current_temp=20.0)
@@ -406,9 +408,9 @@ def test_autocalib_retry_logic():
     ac._triggered_params = ["a"]
 
     mock_algo = MagicMock()
-    # Partial success: only 'a' improved
-    mock_algo.est.learn_ok_count_a = 12
-    mock_algo.est.learn_ok_count_b = 10  # No change
+    # Partial exit: the triggering parameter 'a' did not improve
+    mock_algo.est.learn_ok_count_a = 10  # No change
+    mock_algo.est.learn_ok_count_b = 12
     mock_algo.dt_est.deadtime_heat_reliable = True
     mock_algo.dt_est.deadtime_cool_reliable = True
 

@@ -16,7 +16,6 @@ from .state_store import SmartPIStateStore
 from .smartpi.const import (
     SMARTPI_RECALC_INTERVAL_SEC,
     SmartPIPhase,
-    SmartPICalibrationPhase,
     SmartPICalibrationResult,
 )
 from .const import (
@@ -71,8 +70,6 @@ class SmartPIHandler:
         self._should_publish_intermediate: bool = True
         self._last_publish_signature = None
         self._pending_publish_signature = None
-        # Track calibration state for completion detection
-        self._prev_is_calibrating: bool = False
         self._allow_pwm_cycle_force: bool = False
         self._valve_linearization_configured: bool = False
         self._valve_curve_params: ValveCurveParams | None = None
@@ -503,18 +500,16 @@ class SmartPIHandler:
             algo = t.prop_algorithm
             now_wall = time.time()
 
-            # Detect calibration completion (CALIBRATING -> IDLE transition)
-            currently_calibrating = algo.calibration_state != SmartPICalibrationPhase.IDLE
-            if self._prev_is_calibrating and not currently_calibrating:
-                # Calibration just ended
+            # A calibration run ended since the previous pass
+            completed_result = algo.calibration_mgr.take_completed_result()
+            if completed_result is not None:
                 ac_event = algo.autocalib.on_calibration_complete(
                     now_wall=now_wall,
                     algo=algo,
-                    result=algo.calibration_mgr.calibration_result,
+                    result=completed_result,
                 )
                 if ac_event is not None:
                     self._fire_autocalib_event(ac_event)
-            self._prev_is_calibrating = currently_calibrating
 
             # Hourly stagnation check
             ac_event = algo.autocalib.check_hourly(
@@ -601,8 +596,8 @@ class SmartPIHandler:
         # Notify autocalib trigger about the cancellation (it never returns an event)
         algo.autocalib.on_calibration_complete(time.time(), algo, SmartPICalibrationResult.CANCELLED)
 
-        # Reset tracking state
-        self._prev_is_calibrating = False
+        # The cancellation is notified above: drop the pending completion
+        algo.calibration_mgr.take_completed_result()
 
         # Update attributes and save state
         self.update_attributes()

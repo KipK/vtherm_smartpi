@@ -1980,16 +1980,14 @@ class SmartPI:
 
         Delegates to CalibrationManager component.
         """
-        # Delegate to CalibrationManager component
         result = self.calibration_mgr.calculate(
             target_temp=target_temp,
             current_temp=current_temp,
             hvac_mode=hvac_mode,
             dt_est=self.dt_est,
             max_on_percent=self._linear_max_on(),
+            twin_diag=self._last_twin_diag,
         )
-
-        # Calibration state is now fully managed by CalibrationManager
 
         # Apply result
         if result.on_percent is not None:

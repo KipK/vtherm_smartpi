@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Automatic calibration: a calibration is judged on the parameters that
+  triggered it (`a`, `b`, dead times; a manual request on the dead times), `b`
+  is only monitored when the indoor-outdoor gradient and the outdoor
+  temperature allow it to be learned (which stops the repeated calibrations in
+  mild weather), and a failed attempt is retried after the documented 6 hours
+  instead of 24 hours (`autocalib.next_check_ts` and `autocalib.last_trigger_ts`
+  report the real times). A calibration whose threshold the thermal twin cannot
+  reach (warm outdoors, undersized emitter) stops at once with the event
+  `smartpi_autocalib_unreachable`, uses no retry and waits 24 hours, instead of
+  running until the 10-hour timeout.
 - The setpoint landing governor is removed: no command cap after the PI, no
   prediction falsification and no terminal braking release. The late-braking
   setpoint trajectory remains on the P branch and ends through its own

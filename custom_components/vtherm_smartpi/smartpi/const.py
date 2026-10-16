@@ -32,6 +32,7 @@ class SmartPICalibrationResult(str, Enum):
     PENDING = "Pending"
     SUCCESS = "Success"
     CANCELLED = "Cancelled"
+    UNREACHABLE = "Unreachable"
 
 # ########################################################################
 #                      SAFETY-FIRST GOVERNANCE ENUMS                   #
@@ -264,6 +265,9 @@ NEAR_BAND_TAPER_KI_MIN = 0.45
 
 # --- Forced Calibration Constants ---
 CALIBRATION_TIMEOUT_MIN = 600  # 10 hours timeout
+# A calibration threshold is reachable when the twin equilibrium of the phase
+# lies at least this far beyond it (deg C)
+CALIBRATION_REACHABILITY_MARGIN_C = 0.5
 
 # --- AutoCalibTrigger Enums ---
 
@@ -290,7 +294,7 @@ AUTOCALIB_A_MAD_THRESHOLD = 0.25          # MAD/med threshold for 'a' stagnation
 AUTOCALIB_B_MAD_THRESHOLD = 0.30          # MAD/med threshold for 'b' stagnation
 AUTOCALIB_TEXT_GRADIENT_C = 5.0           # Min Tin-Text gradient to check deadtime_cool stagnation
 AUTOCALIB_MAX_RETRIES = 3                  # Max retries before declaring model degraded
-AUTOCALIB_RETRY_DELAY_H = 6               # Hours between retries
+AUTOCALIB_RETRY_DELAY_H = 6               # Hours between a failed attempt and its retry
 AUTOCALIB_EXIT_NEW_OBS_MIN = 1            # Minimum new observations (a/b) for positive exit
 
 # --- FFv2 Governance Enums ---

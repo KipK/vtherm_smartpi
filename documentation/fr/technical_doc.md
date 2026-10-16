@@ -426,21 +426,26 @@ Comportement implémenté :
 - vérification horaire,
 - garde de cooldown `AUTOCALIB_COOLDOWN_H = 24` heures,
 - seuils de stagnation `AUTOCALIB_A_MAD_THRESHOLD = 0.25` et `AUTOCALIB_B_MAD_THRESHOLD = 0.30`,
-- sortie positive après au moins `AUTOCALIB_EXIT_NEW_OBS_MIN = 1` nouvelle observation sur `a` et `b` plus des temps morts cohérents,
+- la stagnation de `b` n'est évaluée que pendant que `b` peut être appris : le gradient intérieur-extérieur est au moins `AB_B_MIN_PASSIVE_GRADIENT_C` et la température extérieure est à au moins `AB_B_OUTDOOR_TARGET_MARGIN_C` de la consigne du côté passif (en dessous en HEAT, au-dessus en COOL), bornes de la fenêtre d'apprentissage ; sans température extérieure ou intérieure, `b` n'est pas évalué,
+- la sortie positive est évaluée sur les paramètres qui ont déclenché la calibration (`triggered_params`) : un `a` ou un `b` déclencheur demande au moins `AUTOCALIB_EXIT_NEW_OBS_MIN = 1` nouvelle observation, un temps mort déclencheur doit être fiable ; une demande manuelle (`manual_request`) est jugée sur `deadtime_heat` et `deadtime_cool`,
 - jusqu'à `AUTOCALIB_MAX_RETRIES = 3` essais,
-- délai de retry planifié `AUTOCALIB_RETRY_DELAY_H = 6` heures.
+- un essai échoué planifie le retry `AUTOCALIB_RETRY_DELAY_H = 6` heures plus tard : jusqu'à cette échéance, la garde de cooldown est remplacée par ce délai et le retry n'attend pas la période du snapshot. L'échéance est publiée sous `autocalib.next_check_ts` et effacée au démarrage du retry, lorsqu'un snapshot est pris ou lorsque la stagnation qui l'exigeait a disparu (le compteur de retry est alors réinitialisé).
 
 `AutoCalibTrigger` publie ses transitions sur le bus d'événements Home Assistant via le handler :
 `smartpi_autocalib_snapshot_taken`, `smartpi_autocalib_triggered`, `smartpi_autocalib_success`,
-`smartpi_autocalib_retry` et `smartpi_autocalib_degraded`. Chaque payload d'événement contient `entity_id`
+`smartpi_autocalib_retry`, `smartpi_autocalib_degraded` et `smartpi_autocalib_unreachable`. Chaque payload d'événement contient `entity_id`
 (l'entité climate, par exemple `climate.salon`) et `name` (le nom du thermostat, par exemple `Salon`),
-suivis des champs propres à chaque événement.
+suivis des champs propres à chaque événement (`smartpi_autocalib_unreachable` : `triggered_params` et `retry_count`).
 
 Le cycle forcé est géré par `CalibrationManager` :
 
 - `COOL_DOWN` jusqu'à `sp - 0.3°C`,
 - `HEAT_UP`,
 - `COOL_DOWN_FINAL` jusqu'au retour à `sp`.
+
+Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, que le seuil de la phase peut être atteint. Une phase pilotée à pleine puissance converge vers `T_steady_max` et une phase passive vers `T_steady_passive` ; le seuil est atteignable lorsque cet équilibre se situe au-delà de lui d'une marge `CALIBRATION_REACHABILITY_MARGIN_C = 0.5°C` (HEAT : `COOL_DOWN` et `COOL_DOWN_FINAL` passifs, `HEAT_UP` à pleine puissance ; COOL : `COOL_DOWN` et `COOL_DOWN_FINAL` à pleine puissance, `HEAT_UP` passif). La vérification ne s'applique que lorsque le jumeau est utilisable (`status` ok, `model_reliable`, passé sa phase de chauffe, équilibre valide, et `cooling_model_available` en COOL). Lorsque le seuil n'est pas atteignable, le cycle se termine immédiatement avec le résultat `Unreachable`, distinct de `Cancelled` (HVAC OFF, timeout de `CALIBRATION_TIMEOUT_MIN = 600` minutes, reset) : `last_calibration_time` n'est pas défini, `AutoCalibTrigger` ne consomme aucun retry et publie `smartpi_autocalib_unreachable`, et la tentative suivante attend `AUTOCALIB_COOLDOWN_H` heures (`autocalib.next_check_ts`). L'équilibre à pleine puissance ne tient pas compte de `max_on_percent`. Le résultat n'est pas un diagnostic publié : `calibration.state` ne porte que la phase.
+
+`CalibrationManager.take_completed_result()` renvoie le résultat d'une exécution terminée (`Success`, `Cancelled`, `Unreachable`), afin que le handler signale chaque exécution à `AutoCalibTrigger`, y compris une exécution qui se termine dans le tick qui l'a démarrée.
 
 ---
 
