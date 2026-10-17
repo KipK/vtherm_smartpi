@@ -10,6 +10,8 @@ from custom_components.vtherm_smartpi.smartpi.feedforward import (
 )
 from custom_components.vtherm_smartpi.smartpi.ff3 import (
     _compute_near_band_ff3_scale,
+    FF3Result,
+    FF3RuntimeState,
     compute_ff3,
 )
 from custom_components.vtherm_smartpi.smartpi.ff3_predictor import (
@@ -490,6 +492,64 @@ class TestFF3:
         assert result.reason_disabled == "not_near_band"
         assert result.candidate_scores == []
         assert result.horizon_cycles == 2
+
+    @staticmethod
+    def _gate_call(twin: ThermalTwin1R1C, **overrides) -> FF3Result:
+        kwargs = dict(
+            enabled=True,
+            twin=twin,
+            twin_reliable=True,
+            twin_initialized=True,
+            tau_reliable=True,
+            ext_temp=5.0,
+            hvac_mode=VThermHvacMode_HEAT,
+            regime=GovernanceRegime.NEAR_BAND,
+            in_deadband=False,
+            in_near_band=True,
+            setpoint_changed=False,
+            startup_first_run=False,
+            last_sat="NO_SAT",
+            u_base=0.4,
+            current_temp=20.8,
+            setpoint=21.0,
+            deadband_c=0.05,
+            near_band_below_deg=0.4,
+            near_band_above_deg=0.3,
+            cycle_min=10.0,
+            a=0.02,
+            b=0.002,
+            deadtime_heat_s=0.0,
+        )
+        kwargs.update(overrides)
+        return compute_ff3(**kwargs)
+
+    def test_ff3_missing_ext_temp_reason_precedes_degraded_regime(self):
+        """A missing outdoor temperature is reported as such, not as the DEGRADED regime it implies."""
+        twin = self._make_initialized_twin()
+        result = self._gate_call(twin, ext_temp=None, regime=GovernanceRegime.DEGRADED)
+        assert result.enabled is False
+        assert result.u_ff3_applied == pytest.approx(0.0)
+        assert result.reason_disabled == "missing_ext_temp"
+
+    def test_ff3_disabled_in_deadband_at_cycle_boundary(self):
+        """FF3 stays off when the cycle boundary falls inside the deadband."""
+        twin = self._make_initialized_twin()
+        result = self._gate_call(twin, in_deadband=True, current_temp=20.98)
+        assert result.enabled is False
+        assert result.u_ff3_applied == pytest.approx(0.0)
+        assert result.reason_disabled == "deadband"
+        assert result.candidate_scores == []
+
+    def test_ff3_pending_value_dropped_before_cycle_start(self):
+        """A dropped pending value is not latched by the next cycle start."""
+        state = FF3RuntimeState()
+        state.u_pending = 0.05
+        state.pending_active = True
+        assert state.disable_pending() is True
+        state.start_cycle()
+        assert state.u_cycle == pytest.approx(0.0)
+        assert state.active_cycle is False
+        assert state.disable_pending() is False
 
     def test_ff3_disabled_without_disturbance_context(self):
         """FF3 must remain off when no disturbance-recovery context is active."""

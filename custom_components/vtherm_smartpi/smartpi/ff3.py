@@ -167,6 +167,8 @@ def compute_ff3(
         return _disabled_result(reason="first_cycle_after_restart", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if hvac_mode != VThermHvacMode_HEAT:
         return _disabled_result(reason="cool_mode", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
+    # The governance regime is DEGRADED without an outdoor temperature; this
+    # check runs first so that the published reason names the missing input.
     if ext_temp is None:
         return _disabled_result(reason="missing_ext_temp", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if not tau_reliable:
@@ -177,6 +179,9 @@ def compute_ff3(
         return _disabled_result(reason=twin_disabled_reason, u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if setpoint_changed:
         return _disabled_result(reason="recent_setpoint_change", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
+    # Deadband exclusion at the cycle boundary. A deadband entered during the
+    # cycle drops the pending value (FF3RuntimeState.disable_pending), and the
+    # runtime feed-forward leaves FF3 out while the deadband is active.
     if in_deadband:
         return _disabled_result(reason="deadband", u_base=u_base, horizon=horizon, prediction_quality=prediction_quality)
     if not in_near_band:

@@ -14,6 +14,7 @@ from custom_components.vtherm_smartpi.smartpi.diagnostics import (
     build_published_diagnostics,
 )
 from custom_components.vtherm_smartpi.smartpi.feedforward import FFResult
+from custom_components.vtherm_smartpi.smartpi.const import GovernanceDecision
 from helpers import force_smartpi_stable_mode, make_receipt
 from fakes.fake_cycle_scheduler import FakeReceiptCycleScheduler
 from fakes.fake_thermostat_runtime import FakeThermostatRuntime
@@ -567,6 +568,38 @@ async def test_smartpi_ff3_is_latched_on_cycle_start():
     assert algo.ff3_state.active_cycle is True
     assert algo.ff3_state.deadtime_cycles == 0
     assert algo.ff3_state.horizon_capped is False
+
+
+@pytest.mark.parametrize("in_deadband", [False, True])
+def test_smartpi_runtime_ff_leaves_ff3_out_in_deadband(in_deadband):
+    """The latched FF3 value is injected outside the deadband only."""
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestAlgo",
+        use_ff3=True,
+    )
+    algo.ff3_state.u_cycle = 0.05
+    algo.deadband_mgr.in_deadband = in_deadband
+
+    runtime_ff = algo._apply_gains_and_ff(
+        GovernanceDecision.ADAPT_ON,
+        20.0,
+        5.0,
+        VThermHvacMode_HEAT,
+        0.1,
+        19.9,
+        0.1,
+        cycle_boundary=False,
+    )
+
+    ff_result = algo._last_ff_result
+    assert ff_result.u_ff3 == pytest.approx(0.05)
+    expected = ff_result.u_ff_final if in_deadband else ff_result.u_ff_eff
+    assert runtime_ff == pytest.approx(expected)
+    assert (runtime_ff == pytest.approx(ff_result.u_ff_final + 0.05)) is not in_deadband
 
 @pytest.mark.asyncio
 async def test_smartpi_power_stability_abort():
