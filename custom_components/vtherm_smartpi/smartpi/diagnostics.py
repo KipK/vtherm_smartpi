@@ -24,6 +24,7 @@ from .const import (
 
 if TYPE_CHECKING:
     from ..algo import SmartPI
+    from .ab_estimator import TauReliability
 
 
 def _effective_ff3_reason_disabled(algo: SmartPI) -> str:
@@ -53,17 +54,17 @@ def _build_ff3_status(diag: Dict[str, Any]) -> str:
     return f"disabled:{reason}"
 
 
-def _build_ab_learning_stage(algo: SmartPI, diag: Dict[str, Any]) -> str:
+def _build_ab_learning_stage(
+    algo: SmartPI, samples_a: int, samples_b: int, tau_reliable: bool
+) -> str:
     """Return a compact AB learning stage for the published summary."""
     if algo.phase == SmartPIPhase.HYSTERESIS:
         return "bootstrap"
 
-    samples_a = int(diag.get("learn_ok_count_a", 0))
-    samples_b = int(diag.get("learn_ok_count_b", 0))
     if samples_a < AB_HISTORY_SIZE or samples_b < AB_HISTORY_SIZE:
         return "learning"
 
-    if diag.get("tau_reliable") is True:
+    if tau_reliable is True:
         return "monitoring"
 
     return "degraded"
@@ -75,6 +76,11 @@ def _build_ab_confidence_state(algo: SmartPI) -> str:
         return ABConfidenceState.AB_BOOTSTRAP.value
 
     return algo._ab_confidence.state.value
+
+
+def _round_optional(value: float | None, digits: int) -> float | None:
+    """Return the rounded value, None when the value is None."""
+    return round(value, digits) if value is not None else None
 
 
 def _session_counter(total: int, baseline: int) -> int:
@@ -337,49 +343,71 @@ def _build_temperature(algo: SmartPI) -> Dict[str, Any]:
     }
 
 
+def _build_model(algo: SmartPI, tau_info: TauReliability) -> Dict[str, Any]:
+    """Return the learned A/B model and the dead times."""
+    est = algo.est
+    dt_est = algo.dt_est
+    return {
+        "a": round(est.a, 6),
+        "b": round(est.b, 6),
+        "confidence": _build_ab_confidence_state(algo),
+        "tau_reliable": tau_info.reliable,
+        "tau_min": round(tau_info.tau_min, 1),
+        "deadtime_heat_s": dt_est.deadtime_heat_s,
+        "deadtime_cool_s": dt_est.deadtime_cool_s,
+        "deadtime_heat_reliable": dt_est.deadtime_heat_reliable,
+        "deadtime_cool_reliable": dt_est.deadtime_cool_reliable,
+        "a_stability_ratio": _round_optional(est.diag_a_mad_over_med, 3),
+        "b_stability_ratio": _round_optional(est.diag_b_mad_over_med, 3),
+    }
+
+
+def _build_learning(algo: SmartPI, tau_reliable: bool) -> Dict[str, Any]:
+    """Return the A/B learning progress and the drift states."""
+    est = algo.est
+    samples_a = int(est.learn_ok_count_a)
+    samples_b = int(est.learn_ok_count_b)
+    return {
+        "enabled": algo.learning_enabled,
+        "stage": _build_ab_learning_stage(algo, samples_a, samples_b, tau_reliable),
+        "bootstrap_progress_percent": _bootstrap_progress(algo),
+        "bootstrap_status": _bootstrap_state(algo),
+        "emea_samples_a": algo.meas_count_a,
+        "emea_samples_b": algo.meas_count_b,
+        "bootstrap_target_a": AB_MIN_SAMPLES_A,
+        "bootstrap_target_b": AB_MIN_SAMPLES_B,
+        "history_target": AB_HISTORY_SIZE,
+        "accepted_updates_a": samples_a,
+        "accepted_updates_b": samples_b,
+        "learn_b_converged": est.b_converged_for_a(),
+        "last_reason": str(est.learn_last_reason),
+        "a_drift_state": est.a_drift.state,
+        "b_drift_state": est.b_drift.state,
+    }
+
+
+def _build_governance(algo: SmartPI) -> Dict[str, Any]:
+    """Return the governance regime and the thermal update decision."""
+    gov = algo.gov
+    return {
+        "regime": gov._current_regime.value,
+        "thermal_update_decision": gov.last_decision_thermal.value,
+        "thermal_update_reason": gov.last_freeze_reason_thermal.value,
+    }
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the canonical SmartPI live diagnostics."""
     diag = _build_full_diagnostics(algo)
+    tau_info = algo.est.tau_reliability()
 
     return {
         "control": _build_control(algo),
         "power": _build_power(algo),
         "temperature": _build_temperature(algo),
-        "model": {
-            "a": diag["a"],
-            "b": diag["b"],
-            "confidence": diag["ab_confidence_state"],
-            "tau_reliable": diag["tau_reliable"],
-            "tau_min": diag["tau_min"],
-            "deadtime_heat_s": diag["deadtime_heat_s"],
-            "deadtime_cool_s": diag["deadtime_cool_s"],
-            "deadtime_heat_reliable": diag["deadtime_heat_reliable"],
-            "deadtime_cool_reliable": diag["deadtime_cool_reliable"],
-            "a_stability_ratio": diag["diag_a_mad_over_med"],
-            "b_stability_ratio": diag["diag_b_mad_over_med"],
-        },
-        "learning": {
-            "enabled": algo.learning_enabled,
-            "stage": _build_ab_learning_stage(algo, diag),
-            "bootstrap_progress_percent": diag.get("bootstrap_progress"),
-            "bootstrap_status": diag.get("bootstrap_state"),
-            "emea_samples_a": algo.meas_count_a,
-            "emea_samples_b": algo.meas_count_b,
-            "bootstrap_target_a": AB_MIN_SAMPLES_A,
-            "bootstrap_target_b": AB_MIN_SAMPLES_B,
-            "history_target": AB_HISTORY_SIZE,
-            "accepted_updates_a": diag["learn_ok_count_a"],
-            "accepted_updates_b": diag["learn_ok_count_b"],
-            "learn_b_converged": diag["learn_b_converged"],
-            "last_reason": diag["learn_last_reason"],
-            "a_drift_state": diag["a_drift_state"],
-            "b_drift_state": diag["b_drift_state"],
-        },
-        "governance": {
-            "regime": diag["governance_regime"],
-            "thermal_update_decision": diag["last_decision_thermal"],
-            "thermal_update_reason": diag["last_freeze_reason_thermal"],
-        },
+        "model": _build_model(algo, tau_info),
+        "learning": _build_learning(algo, tau_info.reliable),
+        "governance": _build_governance(algo),
         "feedforward": {
             "ff3_status": _build_ff3_status(diag),
             "ff3_twin_usable": diag["ff3_twin_usable"],
@@ -542,7 +570,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         algo._ff_trim.last_transaction
     )
     coord = algo.fftrim_coord
-    tau_info = algo.est.tau_reliability()
     ff_result = algo._last_ff_result
     twin_diag = getattr(algo, '_last_twin_diag', None) or {}
     twin_status = twin_diag.get("status", "unavailable")
@@ -561,28 +588,15 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     ff2_authority = FF_TRIM_RHO * max(u_ff1, FF_TRIM_EPSILON)
 
     diag = {
-        # Model
-        "a": round(algo.est.a, 6),
-        "b": round(algo.est.b, 6),
-        "tau_min": round(tau_info.tau_min, 1),
-        "tau_reliable": tau_info.reliable,
+        # Learning counters
         "learn_ok_count": _session_counter(
             algo.est.learn_ok_count,
             getattr(algo, "_session_learn_ok_count_base", 0),
         ),
-        "learn_ok_count_a": int(algo.est.learn_ok_count_a),
-        "learn_ok_count_b": int(algo.est.learn_ok_count_b),
         "learn_skip_count": _session_counter(
             algo.est.learn_skip_count,
             getattr(algo, "_session_learn_skip_count_base", 0),
         ),
-        "learn_last_reason": str(algo.est.learn_last_reason),
-        "learn_b_converged": algo.est.b_converged_for_a(),
-        # A1/A2/A3 Diagnostics
-        "diag_b_mad_over_med": round(algo.est.diag_b_mad_over_med, 3) if algo.est.diag_b_mad_over_med is not None else None,
-        "diag_a_mad_over_med": round(algo.est.diag_a_mad_over_med, 3) if algo.est.diag_a_mad_over_med is not None else None,
-        "a_drift_state": algo.est.a_drift.state,
-        "b_drift_state": algo.est.b_drift.state,
         # Learning metadata
         "learn_u_avg": round(algo.learn_u_int / max(algo.learn_t_int_s, 1.0), 3) if algo.learn_win_active else None,
         "learn_u_cv": round(algo.learn_win._u_cv, 3) if algo.learn_win_active else None,
@@ -682,7 +696,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "ff3_dynamic_coherent": algo.ff3_state.dynamic_coherent,
         "twin_status": twin_status,
         "ff3_twin_usable": ff3_twin_usable,
-        "ab_confidence_state": _build_ab_confidence_state(algo),
         "cycle_min": round(algo.cycle_min, 3),
         # Setpoint trajectory
         "filtered_setpoint": None if algo.sp_mgr.effective_setpoint is None else round(algo.sp_mgr.effective_setpoint, 2),
@@ -722,10 +735,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         # Setpoint boost state
         "setpoint_boost_active": algo.sp_mgr.boost_active,
         # Dead Time (Smart-PI v2)
-        "deadtime_heat_s": algo.dt_est.deadtime_heat_s,
-        "deadtime_heat_reliable": algo.dt_est.deadtime_heat_reliable,
-        "deadtime_cool_s": algo.dt_est.deadtime_cool_s,
-        "deadtime_cool_reliable": algo.dt_est.deadtime_cool_reliable,
         "kp_source": algo.gain_scheduler.kp_source,
         "deadtime_state": algo.dt_est.state,
         "deadtime_last_power": algo.dt_est.last_power,
@@ -743,21 +752,10 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "autocalib_last_trigger_ts": algo.autocalib.last_trigger_ts_iso,
         "autocalib_next_check_ts": algo.autocalib.next_check_ts_iso,
         "autocalib_snapshot_age_h": algo.autocalib.snapshot_age_h,
-        # Safety-First Governance
-        "governance_regime": algo.gov._current_regime.value,
         # Governance diagnostics
-        "last_freeze_reason_thermal": algo.gov.last_freeze_reason_thermal.value,
         "last_freeze_reason_gains": algo.gov.last_freeze_reason_gains.value,
-        "last_decision_thermal": algo.gov.last_decision_thermal.value,
         "last_decision_gains": algo.gov.last_decision_gains.value,
     }
-
-    # --- Bootstrap / Learning Diagnostics ---
-    # Only added if available (Hysteresis phase)
-    if _bootstrap_progress(algo) is not None:
-        diag["bootstrap_progress"] = _bootstrap_progress(algo)
-        diag["bootstrap_state"] = _bootstrap_state(algo)
-
 
     # --- Thermal Twin / ETA (diagnostics-only) ---
     if twin_diag and twin_diag.get("status") == "ok":
