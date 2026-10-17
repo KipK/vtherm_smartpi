@@ -484,6 +484,39 @@ def _build_feedforward(algo: SmartPI, twin_diag: Dict[str, Any]) -> Dict[str, An
     }
 
 
+def _build_setpoint(algo: SmartPI) -> Dict[str, Any]:
+    """Return the effective setpoint and the trajectory and boost flags."""
+    sp_mgr = algo.sp_mgr
+    return {
+        "filtered_setpoint": _round_optional(sp_mgr.effective_setpoint, 2),
+        "trajectory_active": sp_mgr.trajectory_active,
+        "trajectory_source": sp_mgr.trajectory_source,
+        "boost_active": sp_mgr.boost_active,
+    }
+
+
+def _build_autocalib(algo: SmartPI) -> Dict[str, Any]:
+    """Return the automatic calibration trigger state."""
+    autocalib = algo.autocalib
+    return {
+        "state": autocalib.state.value,
+        "model_degraded": autocalib.model_degraded,
+        "last_trigger_ts": autocalib.last_trigger_ts_iso,
+        "next_check_ts": autocalib.next_check_ts_iso,
+        "snapshot_age_h": autocalib.snapshot_age_h,
+    }
+
+
+def _build_calibration(algo: SmartPI) -> Dict[str, Any]:
+    """Return the calibration phase, its retry count and its last run time."""
+    last_time = algo.calibration_mgr.last_calibration_time
+    return {
+        "state": algo.calibration_state,
+        "retry_count": algo.autocalib.retry_count,
+        "last_time": datetime.fromtimestamp(last_time).isoformat() if last_time else None,
+    }
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the canonical SmartPI live diagnostics."""
     diag = _build_full_diagnostics(algo)
@@ -498,24 +531,9 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "learning": _build_learning(algo, tau_info.reliable),
         "governance": _build_governance(algo),
         "feedforward": _build_feedforward(algo, twin_diag),
-        "setpoint": {
-            "filtered_setpoint": diag["filtered_setpoint"],
-            "trajectory_active": diag["setpoint_trajectory_active"],
-            "trajectory_source": diag["trajectory_source"],
-            "boost_active": diag["setpoint_boost_active"],
-        },
-        "autocalib": {
-            "state": diag["autocalib_state"],
-            "model_degraded": diag["autocalib_model_degraded"],
-            "last_trigger_ts": diag["autocalib_last_trigger_ts"],
-            "next_check_ts": diag["autocalib_next_check_ts"],
-            "snapshot_age_h": diag["autocalib_snapshot_age_h"],
-        },
-        "calibration": {
-            "state": diag["calibration_state"],
-            "retry_count": diag["autocalib_retry_count"],
-            "last_time": diag["last_calibration_time"],
-        },
+        "setpoint": _build_setpoint(algo),
+        "autocalib": _build_autocalib(algo),
+        "calibration": _build_calibration(algo),
         "analysis": _build_analysis_diagnostics(diag),
         "valve": _build_valve_diagnostics(algo),
     }
@@ -645,8 +663,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "ff3_dynamic_coherent": algo.ff3_state.dynamic_coherent,
         "cycle_min": round(algo.cycle_min, 3),
         # Setpoint trajectory
-        "filtered_setpoint": None if algo.sp_mgr.effective_setpoint is None else round(algo.sp_mgr.effective_setpoint, 2),
-        "setpoint_trajectory_active": algo.sp_mgr.trajectory_active,
         "trajectory_start_sp": (
             round(algo.sp_mgr.trajectory_start_setpoint, 3)
             if algo.sp_mgr.trajectory_start_setpoint is not None else None
@@ -661,7 +677,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ),
         "trajectory_elapsed_s": round(algo.sp_mgr.trajectory_elapsed_s, 3),
         "trajectory_phase": algo.sp_mgr.trajectory_phase.value,
-        "trajectory_source": algo.sp_mgr.trajectory_source,
         "trajectory_pending_target_change_braking": algo.sp_mgr.trajectory_pending_target_change_braking,
         "trajectory_braking_needed": algo.sp_mgr.trajectory_braking_needed,
         "trajectory_model_ready": algo.sp_mgr.trajectory_model_ready,
@@ -677,8 +692,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "forced_by_timing": algo.forced_by_timing,
         # Deadband state
         "in_core_deadband": algo._tau_reliable and abs(algo.error) < max(algo.deadband_c, 0.0),
-        # Setpoint boost state
-        "setpoint_boost_active": algo.sp_mgr.boost_active,
         # Dead Time (Smart-PI v2)
         "kp_source": algo.gain_scheduler.kp_source,
         "deadtime_state": algo.dt_est.state,
@@ -687,16 +700,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "near_band_below_deg": algo.deadband_mgr.near_band_below_deg,
         "near_band_above_deg": algo.deadband_mgr.near_band_above_deg,
         "near_band_source": algo.deadband_mgr.near_band_source,
-        # Forced Calibration
-        "calibration_state": algo.calibration_state,
-        "last_calibration_time": (datetime.fromtimestamp(algo.calibration_mgr.last_calibration_time).isoformat() if algo.calibration_mgr.last_calibration_time else None),
-        # AutoCalibTrigger §6.1
-        "autocalib_state": algo.autocalib.state.value,
-        "autocalib_model_degraded": algo.autocalib.model_degraded,
-        "autocalib_retry_count": algo.autocalib.retry_count,
-        "autocalib_last_trigger_ts": algo.autocalib.last_trigger_ts_iso,
-        "autocalib_next_check_ts": algo.autocalib.next_check_ts_iso,
-        "autocalib_snapshot_age_h": algo.autocalib.snapshot_age_h,
         # Governance diagnostics
         "last_freeze_reason_gains": algo.gov.last_freeze_reason_gains.value,
         "last_decision_gains": algo.gov.last_decision_gains.value,
