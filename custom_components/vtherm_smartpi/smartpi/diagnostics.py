@@ -82,11 +82,9 @@ def _session_counter(total: int, baseline: int) -> int:
     return max(0, int(total) - int(baseline))
 
 
-def _ratio_to_percent(value: Any, digits: int = 1) -> float | None:
-    """Return a public percent value from an internal ratio."""
-    if value is None:
-        return None
-    return round(float(value) * 100.0, digits)
+def _percent(ratio: float) -> float:
+    """Return a public percent value from an internal ratio rounded to 6 digits."""
+    return round(float(round(ratio, 6)) * 100.0, 1)
 
 
 def _build_fftrim_result(result: Any | None) -> Dict[str, Any] | None:
@@ -288,47 +286,65 @@ def _integral_time_min(kp: float, ki: float) -> float | None:
     return round(kp / ki, 1)
 
 
+def _build_control(algo: SmartPI) -> Dict[str, Any]:
+    """Return the regulation phase, gains and band flags."""
+    phase = algo.phase
+    kp = round(algo.Kp, 6)
+    ki = round(algo.Ki, 6)
+    return {
+        "phase": phase,
+        "mode": "hysteresis" if phase == SmartPIPhase.HYSTERESIS else "smartpi",
+        "hysteresis_state": algo.ctl.hysteresis_state,
+        "kp": kp,
+        "ki": ki,
+        "ti_min": _integral_time_min(kp, ki),
+        "restart_reason": algo._last_restart_reason,
+        "saturation_state": algo.last_sat,
+        "in_deadband": algo.in_deadband,
+        "in_near_band": algo.in_near_band,
+        "in_deadtime_window": algo.in_deadtime_window,
+    }
+
+
+def _build_power(algo: SmartPI) -> Dict[str, Any]:
+    """Return the command chain in percent."""
+    return {
+        "current_cycle_percent": _percent(algo.committed_on_percent),
+        "next_cycle_percent": _percent(algo.on_percent),
+        "linear_current_cycle_percent": _percent(algo.linear_committed_on_percent),
+        "linear_next_cycle_percent": _percent(algo.linear_on_percent),
+        "valve_linearization_enabled": algo.valve_curve.params is not None,
+        "pi_percent": _percent(algo.u_pi),
+        "ff_percent": _percent(algo.u_ff),
+        "hold_percent": _percent(algo.ctl.u_hold),
+        "command_percent": _percent(algo.u_cmd),
+        "limited_percent": _percent(algo.u_limited),
+        "applied_percent": _percent(algo.u_applied),
+    }
+
+
+def _build_temperature(algo: SmartPI) -> Dict[str, Any]:
+    """Return the measured temperatures, the error and the integral state."""
+    return {
+        "indoor": algo._last_current_temp,
+        "outdoor": algo._last_ext_temp,
+        "error": round(algo.error, 4),
+        "integral_error": round(algo.integral, 6),
+        "integral_mode": algo.last_i_mode,
+        "integral_hold_mode": algo.ctl.integral_hold_mode,
+        "integral_hold_source": algo.ctl.last_integral_hold_source,
+        "integral_guard_source": algo.integral_guard.source.value,
+    }
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the canonical SmartPI live diagnostics."""
     diag = _build_full_diagnostics(algo)
 
     return {
-        "control": {
-            "phase": diag["phase"],
-            "mode": diag["regulation_mode"],
-            "hysteresis_state": diag["hysteresis_state"],
-            "kp": diag["Kp"],
-            "ki": diag["Ki"],
-            "ti_min": _integral_time_min(diag["Kp"], diag["Ki"]),
-            "restart_reason": diag["restart_reason"],
-            "saturation_state": diag["sat"],
-            "in_deadband": diag["in_deadband"],
-            "in_near_band": diag["in_near_band"],
-            "in_deadtime_window": diag["in_deadtime_window"],
-        },
-        "power": {
-            "current_cycle_percent": _ratio_to_percent(diag["committed_on_percent"]),
-            "next_cycle_percent": _ratio_to_percent(diag["on_percent"]),
-            "linear_current_cycle_percent": _ratio_to_percent(diag["linear_committed_on_percent"]),
-            "linear_next_cycle_percent": _ratio_to_percent(diag["linear_on_percent"]),
-            "valve_linearization_enabled": diag["valve_linearization_enabled"],
-            "pi_percent": _ratio_to_percent(diag["u_pi"]),
-            "ff_percent": _ratio_to_percent(diag["u_ff"]),
-            "hold_percent": _ratio_to_percent(diag["u_hold"]),
-            "command_percent": _ratio_to_percent(diag["u_cmd"]),
-            "limited_percent": _ratio_to_percent(diag["u_limited"]),
-            "applied_percent": _ratio_to_percent(diag["u_applied"]),
-        },
-        "temperature": {
-            "indoor": diag["sensor_temperature"],
-            "outdoor": diag["ext_sensor_temperature"],
-            "error": diag["error"],
-            "integral_error": diag["integral_error"],
-            "integral_mode": diag["i_mode"],
-            "integral_hold_mode": diag["integral_hold_mode"],
-            "integral_hold_source": diag["integral_hold_source"],
-            "integral_guard_source": diag["integral_guard_source"],
-        },
+        "control": _build_control(algo),
+        "power": _build_power(algo),
+        "temperature": _build_temperature(algo),
         "model": {
             "a": diag["a"],
             "b": diag["b"],
@@ -545,10 +561,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     ff2_authority = FF_TRIM_RHO * max(u_ff1, FF_TRIM_EPSILON)
 
     diag = {
-        # Phase / Mode
-        "phase": algo.phase,
-        "regulation_mode": "hysteresis" if algo.phase == SmartPIPhase.HYSTERESIS else "smartpi",
-        "hysteresis_state": algo.ctl.hysteresis_state,
         # Model
         "a": round(algo.est.a, 6),
         "b": round(algo.est.b, 6),
@@ -575,16 +587,8 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "learn_u_avg": round(algo.learn_u_int / max(algo.learn_t_int_s, 1.0), 3) if algo.learn_win_active else None,
         "learn_u_cv": round(algo.learn_win._u_cv, 3) if algo.learn_win_active else None,
         "learn_u_std": round(algo.learn_win._u_std, 4) if algo.learn_win_active else None,
-        # PI
-        "Kp": round(algo.Kp, 6),
-        "Ki": round(algo.Ki, 6),
-        "integral_error": round(algo.integral, 6),
-        "i_mode": algo.last_i_mode,
-        "integral_guard_source": algo.integral_guard.source.value,
         "integral_guard_mode": algo._last_integral_guard_mode,
-        "sat": algo.last_sat,
         # Errors
-        "error": round(algo.error, 4),
         "error_p": round(algo.error_p, 4),
         "error_filtered": round(algo.error_filtered, 4) if algo.error_filtered != 0.0 or algo._e_filt is not None else None,
         "temperature_slope_h": (
@@ -592,10 +596,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
             if algo.temperature_slope_h is not None else None
         ),
         # Output
-        "u_ff": round(algo.u_ff, 6),
         "ff_reason": algo._last_ff_reason,
-        "u_pi": round(algo.u_pi, 6),
-        "u_hold": round(algo.ctl.u_hold, 6),
         "ff_warmup_ok_count": int(algo.ff_warmup_ok_count),
         "ff_warmup_cycles": int(algo.ff_warmup_cycles),
         # FFv3 signal chain
@@ -681,15 +682,7 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "ff3_dynamic_coherent": algo.ff3_state.dynamic_coherent,
         "twin_status": twin_status,
         "ff3_twin_usable": ff3_twin_usable,
-        "integral_hold_mode": algo.ctl.integral_hold_mode,
-        "integral_hold_source": algo.ctl.last_integral_hold_source,
-        "restart_reason": algo._last_restart_reason,
         "ab_confidence_state": _build_ab_confidence_state(algo),
-        "on_percent": round(algo.on_percent, 6),
-        "committed_on_percent": round(algo.committed_on_percent, 6),
-        "linear_on_percent": round(algo.linear_on_percent, 6),
-        "linear_committed_on_percent": round(algo.linear_committed_on_percent, 6),
-        "valve_linearization_enabled": algo.valve_curve.params is not None,
         "cycle_min": round(algo.cycle_min, 3),
         # Setpoint trajectory
         "filtered_setpoint": None if algo.sp_mgr.effective_setpoint is None else round(algo.sp_mgr.effective_setpoint, 2),
@@ -720,15 +713,10 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         ),
         "trajectory_bumpless_ready": algo.sp_mgr.trajectory_bumpless_ready,
         # Anti-windup tracking diagnostics
-        "u_cmd": round(algo.u_cmd, 6),
-        "u_limited": round(algo.u_limited, 6),
-        "u_applied": round(algo.u_applied, 6),
         "aw_du": round(algo.aw_du, 6),
         "forced_by_timing": algo.forced_by_timing,
         # Deadband state
-        "in_deadband": algo.in_deadband,
         "in_core_deadband": algo._tau_reliable and abs(algo.error) < max(algo.deadband_c, 0.0),
-        "in_near_band": algo.in_near_band,
         "deadband_power_source": algo.ctl.deadband_power_source,
         "deadband_p_mode": algo.ctl.deadband_p_mode,
         # Setpoint boost state
@@ -738,7 +726,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "deadtime_heat_reliable": algo.dt_est.deadtime_heat_reliable,
         "deadtime_cool_s": algo.dt_est.deadtime_cool_s,
         "deadtime_cool_reliable": algo.dt_est.deadtime_cool_reliable,
-        "in_deadtime_window": algo.in_deadtime_window,
         "kp_source": algo.gain_scheduler.kp_source,
         "deadtime_state": algo.dt_est.state,
         "deadtime_last_power": algo.dt_est.last_power,
@@ -763,9 +750,6 @@ def _build_full_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "last_freeze_reason_gains": algo.gov.last_freeze_reason_gains.value,
         "last_decision_thermal": algo.gov.last_decision_thermal.value,
         "last_decision_gains": algo.gov.last_decision_gains.value,
-        # Sensor temperature (unrounded) used in last calculation cycle
-        "sensor_temperature": algo._last_current_temp,
-        "ext_sensor_temperature": algo._last_ext_temp,
     }
 
     # --- Bootstrap / Learning Diagnostics ---
