@@ -625,7 +625,7 @@ opening commits nothing and marks a trace discontinuity.
 - `build_published_diagnostics()`: the function that builds that payload.
 
 `diagnostic_history.py` wraps this payload in `schema_version`, `live` and the
-stable eleven-series `history` block. Normal sensor entities exclude `live` from
+stable eight-series `history` block. Normal sensor entities exclude `live` from
 Recorder; the debug sensor subclass records it directly. The debug option only selects the sensor class that is recorded; it does not
 add a second diagnostic block.
 
