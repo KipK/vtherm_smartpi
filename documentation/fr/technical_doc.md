@@ -628,8 +628,13 @@ requêtes non taguées et engage la puissance indiquée par le callback de débu
 de cycle, ou l’ouverture de vanne publiée en mode vanne, sans propriété. Le
 trim stationnaire utilise alors le `u_ff1` échantillonné, le trim périodique et
 le transfert bumpless restent inactifs, et la régulation PI est inchangée. Une
-mise à jour de vanne sans ouverture publiée n’engage rien et marque une
-discontinuité de trace.
+mise à jour de vanne sans ouverture publiée n’engage rien et ouvre un
+intervalle de puissance non observée (`missing_valve_position`) qui dure
+jusqu’à la prochaine puissance observée (mise à jour de vanne, début ou fin de
+cycle). La trace conserve la dernière puissance connue sur cet intervalle :
+une fenêtre de trim qui le chevauche est donc rejetée
+(`causal_power_not_covered`) ; un court trou du scheduler comblé par la
+puissance précédente (`legacy_gap_fill`) reste utilisable.
 
 ### 5.5 Diagnostics publiés
 

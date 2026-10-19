@@ -615,7 +615,12 @@ requests and commits the power reported by the cycle-start callback, or the
 published valve opening in valve mode, without ownership. The stationary trim
 then uses the sampled `u_ff1`, the periodic trim and the bumpless transfer stay
 inactive, and PI regulation is unchanged. A valve update without a published
-opening commits nothing and marks a trace discontinuity.
+opening commits nothing and opens an unobserved-power interval
+(`missing_valve_position`) that lasts until the next observed power (valve
+update, cycle start or cycle end). The trace keeps the last known power over
+that interval, so a trim window overlapping it is rejected
+(`causal_power_not_covered`); a short scheduler gap filled with the previous
+power (`legacy_gap_fill`) stays usable.
 
 ### 5.5 Published diagnostics
 

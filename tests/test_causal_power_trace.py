@@ -182,3 +182,47 @@ def test_logical_trim_resets_do_not_clear_shared_physical_evidence() -> None:
 
     assert trace.epoch == initial_epoch + 1
     assert trace.power_segments == ()
+
+
+def test_unobserved_power_interval_is_open_until_the_next_observed_power() -> None:
+    """A missing valve reading opens an interval that the next observed power closes."""
+    trace = CausalPowerTrace()
+    trace.start_applied_cycle(now_monotonic=0.0, linear_power=0.5)
+    trace.mark_unobserved_power(600.0, "missing_valve_position")
+    trace.mark_unobserved_power(700.0, "missing_valve_position")
+
+    open_window = trace.read_window(500.0, 900.0)
+    assert open_window.discontinuities[-1].reason == "missing_valve_position"
+    assert open_window.discontinuities[-1].start_monotonic == pytest.approx(600.0)
+    assert open_window.discontinuities[-1].end_monotonic == pytest.approx(900.0)
+    assert trace.read_window(0.0, 500.0).discontinuities == ()
+
+    trace.update_applied_power(now_monotonic=1200.0, linear_power=0.4)
+    trace.complete_applied_cycle(
+        now_monotonic=1800.0, realized_linear_power=None, use_valve_trace=True
+    )
+
+    window = trace.read_window(0.0, 1800.0)
+    assert window.status == "discontinuity"
+    assert window.power_coverage_ratio == pytest.approx(1.0)
+    assert [(d.start_monotonic, d.end_monotonic, d.reason) for d in window.discontinuities] == [
+        (600.0, 1200.0, "missing_valve_position")
+    ]
+    assert trace.read_window(1200.0, 1800.0).discontinuities == ()
+
+
+def test_unobserved_power_interval_closes_at_cycle_end_and_clears_on_reset() -> None:
+    """The cycle end closes an open interval; a reset drops it."""
+    trace = CausalPowerTrace()
+    trace.start_applied_cycle(now_monotonic=0.0, linear_power=0.5)
+    trace.mark_unobserved_power(900.0, "missing_valve_position")
+    trace.complete_applied_cycle(
+        now_monotonic=1800.0, realized_linear_power=None, use_valve_trace=True
+    )
+    closed = trace.read_window(0.0, 3600.0).discontinuities
+    assert [(d.start_monotonic, d.end_monotonic) for d in closed] == [(900.0, 1800.0)]
+
+    trace.start_applied_cycle(now_monotonic=1800.0, linear_power=0.5)
+    trace.mark_unobserved_power(2000.0, "missing_valve_position")
+    trace.reset()
+    assert trace.read_window(0.0, 3600.0).discontinuities == ()

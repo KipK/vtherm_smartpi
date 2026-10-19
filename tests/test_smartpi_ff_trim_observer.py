@@ -652,3 +652,49 @@ def test_causal_observer_signed_cool_uses_same_power_ownership() -> None:
     assert result.transfer_eligible is True
     assert result.mean_i_power == pytest.approx(0.1)
     assert result.physical_power_deficit == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("unobserved", [False, True])
+def test_causal_observer_rejects_a_window_with_unobserved_power(unobserved) -> None:
+    """Power carried over a missing valve reading cannot feed the stationary trim."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    trace = observer.physical_trace
+    trace.start_applied_cycle(now_monotonic=0.0, linear_power=0.5)
+    if unobserved:
+        trace.mark_unobserved_power(600.0, "missing_valve_position")
+    trace.complete_applied_cycle(
+        now_monotonic=1800.0, realized_linear_power=None, use_valve_trace=True
+    )
+    _record_samples(observer, (20.0, 20.1, 19.9, 20.0))
+
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is not unobserved
+    if unobserved:
+        assert result.reason == "causal_power_not_covered"
+
+
+def test_causal_observer_keeps_accepting_legacy_gap_fill() -> None:
+    """A short scheduler gap filled with the previous power stays usable."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(0.0, 900.0, 0.5))
+    observer.physical_trace.record_applied_power(AppliedPowerSegment(903.0, 1800.0, 0.5))
+    _record_samples(observer, (20.0, 20.1, 19.9, 20.0))
+
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+    assert result is not None
+    assert result.admissible is True

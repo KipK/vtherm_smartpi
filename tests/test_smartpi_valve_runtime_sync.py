@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
@@ -93,7 +94,8 @@ async def test_legacy_valve_update_without_published_position_commits_nothing(
 
     assert "request_id" not in thermostat.cycle_scheduler.start_cycle.await_args.kwargs
     assert algo.committed_on_percent == pytest.approx(0.2)
-    assert algo._causal_power_trace._discontinuities[-1].reason == "missing_valve_position"
+    open_interval = algo._causal_power_trace.read_window(0.0, time.monotonic() + 1.0).discontinuities
+    assert open_interval[-1].reason == "missing_valve_position"
 
 
 @pytest.mark.asyncio
@@ -388,3 +390,66 @@ def test_valve_mode_ignores_min_activation_delay(linearized: bool) -> None:
     assert algo.forced_by_timing is False
     assert algo.update_timing_constraints(0.05, 0.99) == pytest.approx(0.99)
     assert algo.forced_by_timing is False
+
+
+@pytest.mark.asyncio
+async def test_missing_valve_position_keeps_its_cycle_out_of_the_stationary_trim() -> None:
+    """A cycle with a missing valve reading cannot provide the realized power of a trim window."""
+    from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime
+    from custom_components.vtherm_smartpi.smartpi.ff_trim import (
+        CausalFFTrimObserver,
+        FFTrimThermalSample,
+    )
+
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=30.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="valve-unobserved",
+    )
+    algo.configure_valve_linearization(False, valve_mode=True)
+    clock = {"t": 0.0}
+    with patch("time.monotonic", side_effect=lambda: clock["t"]):
+        await algo.on_cycle_started(0.0, 0.0, 0.5, "heat", physical_on_percent=0.5)
+        clock["t"] = 600.0
+        algo.on_applied_power_updated(None, VThermHvacMode_HEAT)
+        clock["t"] = 1800.0
+        await algo.on_cycle_completed(e_eff=0.5, elapsed_ratio=1.0)
+
+    window = algo._causal_power_trace.read_window(0.0, 1800.0)
+    assert window.power_coverage_ratio == pytest.approx(1.0)
+    assert [(d.start_monotonic, d.end_monotonic, d.reason) for d in window.discontinuities] == [
+        (600.0, 1800.0, "missing_valve_position")
+    ]
+
+    observer = CausalFFTrimObserver(5.0, algo._causal_power_trace)
+    for timestamp, temperature in ((120.0, 20.0), (720.0, 20.1), (1320.0, 19.9), (1920.0, 20.0)):
+        observer.record_thermal_sample(
+            FFTrimThermalSample(
+                observed_monotonic=timestamp,
+                measurement_id=str(timestamp),
+                temperature=temperature,
+                target=20.0,
+                ff1=0.5,
+                regime=GovernanceRegime.DEAD_BAND,
+                i_mode="I:FREEZE(deadband)",
+                u_pi=0.1,
+                hvac_mode="heat",
+                saturated=False,
+                trajectory_active=False,
+                ff3_active=False,
+                setpoint_changed=False,
+                outside_temperature_available=True,
+                model_reliable=True,
+                outside_temperature=10.0,
+            ),
+            deadtime_s=120.0,
+            deadtime_reliable=True,
+        )
+    result = observer.try_complete_window(
+        a=0.1, b=0.005, deadtime_s=120.0, deadtime_reliable=True, current_trim=0.0
+    )
+    assert result is not None
+    assert result.admissible is False
+    assert result.reason == "causal_power_not_covered"

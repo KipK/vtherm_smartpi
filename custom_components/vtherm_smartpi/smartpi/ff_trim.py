@@ -24,6 +24,7 @@ from statistics import median
 from typing import Callable, Deque, Sequence
 
 from .causal_power_trace import (
+    UNOBSERVED_POWER_REASONS,
     CausalPowerTrace,
     ControlOwnershipSegment,
 )
@@ -571,6 +572,18 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
                 or trace_window.last_committed_end_monotonic < causal_end
             ):
                 return None
+            return self._reject_completed_window(
+                "causal_power_not_covered",
+                samples,
+                delay_s,
+                coverage=coverage,
+                observation_mode=observation_mode,
+            )
+
+        if any(
+            item.reason in UNOBSERVED_POWER_REASONS
+            for item in trace_window.discontinuities
+        ):
             return self._reject_completed_window(
                 "causal_power_not_covered",
                 samples,

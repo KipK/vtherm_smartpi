@@ -59,6 +59,12 @@ class TraceDiscontinuity:
     reason: str
 
 
+# Discontinuity reasons covering an interval whose applied power was not
+# observed: the trace keeps the last known power over it, so a consumer that
+# learns from the realized power must not use a window overlapping it.
+UNOBSERVED_POWER_REASONS = frozenset({"missing_valve_position"})
+
+
 @dataclass(frozen=True)
 class PhysicalTraceWindow:
     """Immutable view of one requested committed-power interval."""
@@ -96,6 +102,7 @@ class CausalPowerTrace:
         self._active_power_quality: str = "unspecified"
         self._active_ownership_start: float | None = None
         self._active_ownership: ControlOwnershipSnapshot | None = None
+        self._unobserved_since: tuple[float, str] | None = None
         self._epoch = 0
 
     @property
@@ -185,6 +192,7 @@ class CausalPowerTrace:
         quality: str = "unspecified",
     ) -> None:
         """Start the provisional trace for one physical scheduler cycle."""
+        self._close_unobserved(float(now_monotonic))
         self._active_cycle_segments.clear()
         self._active_ownership_segments.clear()
         self._active_power_start = float(now_monotonic)
@@ -203,6 +211,7 @@ class CausalPowerTrace:
     ) -> None:
         """Record a provisional valve-power change inside the active cycle."""
         now = float(now_monotonic)
+        self._close_unobserved(now)
         if (
             self._active_power_start is not None
             and self._active_linear_power is not None
@@ -243,6 +252,7 @@ class CausalPowerTrace:
     ) -> None:
         """Commit either the valve trace or the realized switch-cycle duty."""
         cycle_end = float(now_monotonic)
+        self._close_unobserved(cycle_end)
         cycle_start = self._active_power_start
         cycle_power = self._active_linear_power
         if cycle_start is None or cycle_end <= cycle_start:
@@ -300,6 +310,27 @@ class CausalPowerTrace:
             return
         self._discontinuities.append(TraceDiscontinuity(now, now, str(reason)))
         self._prune_power_history(now)
+
+    def mark_unobserved_power(self, now_monotonic: float, reason: str) -> None:
+        """Open an interval of unobserved applied power.
+
+        The interval ends at the next observed power (valve update, cycle start
+        or cycle end) and is recorded as a discontinuity with `reason`; until
+        then a window reaching past its start sees it as open.
+        """
+        now = float(now_monotonic)
+        if not isfinite(now) or not str(reason) or self._unobserved_since is not None:
+            return
+        self._unobserved_since = (now, str(reason))
+
+    def _close_unobserved(self, now_monotonic: float) -> None:
+        if self._unobserved_since is None:
+            return
+        start, reason = self._unobserved_since
+        self._unobserved_since = None
+        end = max(float(now_monotonic), start) if isfinite(now_monotonic) else start
+        self._discontinuities.append(TraceDiscontinuity(start, end, reason))
+        self._prune_power_history(end)
 
     def read_window(
         self,
@@ -367,6 +398,12 @@ class CausalPowerTrace:
                 )
             )
         )
+        if self._unobserved_since is not None:
+            open_start, open_reason = self._unobserved_since
+            if open_start <= end:
+                discontinuities += (
+                    TraceDiscontinuity(max(start, open_start), end, open_reason),
+                )
         duration = end - start
         power_covered = sum(
             segment.end_monotonic - segment.start_monotonic
@@ -437,6 +474,7 @@ class CausalPowerTrace:
         self._power_segments.clear()
         self._ownership_segments.clear()
         self._discontinuities.clear()
+        self._unobserved_since = None
         self._clear_active_cycle()
         self._epoch += 1
 

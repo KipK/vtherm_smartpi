@@ -643,7 +643,7 @@ class SmartPI:
     ) -> None:
         """Commit a mid-cycle valve position read without receipts (no ownership)."""
         if on_percent is None:
-            self._causal_power_trace.mark_discontinuity(
+            self._causal_power_trace.mark_unobserved_power(
                 time.monotonic(), "missing_valve_position"
             )
             return

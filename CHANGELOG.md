@@ -90,7 +90,8 @@ All notable changes to this project will be documented in this file.
   release whose cycle scheduler emits these receipts. With an older Versatile
   Thermostat, a warning is logged and PI regulation is unchanged, but the
   periodic trim and the bumpless transfer stay inactive and the stationary trim
-  uses the sampled feed-forward.
+  uses the sampled feed-forward. In valve mode, a trim window that overlaps a
+  valve update without a published opening is rejected.
 - In valve mode, commands are attributed to their SmartPI request, so the
   feed-forward trim and the bumpless transfer work with valves. A valve opening
   held back by Versatile Thermostat (regulation threshold or minimum period) or
