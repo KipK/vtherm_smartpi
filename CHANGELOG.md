@@ -5,8 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 - Learning: the indoor temperature history used for the learning slopes and
-  the dead-time detection keeps the last 300 minutes of samples whatever the
-  sensor update rate. With a sensor reporting more than once a minute, a long
+  the dead-time detection keeps the last 300 minutes of samples, within a cap
+  of 1800 samples (full coverage while samples arrive on average at most every
+  10 s). With a sensor reporting more than once a minute, a long
   learning window used only its last samples (about 75 minutes at one report
   every 15 s) while its start temperature referred to the whole window.
 - Dead time: the published `deadtime_heat_s` / `deadtime_cool_s` are the median
@@ -38,20 +39,22 @@ All notable changes to this project will be documented in this file.
   running until the 10-hour timeout. A threshold the measured temperature has
   already reached always moves the calibration on, and an active phase is
   judged at the power allowed by `max_on_percent`.
-- The setpoint landing governor is removed: no command cap after the PI, no
-  prediction falsification and no terminal braking release. The late-braking
+- The HEAT setpoint landing command cap applied after the PI is removed: the
+  PI output is no longer capped near the target. The late-braking
   setpoint trajectory remains on the P branch and ends through its own
   completion (release near the target with a bumpless P step, target reached,
   or setpoint change). ON/`a` learning is no longer blocked while a setpoint
   trajectory runs; only the setpoint-change observation is rejected.
-  Diagnostics removed: `live.analysis.reference_governor`,
-  `live.setpoint.governor_active`, `governor_phase`, `governor_reason`,
-  `governor_command_cap`, `governor_coast_required`, and the Recorder series
-  `history.setpoint.nominal_reference`, `history.power.governor_cap_percent`
-  and `history.power.before_governor_cap_percent` (`schema_version` stays 2).
+  Diagnostics removed: `live.setpoint.landing_active`, `landing_reason`,
+  `landing_u_cap`, `landing_coast_required` and the `live.analysis.landing`
+  block (`setpoint_for_p_cap`, `predicted_temperature`, `predicted_rise`,
+  `target_margin`, `release_allowed`, `time_to_target_min`,
+  `release_blocked_by_slope`, `command_before_cap`, `command_after_cap`); the
+  Recorder `history` series are unchanged (`schema_version` stays 2).
   Effect on the B4 bench: switch landings practically unchanged; with valve
   position retention (`dpercent` 10) landings overshoot 0.05 to 0.25 °C more
-  on some setpoint steps, while the governor was worse on as many other rows.
+  on some setpoint steps, while the landing cap was worse on as many other
+  rows.
 - Outdoor sensor without a value: SmartPI keeps using the last valid outdoor
   temperature for the feed-forward, the setpoint model and the near band, with
   no age limit, and the integral keeps integrating; gains, learning and the FF
@@ -124,15 +127,14 @@ All notable changes to this project will be documented in this file.
   drift on one channel is no longer blocked by measurements of the other.
 - SmartPI services use the standard entity target (Versatile Thermostat climates
   only) and raise a validation error when no SmartPI thermostat matches.
-- COOL uses the passive (rise) dead time for braking, trajectory floor, governor
-  stop delay and thermal twin power-off delay.
+- COOL uses the passive (rise) dead time for setpoint braking and the thermal
+  twin power-off delay.
 - COOL bootstrap hysteresis mirrors HEAT: cooling starts at setpoint + on
   threshold and stops at setpoint - off threshold.
 - A setpoint change during a cycle is flagged in command ownership, and the
   feed-forward trim refuses a bumpless transfer for that cycle.
 - `calibration.retry_count` now publishes the AutoCalib retry counter, and
   `analysis.feedforward.reason` no longer reports `ff_ab_fallback`.
-- Release of stable HEAT setpoint landing plateaus after cycle confirmation, terminal braking release and a more tolerant reference governor cap.
 - In valve mode, the minimal activation and deactivation delays no longer raise
   or zero the valve command: valve position does not depend on ON time.
 - A Home Assistant repair warns when the Versatile Thermostat valve regulation
