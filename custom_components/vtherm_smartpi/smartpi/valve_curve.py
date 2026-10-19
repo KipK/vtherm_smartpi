@@ -145,4 +145,3 @@ def build_valve_curve(
     if enabled:
         return TwoSlopeValveCurve(params or VALVE_CURVE_DEFAULTS)
     return IdentityValveCurve()
-
