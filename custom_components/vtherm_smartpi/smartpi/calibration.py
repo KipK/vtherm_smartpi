@@ -117,13 +117,24 @@ class CalibrationManager:
         result, self._completed_result = self._completed_result, None
         return result
 
-    def _unreachable_phase(self, target_temp: float, is_cool: bool, twin_diag: dict | None) -> str | None:
+    def _unreachable_phase(
+        self,
+        target_temp: float,
+        current_temp: float | None,
+        is_cool: bool,
+        twin_diag: dict | None,
+        max_on_percent: float | None,
+    ) -> str | None:
         """Name the current phase when the reliable twin cannot reach its threshold.
 
-        A phase driven at full power converges to T_steady_max and a passive
-        one to T_steady_passive. The threshold is reachable when that
+        A passive phase converges to T_steady_passive. An active phase driven
+        at the allowed power u_max converges to
+        T_steady_passive + u_max * (T_steady_max - T_steady_passive), the 1R1C
+        equilibrium being linear in power (T_steady_max when u_max is 1 or the
+        passive equilibrium is unknown). The threshold is reachable when that
         equilibrium lies beyond it by CALIBRATION_REACHABILITY_MARGIN_C.
-        Returns None when the twin is not reliable or the phase is reachable.
+        Returns None when the measured temperature already reached the
+        threshold, when the twin is not reliable or when the phase is reachable.
         """
         diag = twin_diag or {}
         if (
@@ -140,18 +151,31 @@ class CalibrationManager:
             SmartPICalibrationPhase.HEAT_UP: target_temp + HYST_UPPER_C,
             SmartPICalibrationPhase.COOL_DOWN_FINAL: target_temp,
         }[phase]
+        if current_temp is not None and (
+            current_temp >= threshold if going_up else current_temp <= threshold
+        ):
+            return None
         active = not is_cool if going_up else is_cool
         key = "T_steady_max" if active else "T_steady_passive"
         level = diag.get(key)
         if level is None or diag.get(f"{key}_valid") is not True:
             return None
+        passive = diag.get("T_steady_passive")
+        if (
+            active
+            and max_on_percent is not None
+            and max_on_percent < 1.0
+            and passive is not None
+            and diag.get("T_steady_passive_valid") is True
+        ):
+            level = passive + max(max_on_percent, 0.0) * (level - passive)
         margin = CALIBRATION_REACHABILITY_MARGIN_C
         unreachable = level < threshold + margin if going_up else level > threshold - margin
         if not unreachable:
             return None
         _LOGGER.warning(
-            "%s - Calibration %s unreachable: %s=%.2f for threshold %.2f",
-            self._name, phase.value, key, level, threshold,
+            "%s - Calibration %s unreachable: equilibrium %.2f (%s) for threshold %.2f",
+            self._name, phase.value, level, key, threshold,
         )
         return phase.value
 
@@ -245,7 +269,9 @@ class CalibrationManager:
         on_low = 1.0 if is_cool else 0.0
         on_high = 0.0 if is_cool else 1.0
         
-        unreachable_phase = self._unreachable_phase(target_temp, is_cool, twin_diag)
+        unreachable_phase = self._unreachable_phase(
+            target_temp, current_temp, is_cool, twin_diag, max_on_percent
+        )
         if unreachable_phase is not None:
             self._calibration_state = SmartPICalibrationPhase.IDLE
             self._calibration_start_time = None

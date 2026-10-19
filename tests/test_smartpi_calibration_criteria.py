@@ -272,13 +272,14 @@ def _manager(phase):
     return mgr
 
 
-def _calc(mgr, twin, mode=VThermHvacMode_HEAT, current=20.5, target=20.0):
+def _calc(mgr, twin, mode=VThermHvacMode_HEAT, current=20.2, target=20.0, max_on=1.0):
+    """Default current temperature lies short of every phase threshold (19.7, 20.5, 20.0)."""
     return mgr.calculate(
         target_temp=target,
         current_temp=current,
         hvac_mode=mode,
         dt_est=MagicMock(),
-        max_on_percent=1.0,
+        max_on_percent=max_on,
         twin_diag=twin,
     )
 
@@ -358,6 +359,52 @@ def test_reachability_margin_is_applied_beyond_the_threshold():
     enough = _twin(T_steady_max=high + CALIBRATION_REACHABILITY_MARGIN_C + 0.05)
     assert _calc(_manager(SmartPICalibrationPhase.HEAT_UP), just_short).result == SmartPICalibrationResult.UNREACHABLE
     assert _calc(_manager(SmartPICalibrationPhase.HEAT_UP), enough).result == SmartPICalibrationResult.PENDING
+
+
+@pytest.mark.parametrize(
+    "phase, mode, twin, current, next_phase, expected",
+    [
+        (SmartPICalibrationPhase.COOL_DOWN, VThermHvacMode_HEAT, _twin(T_steady_passive=19.6),
+         19.7, SmartPICalibrationPhase.HEAT_UP, SmartPICalibrationResult.PENDING),
+        (SmartPICalibrationPhase.HEAT_UP, VThermHvacMode_HEAT, _twin(T_steady_max=20.6),
+         20.5, SmartPICalibrationPhase.COOL_DOWN_FINAL, SmartPICalibrationResult.PENDING),
+        (SmartPICalibrationPhase.COOL_DOWN_FINAL, VThermHvacMode_HEAT, _twin(T_steady_passive=20.5),
+         20.0, SmartPICalibrationPhase.IDLE, SmartPICalibrationResult.SUCCESS),
+        (SmartPICalibrationPhase.COOL_DOWN, VThermHvacMode_COOL,
+         _twin(cooling_model_available=True, T_steady_max=19.6),
+         19.6, SmartPICalibrationPhase.HEAT_UP, SmartPICalibrationResult.PENDING),
+        (SmartPICalibrationPhase.HEAT_UP, VThermHvacMode_COOL,
+         _twin(cooling_model_available=True, T_steady_passive=20.6),
+         20.6, SmartPICalibrationPhase.COOL_DOWN_FINAL, SmartPICalibrationResult.PENDING),
+        (SmartPICalibrationPhase.COOL_DOWN_FINAL, VThermHvacMode_COOL,
+         _twin(cooling_model_available=True, T_steady_max=20.5),
+         19.9, SmartPICalibrationPhase.IDLE, SmartPICalibrationResult.SUCCESS),
+    ],
+)
+def test_measured_threshold_takes_priority_over_reachability(phase, mode, twin, current, next_phase, expected):
+    """A threshold the measured temperature already reached moves the cycle on, whatever the twin predicts."""
+    mgr = _manager(phase)
+
+    result = _calc(mgr, twin, mode, current=current)
+
+    assert result.result == expected
+    assert mgr.state == next_phase
+    assert not result.message.startswith("unreachable")
+
+
+def test_active_reachability_uses_the_allowed_power():
+    """An active phase is judged on the equilibrium at max_on_percent, linear between passive and full power."""
+    # Passive 10 C, full power 30 C: u_max 0.2 settles at 14 C, short of 20.5 + margin.
+    twin = _twin(T_steady_max=30.0, T_steady_passive=10.0)
+    assert _calc(_manager(SmartPICalibrationPhase.HEAT_UP), twin).result == SmartPICalibrationResult.PENDING
+    limited = _calc(_manager(SmartPICalibrationPhase.HEAT_UP), twin, max_on=0.2)
+    assert limited.result == SmartPICalibrationResult.UNREACHABLE
+    assert limited.message == f"unreachable_{SmartPICalibrationPhase.HEAT_UP.value}"
+    # u_max 0.6 settles at 22 C, which clears 20.5 + margin.
+    assert _calc(_manager(SmartPICalibrationPhase.HEAT_UP), twin, max_on=0.6).result == SmartPICalibrationResult.PENDING
+    # The passive phases ignore the power limit.
+    passive = _twin(T_steady_passive=18.0)
+    assert _calc(_manager(SmartPICalibrationPhase.COOL_DOWN), passive, max_on=0.2).result == SmartPICalibrationResult.PENDING
 
 
 def test_completed_result_reports_every_way_a_run_ends():

@@ -35,7 +35,9 @@ All notable changes to this project will be documented in this file.
   report the real times). A calibration whose threshold the thermal twin cannot
   reach (warm outdoors, undersized emitter) stops at once with the event
   `smartpi_autocalib_unreachable`, uses no retry and waits 24 hours, instead of
-  running until the 10-hour timeout.
+  running until the 10-hour timeout. A threshold the measured temperature has
+  already reached always moves the calibration on, and an active phase is
+  judged at the power allowed by `max_on_percent`.
 - The setpoint landing governor is removed: no command cap after the PI, no
   prediction falsification and no terminal braking release. The late-braking
   setpoint trajectory remains on the P branch and ends through its own
