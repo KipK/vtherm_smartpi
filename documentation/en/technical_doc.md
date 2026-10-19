@@ -127,7 +127,7 @@ In practice, the decision to submit or extend the window depends on slope robust
 - minimum number of level changes: `OLS_MIN_JUMPS = 3`,
 - statistical significance: `OLS_T_MIN = 2.5`.
 
-Slopes are computed on the raw measured indoor temperature, not on the filtered signals, because the robustness guard counts distinct value jumps of the measurement. The raw history (and the filtered history used by the dead-time detection) keeps the samples of the last `TIN_HISTORY_RETENTION_MIN = 300` minutes (`DT_MAX_MIN` + 60) whatever the sensor update rate, so the slope of a window uses the samples from the window start; `TIN_HISTORY_MAX_SAMPLES = 1800` only bounds memory (about one sample every 10 s over that duration). Validated slopes are then fed into `ABEstimator.learn()`, which:
+Slopes are computed on the raw measured indoor temperature, not on the filtered signals, because the robustness guard counts distinct value jumps of the measurement. The raw history (and the filtered history used by the dead-time detection) keeps the samples of the last `TIN_HISTORY_RETENTION_MIN = 300` minutes (`DT_MAX_MIN` + 60) and at most `TIN_HISTORY_MAX_SAMPLES = 1800` samples. A sample is added on each value change or after 60 s, so the full duration is covered while samples arrive on average at most every 10 s; beyond that rate the sample cap shortens the covered duration (about 150 minutes at one changing sample every 5 s) and the slope of a long window uses only its most recent samples. Validated slopes are then fed into `ABEstimator.learn()`, which:
 
 - rejects physical outliers (`max_abs_dT_per_min = 0.35`),
 - learns `b` if `u < U_OFF_MAX`,

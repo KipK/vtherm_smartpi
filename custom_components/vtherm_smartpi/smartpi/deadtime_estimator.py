@@ -86,8 +86,9 @@ class DeadTimeEstimator:
     ) -> None:
         """Append a sample when the value changed or 60 seconds elapsed.
 
-        Samples older than TIN_HISTORY_RETENTION_MIN are dropped, so the
-        history spans that duration independently of the sensor update rate.
+        Samples older than TIN_HISTORY_RETENTION_MIN are dropped. The history
+        spans that duration as long as the TIN_HISTORY_MAX_SAMPLES cap is not
+        reached, i.e. while samples arrive on average at most every 10 s.
         """
         # Performance/Redundancy Gate: only append if temperature changed
         # or if more than 60 seconds passed since the last sample.

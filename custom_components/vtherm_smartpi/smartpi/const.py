@@ -258,8 +258,10 @@ U_CV_MIN_MEAN = 0.05       # Minimum mean(u) to compute CV (avoids division by ~
 
 # Indoor temperature histories of the dead time estimator (learning slopes and
 # dead time inflection lookback). Samples are kept by age so that a learning
-# window or a dead time detection (both bounded by 240 min) is fully covered
-# whatever the sensor update rate; the sample cap only bounds memory.
+# window or a dead time detection (both bounded by 240 min) is covered; the
+# sample cap bounds memory and also limits the covered duration when samples
+# arrive on average more often than every 10 s (a sample is added on each
+# value change or after 60 s).
 TIN_HISTORY_RETENTION_MIN = DT_MAX_MIN + 60
 TIN_HISTORY_MAX_SAMPLES = 1800
 
