@@ -28,6 +28,7 @@ from .const import (
     SERVICE_SET_SMARTPI_LEARNING,
 )
 from .factory import SmartPIHandlerFactory
+from .smartpi.compatibility import async_check_vtherm_version
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -192,6 +193,8 @@ async def _reload_smartpi_vtherms_using_defaults(hass: HomeAssistant) -> None:
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up vtherm_smartpi from YAML."""
     del config
+    if not await async_check_vtherm_version(hass):
+        return False
     _register_factory(hass)
     _register_services(hass)
     return True

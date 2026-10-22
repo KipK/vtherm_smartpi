@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from awesomeversion import AwesomeVersion
 import pytest
 from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.core import CoreState
@@ -30,6 +32,15 @@ from custom_components.vtherm_smartpi.const import (
 )
 
 TARGET_UNIQUE_ID = "vt-target"
+
+
+@pytest.fixture(autouse=True)
+def compatible_vtherm(monkeypatch):
+    """Keep lifecycle tests independent of the locally installed VT version."""
+    monkeypatch.setattr(
+        "custom_components.vtherm_smartpi.smartpi.compatibility.async_get_integration",
+        AsyncMock(return_value=SimpleNamespace(version=AwesomeVersion("10.6.2"))),
+    )
 
 
 @pytest.fixture

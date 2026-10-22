@@ -106,6 +106,10 @@
     }
   },
   "issues": {
+    "vtherm_version": {
+      "title": "SmartPI cannot start",
+      "description": "SmartPI requires Versatile Thermostat {minimum_version} or later. Installed version: {installed_version}.\n\nSmartPI cannot start because this version is too old or could not be verified. Update Versatile Thermostat, then restart Home Assistant."
+    },
     "dpercent_filter": {
       "title": "SmartPI valve commands are filtered for {name}",
       "description": "The thermostat {name} controls a valve and its Versatile Thermostat \"Regulation threshold\" is set to {dpercent} %. Versatile Thermostat keeps the previous valve opening when the opening requested by SmartPI differs from it by less than this threshold, and forces any opening below the threshold to 0 %. SmartPI is not aware of this filtering, so the valve does not follow its command and its learning and regulation are degraded.\n\nTo fix it, open the Versatile Thermostat settings of {name}, go to the valve regulation settings and set \"Regulation threshold\" to 0."

@@ -49,6 +49,8 @@ SmartPI publishes a structured diagnostics summary that the [Equinox Lovelace ca
 
 ## 📦 Installation
 
+SmartPI requires **Versatile Thermostat 10.6.2 or later**. If the installed version is too old or cannot be verified, SmartPI does not load and displays a persistent Home Assistant notification. Update Versatile Thermostat, then restart Home Assistant.
+
 ### Via HACS (Recommended)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=KipK&repository=vtherm_smartpi&category=Integration)

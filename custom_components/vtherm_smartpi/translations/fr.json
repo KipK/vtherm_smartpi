@@ -106,6 +106,10 @@
     }
   },
   "issues": {
+    "vtherm_version": {
+      "title": "SmartPI ne peut pas démarrer",
+      "description": "SmartPI nécessite Versatile Thermostat {minimum_version} ou supérieur. Version installée : {installed_version}.\n\nSmartPI ne peut pas démarrer car cette version est trop ancienne ou n'a pas pu être vérifiée. Mettez à jour Versatile Thermostat, puis redémarrez Home Assistant."
+    },
     "dpercent_filter": {
       "title": "Les commandes de vanne SmartPI sont filtrées pour {name}",
       "description": "Le thermostat {name} pilote une vanne et son « Seuil de régulation » Versatile Thermostat est réglé à {dpercent} %. Versatile Thermostat conserve l'ouverture précédente de la vanne lorsque l'ouverture demandée par SmartPI en diffère de moins que ce seuil, et force à 0 % toute ouverture inférieure au seuil. SmartPI n'a pas connaissance de ce filtrage : la vanne ne suit pas sa commande et son apprentissage ainsi que sa régulation sont dégradés.\n\nPour corriger, ouvrez les réglages Versatile Thermostat de {name}, allez dans les réglages de régulation de la vanne et mettez « Seuil de régulation » à 0."

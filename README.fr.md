@@ -49,6 +49,8 @@ SmartPI publie un résumé structuré de diagnostics que la [carte Lovelace Equi
 
 ## 📦 Installation
 
+SmartPI nécessite **Versatile Thermostat 10.6.2 ou supérieur**. Si la version installée est trop ancienne ou ne peut pas être vérifiée, SmartPI ne se charge pas et affiche une notification persistante Home Assistant. Mettez à jour Versatile Thermostat, puis redémarrez Home Assistant.
+
 ### Via HACS (recommandé)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=KipK&repository=vtherm_smartpi&category=Integration)

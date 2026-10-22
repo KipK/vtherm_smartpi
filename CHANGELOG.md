@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Compatibility: SmartPI requires Versatile Thermostat 10.6.2 or later. An
+  older or unverifiable version prevents SmartPI from loading and displays a
+  persistent Home Assistant notification with update instructions.
 - Learning: the indoor temperature history used for the learning slopes and
   the dead-time detection keeps the last 300 minutes of samples, within a cap
   of 1800 samples (full coverage while samples arrive on average at most every
