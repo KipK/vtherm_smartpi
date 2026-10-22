@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.5.0]
 
 - Compatibility: SmartPI requires Versatile Thermostat 10.6.2 or later. An
   older or unverifiable version prevents SmartPI from loading and displays a
