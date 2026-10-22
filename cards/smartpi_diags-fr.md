@@ -2,8 +2,9 @@
 {% set sensor_entity = 'sensor.smartpi_diagnostics' %}
 {% set entity_name = 'Simu' %}
 
-{% set attrs = states[sensor_entity].attributes if states(sensor_entity) else {} %}
-{% set spi = attrs.get('live', {}) %}
+{% set sensor_state = states[sensor_entity] %}
+{% set attrs = sensor_state.attributes if sensor_state is not none else {} %}
+{% set spi = attrs.get('live') or {} %}
 
 {% if not spi or spi.get('control') is none %}
 <ha-alert alert-type="warning">Aucune donnée SmartPI disponible pour cette entité. Vérifiez l'ID du sensor.</ha-alert>
@@ -40,7 +41,8 @@
 {% set ti_min = control.get('ti_min') %}
 {% set t_in = temp.get('indoor') %}
 {% set t_set = state_attr(climate_entity, 'temperature') %}
-{% set c_attrs = states[climate_entity].attributes if states(climate_entity) else {} %}
+{% set climate_state = states[climate_entity] %}
+{% set c_attrs = climate_state.attributes if climate_state is not none else {} %}
 {% set t_ext = c_attrs.get('ext_current_temperature', c_attrs.get('specific_states', {}).get('ext_current_temperature')) %}
 {% set error = temp.get('error') %}
 {% set integral_error = temp.get('integral_error') %}
@@ -67,6 +69,7 @@
 {% set deadtime_heat_reliable = model.get('deadtime_heat_reliable', false) %}
 {% set deadtime_cool_reliable = model.get('deadtime_cool_reliable', false) %}
 
+{% set learning_enabled = learning.get('enabled') %}
 {% set stage = learning.get('stage', 'unknown') %}
 {% set bootstrap_progress = learning.get('bootstrap_progress_percent') %}
 {% set bootstrap_status = learning.get('bootstrap_status') %}
@@ -261,8 +264,6 @@
 {% set integral_guard_source = integral_guard_source_pub %}
 {% set integral_guard_mode = analysis_control.get('integral_guard_mode', '—') %}
 {% set core_db_active = analysis_control.get('in_core_deadband', false) %}
-{% set nb_below = analysis_control.get('near_band_below_deg') %}
-{% set nb_above = analysis_control.get('near_band_above_deg') %}
 {% set nb_src = analysis_control.get('near_band_source', 'unknown') %}
 {% set tau_s = model.get('tau_min') %}
 {% set learn_ok = analysis_learning.get('learn_ok_count', 0) | int %}
@@ -288,8 +289,6 @@
 {% set learn_u_std = analysis_learning.get('window_power_std') %}
 {% set deadtime_state = analysis_deadtime.get('state', '—') %}
 {% set deadtime_last_power = analysis_deadtime.get('last_power') %}
-{% set deadtime_heat_start_time = none %}
-{% set deadtime_cool_start_time = none %}
 {% set t_freeze = gov.get('thermal_update_reason', 'none') %}
 {% set g_freeze = analysis_governance.get('last_freeze_reason_gains', 'none') %}
 {% set g_dec_g = analysis_governance.get('last_decision_gains', 'unknown') %}
@@ -368,19 +367,7 @@
 {% set pi_blk = [tot_blk - ff_blk, 0] | max %}
 {% set off_dot = [18 - ff_blk - pi_blk, 0] | max %}
 {% set pwr_bar = '█' * ff_blk ~ '░' * pi_blk ~ '·' * off_dot %}
-{% if nb_below is not none and nb_above is not none %}
-  {% set nb_low = (t_set | float(0)) - (nb_below | float) %}
-  {% set nb_high = (t_set | float(0)) + (nb_above | float) %}
-  {% if (t_in | float(0)) < nb_low %}
-    {% set nb_status = 'sous bande' %}
-  {% elif (t_in | float(0)) > nb_high %}
-    {% set nb_status = 'au-dessus' %}
-  {% else %}
-    {% set nb_status = 'dans bande' %}
-  {% endif %}
-{% else %}
-  {% set nb_status = '—' %}
-{% endif %}
+{% set nb_status = 'active' if nb_active else 'inactive' %}
 {% set sat_icons = {
   'NO_SAT': '—',
   'SAT_HI': '🔴 butée haute',
@@ -588,10 +575,12 @@
 ### 🧠 Apprentissage AB
 
 {{ stage_icon }} **{{ stage | upper }}**
+{%- if learning_enabled is sameas false %} · ⏸️ en pause{% endif %}
 {%- if bootstrap_progress is not none %} · {{ bootstrap_progress }}%{% endif %}
 
 | Paramètre | Valeur |
 |---|---|
+| Apprentissage | {% if learning_enabled is sameas true %}activé{% elif learning_enabled is sameas false %}en pause{% else %}—{% endif %} |
 | Échantillons EMEA A/B | **{{ emea_samples_a }} / {{ emea_samples_b }}** (cibles: {{ bootstrap_target_a }}/{{ bootstrap_target_b }} bootstrap, {{ history_target }} historique) |
 | Updates acceptés A/B | **{{ accepted_updates_a }} / {{ accepted_updates_b }}** |
 | Dérive A/B | `{{ a_drift }}` / `{{ b_drift }}` |
@@ -734,7 +723,7 @@
 | Paramètre | Valeur |
 |---|---:|
 | `ep` | {{ ep | round(4) }} |
-| Thermique | {{ '✅ active' if t_freeze == 'none' else '🔒 ' ~ (t_freeze | replace('_', ' ')) }} |
+| Thermique | {% if learning_enabled is sameas false %}⏸️ apprentissage en pause{% else %}{{ '✅ active' if t_freeze == 'none' else '🔒 ' ~ (t_freeze | replace('_', ' ')) }}{% endif %} |
 | Gains | {{ '✅ active' if g_freeze == 'none' else '🔒 ' ~ (g_freeze | replace('_', ' ')) }} |
 | Décision gains | `{{ g_dec_g }}` |
 
@@ -748,8 +737,6 @@
 | `deadtime_cool_s` | {% if dt_cool is not none %}{{ dt_cool }} s{% else %}—{% endif %} · {% if deadtime_cool_reliable %}✅ fiable{% else %}⏳ apprentissage{% endif %} |
 | `deadtime_state` | `{{ deadtime_state }}` |
 | `deadtime_last_power` | {% if deadtime_last_power is not none %}{{ (deadtime_last_power | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| `heat_start_time` | {% if deadtime_heat_start_time is not none %}{{ deadtime_heat_start_time }}{% else %}—{% endif %} |
-| `cool_start_time` | {% if deadtime_cool_start_time is not none %}{{ deadtime_cool_start_time }}{% else %}—{% endif %} |
 
 ---
 
