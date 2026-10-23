@@ -49,7 +49,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "SmartPI defaults",
+        "title": "SmartPI settings",
         "data": {
           "minimal_activation_delay": "Minimal activation delay",
           "minimal_deactivation_delay": "Minimal deactivation delay",
