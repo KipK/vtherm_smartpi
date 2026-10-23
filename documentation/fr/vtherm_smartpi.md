@@ -181,6 +181,8 @@ Pour trouver l'ouverture minimale, le plus simple est d'observer le radiateur :
 4. Attendez au moins une minute entre deux essais.
 5. Notez la première valeur où le tuyau ou le radiateur commence vraiment à chauffer.
 
+Les valeurs doivent seulement respecter ouverture minimale < ouverture au coude < ouverture maximale, avec une demande au coude strictement comprise entre `0%` et `100%`. Sinon, le formulaire indique le champ à corriger.
+
 Si vous n'avez pas envie de tester finement, gardez les valeurs par défaut. Si votre vanne semble très rapide, une ouverture au coude autour de `20%` à `25%` peut être un essai raisonnable. Si le radiateur devient bruyant à pleine ouverture, baissez l'ouverture maximale.
 
 Après un changement, laissez SmartPI fonctionner plusieurs cycles avant de juger le résultat. Une seule chauffe ne suffit pas toujours à conclure.
@@ -199,7 +201,7 @@ L'arrondi entier de la position de la vanne (pas de `1%`) s'applique toujours. U
 
 SmartPI vérifie ces réglages au démarrage du thermostat et affiche, dans Home Assistant **Paramètres > Réparations**, un avertissement pour chaque réglage non transparent : le seuil de régulation vaut `1` ou plus, la période minimale de régulation est supérieure à `0`, ou une modification de l'ouverture est active alors que la linéarisation de vanne est activée. L'avertissement disparaît au démarrage suivant, une fois le réglage mis en conformité. Les valeurs contrôlées et les codes de problème (`dpercent_filter`, `period_filter`, `opening_remap`) sont aussi publiés sous `live.valve` dans les [diagnostics](./diagnostics.md).
 
-Pour lever les avertissements, réglez le seuil de régulation et la période minimale de régulation à `0` dans les réglages de régulation de la vanne de Versatile Thermostat. Si vous avez besoin de ces réglages d'ouverture, désactivez plutôt la linéarisation de vanne de SmartPI.
+Pour lever les avertissements, réglez le seuil de régulation et la période minimale de régulation à `0` dans le menu **Sous-jacents** des réglages de Versatile Thermostat. Si le radiateur ne commence à chauffer qu'au-delà d'une certaine ouverture, réglez cette ouverture dans **Ouverture minimale de vanne** de la courbe de vanne SmartPI plutôt que dans les réglages d'ouverture de Versatile Thermostat. Si vous avez besoin d'autres réglages d'ouverture, désactivez plutôt la linéarisation de vanne de SmartPI.
 
 ## Phases de fonctionnement
 

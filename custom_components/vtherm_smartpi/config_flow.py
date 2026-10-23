@@ -33,6 +33,9 @@ from .const import (
 )
 
 ERROR_INVALID_VALVE_CURVE = "invalid_valve_curve"
+ERROR_VALVE_MIN_NOT_BELOW_KNEE = "valve_min_not_below_knee"
+ERROR_VALVE_KNEE_NOT_BELOW_MAX = "valve_knee_not_below_max"
+ERROR_KNEE_DEMAND_OUT_OF_RANGE = "knee_demand_out_of_range"
 THERMOSTAT_TYPE_VALVE = "thermostat_over_valve"
 THERMOSTAT_TYPE_CLIMATE = "thermostat_over_climate"
 AUTO_REGULATION_VALVE = "auto_regulation_valve"
@@ -156,7 +159,7 @@ def build_valve_curve_schema(defaults: dict[str, Any]) -> vol.Schema:
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
                     min=0,
-                    max=20,
+                    max=100,
                     step=1,
                     mode=selector.NumberSelectorMode.BOX,
                 )
@@ -166,8 +169,8 @@ def build_valve_curve_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=defaults[CONF_SMART_PI_KNEE_DEMAND],
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=50,
-                    max=95,
+                    min=0,
+                    max=100,
                     step=1,
                     mode=selector.NumberSelectorMode.BOX,
                 )
@@ -177,8 +180,8 @@ def build_valve_curve_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=defaults[CONF_SMART_PI_KNEE_VALVE],
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=10,
-                    max=50,
+                    min=0,
+                    max=100,
                     step=1,
                     mode=selector.NumberSelectorMode.BOX,
                 )
@@ -188,7 +191,7 @@ def build_valve_curve_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=defaults[CONF_SMART_PI_MAX_VALVE],
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=50,
+                    min=0,
                     max=100,
                     step=1,
                     mode=selector.NumberSelectorMode.BOX,
@@ -290,12 +293,15 @@ def _validate_valve_curve_config(config: dict[str, Any]) -> dict[str, str]:
     except (KeyError, TypeError, ValueError):
         return {"base": ERROR_INVALID_VALVE_CURVE}
 
-    if (
-        0.0 <= min_valve < knee_valve < max_valve <= 100.0
-        and 0.0 < knee_demand < 100.0
-    ):
-        return {}
-    return {"base": ERROR_INVALID_VALVE_CURVE}
+    # Errors are attached to the field the user has to change.
+    errors: dict[str, str] = {}
+    if not 0.0 <= min_valve < knee_valve:
+        errors[CONF_SMART_PI_MIN_VALVE] = ERROR_VALVE_MIN_NOT_BELOW_KNEE
+    if not knee_valve < max_valve <= 100.0:
+        errors[CONF_SMART_PI_KNEE_VALVE] = ERROR_VALVE_KNEE_NOT_BELOW_MAX
+    if not 0.0 < knee_demand < 100.0:
+        errors[CONF_SMART_PI_KNEE_DEMAND] = ERROR_KNEE_DEMAND_OUT_OF_RANGE
+    return errors
 
 
 class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):

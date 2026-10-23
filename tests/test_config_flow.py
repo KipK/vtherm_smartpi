@@ -7,6 +7,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from custom_components.vtherm_smartpi.const import (
     CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
@@ -19,7 +20,11 @@ from custom_components.vtherm_smartpi.const import (
     DEFAULT_OPTIONS,
     DOMAIN,
 )
-from custom_components.vtherm_smartpi.config_flow import build_options_schema
+from custom_components.vtherm_smartpi.config_flow import (
+    _validate_valve_curve_config,
+    build_options_schema,
+    build_valve_curve_schema,
+)
 
 VT_DOMAIN = "versatile_thermostat"
 
@@ -246,7 +251,7 @@ async def test_thermostat_flow_shows_valve_curve_step_for_valve(hass) -> None:
     )
 
     assert result["type"] == FlowResultType.FORM
-    assert result["errors"] == {"base": "invalid_valve_curve"}
+    assert result["errors"] == {CONF_SMART_PI_MIN_VALVE: "valve_min_not_below_knee"}
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -260,6 +265,79 @@ async def test_thermostat_flow_shows_valve_curve_step_for_valve(hass) -> None:
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION] is True
+
+
+def _valve_curve(min_valve, knee_demand, knee_valve, max_valve) -> dict[str, float]:
+    """Return a valve curve form payload."""
+    return {
+        CONF_SMART_PI_MIN_VALVE: min_valve,
+        CONF_SMART_PI_KNEE_DEMAND: knee_demand,
+        CONF_SMART_PI_KNEE_VALVE: knee_valve,
+        CONF_SMART_PI_MAX_VALVE: max_valve,
+    }
+
+
+def test_valve_curve_schema_accepts_high_minimum_opening() -> None:
+    """A valve that only heats above a high opening must be configurable."""
+    schema = build_valve_curve_schema(DEFAULT_OPTIONS)
+    payload = _valve_curve(28.0, 80.0, 35.0, 100.0)
+
+    assert schema(payload) == payload
+    assert _validate_valve_curve_config(payload) == {}
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        CONF_SMART_PI_MIN_VALVE,
+        CONF_SMART_PI_KNEE_DEMAND,
+        CONF_SMART_PI_KNEE_VALVE,
+        CONF_SMART_PI_MAX_VALVE,
+    ],
+)
+@pytest.mark.parametrize("value", [-1.0, 101.0])
+def test_valve_curve_schema_rejects_values_outside_percent_range(field, value) -> None:
+    """Each valve curve value must stay a percentage."""
+    schema = build_valve_curve_schema(DEFAULT_OPTIONS)
+    payload = _valve_curve(7.0, 80.0, 15.0, 100.0)
+    payload[field] = value
+
+    with pytest.raises(vol.Invalid):
+        schema(payload)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (
+            _valve_curve(35.0, 80.0, 35.0, 100.0),
+            {CONF_SMART_PI_MIN_VALVE: "valve_min_not_below_knee"},
+        ),
+        (
+            _valve_curve(7.0, 80.0, 60.0, 60.0),
+            {CONF_SMART_PI_KNEE_VALVE: "valve_knee_not_below_max"},
+        ),
+        (
+            _valve_curve(7.0, 0.0, 15.0, 100.0),
+            {CONF_SMART_PI_KNEE_DEMAND: "knee_demand_out_of_range"},
+        ),
+        (
+            _valve_curve(7.0, 100.0, 15.0, 100.0),
+            {CONF_SMART_PI_KNEE_DEMAND: "knee_demand_out_of_range"},
+        ),
+        (
+            _valve_curve(50.0, 100.0, 40.0, 30.0),
+            {
+                CONF_SMART_PI_MIN_VALVE: "valve_min_not_below_knee",
+                CONF_SMART_PI_KNEE_VALVE: "valve_knee_not_below_max",
+                CONF_SMART_PI_KNEE_DEMAND: "knee_demand_out_of_range",
+            },
+        ),
+    ],
+)
+def test_valve_curve_validation_reports_the_field_to_correct(payload, expected) -> None:
+    """Invalid valve curves must point at the field the user has to change."""
+    assert _validate_valve_curve_config(payload) == expected
 
 
 @pytest.mark.asyncio

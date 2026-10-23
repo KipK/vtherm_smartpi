@@ -181,6 +181,8 @@ To find the minimum opening, the simplest method is to observe the radiator:
 4. Wait at least one minute between attempts.
 5. Note the first value where the pipe or radiator really starts warming up.
 
+The values only need to satisfy minimum opening < knee opening < maximum opening, with a demand at knee strictly between `0%` and `100%`. Otherwise the form shows the field to correct.
+
 If you do not want to test carefully, keep the defaults. If your valve reacts very quickly, a knee opening around `20%` to `25%` can be a reasonable trial. If the radiator becomes noisy at full opening, lower the maximum opening.
 
 After changing a value, let SmartPI run for several cycles before judging the result. One heating cycle is not always enough to conclude.
@@ -199,7 +201,7 @@ The integer rounding of the valve position (`1%` steps) always applies. A regula
 
 SmartPI checks these settings when the thermostat starts and raises a warning in Home Assistant **Settings > Repairs** for each setting that is not transparent: the regulation threshold is `1` or more, the regulation minimum period is above `0`, or an opening remap is active while the valve linearization is enabled. The warning disappears at the next start once the setting is corrected. The checked values and the issue codes (`dpercent_filter`, `period_filter`, `opening_remap`) are also published under `live.valve` in the [diagnostics](diagnostics.md).
 
-To clear the warnings, set the regulation threshold and the regulation minimum period to `0` in the valve regulation settings of the Versatile Thermostat. If you need an opening remap, disable the SmartPI valve linearization instead.
+To clear the warnings, set the regulation threshold and the regulation minimum period to `0` in the **Underlyings** menu of the Versatile Thermostat settings. If the radiator only starts heating above a given opening, set that opening as **Minimum valve opening** in the SmartPI valve curve rather than in the Versatile Thermostat opening settings. If you need another opening remap, disable the SmartPI valve linearization instead.
 
 ## Operating phases
 
