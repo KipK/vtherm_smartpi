@@ -20,6 +20,8 @@ from .const import (
     U_ON_MIN,
     clamp,
 )
+from .ab_window_balance import ABWindowBalance
+from .learning_outcomes import LearningOutcomes
 
 if TYPE_CHECKING:
     from .ab_estimator import ABEstimator
@@ -73,6 +75,17 @@ class LearningWindowManager:
         # Track last published extending method to suppress duplicate messages
         self._last_extend_method: str = ""
 
+        # Integral balance pools fed by windows closed without a robust slope.
+        # A window reset during update() closes its segment into the pools;
+        # an external reset discards it.
+        self._balance = ABWindowBalance(name)
+        self._updating: bool = False
+        # A window timeout only bounds the OLS slope: the balance segment
+        # carries over into the next window until a gate closes it.
+        self._balance_carry: bool = False
+        # Sliding-period counts of window outcomes for diagnostics.
+        self._outcomes = LearningOutcomes()
+
     # --------------------------------------------------------------------------
     # Properties for diagnostic access
     # --------------------------------------------------------------------------
@@ -118,6 +131,15 @@ class LearningWindowManager:
         return self._learning_start_date
 
     @property
+    def balance(self) -> ABWindowBalance:
+        """Return the integral balance pools (diagnostics)."""
+        return self._balance
+
+    def outcomes_summary(self, now: float) -> dict[str, list[list]]:
+        """Return the most frequent window outcomes of the sliding period."""
+        return self._outcomes.summary(now)
+
+    @property
     def learning_resume_ts(self) -> Optional[float]:
         """Return the monotonic timestamp for learning resume cooldown."""
         return self._learning_resume_ts
@@ -138,10 +160,14 @@ class LearningWindowManager:
         self._u_m2 = 0.0
         self._last_extend_method = ""
         self._sliding_elapsed_s = 0.0
+        if not self._updating:
+            self._balance.discard()
 
     def reset_all(self) -> None:
         """Reset all learning window state including timestamps."""
         self.reset()
+        self._balance.clear()
+        self._outcomes.clear()
         self._T_int_start = 0.0
         self._T_ext_start = 0.0
         self._learning_start_date = datetime.now()
@@ -253,6 +279,86 @@ class LearningWindowManager:
         target_temp: float | None = None,
         a_learning_allowed: bool = True,
         a_learning_block_reason: str | None = None,
+        raw_temp: float | None = None,
+    ) -> tuple[int, int]:
+        """Update the learning window, then pool a window closed by this update."""
+        was_active = self._active
+        window_param = (
+            "b" if self._u_first is not None and self._u_first < U_OFF_MAX else "a"
+        )
+        self._updating = True
+        try:
+            result = self._update_window(
+                dt_min,
+                current_temp,
+                ext_temp,
+                u_active,
+                estimator,
+                dt_est,
+                governance,
+                now,
+                in_deadband,
+                in_near_band,
+                t_heat_episode_start,
+                t_cool_episode_start,
+                ff3_active=ff3_active,
+                deadtime_skip_count_a=deadtime_skip_count_a,
+                deadtime_skip_count_b=deadtime_skip_count_b,
+                is_calibrating=is_calibrating,
+                is_hysteresis=is_hysteresis,
+                hvac_mode=hvac_mode,
+                target_temp=target_temp,
+                a_learning_allowed=a_learning_allowed,
+                a_learning_block_reason=a_learning_block_reason,
+                raw_temp=raw_temp,
+            )
+        finally:
+            self._updating = False
+        carry, self._balance_carry = self._balance_carry, False
+        if was_active and not self._active:
+            self._outcomes.record(now, window_param, estimator.learn_last_reason)
+        if self._balance.is_open and not self._active and not carry:
+            pooled = self._balance.close(
+                now=now,
+                hvac_mode=hvac_mode,
+                target_temp=target_temp,
+                estimator=estimator,
+            )
+            if pooled is not None:
+                param, submitted = pooled
+                self._outcomes.record(
+                    now,
+                    param,
+                    f"pool: {estimator.learn_last_reason}"
+                    if submitted
+                    else "pool: segment added",
+                )
+        return result
+
+    def _update_window(
+        self,
+        dt_min: float,
+        current_temp: float,
+        ext_temp: float,
+        u_active: float,
+        estimator: "ABEstimator",
+        dt_est: "DeadTimeEstimator",
+        governance: "SmartPIGovernance",
+        now: float,
+        in_deadband: bool,
+        in_near_band: bool,
+        t_heat_episode_start: float | None,
+        t_cool_episode_start: float | None,
+        ff3_active: bool = False,
+        deadtime_skip_count_a: int = 0,
+        deadtime_skip_count_b: int = 0,
+        is_calibrating: bool = False,
+        is_hysteresis: bool = False,
+        hvac_mode: "VThermHvacMode | None" = None,
+        target_temp: float | None = None,
+        a_learning_allowed: bool = True,
+        a_learning_block_reason: str | None = None,
+        raw_temp: float | None = None,
     ) -> tuple[int, int]:
         """
         Update learning window and submit to estimator if conditions met.
@@ -277,6 +383,8 @@ class LearningWindowManager:
             target_temp: Current target temperature.
             a_learning_allowed: Whether ON/A learning is eligible.
             a_learning_block_reason: Diagnostic reason when ON/A learning is blocked.
+            raw_temp: Raw measured indoor temperature for the integral balance
+                (defaults to current_temp).
             
         Returns:
             Tuple of (deadtime_skip_count_a, deadtime_skip_count_b) for tracking.
@@ -545,6 +653,7 @@ class LearningWindowManager:
                 # DT_MAX_MIN unreachable when dt_s is small.
                 self._sliding_elapsed_s += dt_s
                 if self._sliding_elapsed_s < DT_MAX_MIN * 60:
+                    self._balance.discard()
                     self._start_ts = now
                     self._T_int_start = current_temp
                     self._T_ext_start = ext_temp
@@ -564,6 +673,14 @@ class LearningWindowManager:
                         "skip: B flywheel timeout" if b_wrong_dir else "skip: A deadtime timeout"
                     )
                     return deadtime_skip_count_a, deadtime_skip_count_b
+
+            self._balance.observe(
+                now,
+                dt_s,
+                clamp(u_active, 0.0, 1.0),
+                current_temp if raw_temp is None else raw_temp,
+                ext_temp,
+            )
 
             # Try slope quality: submit if robust, extend if not, timeout if limit reached.
             # robust_dTdt_per_min enforces its own internal guards (jumps, amplitude, t-test).
@@ -587,6 +704,7 @@ class LearningWindowManager:
                 return deadtime_skip_count_a, deadtime_skip_count_b
             else:
                 # Absolute timeout reached with no valid slope: abandon.
+                self._balance_carry = True
                 self.reset()
                 estimator.learn_last_reason = f"skip: window timeout ({method})"
                 return deadtime_skip_count_a, deadtime_skip_count_b
@@ -659,6 +777,7 @@ class LearningWindowManager:
                     self.reset()
                     return deadtime_skip_count_a, deadtime_skip_count_b
 
+            self._balance.discard()
             estimator.diag_dTdt_method = method
             estimator.learn(
                 dT_int_per_min=slope_val,
@@ -673,6 +792,7 @@ class LearningWindowManager:
             )
         elif u_eff > U_ON_MIN:
             # ON phase
+            self._balance.discard()
             estimator.diag_dTdt_method = method
             estimator.learn(
                 dT_int_per_min=slope_val,

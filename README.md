@@ -71,6 +71,8 @@ SmartPI requires **Versatile Thermostat 10.6.2 or later**. If the installed vers
 4. Restart Home Assistant
 5. Configure as above
 
+> **Slow or imprecise temperature sensor?** With a coarse-resolution sensor (0.2 °C) or one that reports rarely (a few times per hour), the initial learning takes longer and may require widening the bootstrap hysteresis thresholds. See [Bootstrap hysteresis by sensor](documentation/en/vtherm_smartpi.md#bootstrap-hysteresis-by-sensor).
+
 ## 📖 Documentation
 
 Comprehensive documentation is available in English:

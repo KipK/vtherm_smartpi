@@ -9,6 +9,7 @@ and intentional.
 # pylint: disable=protected-access
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Any, Dict, TYPE_CHECKING
 from .const import (
@@ -522,6 +523,12 @@ def _build_analysis_learning(algo: SmartPI) -> Dict[str, Any]:
         ),
         "window_power_cv": round(learn_win._u_cv, 3) if window_active else None,
         "window_power_std": round(learn_win._u_std, 4) if window_active else None,
+        "window_outcomes_24h": learn_win.outcomes_summary(time.monotonic()),
+        "balance_pool": {
+            "segments_a": learn_win.balance.pool_size("a"),
+            "segments_b": learn_win.balance.pool_size("b"),
+            "resolution_c": round(learn_win.balance.resolution_c, 3),
+        },
     }
 
 

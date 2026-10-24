@@ -71,6 +71,8 @@ SmartPI nécessite **Versatile Thermostat 10.6.2 ou supérieur**. Si la version 
 4. Redémarrez Home Assistant
 5. Configurez comme indiqué ci-dessus
 
+> **Capteur de température lent ou peu précis ?** Avec une sonde à résolution grossière (0,2 °C) ou qui publie rarement (quelques fois par heure), l'apprentissage initial est plus long et peut demander d'élargir les seuils d'hystérésis du bootstrap. Voir [Hystérésis du bootstrap selon le capteur](documentation/fr/vtherm_smartpi.md#hystérésis-du-bootstrap-selon-le-capteur).
+
 ## 📖 Documentation
 
 La documentation complète est disponible en français :

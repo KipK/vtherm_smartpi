@@ -295,12 +295,26 @@ Default settings are suitable for most installations.
 
 Start simple:
 
-- keep the default hysteresis thresholds,
+- keep the default hysteresis thresholds if your sensor is accurate and reports often (see below otherwise),
 - keep `FF3` enabled unless you have a specific reason to disable it,
 - keep the setpoint filter enabled by default,
 - adjust the deadband first if the temperature oscillates too much around the target.
 
 Do not try to tune several parameters at once during the first learning period. It is better to let SmartPI complete a clean first learning cycle, then adjust only what is really needed.
+
+### Bootstrap hysteresis by sensor
+
+During bootstrap, SmartPI runs bang-bang heating between setpoint − *on hysteresis* and setpoint + *off hysteresis*, and learns `a` during heating phases and `b` during cooling phases. Each phase must contain enough distinct readings from the sensor. With a coarse-resolution sensor or one that reports rarely, the default thresholds produce phases that are too short, and bootstrap can last several days or never complete.
+
+| Temperature sensor | Recommended on / off hysteresis |
+| --- | --- |
+| Resolution 0.1 °C or better, reporting at least every 5 minutes | `0.3 / 0.5 °C` (default) |
+| Resolution 0.1 °C reporting a few times per hour, or resolution 0.2 °C | `0.5 / 0.8 °C` |
+| Resolution 0.2 °C reporting every 30 minutes or less often | `0.5 / 0.8 °C`, but initial learning may not complete, especially in mid-season: a more precise or more frequent sensor is recommended |
+
+Widening them further does not speed up learning and degrades the accuracy of `a`. These thresholds only apply during bootstrap: once SmartPI is in normal regulation, they no longer have any effect. During bootstrap, the temperature varies between the two thresholds.
+
+The more slowly the room loses heat (good insulation, mild weather), the longer the cooling phases and the longer bootstrap takes.
 
 ## Configuration
 

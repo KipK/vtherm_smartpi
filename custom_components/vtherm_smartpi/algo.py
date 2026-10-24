@@ -538,6 +538,7 @@ class SmartPI:
         setpoint_changed: bool = False,
         hvac_mode: VThermHvacMode | None = None,
         target_temp: float | None = None,
+        raw_temp: float | None = None,
     ) -> None:
         """
         Feed learning data from the heartbeat tick.
@@ -552,6 +553,7 @@ class SmartPI:
             setpoint_changed: True if setpoint changed during this interval
             hvac_mode: Current HVAC mode.
             target_temp: Current target temperature.
+            raw_temp: Raw measured indoor temperature (defaults to current_temp).
         """
         now = time.monotonic()
 
@@ -585,6 +587,7 @@ class SmartPI:
             target_temp=target_temp,
             a_learning_allowed=a_learning_block_reason is None,
             a_learning_block_reason=a_learning_block_reason,
+            raw_temp=raw_temp,
         )
 
     def stage_command(self, hvac_mode: VThermHvacMode) -> int:
@@ -1839,6 +1842,7 @@ class SmartPI:
                 setpoint_changed=setpoint_changed,
                 hvac_mode=hvac_mode,
                 target_temp=target_temp,
+                raw_temp=current_temp,
             )
 
         # Calibration state machine

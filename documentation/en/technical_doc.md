@@ -115,9 +115,9 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
   evaluated once the window mean power reaches `U_CV_MIN_MEAN = 0.05` (below
   it, power returning in an OFF window is not detected by this check),
 - extends the window while the slope is not yet considered robust,
-- gives up after `DT_MAX_MIN = 240` minutes if no robust signal emerges.
+- gives up the slope after `DT_MAX_MIN = 240` minutes if no robust signal emerges.
 
-In practice, the decision to submit or extend the window depends on slope robustness, not on a fixed minimum duration.
+In practice, the decision to submit or extend the window depends on slope robustness, not on a fixed minimum duration. A window closed without a robust slope is not lost: its integral balance feeds the pools described in 3.5.
 
 ### 3.3 Robust slope estimation
 
@@ -150,7 +150,35 @@ $$ a = \frac{dT/dt + b \cdot (T_{int} - T_{ext})}{u} $$
 Histories are filtered through median/MAD. The published magnitude of `a` is
 bounded while preserving the mode sign; `b` remains strictly positive.
 
-### 3.5 Dead-time estimation
+### 3.5 Integral balance of windows without a robust slope
+
+With a coarse sensor (0.2 °C steps) or one that reports rarely, a heating or cooling phase rarely contains the three value jumps required by the OLS slope. The model integrated between two instants nevertheless carries the information without a significant slope:
+
+$$ T(t_2) - T(t_1) = a \cdot U - b \cdot D, \quad U = \int u\,dt, \quad D = \int (T_{int} - T_{ext})\,dt $$
+
+`ABWindowBalance` (`ab_window_balance.py`) tracks each accepted window:
+
+- it records, at each raw temperature step, the cumulative integrals of `u`, of `T_int - T_ext` and of `T_ext`;
+- when a window closes through a guard, a timeout or the absence of a robust slope, it keeps the segment between the first and the last step: `b` if the mean power is below `U_OFF_MAX`, `a` if it exceeds `U_ON_MIN`;
+- a window submitted through the OLS slope is never reused, and an external reset (resume, learning disabled) discards it;
+- a slope timeout does not close the segment, which continues into the next window until a guard.
+
+A segment is kept only if:
+
+- all steps of the window go in the direction of the response (otherwise the sensor is noisy at step scale and the window remains the responsibility of the OLS),
+- it lasts at least `AB_BALANCE_MIN_SEGMENT_MIN = 15` minutes,
+- the power did not change during collection: collection stops at the first tick that deviates from the mean power, so that the emitter's inertia after a cut-off is not attributed to the previous power,
+- for `b`, the inside/outside gradient and outside margin guards of the passive window are respected.
+
+Both endpoints are steps in the same direction. A sensor that reports on change then crosses the same quantization threshold, and the measured variation is exact; a periodically sampled sensor provides values to within half a step. The uncertainty model keeps half a step per endpoint:
+
+$$ \sigma_{rel} = \frac{q \sqrt{n / 6}}{|N|} $$
+
+with `q` the smallest observed step (bounded below by `AB_BALANCE_MIN_RESOLUTION_C = 0.05`, `AB_BALANCE_DEFAULT_RESOLUTION_C = 0.1` until a step has been seen), `n` the number of segments and `N` the numerator (`ΔT + b·D` for `a`, `ΔT` for `b`).
+
+Segments are accumulated per parameter (at most `AB_BALANCE_POOL_MAX_SEGMENTS = 12`, aged at most 24 h, emptied on HVAC mode change). As soon as `σ_rel <= AB_BALANCE_MAX_REL_UNC = 0.25`, the pool is submitted to `ABEstimator.learn()` as a single measurement, with the equivalent slope, power and indoor/outdoor difference (averages over the cumulated duration); median/MAD aggregation, drift detection and the soft gate apply as is. The `a` pool waits until `b` has `AB_A_SOFT_GATE_MIN_B` measurements. The threshold is stricter than that of the OLS slope (`t >= 2.5` accepts a relative error up to 0.40).
+
+### 3.6 Dead-time estimation
 
 `DeadTimeEstimator` implements an independent FSM. Its channels describe the
 physical room response, not the power-transition direction:
@@ -473,6 +501,8 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `ab_aggregator.py`     | median or weighted-median aggregation of `a/b` measurements |
 | `ab_drift.py`          | persistent drift detection and recentering for `a/b`, with one candidate sequence per channel |
 | `learning_window.py`   | learning-window management and guardrails                   |
+| `ab_window_balance.py` | integral balance of windows without a robust slope and `a/b` pools |
+| `learning_outcomes.py` | bounded counters of learning-window outcomes                |
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis                  |
 | `deadband.py`          | deadband and near-band                                      |
@@ -586,6 +616,8 @@ The control loop schedules at most one delayed write of this payload per five-mi
 
 Past event timestamps (temperature histories, calibration start) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
 
+The integral-balance pools and the window-outcome counters are not persisted: they start empty at each startup.
+
 Only the learned trim remains persistent. Ownership windows, pending
 proposals, and integral transfers are transient; after restart the observer is
 rebuilt and the existing three-cycle trim freeze still applies.
@@ -636,8 +668,14 @@ add a second diagnostic block.
 
 `analysis.learning.learn_ok_count` and `learn_skip_count` are runtime counters
 relative to the current Home Assistant process. Persisted model counters remain
-internal and are used for model quality and warm-up decisions. When the thermal
-twin is usable, its public diagnostic fields are exposed under `analysis.twin`.
+internal and are used for model quality and warm-up decisions.
+`analysis.learning.window_outcomes_24h` lists, for `a` and for `b`, the eight
+most frequent window-closure reasons of the last 24 hours as `[reason, count]`
+pairs (numeric values removed from the reasons; pool events are prefixed with
+`pool:`). `analysis.learning.balance_pool` gives the number of segments waiting
+in each pool and the sensor resolution used for their uncertainty; these values
+are specific to the current Home Assistant session. When the thermal twin is
+usable, its public diagnostic fields are exposed under `analysis.twin`.
 
 `feedforward.fftrim.command_ownership` exposes whether the scheduler emits
 receipts, the latest binding status and rejection reason, the request
@@ -671,6 +709,11 @@ acceptance or rejection without changing the learning decision.
 | `DT_MAX_MIN`                   | `240`  |
 | `U_OFF_MAX`                    | `0.05` |
 | `U_ON_MIN`                     | `0.20` |
+| `AB_BALANCE_MAX_REL_UNC`       | `0.25` |
+| `AB_BALANCE_MIN_SEGMENT_MIN`   | `15`   |
+| `AB_BALANCE_MIN_RESOLUTION_C`  | `0.05` |
+| `AB_BALANCE_DEFAULT_RESOLUTION_C` | `0.1` |
+| `AB_BALANCE_POOL_MAX_SEGMENTS` | `12`   |
 
 ### 6.2 Regulation
 

@@ -295,12 +295,26 @@ Les réglages par défaut conviennent dans la plupart des installations.
 
 Pour démarrer simplement :
 
-- gardez les seuils d'hystérésis par défaut,
+- gardez les seuils d'hystérésis par défaut si votre sonde est précise et publie souvent (voir ci-dessous sinon),
 - laissez `FF3` activé sauf raison précise de le désactiver,
 - laissez le filtre de consigne activé par défaut,
 - ajustez d'abord la deadband si la température oscille trop autour de la cible.
 
 Évitez de modifier plusieurs paramètres à la fois pendant la première phase d'apprentissage. Il vaut mieux laisser SmartPI terminer un cycle d'apprentissage propre, puis ne changer que ce qui est réellement nécessaire.
+
+### Hystérésis du bootstrap selon le capteur
+
+Pendant le bootstrap, SmartPI chauffe en tout-ou-rien entre consigne − *hystérésis marche* et consigne + *hystérésis arrêt*, et apprend `a` pendant les phases de chauffe et `b` pendant les phases de refroidissement. Chaque phase doit contenir assez de mesures distinctes de la sonde. Avec une sonde à résolution grossière ou qui publie rarement, les seuils par défaut donnent des phases trop courtes et le bootstrap peut durer plusieurs jours, voire ne pas aboutir.
+
+| Sonde de température | Hystérésis marche / arrêt conseillée |
+| --- | --- |
+| Résolution 0,1 °C ou mieux, publication au moins toutes les 5 minutes | `0.3 / 0.5 °C` (défaut) |
+| Résolution 0,1 °C publiant quelques fois par heure, ou résolution 0,2 °C | `0.5 / 0.8 °C` |
+| Résolution 0,2 °C publiant toutes les 30 minutes ou moins souvent | `0.5 / 0.8 °C`, mais l'apprentissage initial peut ne pas aboutir, surtout en mi-saison : une sonde plus précise ou plus fréquente est recommandée |
+
+Élargir davantage n'accélère pas l'apprentissage et dégrade la précision de `a`. Ces seuils ne s'appliquent que pendant le bootstrap : une fois SmartPI en régulation normale, ils n'ont plus d'effet. Pendant le bootstrap, la température varie entre les deux seuils.
+
+Plus la pièce perd lentement sa chaleur (bonne isolation, temps doux), plus les phases de refroidissement sont longues et plus le bootstrap prend du temps.
 
 ## Configuration
 

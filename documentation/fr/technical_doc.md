@@ -118,9 +118,9 @@ Le code n'utilise plus de constante `WINDOW_MIN_MINUTES`. L'apprentissage repose
   évalué dès que la puissance moyenne de la fenêtre atteint `U_CV_MIN_MEAN = 0.05`
   (en dessous, une puissance qui revient dans une fenêtre OFF n'est pas détectée par ce contrôle),
 - prolonge la fenêtre tant que la pente n'est pas jugée robuste,
-- abandonne après `DT_MAX_MIN = 240` minutes si aucun signal robuste n'émerge.
+- abandonne la pente après `DT_MAX_MIN = 240` minutes si aucun signal robuste n'émerge.
 
-En pratique, la décision de soumettre ou d'étendre la fenêtre dépend de la robustesse de la pente, pas d'une durée minimale fixe.
+En pratique, la décision de soumettre ou d'étendre la fenêtre dépend de la robustesse de la pente, pas d'une durée minimale fixe. Une fenêtre fermée sans pente robuste n'est pas perdue : son bilan intégral alimente les pools décrits en 3.5.
 
 ### 3.3 Estimation robuste de pente
 
@@ -153,7 +153,60 @@ $$ a = \frac{dT/dt + b \cdot (T_{int} - T_{ext})}{u} $$
 Les historiques sont filtrés par median/MAD. La magnitude publiée de `a` est
 bornée tout en conservant le signe du mode ; `b` reste strictement positif.
 
-### 3.5 Estimation du temps mort
+### 3.5 Bilan intégral des fenêtres sans pente robuste
+
+Avec un capteur grossier (pas de 0,2 °C) ou publiant rarement, une phase de
+chauffe ou de refroidissement contient rarement les trois sauts de valeur
+exigés par la pente OLS. Le modèle intégré entre deux instants donne pourtant
+l'information sans pente significative :
+
+$$ T(t_2) - T(t_1) = a \cdot U - b \cdot D, \quad U = \int u\,dt, \quad D = \int (T_{int} - T_{ext})\,dt $$
+
+`ABWindowBalance` (`ab_window_balance.py`) suit chaque fenêtre acceptée :
+
+- il enregistre à chaque pas de la température brute les intégrales cumulées
+  de `u`, de `T_int - T_ext` et de `T_ext` ;
+- à la fermeture d'une fenêtre par une garde, un timeout ou l'absence de pente
+  robuste, il retient le segment entre le premier et le dernier pas : `b` si la
+  puissance moyenne est inférieure à `U_OFF_MAX`, `a` si elle dépasse `U_ON_MIN` ;
+- une fenêtre soumise par la pente OLS n'est jamais réutilisée, et une
+  réinitialisation externe (reprise, apprentissage désactivé) l'écarte ;
+- un timeout de pente ne ferme pas le segment, qui se poursuit dans la
+  fenêtre suivante jusqu'à une garde.
+
+Un segment n'est retenu que si :
+
+- tous les pas de la fenêtre vont dans le sens de la réponse (sinon le
+  capteur est bruité à l'échelle du pas et la fenêtre reste du ressort de l'OLS),
+- il dure au moins `AB_BALANCE_MIN_SEGMENT_MIN = 15` minutes,
+- la puissance n'a pas changé pendant la collecte : celle-ci s'arrête au
+  premier tick qui s'écarte de la puissance moyenne, afin que l'inertie de
+  l'émetteur après une coupure ne soit pas attribuée à la puissance précédente,
+- pour `b`, les gardes de gradient intérieur/extérieur et de marge extérieure
+  de la fenêtre passive sont respectées.
+
+Les deux extrémités sont des pas dans le même sens. Un capteur qui publie au
+changement franchit alors le même seuil de quantification, et la variation
+mesurée est exacte ; un capteur échantillonné périodiquement fournit des valeurs
+à un demi-pas près. Le modèle d'incertitude retient un demi-pas par extrémité :
+
+$$ \sigma_{rel} = \frac{q \sqrt{n / 6}}{|N|} $$
+
+avec `q` le plus petit pas observé (borné à `AB_BALANCE_MIN_RESOLUTION_C = 0.05`,
+`AB_BALANCE_DEFAULT_RESOLUTION_C = 0.1` tant qu'aucun pas n'a été vu), `n` le
+nombre de segments et `N` le numérateur (`ΔT + b·D` pour `a`, `ΔT` pour `b`).
+
+Les segments sont cumulés par paramètre (au plus `AB_BALANCE_POOL_MAX_SEGMENTS = 12`,
+âgés d'au plus 24 h, vidés au changement de mode HVAC). Dès que
+`σ_rel <= AB_BALANCE_MAX_REL_UNC = 0.25`, le pool est soumis à `ABEstimator.learn()`
+comme une mesure unique, avec la pente, la puissance et l'écart
+intérieur/extérieur équivalents (moyennes sur la durée cumulée) ; l'agrégation
+médiane/MAD, la détection de dérive et le soft gate s'appliquent sans changement.
+Le pool `a` attend que `b` dispose de `AB_A_SOFT_GATE_MIN_B` mesures. Le seuil
+est plus strict que celui de la pente OLS (`t >= 2.5` accepte une erreur
+relative jusqu'à 0,40).
+
+### 3.6 Estimation du temps mort
 
 `DeadTimeEstimator` implémente une FSM indépendante. Les canaux décrivent la
 réponse physique de la pièce, pas le sens de la transition de puissance :
@@ -479,6 +532,8 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `ab_aggregator.py`     | agrégation médiane ou médiane pondérée des mesures `a/b` |
 | `ab_drift.py`          | détection et recentrage de dérive persistante sur `a/b`, avec une séquence de candidats par canal |
 | `learning_window.py`   | gestion des fenêtres d'apprentissage et de leurs gardes  |
+| `ab_window_balance.py` | bilan intégral des fenêtres sans pente robuste et pools `a/b` |
+| `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
 | `deadband.py`          | deadband et near-band                                    |
@@ -597,6 +652,9 @@ La boucle de régulation planifie au plus une écriture différée de ce payload
 
 Les timestamps d'événements passés (historiques de température, début de calibration) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
 
+Les pools de bilan intégral et les compteurs d'issues de fenêtres ne sont pas
+persistés : ils repartent vides à chaque démarrage.
+
 Seul le trim appris reste persistant. Les fenêtres de propriété, propositions
 en attente et transferts d'intégrale sont transitoires ; après redémarrage,
 l'observateur est reconstruit et le gel existant de trois cycles est conservé.
@@ -650,7 +708,13 @@ Recorder ; la sous-classe debug l'enregistre directement. Le mode debug ne fait 
 `analysis.learning.learn_ok_count` et `learn_skip_count` sont des compteurs
 d'exécution relatifs au processus Home Assistant courant. Les compteurs
 persistés du modèle restent internes et servent aux décisions de qualité du
-modèle et de warm-up. Quand le jumeau thermique est exploitable, ses champs
+modèle et de warm-up. `analysis.learning.window_outcomes_24h` liste, pour `a` et
+pour `b`, les huit motifs de fermeture de fenêtre les plus fréquents des
+dernières 24 heures sous forme de paires `[motif, nombre]` (valeurs numériques
+retirées des motifs ; les événements des pools sont préfixés par `pool:`).
+`analysis.learning.balance_pool` donne le nombre de segments en attente de
+chaque pool et le pas de capteur utilisé pour leur incertitude ; ces valeurs
+sont propres à la session Home Assistant courante. Quand le jumeau thermique est exploitable, ses champs
 publics sont exposés sous `analysis.twin`.
 
 `feedforward.fftrim.command_ownership` indique si le scheduler émet des reçus
@@ -685,6 +749,11 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `DT_MAX_MIN`                   | `240`  |
 | `U_OFF_MAX`                    | `0.05` |
 | `U_ON_MIN`                     | `0.20` |
+| `AB_BALANCE_MAX_REL_UNC`       | `0.25` |
+| `AB_BALANCE_MIN_SEGMENT_MIN`   | `15`   |
+| `AB_BALANCE_MIN_RESOLUTION_C`  | `0.05` |
+| `AB_BALANCE_DEFAULT_RESOLUTION_C` | `0.1` |
+| `AB_BALANCE_POOL_MAX_SEGMENTS` | `12`   |
 
 ### 6.2 Régulation
 

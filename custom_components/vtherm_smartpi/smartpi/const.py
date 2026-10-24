@@ -256,6 +256,17 @@ AB_B_OUTDOOR_TARGET_MARGIN_C = 2.0
 U_CV_MAX = 0.30            # Maximum accepted CV of power over the learning window
 U_CV_MIN_MEAN = 0.05       # Minimum mean(u) to compute CV (avoids division by ~0)
 
+# Integral balance pools (windows closed without a robust OLS slope).
+# Each closed window contributes the segment between its first and last raw
+# temperature steps in the response direction; segments are pooled per
+# parameter until the quantisation-bounded relative uncertainty is reached.
+AB_BALANCE_MAX_REL_UNC = 0.25         # Emission threshold (OLS t >= 2.5 accepts up to 0.40)
+AB_BALANCE_DEFAULT_RESOLUTION_C = 0.1  # Sensor step assumed before any raw step is observed
+AB_BALANCE_MIN_RESOLUTION_C = 0.05     # Floor on the step used for uncertainty (noise margin)
+AB_BALANCE_POOL_MAX_AGE_S = 86400.0    # Segments older than this are dropped
+AB_BALANCE_POOL_MAX_SEGMENTS = 12      # Oldest segments are dropped beyond this count
+AB_BALANCE_MIN_SEGMENT_MIN = 15.0      # Shorter segments are dominated by noise and actuator lag
+
 # Indoor temperature histories of the dead time estimator (learning slopes and
 # dead time inflection lookback). Samples are kept by age so that a learning
 # window or a dead time detection (both bounded by 240 min) is covered; the

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Learning: a learning window closed without a robust slope (coarse sensor of
+  0.2 °C, or a sensor publishing only a few times per hour) is no longer lost.
+  The integral heat balance between its first and last raw temperature steps
+  is pooled with the following windows of the same kind, and the pool is
+  submitted to the `a` or `b` estimator once its quantisation-bounded relative
+  uncertainty is at most 25 %. Since 0.5.0 the learning slopes use the raw
+  measurements, and such sensors could stay in the bootstrap phase without
+  ever learning `a`. Noisy fine sensors keep the slope-based learning only.
+- Diagnostics: `analysis.learning.window_outcomes_24h` lists the most frequent
+  learning window outcomes of the last 24 hours for `a` and `b`, and
+  `analysis.learning.balance_pool` the pending pooled segments and the sensor
+  step used for their uncertainty.
+- Documentation: recommended bootstrap hysteresis thresholds by sensor
+  resolution and publication rate.
+
 ## [0.5.0]
 
 - Compatibility: SmartPI requires Versatile Thermostat 10.6.2 or later. An
