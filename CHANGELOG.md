@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.5.1]
 
 - Learning: a learning window closed without a robust slope (coarse sensor of
   0.2 °C, or a sensor publishing only a few times per hour) is no longer lost.
