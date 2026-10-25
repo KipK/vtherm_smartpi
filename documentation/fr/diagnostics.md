@@ -72,7 +72,7 @@ est disponible, `twin`.
 | `vt_period_min` | Période minimale de régulation de Versatile Thermostat en minutes (`null` si indisponible) |
 | `opening_remap_active` | `true` lorsque les réglages d'ouverture de Versatile Thermostat modifient l'ouverture envoyée à la vanne |
 | `quantization_step_linear_percent` | Demande linéaire, en pourcentage, déplacée par un pas de vanne de `1%` à la position de vanne engagée ; `1.0` sans linéarisation, `null` lorsque la vanne est fermée |
-| `issues` | Codes des réglages non transparents pour SmartPI : `dpercent_filter`, `period_filter`, `opening_remap`. Les mêmes problèmes sont signalés dans les Réparations de Home Assistant |
+| `issues` | Codes de filtrage, de retard de commande ou de transformation d'ouverture en conflit avec la linéarisation SmartPI : `dpercent_filter`, `period_filter`, `opening_remap`. Les mêmes avertissements apparaissent dans les Réparations de Home Assistant ; un filtrage ou un retard ne prouve pas, à lui seul, un échec de l'apprentissage |
 
 FFTrim utilise des blocs canoniques imbriqués :
 

@@ -72,7 +72,7 @@ available, `twin`.
 | `vt_period_min` | Versatile Thermostat regulation minimum period in minutes (`null` when unavailable) |
 | `opening_remap_active` | `true` when the Versatile Thermostat opening settings change the opening sent to the valve |
 | `quantization_step_linear_percent` | Linear demand, in percent, moved by one `1%` valve step at the committed valve position; `1.0` without linearization, `null` when the valve is closed |
-| `issues` | Codes of the settings that are not transparent for SmartPI: `dpercent_filter`, `period_filter`, `opening_remap`. The same issues are raised in Home Assistant Repairs |
+| `issues` | Codes for command filtering, delay or an opening remap conflicting with SmartPI linearization: `dpercent_filter`, `period_filter`, `opening_remap`. The same warnings appear in Home Assistant Repairs; filtering or delay alone does not prove a learning failure |
 
 FFTrim uses nested canonical blocks:
 
