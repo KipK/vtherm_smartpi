@@ -207,7 +207,7 @@ B_STABILITY_MAD_RATIO_MAX = 0.60   # MAD(b) / median(b)
 # --- SmartPI Robust Learning Constants ---
 # Median+MAD Strategy Constants
 AB_HISTORY_SIZE = 31      # Keep last 31 (ODD) values
-AB_MIN_SAMPLES_B = 8      # Min samples for b publication (OFF phase)
+AB_MIN_SAMPLES_B = 4      # Min samples for b publication (OFF phase)
 AB_MIN_SAMPLES_A = 6      # Min samples for a publication (ON phase)
 AB_MAD_SIGMA_MULT = 3.0   # Outlier rejection threshold (sigma)
 
@@ -216,13 +216,15 @@ AB_VAL_TOLERANCE = 1e-12  # Small epsilon
 DT_DERIVATIVE_MIN_ABS = 0.05    # Min absolute dT (°C) amplitude guard
 OLS_MIN_JUMPS = 3               # Min temperature level changes for OLS validity
 OLS_T_MIN = 2.5                 # Min t-statistic for slope significance
+OLS_MIN_SPAN_STEPS = 1.5        # Min fitted change over the window, in sensor steps
+OLS_SPAN_MIN_STEP_C = 0.05      # Floor on the sensor step for the span guard (noise margin)
 
 # Sequential gate a->b
 AB_B_CONVERGENCE_MIN_SAMPLES: int = 11
 AB_B_CONVERGENCE_MAD_RATIO: float = 0.30
 AB_B_CONVERGENCE_RANGE_RATIO: float = 0.10
 AB_B_CONVERGENCE_MIN_BHIST: int = 5
-AB_A_SOFT_GATE_MIN_B: int = 8
+AB_A_SOFT_GATE_MIN_B: int = 4
 
 # --- ABEstimator weighted-median aggregation parameters ---
 AB_WMED_PLATEAU_N: int = 11          # Most-recent N points assigned weight 1.0 (plateau)

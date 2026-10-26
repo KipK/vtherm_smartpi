@@ -80,11 +80,11 @@ In phase `HYSTERESIS`, learning follows a strict order:
 
 Rules effectively coded:
 
-- `AB_MIN_SAMPLES_B = 8`,
+- `AB_MIN_SAMPLES_B = 4`,
 - `AB_MIN_SAMPLES_A = 6`,
-- `AB_A_SOFT_GATE_MIN_B = 8`.
+- `AB_A_SOFT_GATE_MIN_B = 4`.
 
-SmartPI leaves `HYSTERESIS` once `b` has 8 measurements and `a` has
+SmartPI leaves `HYSTERESIS` once `b` has 4 measurements and `a` has
 6 measurements. Both buffers continue filling up to `AB_HISTORY_SIZE = 31`
 during normal SmartPI regulation.
 
@@ -125,7 +125,18 @@ In practice, the decision to submit or extend the window depends on slope robust
 
 - minimum amplitude: `DT_DERIVATIVE_MIN_ABS = 0.05°C`,
 - minimum number of level changes: `OLS_MIN_JUMPS = 3`,
-- statistical significance: `OLS_T_MIN = 2.5`.
+- statistical significance: `OLS_T_MIN = 2.5`,
+- minimum span: once the slope is significant, the adjusted variation over the
+  window (`|slope| × duration`) must cover at least `OLS_MIN_SPAN_STEPS = 1.5` sensor
+  steps; the step is the smallest change observed in the window, with a floor
+  `OLS_SPAN_MIN_STEP_C = 0.05°C` that acts as a noise margin for fine-resolution
+  sensors. Otherwise the window is extended (`span_below_resolution`).
+
+Since the slope is tested at each update, a window that is too short relative to
+quantization would be submitted as soon as its slope looks significant: with a
+0.1 °C sensor switching between two levels and a slowly cooling room, the sampling
+triggered by publications then dominates the fit and `b` can be off by ±50 %. On a
+window covering several steps, the slope is unbiased whatever the sensor profile.
 
 Slopes are computed on the raw measured indoor temperature, not on the filtered signals, because the robustness guard counts distinct value jumps of the measurement. The raw history (and the filtered history used by the dead-time detection) keeps the samples of the last `TIN_HISTORY_RETENTION_MIN = 300` minutes (`DT_MAX_MIN` + 60) and at most `TIN_HISTORY_MAX_SAMPLES = 1800` samples. A sample is added on each value change or after 60 s, so the full duration is covered while samples arrive on average at most every 10 s; beyond that rate the sample cap shortens the covered duration (about 150 minutes at one changing sample every 5 s) and the slope of a long window uses only its most recent samples. Validated slopes are then fed into `ABEstimator.learn()`, which:
 
@@ -149,6 +160,13 @@ $$ a = \frac{dT/dt + b \cdot (T_{int} - T_{ext})}{u} $$
 
 Histories are filtered through median/MAD. The published magnitude of `a` is
 bounded while preserving the mode sign; `b` remains strictly positive.
+
+Each `a` measurement keeps its observation (`dT/dt`, `T_int - T_ext`, `u`). Each
+time a new value of `b` is published, all retained measurements are recomputed
+with that `b`, then `a` is aggregated again if it has already been published: an
+`a` measurement made before `b` was accurate therefore follows its corrections. A
+measurement restored without an observation, or whose recomputation would
+contradict the mode sign, keeps its value.
 
 ### 3.5 Integral balance of windows without a robust slope
 
@@ -616,7 +634,10 @@ The control loop schedules at most one delayed write of this payload per five-mi
 
 Past event timestamps (temperature histories, calibration start) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
 
-The integral-balance pools and the window-outcome counters are not persisted: they start empty at each startup.
+The integral-balance pools and the window-outcome counters are not persisted:
+they start empty at each startup. The observations of the `a` measurements are
+persisted with the estimator state; a state that does not contain them loads with
+measurements that cannot be recomputed.
 
 Only the learned trim remains persistent. Ownership windows, pending
 proposals, and integral transfers are transient; after restart the observer is
@@ -694,9 +715,9 @@ acceptance or rejection without changing the learning decision.
 | Constant                       | Value  |
 | ------------------------------ | ------ |
 | `AB_HISTORY_SIZE`              | `31`   |
-| `AB_MIN_SAMPLES_B`             | `8`    |
+| `AB_MIN_SAMPLES_B`             | `4`    |
 | `AB_MIN_SAMPLES_A`             | `6`    |
-| `AB_A_SOFT_GATE_MIN_B`         | `8`    |
+| `AB_A_SOFT_GATE_MIN_B`         | `4`    |
 | `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
 | `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
 | `AB_B_CONVERGENCE_MIN_SAMPLES` | `11`   |
@@ -705,6 +726,8 @@ acceptance or rejection without changing the learning decision.
 | `AB_B_CONVERGENCE_RANGE_RATIO` | `0.10` |
 | `DT_DERIVATIVE_MIN_ABS`        | `0.05` |
 | `OLS_MIN_JUMPS`                | `3`    |
+| `OLS_MIN_SPAN_STEPS`           | `1.5`  |
+| `OLS_SPAN_MIN_STEP_C`          | `0.05` |
 | `OLS_T_MIN`                    | `2.5`  |
 | `DT_MAX_MIN`                   | `240`  |
 | `U_OFF_MAX`                    | `0.05` |

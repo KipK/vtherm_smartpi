@@ -81,11 +81,11 @@ En phase `HYSTERESIS`, l'apprentissage suit un ordre strict :
 
 Règles effectivement codées :
 
-- `AB_MIN_SAMPLES_B = 8`,
+- `AB_MIN_SAMPLES_B = 4`,
 - `AB_MIN_SAMPLES_A = 6`,
-- `AB_A_SOFT_GATE_MIN_B = 8`.
+- `AB_A_SOFT_GATE_MIN_B = 4`.
 
-SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 8 mesures et `a` de
+SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 4 mesures et `a` de
 6 mesures. Les deux buffers continuent ensuite à se remplir jusqu'à
 `AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale.
 
@@ -128,7 +128,20 @@ En pratique, la décision de soumettre ou d'étendre la fenêtre dépend de la r
 
 - amplitude minimale : `DT_DERIVATIVE_MIN_ABS = 0.05°C`,
 - nombre minimal de changements de niveau : `OLS_MIN_JUMPS = 3`,
-- significativité statistique : `OLS_T_MIN = 2.5`.
+- significativité statistique : `OLS_T_MIN = 2.5`,
+- étendue minimale : une fois la pente significative, la variation ajustée sur la
+  fenêtre (`|pente| × durée`) doit couvrir au moins `OLS_MIN_SPAN_STEPS = 1.5` pas
+  de capteur ; le pas est le plus petit changement observé dans la fenêtre, avec un
+  plancher `OLS_SPAN_MIN_STEP_C = 0.05°C` qui sert de marge de bruit pour les
+  capteurs à résolution fine. Sinon la fenêtre est prolongée
+  (`span_below_resolution`).
+
+La pente étant testée à chaque mise à jour, une fenêtre trop courte au regard de la
+quantification serait soumise dès que sa pente paraît significative : avec un
+capteur de 0,1 °C qui bascule entre deux niveaux et une pièce qui refroidit
+lentement, l'échantillonnage déclenché par les publications domine alors
+l'ajustement et `b` peut être faux de ±50 %. Sur une fenêtre couvrant plusieurs pas,
+la pente est sans biais quel que soit le profil du capteur.
 
 Les pentes sont calculées sur la température intérieure brute mesurée, et non sur les signaux filtrés, car le garde-fou de robustesse compte les sauts de valeur distincts de la mesure. L'historique brut (et l'historique filtré utilisé par la détection du temps mort) garde les échantillons des `TIN_HISTORY_RETENTION_MIN = 300` dernières minutes (`DT_MAX_MIN` + 60), dans la limite de `TIN_HISTORY_MAX_SAMPLES = 1800` échantillons. Un échantillon est ajouté à chaque changement de valeur ou après 60 s : toute la durée est couverte tant que les échantillons arrivent en moyenne au plus toutes les 10 s ; au-delà, le plafond d'échantillons raccourcit la durée couverte (environ 150 minutes avec un échantillon différent toutes les 5 s) et la pente d'une longue fenêtre n'utilise que ses échantillons les plus récents. Les pentes validées alimentent ensuite `ABEstimator.learn()` qui :
 
@@ -152,6 +165,13 @@ $$ a = \frac{dT/dt + b \cdot (T_{int} - T_{ext})}{u} $$
 
 Les historiques sont filtrés par median/MAD. La magnitude publiée de `a` est
 bornée tout en conservant le signe du mode ; `b` reste strictement positif.
+
+Chaque mesure de `a` conserve son observation (`dT/dt`, `T_int - T_ext`, `u`). À
+chaque publication d'une nouvelle valeur de `b`, toutes les mesures conservées sont
+recalculées avec ce `b`, puis `a` est agrégé à nouveau s'il a déjà été publié : une
+mesure de `a` faite avant que `b` soit précis suit donc ses corrections. Une mesure
+restaurée sans observation, ou dont le recalcul contredirait le signe du mode,
+garde sa valeur.
 
 ### 3.5 Bilan intégral des fenêtres sans pente robuste
 
@@ -653,7 +673,9 @@ La boucle de régulation planifie au plus une écriture différée de ce payload
 Les timestamps d'événements passés (historiques de température, début de calibration) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
 
 Les pools de bilan intégral et les compteurs d'issues de fenêtres ne sont pas
-persistés : ils repartent vides à chaque démarrage.
+persistés : ils repartent vides à chaque démarrage. Les observations des mesures de
+`a` sont persistées avec l'état de l'estimateur ; un état qui n'en contient pas se
+charge avec des mesures non recalculables.
 
 Seul le trim appris reste persistant. Les fenêtres de propriété, propositions
 en attente et transferts d'intégrale sont transitoires ; après redémarrage,
@@ -734,9 +756,9 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | Constante                      | Valeur |
 | ------------------------------ | ------ |
 | `AB_HISTORY_SIZE`              | `31`   |
-| `AB_MIN_SAMPLES_B`             | `8`    |
+| `AB_MIN_SAMPLES_B`             | `4`    |
 | `AB_MIN_SAMPLES_A`             | `6`    |
-| `AB_A_SOFT_GATE_MIN_B`         | `8`    |
+| `AB_A_SOFT_GATE_MIN_B`         | `4`    |
 | `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
 | `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
 | `AB_B_CONVERGENCE_MIN_SAMPLES` | `11`   |
@@ -745,6 +767,8 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `AB_B_CONVERGENCE_RANGE_RATIO` | `0.10` |
 | `DT_DERIVATIVE_MIN_ABS`        | `0.05` |
 | `OLS_MIN_JUMPS`                | `3`    |
+| `OLS_MIN_SPAN_STEPS`           | `1.5`  |
+| `OLS_SPAN_MIN_STEP_C`          | `0.05` |
 | `OLS_T_MIN`                    | `2.5`  |
 | `DT_MAX_MIN`                   | `240`  |
 | `U_OFF_MAX`                    | `0.05` |
