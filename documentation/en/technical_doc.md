@@ -84,9 +84,13 @@ Rules effectively coded:
 - `AB_MIN_SAMPLES_A = 6`,
 - `AB_A_SOFT_GATE_MIN_B = 4`.
 
-SmartPI leaves `HYSTERESIS` once `b` has 4 measurements and `a` has
-6 measurements. Both buffers continue filling up to `AB_HISTORY_SIZE = 31`
-during normal SmartPI regulation.
+SmartPI leaves `HYSTERESIS` once `b` has 4 measurements and `a` is published.
+`a` is published at 6 measurements, or from `AB_MIN_SAMPLES_A_CONSISTENT = 4`
+measurements when they agree: their median absolute deviation is at most
+`AB_A_CONSISTENT_MAX_REL_MAD = 0.10` of their median. The first publication of
+`a` also waits for the delivered power model (3.7): while the response lag is not
+resolved, measurements are collected without publication. Both buffers continue
+filling up to `AB_HISTORY_SIZE = 31` during normal SmartPI regulation.
 
 The `b` convergence used for drift-aware `a` learning relies on `b_converged_for_a()`:
 
@@ -111,6 +115,18 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
 - blocks bootstrap collection until the required dead times are reliable,
 - applies a post-resume pause (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - anchors the window start after the dead-time end when needed,
+- delays the window start until the response transient has decayed, once the
+  response lag is published (3.7): an `a` window starts at least
+  `min(3 lag, half the median active episode)` after the power step, a `b` window
+  at least `3 lag` after the power cut (`skip: response transient (a|b)`),
+- does not submit an active window shorter than one PWM cycle
+  (`active_window_shorter_than_cycle`): its duration is set before its data, since
+  stopping as soon as a short window looks significant favours the steepest noisy
+  slopes,
+- closes the window at its last observation when two updates are not contiguous
+  (heating guard cut, interval capped at one cycle): the window is submitted on
+  the data up to that instant when its slope is robust there, otherwise abandoned
+  (`skip: observation gap`); it never spans the unobserved period,
 - monitors power stability through the coefficient of variation (`U_CV_MAX`),
   evaluated once the window mean power reaches `U_CV_MIN_MEAN = 0.05` (below
   it, power returning in an OFF window is not detected by this check),
@@ -161,6 +177,9 @@ $$ a = \frac{dT/dt + b \cdot (T_{int} - T_{ext})}{u} $$
 Histories are filtered through median/MAD. The published magnitude of `a` is
 bounded while preserving the mode sign; `b` remains strictly positive.
 
+For an active window, `u` is the mean delivered power of the window (3.7), not
+the applied command.
+
 Each `a` measurement keeps its observation (`dT/dt`, `T_int - T_ext`, `u`). Each
 time a new value of `b` is published, all retained measurements are recomputed
 with that `b`, then `a` is aggregated again if it has already been published: an
@@ -210,6 +229,78 @@ ON -> OFF transition learns the opposite passive response.
 Detection tracks the filtered indoor temperature. A detection in progress is not resumed after a restart, and the minimum OFF duration must be observed again in the new session before a detection can be armed.
 
 Reliability becomes true as soon as at least one valid measurement has been captured on the corresponding channel. Each channel keeps its last 6 detections; the published value is their median, so a single aberrant detection does not move it (with one or two detections the median equals their mean). On restart, the published value is recomputed from the restored detections.
+
+### 3.7 Response lag and delivered power
+
+At the scale of a learning window, the room behaves as an integrator behind
+fast lags (actuator, emitter, air mixing, sensor housing) and a pure delay
+(integrating first-order plus dead time response). After a power step, the
+slope settles progressively and its ramp asymptote crosses the extrapolated
+passive trajectory at $t = T_{ar} = L + \sum \tau_i$, the mean residence time of
+the response (Åström and Hägglund). A window that starts $k \cdot T_{ar}$ after the
+step has a slope deficit of at most $e^{-k}$ for a single lag, whatever the pure
+delay share. A window within the transient underestimates `a`, all the more as
+the lags are long or the sensor reports late.
+
+`ResponseLagEstimator` (`response_lag.py`) measures $T_{ar}$ on active episodes
+at constant power (deviation at most `RESPONSE_LAG_U_TOL = 0.05`):
+
+- the episode must follow a passive period of at least
+  `max(RESPONSE_LAG_MIN_OFF_S = 1800 s, RESPONSE_LAG_MIN_OFF_LAGS = 5 × known lag)`,
+  so that the power of the previous episode has decayed;
+- the passive baseline is the robust OLS slope of the end of that OFF period (at
+  most `RESPONSE_LAG_PASSIVE_SPAN_S = 3600 s`), otherwise the published `b`;
+- the late line is fitted on the level crossings of the raw history (at least
+  `RESPONSE_LAG_MIN_CROSSINGS = 3`). For a jump of one sensor step, the crossing is
+  dated at the midpoint between the two samples; a jump of several steps keeps the
+  raw value. This removes the staircase and trigger-threshold biases of sensors
+  that report on change;
+- the intercept of an OLS line fitted on a transient segment falls before
+  $T_{ar}$: the estimator inverts the closed-form intercept of a single-lag
+  response over the fitted interval (monotonic in the lag). An episode is not
+  used when the inversion is too flat (`RESPONSE_LAG_MIN_INVERSION_SLOPE = 0.05`)
+  or when the intercept reaches `RESPONSE_LAG_RESOLVABLE_FRAC = 0.9` of its
+  limit for an infinite lag;
+- each estimate carries its standard deviation, propagated from the fit
+  residuals and from an assumed relative uncertainty of `b` of
+  `RESPONSE_LAG_B_REL_UNC = 0.10`.
+
+The last `RESPONSE_LAG_HISTORY = 7` estimates are kept. The lag is published
+when at least `RESPONSE_LAG_MIN_ESTIMATES = 3` estimates give a combined standard
+deviation of their inverse-variance weighted median at most
+`RESPONSE_LAG_MAX_REL_UNC = 0.15` of that median (floor
+`RESPONSE_LAG_UNC_FLOOR_S = 30 s`); estimates more than three standard deviations
+away from the median are not combined. An inconsistent set keeps the published
+value, so dispersed estimates do not switch the delivered power model on and off. A discontinuity of more than 1 s between two updates ends the
+episode at the last observed instant, and the power cut is dated at the resume.
+
+The intercept fixes the mean delay of the response, not its shape. The
+delivered power model splits it into a pure delay
+$L = \min(\text{active dead time}, T_{ar})$, then a first-order lag of
+$T_{ar} - L$. The dead time is detected after the response has started, so it
+bounds the pure delay from above: the model never delivers power earlier than a
+pure delay with the same intercept. Without a published lag or a reliable dead
+time, the delivered power equals the applied power. For an active window starting
+$t_0$ after the step and lasting $W$, the mean delivered fraction is, with
+$\tau = T_{ar} - L$:
+
+$$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-L)/\tau}\right)\mathbb{1}_{t>L}\,dt $$
+
+The model is resolved once the lag is published, or after
+`RESPONSE_LAG_RESOLVE_EPISODES = 7` active episodes without a publication
+(the applied power is then used). Until then, `a` measurements are collected
+without publication. When the published lag appears or changes by more than
+`RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` before the first publication of `a`, the
+collected measurements are recomputed with the new delivered power. Only the
+windows that the settling gate admits are recomputed; the others are dropped,
+since their correction depends on the shape of the response.
+
+The state is published in `analysis.learning.response_lag` (`lag_s`, `estimates`,
+`episode_median_s`, `last_reason`) and persisted with the learning state.
+
+The lag is learned on constant-power episodes, which the hysteresis bootstrap
+provides. In PWM regulation the duty cycle changes from cycle to cycle, so an
+installation already out of the bootstrap rarely provides one.
 
 ---
 
@@ -274,7 +365,8 @@ power.
 The FF2 trim stays frozen (`ff_warmup`) while `warmup_scale` is below 1.
 
 $k_{ff}$ is zero, and therefore $u_{ff1}$ is zero, whenever the model is not
-ready (not enough `a` and `b` measurements), `tau` is not reliable, or the sign
+ready (`a` not published with fewer than 6 measurements, or fewer than 4 `b`
+measurements), `tau` is not reliable, or the sign
 of `a` does not match the active mode.
 
 $T_{ext}$ is the last valid outdoor temperature received by SmartPI. When the
@@ -520,6 +612,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `ab_drift.py`          | persistent drift detection and recentering for `a/b`, with one candidate sequence per channel |
 | `learning_window.py`   | learning-window management and guardrails                   |
 | `ab_window_balance.py` | integral balance of windows without a robust slope and `a/b` pools |
+| `response_lag.py`      | `ResponseLagEstimator`: response lag, settling gates and delivered power model |
 | `learning_outcomes.py` | bounded counters of learning-window outcomes                |
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis                  |
@@ -717,6 +810,8 @@ acceptance or rejection without changing the learning decision.
 | `AB_HISTORY_SIZE`              | `31`   |
 | `AB_MIN_SAMPLES_B`             | `4`    |
 | `AB_MIN_SAMPLES_A`             | `6`    |
+| `AB_MIN_SAMPLES_A_CONSISTENT`  | `4`    |
+| `AB_A_CONSISTENT_MAX_REL_MAD`  | `0.10` |
 | `AB_A_SOFT_GATE_MIN_B`         | `4`    |
 | `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
 | `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
@@ -737,6 +832,18 @@ acceptance or rejection without changing the learning decision.
 | `AB_BALANCE_MIN_RESOLUTION_C`  | `0.05` |
 | `AB_BALANCE_DEFAULT_RESOLUTION_C` | `0.1` |
 | `AB_BALANCE_POOL_MAX_SEGMENTS` | `12`   |
+| `RESPONSE_LAG_HISTORY`         | `7`    |
+| `RESPONSE_LAG_MIN_ESTIMATES`   | `3`    |
+| `RESPONSE_LAG_RESOLVE_EPISODES` | `7`   |
+| `RESPONSE_LAG_MAX_REL_UNC`     | `0.15` |
+| `RESPONSE_LAG_UNC_FLOOR_S`     | `30`   |
+| `RESPONSE_LAG_MIN_OFF_S`       | `1800` |
+| `RESPONSE_LAG_MIN_OFF_LAGS`    | `5`    |
+| `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
+| `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
+| `AB_SETTLE_K_ACTIVE`           | `3`    |
+| `AB_SETTLE_K_PASSIVE`          | `3`    |
+| `AB_SETTLE_ACTIVE_CAP_FRAC`    | `0.5`  |
 
 ### 6.2 Regulation
 

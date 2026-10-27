@@ -237,7 +237,7 @@ Once the dead times are considered reliable, SmartPI starts collecting **cooling
 
 From these observations, it calculates `b`, the heat-loss coefficient. This parameter represents how quickly the room cools down depending on the difference between indoor and outdoor temperature.
 
-SmartPI needs at least 8 valid cooling observations before `b` is considered usable.
+SmartPI needs at least 4 valid cooling observations before `b` is considered usable.
 
 #### Step 3 — Learning heating gain (`a`)
 
@@ -245,7 +245,18 @@ Once `b` has enough observations to be considered reliable, SmartPI starts colle
 
 From these observations, it calculates `a`, the heating gain. This parameter represents how effectively your heating system raises the indoor temperature.
 
-SmartPI needs at least 6 valid heating observations for `a`.
+After a heating start, the room warms up progressively: the emitter, the air and
+the sensor take some time before the temperature rises at its full rate. SmartPI
+measures this *response lag* on the first heating phases and ignores the start
+of each phase until the response has settled, then accounts for the heat
+actually delivered. `a` is only published once this lag is known (or after 7
+heating phases where it could not be measured, for example with a sensor that
+reports too rarely).
+
+SmartPI needs 6 valid heating observations for `a`, or 4 when they agree closely.
+
+Bootstrap therefore takes longer in slow rooms or with slow sensors: SmartPI
+favours an accurate `a` over a fast exit.
 
 #### Leaving bootstrap
 

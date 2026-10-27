@@ -438,7 +438,12 @@ class SmartPI:
     def phase(self) -> SmartPIPhase:
         if self.calibration_mgr.state != SmartPICalibrationPhase.IDLE:
             return SmartPIPhase.CALIBRATION
-        if len(self.est.a_meas_hist) < AB_MIN_SAMPLES_A or len(self.est.b_meas_hist) < AB_MIN_SAMPLES_B:
+        if (
+            (len(self.est.a_meas_hist) < AB_MIN_SAMPLES_A and self.est.learn_ok_count_a == 0)
+            or len(self.est.b_meas_hist) < AB_MIN_SAMPLES_B
+            # The first a publication waits for the delivered power model.
+            or (not self.est.a_model_ready and self.est.learn_ok_count_a == 0)
+        ):
             return SmartPIPhase.HYSTERESIS
         return SmartPIPhase.STABLE
 
@@ -588,6 +593,7 @@ class SmartPI:
             a_learning_allowed=a_learning_block_reason is None,
             a_learning_block_reason=a_learning_block_reason,
             raw_temp=raw_temp,
+            min_active_window_min=self._cycle_min,
         )
 
     def stage_command(self, hvac_mode: VThermHvacMode) -> int:

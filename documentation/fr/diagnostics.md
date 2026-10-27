@@ -64,6 +64,15 @@ Le bloc `live` est organisé par responsabilité :
 `trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
 est disponible, `twin`.
 
+`analysis.learning.response_lag` décrit le retard de réponse utilisé par l'apprentissage de `a` :
+
+| Champ | Signification |
+|---|---|
+| `lag_s` | Retard de réponse publié en secondes, `null` tant qu'il n'existe pas un ensemble cohérent d'estimations |
+| `estimates` | Nombre d'estimations conservées (7 au plus) |
+| `episode_median_s` | Durée médiane des épisodes actifs récents en secondes, `null` avec moins de 3 épisodes |
+| `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage) |
+
 `valve` vaut `null` sauf si le thermostat pilote une vanne. En mode vanne, il contient :
 
 | Champ | Signification |

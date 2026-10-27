@@ -209,6 +209,10 @@ B_STABILITY_MAD_RATIO_MAX = 0.60   # MAD(b) / median(b)
 AB_HISTORY_SIZE = 31      # Keep last 31 (ODD) values
 AB_MIN_SAMPLES_B = 4      # Min samples for b publication (OFF phase)
 AB_MIN_SAMPLES_A = 6      # Min samples for a publication (ON phase)
+# The first a publication may take place from this count when the collected
+# measurements agree (median absolute deviation within the fraction below).
+AB_MIN_SAMPLES_A_CONSISTENT = 4
+AB_A_CONSISTENT_MAX_REL_MAD = 0.10
 AB_MAD_SIGMA_MULT = 3.0   # Outlier rejection threshold (sigma)
 
 AB_MAD_K = 1.4826         # Sigma scaling factor for MAD
@@ -268,6 +272,42 @@ AB_BALANCE_MIN_RESOLUTION_C = 0.05     # Floor on the step used for uncertainty 
 AB_BALANCE_POOL_MAX_AGE_S = 86400.0    # Segments older than this are dropped
 AB_BALANCE_POOL_MAX_SEGMENTS = 12      # Oldest segments are dropped beyond this count
 AB_BALANCE_MIN_SEGMENT_MIN = 15.0      # Shorter segments are dominated by noise and actuator lag
+
+# Response lag (ramp asymptote intercept after a power step).
+# Over a learning window the room behaves as an integrator behind fast lags
+# (actuator, emitter, air mixing, sensor housing) and a pure delay: after a
+# power step the slope settles and its asymptote is delayed by the lag. The
+# lag is estimated on constant-power active episodes and sets the settling
+# gates and the delivered power model of the a learning.
+RESPONSE_LAG_HISTORY = 7               # Estimates kept (published value: their median)
+RESPONSE_LAG_MIN_ESTIMATES = 3         # Estimates required before the lag is published
+# Active episodes after which an unpublished lag is given up for the a
+# bootstrap (the applied power is then used for the a measurements).
+RESPONSE_LAG_RESOLVE_EPISODES = 7
+# Publication: combined standard deviation of the inverse-variance weighted
+# estimates at most this fraction of their weighted median (floor for short lags).
+RESPONSE_LAG_MAX_REL_UNC = 0.15
+RESPONSE_LAG_UNC_FLOOR_S = 30.0
+RESPONSE_LAG_B_REL_UNC = 0.10          # Assumed relative uncertainty of a published b
+# Slope of the intercept inversion below which an episode cannot resolve the lag.
+RESPONSE_LAG_MIN_INVERSION_SLOPE = 0.05
+RESPONSE_LAG_MIN_OFF_S = 1800.0        # Passive time before an episode for a settled baseline
+RESPONSE_LAG_MIN_OFF_LAGS = 5.0        # Same, in known lags (residual power below 1 %)
+RESPONSE_LAG_PASSIVE_SPAN_S = 3600.0   # Max OFF tail used to measure the passive slope
+RESPONSE_LAG_MIN_CROSSINGS = 3        # Level crossings required for the late line
+# Relative change of the published lag that restarts the a collection during
+# the bootstrap (measurements of different power models are not comparable).
+RESPONSE_LAG_MODEL_CHANGE_REL = 0.5
+RESPONSE_LAG_U_TOL = 0.05              # Power deviation ending a constant-power episode
+RESPONSE_LAG_MAX_S = DT_MAX_MIN * 60.0  # Upper bound of an estimate
+# An intercept at or beyond this fraction of its asymptotic limit (infinite
+# lag) cannot be resolved from the episode.
+RESPONSE_LAG_RESOLVABLE_FRAC = 0.9
+# Settling gates, in published lags: the slope deficit after k lags is at most
+# exp(-k) for a single lag, whatever the pure delay share.
+AB_SETTLE_K_ACTIVE = 3.0               # Delivered power model corrects the remainder
+AB_SETTLE_K_PASSIVE = 3.0              # b is not corrected (learned before a)
+AB_SETTLE_ACTIVE_CAP_FRAC = 0.5        # Active gate cap, fraction of the median episode
 
 # Indoor temperature histories of the dead time estimator (learning slopes and
 # dead time inflection lookback). Samples are kept by age so that a learning

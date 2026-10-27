@@ -30,6 +30,9 @@ def _force_stable_phase(pi):
     for _ in range(AB_HISTORY_SIZE + 1):
         pi.est.a_meas_hist.append(0.01)
         pi.est.b_meas_hist.append(0.002)
+    # A stable model has published a and b.
+    pi.est.learn_ok_count_a = max(pi.est.learn_ok_count_a, 1)
+    pi.est.learn_ok_count_b = max(pi.est.learn_ok_count_b, 1)
     pi._output_initialized = True
     pi.calibration_mgr.last_calibration_time = time.time()
 

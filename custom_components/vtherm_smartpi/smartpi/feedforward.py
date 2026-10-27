@@ -46,8 +46,10 @@ def compute_ff_gain(
     tau_reliable: bool,
 ) -> float:
     """Return the signed FF gain b / a of the active mono-mode model, 0 when unusable."""
+    # a is usable once published, which may happen before AB_MIN_SAMPLES_A
+    # measurements when the first ones agree.
     model_ready = (
-        len(estimator.a_meas_hist) >= AB_MIN_SAMPLES_A
+        (len(estimator.a_meas_hist) >= AB_MIN_SAMPLES_A or estimator.learn_ok_count_a > 0)
         and len(estimator.b_meas_hist) >= AB_MIN_SAMPLES_B
     )
     model_sign_valid = (

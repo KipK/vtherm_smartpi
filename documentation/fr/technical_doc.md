@@ -85,8 +85,12 @@ Règles effectivement codées :
 - `AB_MIN_SAMPLES_A = 6`,
 - `AB_A_SOFT_GATE_MIN_B = 4`.
 
-SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 4 mesures et `a` de
-6 mesures. Les deux buffers continuent ensuite à se remplir jusqu'à
+SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 4 mesures et que `a` est publié.
+`a` est publié à 6 mesures, ou dès `AB_MIN_SAMPLES_A_CONSISTENT = 4` mesures lorsqu'elles
+concordent : leur écart absolu médian est au plus `AB_A_CONSISTENT_MAX_REL_MAD = 0.10`
+de leur médiane. La première publication de `a` attend aussi le modèle de puissance
+délivrée (3.7) : tant que le retard de réponse n'est pas résolu, les mesures sont
+collectées sans publication. Les deux buffers continuent ensuite à se remplir jusqu'à
 `AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale.
 
 La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dérive repose sur `b_converged_for_a()` :
@@ -114,6 +118,9 @@ Le code n'utilise plus de constante `WINDOW_MIN_MINUTES`. L'apprentissage repose
 - bloque la collecte en bootstrap tant que les temps morts requis ne sont pas fiables,
 - applique une pause après reprise (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - ancre le début de fenêtre après la fin du temps mort quand c'est nécessaire,
+- retarde le début de fenêtre jusqu'à l'extinction de la réponse transitoire, une fois le retard de réponse publié (3.7) : une fenêtre `a` débute au moins `min(3 retard, moitié de l'épisode actif médian)` après l'échelon de puissance, une fenêtre `b` au moins `3 retard` après la coupure de puissance (`skip: response transient (a|b)`),
+- ne soumet pas une fenêtre active plus courte qu'un cycle PWM (`active_window_shorter_than_cycle`) : sa durée est fixée avant ses données, car arrêter dès qu'une fenêtre courte paraît significative favorise les pentes les plus fortes parmi les données bruitées,
+- clôt la fenêtre à sa dernière observation lorsque deux mises à jour ne sont pas contiguës (coupure de garde de chauffe, intervalle plafonné à un cycle) : la fenêtre est soumise sur les données jusqu'à cet instant lorsque sa pente y est robuste, sinon abandonnée (`skip: observation gap`) ; elle ne couvre jamais la période non observée,
 - surveille la stabilité de puissance via le coefficient de variation (`U_CV_MAX`),
   évalué dès que la puissance moyenne de la fenêtre atteint `U_CV_MIN_MEAN = 0.05`
   (en dessous, une puissance qui revient dans une fenêtre OFF n'est pas détectée par ce contrôle),
@@ -165,6 +172,8 @@ $$ a = \frac{dT/dt + b \cdot (T_{int} - T_{ext})}{u} $$
 
 Les historiques sont filtrés par median/MAD. La magnitude publiée de `a` est
 bornée tout en conservant le signe du mode ; `b` reste strictement positif.
+
+Pour une fenêtre active, `u` est la puissance délivrée moyenne de la fenêtre (3.7), et non la commande appliquée.
 
 Chaque mesure de `a` conserve son observation (`dT/dt`, `T_int - T_ext`, `u`). À
 chaque publication d'une nouvelle valeur de `b`, toutes les mesures conservées sont
@@ -241,6 +250,30 @@ La détection suit la température intérieure filtrée. Une détection en cours
 
 La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée sur le canal correspondant. Chaque canal garde ses 6 dernières détections ; la valeur publiée est leur médiane, de sorte qu'une détection aberrante isolée ne la déplace pas (avec une ou deux détections, la médiane vaut leur moyenne). Au redémarrage, la valeur publiée est recalculée à partir des détections restaurées.
 
+### 3.7 Retard de réponse et puissance délivrée
+
+À l'échelle d'une fenêtre d'apprentissage, la pièce se comporte comme un intégrateur derrière des retards rapides (actionneur, émetteur, brassage de l'air, boîtier de la sonde) et un retard pur (réponse intégratrice du premier ordre avec temps mort). Après un échelon de puissance, la pente se stabilise progressivement et son asymptote de rampe croise la trajectoire passive extrapolée à $t = T_{ar} = L + \sum \tau_i$, le temps de séjour moyen de la réponse (Åström et Hägglund). Une fenêtre qui débute $k \cdot T_{ar}$ après l'échelon présente un déficit de pente d'au plus $e^{-k}$ pour un retard unique, quelle que soit la part du retard pur. Une fenêtre comprise dans le régime transitoire sous-estime `a`, d'autant plus que les retards sont longs ou que la sonde rapporte en retard.
+
+`ResponseLagEstimator` (`response_lag.py`) mesure $T_{ar}$ sur les épisodes actifs à puissance constante (écart d'au plus `RESPONSE_LAG_U_TOL = 0.05`) :
+
+- l'épisode doit suivre une période passive d'au moins `max(RESPONSE_LAG_MIN_OFF_S = 1800 s, RESPONSE_LAG_MIN_OFF_LAGS = 5 × retard connu)`, afin que la puissance de l'épisode précédent soit retombée ;
+- la référence passive est la pente OLS robuste de la fin de cette période OFF (sur `RESPONSE_LAG_PASSIVE_SPAN_S = 3600 s` au plus), à défaut le `b` publié ;
+- la droite tardive est ajustée sur les franchissements de niveau de l'historique brut (au moins `RESPONSE_LAG_MIN_CROSSINGS = 3`). Pour un saut d'un pas de capteur, le franchissement est daté au milieu des deux échantillons ; un saut de plusieurs pas conserve la valeur brute. Cela supprime les biais en escalier et de seuil de déclenchement des capteurs qui rapportent sur changement ;
+- l'ordonnée à l'origine d'une droite OLS ajustée sur un segment transitoire tombe avant $T_{ar}$ : l'estimateur inverse la forme close de l'ordonnée à l'origine d'une réponse à retard unique sur l'intervalle ajusté (monotone en le retard). Un épisode n'est pas utilisé lorsque l'inversion est trop plate (`RESPONSE_LAG_MIN_INVERSION_SLOPE = 0.05`) ou lorsque l'ordonnée à l'origine atteint `RESPONSE_LAG_RESOLVABLE_FRAC = 0.9` de sa limite pour un retard infini ;
+- chaque estimation porte son écart-type, propagé à partir des résidus de l'ajustement et d'une incertitude relative supposée de `b` égale à `RESPONSE_LAG_B_REL_UNC = 0.10`.
+
+Les `RESPONSE_LAG_HISTORY = 7` dernières estimations sont conservées. Le retard est publié lorsqu'au moins `RESPONSE_LAG_MIN_ESTIMATES = 3` estimations donnent un écart-type combiné de leur médiane pondérée par l'inverse des variances au plus égal à `RESPONSE_LAG_MAX_REL_UNC = 0.15` de cette médiane (plancher `RESPONSE_LAG_UNC_FLOOR_S = 30 s`) ; les estimations situées à plus de trois écarts-types de la médiane ne sont pas combinées. Un ensemble incohérent conserve la valeur publiée, afin que des estimations dispersées n'activent et ne désactivent pas le modèle de puissance délivrée. Une discontinuité de plus de 1 s entre deux mises à jour termine l'épisode au dernier instant observé, et la coupure de puissance est datée à la reprise.
+
+L'ordonnée à l'origine fixe le retard moyen de la réponse, pas sa forme. Le modèle de puissance délivrée la répartit en un retard pur $L = \min(\text{temps mort actif}, T_{ar})$, puis en un retard du premier ordre de $T_{ar} - L$. Le temps mort est détecté après le début de la réponse ; il borne donc le retard pur par le haut : le modèle ne délivre jamais de puissance plus tôt qu'un retard pur de même ordonnée à l'origine. Sans retard publié ni temps mort fiable, la puissance délivrée est égale à la puissance appliquée. Pour une fenêtre active qui débute $t_0$ après l'échelon et dure $W$, la fraction délivrée moyenne vaut, avec $\tau = T_{ar} - L$ :
+
+$$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-L)/\tau}\right)\mathbb{1}_{t>L}\,dt $$
+
+Le modèle est résolu dès que le retard est publié, ou après `RESPONSE_LAG_RESOLVE_EPISODES = 7` épisodes actifs sans publication (la puissance appliquée est alors utilisée). Jusque-là, les mesures de `a` sont collectées sans publication. Lorsque le retard publié apparaît ou varie de plus de `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` avant la première publication de `a`, les mesures collectées sont recalculées avec la nouvelle puissance délivrée. Seules les fenêtres admises par la porte de stabilisation sont recalculées ; les autres sont écartées, puisque leur correction dépend de la forme de la réponse.
+
+L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`, `episode_median_s`, `last_reason`) et persisté avec l'état d'apprentissage.
+
+Le retard est appris sur des épisodes à puissance constante, que fournit le bootstrap par hystérésis. En régulation PWM, le rapport cyclique change d'un cycle à l'autre : une installation déjà sortie du bootstrap en fournit donc rarement.
+
 ---
 
 ## 4. Contrôle Smart-PI
@@ -305,7 +338,7 @@ Le `warmup_scale` n'est pas un simple interrupteur. Il est le produit :
 
 Le trim FF2 reste gelé (`ff_warmup`) tant que `warmup_scale` est inférieur à 1.
 
-$k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (pas assez de mesures de `a` et de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
+$k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (`a` non publié avec moins de 6 mesures, ou moins de 4 mesures de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
 
 $T_{ext}$ est la dernière température extérieure valide reçue par SmartPI. Lorsque la sonde extérieure ne fournit aucune valeur, FF1, le modèle de consigne et la near-band continuent d'utiliser cette dernière valeur, sans limite d'âge. Tant qu'aucune température extérieure n'a été reçue, $u_{ff1}$ et $u_{ff2}$ sont tous deux nuls (`ff_reason` `ff_no_ext_temp`).
 
@@ -553,6 +586,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `ab_drift.py`          | détection et recentrage de dérive persistante sur `a/b`, avec une séquence de candidats par canal |
 | `learning_window.py`   | gestion des fenêtres d'apprentissage et de leurs gardes  |
 | `ab_window_balance.py` | bilan intégral des fenêtres sans pente robuste et pools `a/b` |
+| `response_lag.py`      | `ResponseLagEstimator` : retard de réponse, portes de stabilisation et modèle de puissance délivrée |
 | `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
@@ -758,6 +792,8 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `AB_HISTORY_SIZE`              | `31`   |
 | `AB_MIN_SAMPLES_B`             | `4`    |
 | `AB_MIN_SAMPLES_A`             | `6`    |
+| `AB_MIN_SAMPLES_A_CONSISTENT`  | `4`    |
+| `AB_A_CONSISTENT_MAX_REL_MAD`  | `0.10` |
 | `AB_A_SOFT_GATE_MIN_B`         | `4`    |
 | `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
 | `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
@@ -778,6 +814,18 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `AB_BALANCE_MIN_RESOLUTION_C`  | `0.05` |
 | `AB_BALANCE_DEFAULT_RESOLUTION_C` | `0.1` |
 | `AB_BALANCE_POOL_MAX_SEGMENTS` | `12`   |
+| `RESPONSE_LAG_HISTORY`         | `7`    |
+| `RESPONSE_LAG_MIN_ESTIMATES`   | `3`    |
+| `RESPONSE_LAG_RESOLVE_EPISODES` | `7`   |
+| `RESPONSE_LAG_MAX_REL_UNC`     | `0.15` |
+| `RESPONSE_LAG_UNC_FLOOR_S`     | `30`   |
+| `RESPONSE_LAG_MIN_OFF_S`       | `1800` |
+| `RESPONSE_LAG_MIN_OFF_LAGS`    | `5`    |
+| `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
+| `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
+| `AB_SETTLE_K_ACTIVE`           | `3`    |
+| `AB_SETTLE_K_PASSIVE`          | `3`    |
+| `AB_SETTLE_ACTIVE_CAP_FRAC`    | `0.5`  |
 
 ### 6.2 Régulation
 

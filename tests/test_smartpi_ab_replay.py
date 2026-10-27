@@ -6,6 +6,7 @@ from custom_components.vtherm_smartpi.smartpi.ab_estimator import ABEstimator
 from custom_components.vtherm_smartpi.smartpi.const import (
     AB_A_SOFT_GATE_MIN_B,
     AB_MIN_SAMPLES_A,
+    AB_MIN_SAMPLES_A_CONSISTENT,
     AB_MIN_SAMPLES_B,
 )
 
@@ -61,7 +62,8 @@ def test_published_a_follows_a_later_b_update():
 def test_collecting_a_is_replayed_without_publishing_a():
     est = ABEstimator()
     _learn_b(est, 3.0e-4, AB_A_SOFT_GATE_MIN_B)
-    slopes = _learn_a(est, 0.025, 3.0e-4, AB_MIN_SAMPLES_A - 2)
+    # Below the count of an early publication on agreeing measurements.
+    slopes = _learn_a(est, 0.025, 3.0e-4, AB_MIN_SAMPLES_A_CONSISTENT - 1)
     a_init = est.a
     _move_b(est, 6.0e-4)
     assert list(est.a_meas_hist) == pytest.approx(_expected(slopes, est.b))

@@ -64,6 +64,16 @@ The `live` block is organized by responsibility:
 `trajectory`, `deadtime`, `governance`, `feedforward` and, when
 available, `twin`.
 
+`analysis.learning.response_lag` describes the response lag used by the `a`
+learning:
+
+| Field | Meaning |
+|---|---|
+| `lag_s` | Published response lag in seconds, `null` until a consistent set of estimates |
+| `estimates` | Number of retained estimates (at most 7) |
+| `episode_median_s` | Median duration of the recent active episodes in seconds, `null` with fewer than 3 episodes |
+| `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used) |
+
 `valve` is `null` unless the thermostat drives a valve. In valve mode it contains:
 
 | Field | Meaning |

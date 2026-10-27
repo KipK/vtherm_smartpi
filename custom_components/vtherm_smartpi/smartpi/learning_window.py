@@ -14,6 +14,8 @@ from .const import (
     AB_B_OUTDOOR_TARGET_MARGIN_C,
     DELTA_MIN,
     DT_MAX_MIN,
+    RESPONSE_LAG_MODEL_CHANGE_REL,
+    RESPONSE_LAG_U_TOL,
     U_CV_MAX,
     U_CV_MIN_MEAN,
     U_OFF_MAX,
@@ -22,6 +24,10 @@ from .const import (
 )
 from .ab_window_balance import ABWindowBalance
 from .learning_outcomes import LearningOutcomes
+from .response_lag import ResponseLagEstimator
+
+# Two observed intervals are contiguous within this tolerance (s).
+_CONTIGUITY_TOL_S = 1.0
 
 if TYPE_CHECKING:
     from .ab_estimator import ABEstimator
@@ -54,12 +60,17 @@ class LearningWindowManager:
         self._T_int_start: float = 0.0
         self._T_ext_start: float = 0.0
         self._u_int: float = 0.0
+        # Delivered power integral (applied power filtered by the response lag)
+        self._uf_int: float = 0.0
         self._t_int_s: float = 0.0
         self._u_first: float | None = None
 
         # Time spent sliding the window start, summed over the window life:
         # ticks in the expected direction do not clear it.
         self._sliding_elapsed_s: float = 0.0
+        # End of the observed data of a window interrupted by an observation
+        # gap: the window closes on its data up to this time.
+        self._close_at: float | None = None
 
         # Power variance tracking (Welford online algorithm)
         self._u_count: int = 0
@@ -85,6 +96,12 @@ class LearningWindowManager:
         self._balance_carry: bool = False
         # Sliding-period counts of window outcomes for diagnostics.
         self._outcomes = LearningOutcomes()
+        # Response lag after power steps: delivered power and settling gates.
+        self._response_lag = ResponseLagEstimator(name)
+        # Lag of the power model of the collected a measurements.
+        self._lag_model: float | None = None
+        # End of the last observed interval (contiguity of the observations).
+        self._last_update_now: float | None = None
 
     # --------------------------------------------------------------------------
     # Properties for diagnostic access
@@ -135,6 +152,11 @@ class LearningWindowManager:
         """Return the integral balance pools (diagnostics)."""
         return self._balance
 
+    @property
+    def response_lag(self) -> ResponseLagEstimator:
+        """Return the response lag estimator (diagnostics)."""
+        return self._response_lag
+
     def outcomes_summary(self, now: float) -> dict[str, list[list]]:
         """Return the most frequent window outcomes of the sliding period."""
         return self._outcomes.summary(now)
@@ -153,6 +175,7 @@ class LearningWindowManager:
         self._active = False
         self._start_ts = None
         self._u_int = 0.0
+        self._uf_int = 0.0
         self._t_int_s = 0.0
         self._u_first = None
         self._u_count = 0
@@ -160,6 +183,7 @@ class LearningWindowManager:
         self._u_m2 = 0.0
         self._last_extend_method = ""
         self._sliding_elapsed_s = 0.0
+        self._close_at = None
         if not self._updating:
             self._balance.discard()
 
@@ -168,6 +192,9 @@ class LearningWindowManager:
         self.reset()
         self._balance.clear()
         self._outcomes.clear()
+        self._response_lag.clear()
+        self._lag_model = None
+        self._last_update_now = None
         self._T_int_start = 0.0
         self._T_ext_start = 0.0
         self._learning_start_date = datetime.now()
@@ -238,6 +265,8 @@ class LearningWindowManager:
         # prop_algo_smartpi handles the post-boot freeze for one cycle. Restoring a stale
         # value (e.g., 20-min OFF-resume) would block learning for the full duration.
         self._learning_resume_ts = None
+        self._response_lag.load_state(state.get("response_lag"))
+        self._lag_model = self._response_lag.lag_s
 
     def save_state(self) -> dict:
         """Save state to persistence dict.
@@ -250,6 +279,7 @@ class LearningWindowManager:
                 self._learning_start_date.isoformat() 
                 if self._learning_start_date else None
             ),
+            "response_lag": self._response_lag.save_state(),
         }
 
     # --------------------------------------------------------------------------
@@ -280,8 +310,31 @@ class LearningWindowManager:
         a_learning_allowed: bool = True,
         a_learning_block_reason: str | None = None,
         raw_temp: float | None = None,
+        min_active_window_min: float = 0.0,
     ) -> tuple[int, int]:
         """Update the learning window, then pool a window closed by this update."""
+        if dt_min > 0:
+            self._close_window_at_gap(now, dt_min * 60.0)
+            self._last_update_now = now
+            self._response_lag.observe(
+                now=now,
+                dt_s=dt_min * 60.0,
+                u=clamp(u_active, 0.0, 1.0),
+                t_ext=ext_temp,
+                hvac_mode=hvac_mode,
+                b=_published_b(estimator),
+                tin_history=dt_est.tin_history,
+                deadtime_s=_active_deadtime_s(dt_est, hvac_mode),
+            )
+            self._follow_power_model(
+                estimator, _active_deadtime_s(dt_est, hvac_mode), hvac_mode
+            )
+        estimator.a_model_ready = self._response_lag.resolved
+        publish = getattr(estimator, "publish_collected_a", None)
+        if callable(publish):
+            from ..hvac_mode import VThermHvacMode_COOL
+
+            publish(-1.0 if hvac_mode == VThermHvacMode_COOL else 1.0)
         was_active = self._active
         window_param = (
             "b" if self._u_first is not None and self._u_first < U_OFF_MAX else "a"
@@ -311,6 +364,7 @@ class LearningWindowManager:
                 a_learning_allowed=a_learning_allowed,
                 a_learning_block_reason=a_learning_block_reason,
                 raw_temp=raw_temp,
+                min_active_window_min=min_active_window_min,
             )
         finally:
             self._updating = False
@@ -334,6 +388,83 @@ class LearningWindowManager:
                     else "pool: segment added",
                 )
         return result
+
+    def _close_window_at_gap(self, now: float, dt_s: float) -> None:
+        """Close a window at its last observation when the intervals are not contiguous.
+
+        calculate() does not feed the learning during a heating guard cut and
+        an interval is capped at one cycle: across such a gap the power and the
+        temperature are unobserved. The window is submitted on its data up to
+        the last observation when its slope is robust there (as on a power
+        change), else abandoned; it never extends across the gap.
+        """
+        if (
+            self._last_update_now is None
+            or now - dt_s <= self._last_update_now + _CONTIGUITY_TOL_S
+        ):
+            return
+        if self._active:
+            self._close_at = self._last_update_now
+            return
+        # A balance segment carried over a window timeout spans the gap.
+        self._balance_carry = False
+        self._balance.discard()
+
+    def _follow_power_model(
+        self,
+        estimator: "ABEstimator",
+        deadtime_s: float | None,
+        hvac_mode: "VThermHvacMode | None",
+    ) -> None:
+        """Recompute the a collection when the bootstrap power model changes."""
+        lag = self._response_lag.lag_s
+        previous = self._lag_model
+        changed = (previous is None) != (lag is None) or (
+            previous is not None
+            and lag is not None
+            and abs(lag - previous) > RESPONSE_LAG_MODEL_CHANGE_REL * previous
+        )
+        if not changed:
+            return
+        self._lag_model = lag
+        replay = getattr(estimator, "replay_a_power", None)
+        if not callable(replay):
+            return
+        from ..hvac_mode import VThermHvacMode_COOL
+
+        settle = self._response_lag.active_settle_s
+
+        def power_of(geometry: tuple[float, float, float]) -> float | None:
+            # Only windows that the settling gate would have admitted are
+            # recomputed: their correction is small whatever the shape of the
+            # response, unlike the one of a window within the transient.
+            u_applied, start_s, duration_s = geometry
+            if settle is not None and start_s < settle:
+                return None
+            return u_applied * self._response_lag.delivered_fraction(
+                start_s, duration_s, deadtime_s
+            )
+
+        mode_sign = -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0
+        if replay(power_of, mode_sign, "replay: response lag model changed") is True:
+            _LOGGER.debug(
+                "%s - a collection recomputed: response lag %s -> %s",
+                self._name, previous, lag,
+            )
+
+    def _power_geometry(self, u_applied: float) -> tuple[float, float, float] | None:
+        """Window power geometry within a constant-power episode, or None."""
+        ep_start = self._response_lag.episode_start
+        ep_power = self._response_lag.episode_power
+        if (
+            ep_start is None
+            or ep_power is None
+            or self._start_ts is None
+            or self._start_ts < ep_start
+            or abs(u_applied - ep_power) > RESPONSE_LAG_U_TOL
+        ):
+            return None
+        return (u_applied, self._start_ts - ep_start, self._t_int_s)
 
     def _update_window(
         self,
@@ -359,6 +490,7 @@ class LearningWindowManager:
         a_learning_allowed: bool = True,
         a_learning_block_reason: str | None = None,
         raw_temp: float | None = None,
+        min_active_window_min: float = 0.0,
     ) -> tuple[int, int]:
         """
         Update learning window and submit to estimator if conditions met.
@@ -558,11 +690,27 @@ class LearningWindowManager:
                 if proposed_start_ts < deadtime_end_ts:
                     proposed_start_ts = deadtime_end_ts
 
-            # If the anchored start is still in the future, the deadtime has not
-            # expired yet — emit a single skip and wait.
+            # The slope settles after a power step: the window starts once the
+            # response transient has decayed (gate of the published lag).
+            settle_end = None
+            settle_param = ""
+            if u_active > U_ON_MIN:
+                settle_end, settle_param = self._response_lag.active_gate_end(), "a"
+            elif u_active < U_OFF_MAX:
+                settle_end, settle_param = self._response_lag.passive_gate_end(), "b"
+            in_transient = settle_end is not None and settle_end >= now
+            if settle_end is not None and proposed_start_ts < settle_end:
+                proposed_start_ts = settle_end
+
+            # If the anchored start is still in the future, the deadtime or the
+            # response transient has not expired yet — emit a single skip and wait.
             if proposed_start_ts >= now:
                 estimator.learn_skip_count += 1
-                estimator.learn_last_reason = "skip: window start still in deadtime"
+                estimator.learn_last_reason = (
+                    f"skip: response transient ({settle_param})"
+                    if in_transient
+                    else "skip: window start still in deadtime"
+                )
                 return deadtime_skip_count_a, deadtime_skip_count_b
 
             # OK to start window (possibly with anchored start)
@@ -571,6 +719,7 @@ class LearningWindowManager:
             self._T_int_start = current_temp
             self._T_ext_start = ext_temp
             self._u_int = 0.0
+            self._uf_int = 0.0
             self._t_int_s = 0.0
             self._u_first = u_active
             self._sliding_elapsed_s = 0.0
@@ -582,16 +731,29 @@ class LearningWindowManager:
         else:
             # Check power consistency via coefficient of variation (Welford)
             cv = self._u_cv
-            if cv > U_CV_MAX:
-                # Regime change detected: window must close now.
+            close_at = self._close_at
+            if close_at is not None or cv > U_CV_MAX:
+                # Regime change or observation gap: window must close now.
                 # Try OLS slope on collected samples before deciding to submit or abandon.
                 u_eff_win = self._u_int / max(self._t_int_s, 1e-9)
                 trim_frac = 0.10 if u_eff_win < U_OFF_MAX else 0.0
-                early_samples = [p for p in dt_est.tin_history if p[0] >= self._start_ts]
+                early_samples = [
+                    p for p in dt_est.tin_history
+                    if p[0] >= self._start_ts and (close_at is None or p[0] <= close_at)
+                ]
                 slope_early, method_early, _ = ABEstimator.robust_dTdt_per_min(
                     early_samples, trim_start_frac=trim_frac
                 )
                 delta_T_early = abs(self._T_int_start - self._T_ext_start)
+                # The duration of an active window is set before its data: a
+                # stop as soon as a short window looks significant favours
+                # the steepest noisy slopes (optional stopping).
+                if (
+                    slope_early is not None
+                    and u_eff_win > U_ON_MIN
+                    and self._t_int_s < min_active_window_min * 60.0
+                ):
+                    slope_early, method_early = None, "active_window_shorter_than_cycle"
                 if slope_early is not None and delta_T_early >= DELTA_MIN:
                     _LOGGER.debug(
                         "%s - power CV %.2f > %.2f: early submit via slope (%.0fs)",
@@ -602,7 +764,9 @@ class LearningWindowManager:
                 else:
                     estimator.learn_skip_count += 1
                     estimator.learn_last_reason = (
-                        f"skip: power instability (CV={cv:.2f}, {method_early})"
+                        f"skip: observation gap ({method_early})"
+                        if close_at is not None
+                        else f"skip: power instability (CV={cv:.2f}, {method_early})"
                     )
                     self.reset()
                     return deadtime_skip_count_a, deadtime_skip_count_b
@@ -615,6 +779,15 @@ class LearningWindowManager:
             # Accumulate current sample into power stats and energy integral
             self._update_u_stats(u_active)
             self._u_int += clamp(u_active, 0.0, 1.0) * dt_s
+            delivered = clamp(self._response_lag.interval_mean_power, 0.0, 1.0)
+            self._uf_int += delivered * dt_s
+            # Only a is referred to the delivered power: passive windows keep
+            # the applied power so that their classification is unchanged.
+            pool_u = (
+                delivered
+                if self._u_first is not None and self._u_first > U_ON_MIN
+                else clamp(u_active, 0.0, 1.0)
+            )
             self._t_int_s += dt_s
 
             # Current Window Stats
@@ -659,6 +832,7 @@ class LearningWindowManager:
                     self._T_ext_start = ext_temp
                     self._t_int_s = 0.0
                     self._u_int = 0.0
+                    self._uf_int = 0.0
                     label = (
                         f"B flywheel ({dT:+.2f}°C)"
                         if b_wrong_dir
@@ -677,7 +851,7 @@ class LearningWindowManager:
             self._balance.observe(
                 now,
                 dt_s,
-                clamp(u_active, 0.0, 1.0),
+                pool_u,
                 current_temp if raw_temp is None else raw_temp,
                 ext_temp,
             )
@@ -689,7 +863,12 @@ class LearningWindowManager:
             slope_val, method, n_samples = ABEstimator.robust_dTdt_per_min(
                 relevant_samples, trim_start_frac=trim_frac
             )
-
+            if (
+                slope_val is not None
+                and u_eff_pre > U_ON_MIN
+                and window_dt_min < min_active_window_min
+            ):
+                slope_val, method = None, "active_window_shorter_than_cycle"
             if slope_val is not None:
                 # Slope is robust: proceed to submission with this slope.
                 pass
@@ -791,12 +970,14 @@ class LearningWindowManager:
                 ),
             )
         elif u_eff > U_ON_MIN:
-            # ON phase
+            # ON phase: a is referred to the delivered power, which equals the
+            # applied power while the response lag is unknown.
             self._balance.discard()
             estimator.diag_dTdt_method = method
             estimator.learn(
                 dT_int_per_min=slope_val,
-                u=u_eff,
+                u=self._uf_int / self._t_int_s,
+                power_geometry=self._power_geometry(u_eff),
                 t_int=self._T_int_start,
                 t_ext=self._T_ext_start,
                 hvac_mode=(
@@ -810,3 +991,28 @@ class LearningWindowManager:
 
         self.reset()
         return deadtime_skip_count_a, deadtime_skip_count_b
+
+
+def _published_b(estimator: "ABEstimator") -> float | None:
+    """Return the published b, or None before its first publication."""
+    # Attributes are read defensively: tests drive the window with mocks.
+    count = getattr(estimator, "learn_ok_count_b", 0)
+    b = getattr(estimator, "b", None)
+    if isinstance(count, int) and count > 0 and isinstance(b, (int, float)):
+        return float(b)
+    return None
+
+
+def _active_deadtime_s(
+    dt_est: "DeadTimeEstimator", hvac_mode: "VThermHvacMode | None"
+) -> float | None:
+    """Return the reliable dead time of the active response, or None."""
+    from ..hvac_mode import VThermHvacMode_COOL
+
+    if hvac_mode == VThermHvacMode_COOL:
+        value, reliable = dt_est.deadtime_cool_s, dt_est.deadtime_cool_reliable
+    else:
+        value, reliable = dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable
+    if reliable is True and isinstance(value, (int, float)):
+        return float(value)
+    return None

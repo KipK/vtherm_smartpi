@@ -11,7 +11,7 @@ import math
 import statistics
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Optional, Tuple
+from typing import Callable, Deque, Optional, Tuple
 
 from ..hvac_mode import (
     VThermHvacMode,
@@ -50,6 +50,8 @@ from .const import (
     AB_DRIFT_RECENTER_STEP_MAX_FACTOR,
     AB_DRIFT_SEQ_GAP_MAX,
     AB_MIN_SAMPLES_A,
+    AB_MIN_SAMPLES_A_CONSISTENT,
+    AB_A_CONSISTENT_MAX_REL_MAD,
     AB_MIN_SAMPLES_B,
     AB_VAL_TOLERANCE,
     AB_WMED_ALPHA,
@@ -69,6 +71,29 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _consistent(values: list[float]) -> bool:
+    """Whether enough a measurements agree for an early first publication."""
+    if len(values) < AB_MIN_SAMPLES_A_CONSISTENT:
+        return False
+    med = statistics.median(values)
+    if med == 0.0:
+        return False
+    mad = statistics.median(abs(v - med) for v in values)
+    return mad <= AB_A_CONSISTENT_MAX_REL_MAD * abs(med)
+
+
+def _observation(
+    d_t_dt: float,
+    delta: float,
+    u: float,
+    power_geometry: tuple[float, float, float] | None,
+) -> tuple:
+    """Return the stored observation of an a measurement."""
+    if power_geometry is None:
+        return (d_t_dt, delta, u)
+    return (d_t_dt, delta, u, tuple(float(v) for v in power_geometry))
 
 
 @dataclass(frozen=True)
@@ -109,14 +134,19 @@ class ABEstimator:
         self.b_meas_hist: Deque[float] = deque(maxlen=AB_HISTORY_SIZE)
         # Observation (dT/dt, T_int - T_ext, u) behind each a measurement, aligned
         # with a_meas_hist, so that the measurements follow later b updates.
-        # None for a measurement restored without its observation.
-        self._a_obs_hist: Deque[tuple[float, float, float] | None] = deque(
-            maxlen=AB_HISTORY_SIZE
-        )
+        # None for a measurement restored without its observation. A fourth
+        # element, not persisted, holds the power geometry of the window
+        # (applied power, start after the power step, duration) when known.
+        self._a_obs_hist: Deque[tuple | None] = deque(maxlen=AB_HISTORY_SIZE)
 
         # Stability tracking for a and b (tau) - used for reliability check
         self._b_hat_hist: Deque[float] = deque(maxlen=20)
         self._a_hat_hist: Deque[float] = deque(maxlen=20)
+
+        # Whether the delivered power model of the a measurements is resolved.
+        # Before the first a publication, the a measurements are only
+        # collected while it is not (set by the learning window).
+        self.a_model_ready: bool = True
 
         # Counters
         self.learn_ok_count = 0  # Total successful updates
@@ -588,9 +618,14 @@ class ABEstimator:
         *,
         max_abs_dT_per_min: float = 0.35,
         hvac_mode: VThermHvacMode = VThermHvacMode_HEAT,
+        power_geometry: tuple[float, float, float] | None = None,
     ) -> None:
         """
         Update (a,b) using Median + MAD approach.
+
+        power_geometry (applied power, window start after the power step,
+        window duration, in s) lets an a measurement follow a later change of
+        the delivered power model during the bootstrap.
 
         Model: dT/dt = a*u - b*(T_int - T_ext)
         """
@@ -683,9 +718,17 @@ class ABEstimator:
                 )
                 return
 
-            min_a_samples = AB_MIN_SAMPLES_A
+            waiting_model = not self.a_model_ready and self.learn_ok_count_a == 0
+            # While the power model is unresolved the collection never reaches
+            # the publication count.
+            min_a_samples = AB_HISTORY_SIZE + 1 if waiting_model else AB_MIN_SAMPLES_A
 
             a_meas = (dTdt + self.b * delta) / u
+            if not waiting_model and self.learn_ok_count_a == 0 and _consistent(
+                [*self.a_meas_hist, a_meas]
+            ):
+                # Agreeing measurements: publish with this one.
+                min_a_samples = len(self.a_meas_hist)
             if mode_sign * a_meas <= 0:
                 self.learn_skip_count += 1
                 self.learn_last_reason = "skip: a_meas wrong hvac sign"
@@ -706,10 +749,11 @@ class ABEstimator:
 
             if decision.accepted_reason == "COLLECTING":
                 self.a_meas_hist.append(a_meas)
-                self._a_obs_hist.append((dTdt, delta, u))
+                self._a_obs_hist.append(_observation(dTdt, delta, u, power_geometry))
                 self.learn_skip_count += 1
                 self.learn_last_reason = (
-                    f"skip: collecting a meas ({len(self.a_meas_hist)}/{min_a_samples})"
+                    f"skip: collecting a meas ({len(self.a_meas_hist)}/{AB_MIN_SAMPLES_A}"
+                    + (", waiting for the response lag)" if waiting_model else ")")
                 )
                 self.diag_a_last_reason = self.learn_last_reason
                 self._update_mad_diag("a", self.a_meas_hist)
@@ -727,7 +771,7 @@ class ABEstimator:
                 history=self.a_meas_hist,
                 value=a_meas,
             )
-            self._a_obs_hist.append((dTdt, delta, u))
+            self._a_obs_hist.append(_observation(dTdt, delta, u, power_geometry))
             new_a = mode_sign * clamp(abs(new_a), self.A_MIN, self.A_MAX)
 
             self.a = new_a
@@ -740,6 +784,78 @@ class ABEstimator:
 
         self.learn_skip_count += 1
         self.learn_last_reason = "skip: u mid-range"
+
+    def publish_collected_a(self, mode_sign: float) -> bool:
+        """Publish a from the collected measurements once the model is resolved.
+
+        The collection may hold the publication count when the delivered power
+        model gets resolved: a is then published without waiting for the next
+        measurement, so that a collected history always comes with a published
+        a outside the waiting state.
+        """
+        if (
+            not self.a_model_ready
+            or self.learn_ok_count_a > 0
+            or not (
+                len(self.a_meas_hist) >= AB_MIN_SAMPLES_A or _consistent(list(self.a_meas_hist))
+            )
+            or len(self.b_meas_hist) < AB_A_SOFT_GATE_MIN_B
+        ):
+            return False
+        new_a, ab_diag = ab_publish(
+            self.a_meas_hist,
+            plateau_n=AB_WMED_PLATEAU_N,
+            alpha=AB_WMED_ALPHA,
+            r=AB_WMED_R,
+        )
+        self.diag_ab_mode_effective = ab_diag.get("ab_mode_effective", "weighted_median")
+        self.a = mode_sign * clamp(abs(new_a), self.A_MIN, self.A_MAX)
+        self._a_hat_hist.append(self.a)
+        self.learn_ok_count += 1
+        self.learn_ok_count_a += 1
+        self.learn_last_reason = f"learned a ({self.diag_ab_mode_effective}, collected)"
+        self.diag_a_last_reason = self.learn_last_reason
+        self._update_mad_diag("a", self.a_meas_hist)
+        return True
+
+    def replay_a_power(
+        self,
+        power_of: Callable[[tuple[float, float, float]], float | None],
+        mode_sign: float,
+        reason: str,
+    ) -> bool:
+        """Recompute the collected a measurements with a new delivered power.
+
+        Used when the delivered power model changes during the bootstrap:
+        power_of maps a window power geometry to its delivered power. A
+        measurement without geometry, or whose recomputed value is not
+        available or contradicts the HVAC sign, is discarded (it would reject
+        the measurements of the new model as outliers). A published a is never
+        changed here.
+        """
+        if self.learn_ok_count_a > 0 or not self.a_meas_hist:
+            return False
+        observations = list(self._a_obs_hist)[-len(self.a_meas_hist):]
+        observations = [None] * (len(self.a_meas_hist) - len(observations)) + observations
+        values, kept = [], []
+        for obs in observations:
+            if obs is None or len(obs) < 4:
+                continue
+            d_t_dt, delta, _, geometry = obs
+            u = power_of(geometry)
+            if u is None or u <= 0.0:
+                continue
+            value = (d_t_dt + self.b * delta) / u
+            if mode_sign * value <= 0.0:
+                continue
+            values.append(value)
+            kept.append((d_t_dt, delta, u, geometry))
+        self.a_meas_hist = deque(values, maxlen=AB_HISTORY_SIZE)
+        self._a_obs_hist = deque(kept, maxlen=AB_HISTORY_SIZE)
+        clear_channel_state(self.a_drift)
+        self.diag_a_last_reason = reason
+        self._update_mad_diag("a", self.a_meas_hist)
+        return True
 
     def _replay_a_measurements(self, mode_sign: float) -> None:
         """Recompute the kept a measurements with the current b.
@@ -762,7 +878,7 @@ class ABEstimator:
             if obs is None:
                 values.append(value)
                 continue
-            d_t_dt, delta, u = obs
+            d_t_dt, delta, u = obs[:3]
             replayed = (d_t_dt + self.b * delta) / u
             values.append(replayed if mode_sign * replayed > 0 else value)
         self.a_meas_hist = deque(values, maxlen=AB_HISTORY_SIZE)
@@ -845,7 +961,7 @@ class ABEstimator:
             "learn_ok_count_b": self.learn_ok_count_b,
             "learn_skip_count": self.learn_skip_count,
             "a_meas_hist": list(self.a_meas_hist),
-            "a_obs_hist": [None if obs is None else list(obs) for obs in self._a_obs_hist],
+            "a_obs_hist": [None if obs is None else list(obs[:3]) for obs in self._a_obs_hist],
             "b_meas_hist": list(self.b_meas_hist),
             "a_hat_hist": list(self._a_hat_hist),
             "b_hat_hist": list(self._b_hat_hist),

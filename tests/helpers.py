@@ -16,6 +16,9 @@ def force_smartpi_stable_mode(algo) -> None:
         algo.est.a_meas_hist.append(0.01)
     for _ in range(missing_b):
         algo.est.b_meas_hist.append(0.002)
+    # A stable model has published a and b.
+    algo.est.learn_ok_count_a = max(algo.est.learn_ok_count_a, 1)
+    algo.est.learn_ok_count_b = max(algo.est.learn_ok_count_b, 1)
 
     algo._output_initialized = True
     algo.calibration_mgr.last_calibration_time = time.time()

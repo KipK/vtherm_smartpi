@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Learning: a learning slope is submitted only once its fitted change over the
+  window covers at least 1.5 sensor steps (smallest observed step, at least
+  0.05 °C). The slope is tested at each update, and a 0.1 °C sensor flickering
+  between two levels in a slowly cooling room could submit a short window as
+  soon as its slope looked significant, with `b` learned up to about 50 % off.
+  Learning windows of coarse sensors last longer.
+- Learning: each `a` measurement keeps its observation (slope, indoor/outdoor
+  gap, power) and is recomputed with every new published `b`, so `a`
+  measurements made before `b` was accurate follow its corrections.
+  Measurements saved without their observation keep their value.
+- Learning: `b` needs 4 measurements instead of 8 to end the bootstrap and to
+  allow `a` learning.
+- Learning: SmartPI learns the response lag of the installation (actuator,
+  emitter, air mixing, sensor) on constant-power heating phases, from the
+  intercept of the settled temperature ramp with the passive trajectory. `a`
+  windows start once the response has settled (3 lags after the power step,
+  at most half of the median heating phase) and are learned with the power
+  actually delivered (pure delay, then first-order lag); `b` windows start 3
+  lags after the power cut. The first `a` publication waits for this lag, or
+  for 7 heating phases without a usable estimate. Windows within the transient
+  underestimated `a`, by up to about half with a 20-minute lag. The bootstrap lasts
+  longer in slow rooms or with slow sensors.
+- Learning: `a` is first published from 4 measurements when they agree (median
+  absolute deviation at most 10 % of their median), otherwise from 6. The
+  feed-forward uses `a` as soon as it is published.
+- Learning: an active learning window shorter than one PWM cycle is not
+  submitted. Stopping a short window as soon as its slope looked significant
+  favoured the steepest noisy slopes.
+- Learning: a learning window is closed at its last observation when updates
+  are not contiguous (heating guard cut, interval capped at one cycle). Its
+  slope no longer spans the unobserved period.
+- Diagnostics: `analysis.learning.response_lag` publishes the response lag,
+  the number of estimates, the median heating phase duration and the outcome of
+  the last phase.
+
 ## [0.5.1]
 
 - Learning: a learning window closed without a robust slope (coarse sensor of

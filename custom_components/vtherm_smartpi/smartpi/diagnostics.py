@@ -529,6 +529,19 @@ def _build_analysis_learning(algo: SmartPI) -> Dict[str, Any]:
             "segments_b": learn_win.balance.pool_size("b"),
             "resolution_c": round(learn_win.balance.resolution_c, 3),
         },
+        "response_lag": _response_lag_diag(learn_win.response_lag),
+    }
+
+
+def _response_lag_diag(response_lag) -> Dict[str, Any]:
+    """Return the response lag estimate and its last outcome."""
+    lag = response_lag.lag_s
+    episode = response_lag.episode_median_s
+    return {
+        "lag_s": round(lag) if lag is not None else None,
+        "estimates": response_lag.estimates_count,
+        "episode_median_s": round(episode) if episode is not None else None,
+        "last_reason": response_lag.last_reason,
     }
 
 
