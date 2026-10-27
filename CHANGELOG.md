@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6.0-rc.1]
 
 - Learning: more accurate heating gain (`a`), especially with slow emitters
   (radiators, floor heating) and slow or coarse sensors. SmartPI measures
