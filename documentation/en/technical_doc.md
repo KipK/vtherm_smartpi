@@ -316,20 +316,24 @@ installation already out of the bootstrap rarely provides one.
 
 $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
-3. compute $K_i = K_p / \tau$,
+3. compute the SIMC integral time (Skogestad, 2003)
+   $T_i = \min(\tau, 4(\lambda + L))$ (`GAIN_TI_LAMBDA_FACTOR = 4`), then
+   $K_i = K_p / T_i$,
 4. clamp the gains ($K_p \in [0.10, 5.0]$, $K_i \in [0.001, 0.050]$) and apply governance freezes.
 
-With typical room dynamics ($\tau$ of several hours) $K_p / \tau$ falls below
-`KI_MIN = 0.001`, so the applied $K_i$ is usually the floor `KI_MIN`; the
-near-band taper of $K_i$ is clamped to the same floor.
+For a room, $\tau$ (several hours to several days) far exceeds the closed-loop
+horizon $\lambda + L$: the room is close to an integrator and $T_i = 4(\lambda + L)$.
+With $T_i = \tau$, $K_i$ would fall on the floor `KI_MIN = 0.001` and the integral
+would take days to correct a model error. The near-band taper of $K_i$ is
+clamped to the same floor.
 
 The effective integral time $T_i = K_p / K_i$ of the applied gains is published
-in minutes as `control.ti_min` (`None` when $K_i \le 0$). With $K_i$ on the
-floor, $T_i$ still follows the room inertia through $K_p$
-($K_p = 1 / (|a| (\lambda + L))$ grows with $\tau$): bench values are about
-146 min for $\tau \approx 3$ h, 247 min for $\tau \approx 5$ h and 390 min for
-$\tau \approx 8$ h. In a fast room ($\tau \approx 1$ h), $K_p / \tau$ is above the
-floor and $K_i$ follows the model.
+in minutes as `control.ti_min` (`None` when $K_i \le 0$).
+
+On every change of the applied $K_i$, the integral is rescaled by
+$K_{i,old} / K_{i,new}$, so the integral power $K_i \cdot I$ is unchanged (bumpless
+transfer). The rescale applies to any change, however small: the near-band taper
+moves $K_i$ by small steps, and a threshold would let $K_i \cdot I$ drift during holds.
 
 `GainScheduler.generation` counts the changes of the untapered model gains
 (IMC/SIMC or safe gains). It advances only while the gains are not frozen and
@@ -480,12 +484,17 @@ The current code also applies an explicit guard on positive integral growth duri
 - after resuming from power shedding,
 - during a disturbance-recovery trajectory.
 
-This guard does not block integral discharge. If the stored integral already
-points against the requested recovery, the guard
-allows that opposing memory to unwind as far as zero. It still blocks any new
-accumulation beyond zero in the protected direction. This prevents a negative
-integral inherited from the previous setpoint from holding the room below a
-new, higher setpoint.
+This guard does not block integral discharge. An integral that already points
+against the requested recovery usually carries the model bias (feed-forward
+error), which still holds at the new setpoint: the guard keeps it while the
+recovery progresses. Once the recovery stalls, with the release error still
+beyond its threshold and the signed recovery slope at or below the release
+slope for `INTEGRAL_GUARD_STALL_CYCLES = 3` cycles, the guard allows that
+opposing memory to unwind as far as zero. It still blocks any new accumulation
+beyond zero in the protected direction. A negative integral inherited from the
+previous setpoint therefore cannot hold the room below a new, higher setpoint,
+and a setpoint step does not erase the bias that keeps the room from
+overshooting at the new setpoint.
 
 The guard is released only when two conditions are met:
 
@@ -551,7 +560,7 @@ Additional protections currently present are:
 
 The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower. It has two parts:
 
-- conditional integration: the integral stops growing when the unconstrained request exceeds the applicable upper limit;
+- conditional integration: the integral stops growing when the unconstrained request exceeds the applicable upper limit. Within `NEAR_SETPOINT_UNWIND_STEPS = 1.5` observed sensor steps of the setpoint, an output saturated against the error still lets the integral unwind toward zero, without crossing it (`I:UNWIND(SAT_HI|SAT_LO)`), provided the output without the proportional term (`u_ff + Ki·I`) stays within its limits: with a quantized sensor, a reading one step away from the setpoint saturates the output through the proportional term alone, and a blocked integral combined with the deadband freeze would hold a steady offset. An output held at its limit by `u_ff + Ki·I` (for example at `max_on_percent`) keeps the integral, which then carries the model bias;
 - back-calculation: on every tick where the integral mode is `I:RUN`, `I:SKIP`, `I:GUARD` or `I:CLAMP`, the excess of the PI output (`u_ff + u_pi`, clamped to `[0, 1]`) above the linear image of `max_on_percent` corrects the integral by `beta * excess / Ki`, with `beta = dt / max(Kp/Ki, dt)` (tracking time constant equal to `Ti = Kp/Ki`). The correction only moves the integral toward zero and stops at zero, so an excess carried by the proportional term alone never winds the integral in the opposite direction. The integral stays clamped to `±2/Ki`. Only the integral changes: `u_pi` keeps the decomposition that produced the command.
 
 The following are not treated as saturation: Versatile Thermostat quantization and valve retention (`dpercent`, period), minimum on/off times, and the rate limiter. The behavior is symmetric in HEAT and COOL, does not use Versatile Thermostat command receipts, and is identical with older Versatile Thermostat versions. The `aw_du` diagnostic is the correction (excess, `<= 0`) applied at the last tick.
@@ -851,6 +860,9 @@ acceptance or rejection without changing the learning decision.
 | ----------------------------- | ------- |
 | `KP_SAFE`                     | `0.55`  |
 | `KI_SAFE`                     | `0.010` |
+| `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
+| `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
+| `INTEGRAL_GUARD_STALL_CYCLES` | `3`     |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |
 | `SMARTPI_RECALC_INTERVAL_SEC` | `60`    |

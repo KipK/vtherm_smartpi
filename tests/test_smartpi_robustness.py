@@ -11,6 +11,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     GovernanceDecision,
     KI_MAX,
     KI_MIN,
+    GAIN_TI_LAMBDA_FACTOR,
     KI_SAFE,
     KP_MAX,
     KP_MIN,
@@ -188,7 +189,8 @@ def test_smartpi_gain_adaptation():
     result = _calculate_gains()
 
     assert result.kp == 1.0 / (0.02 * (20.0 + 2.0))
-    assert result.ki == result.kp / 200.0
+    # SIMC: Ti = min(tau, 4 (lambda + L))
+    assert result.ki == result.kp / min(200.0, GAIN_TI_LAMBDA_FACTOR * (20.0 + 2.0))
     assert result.kp_source == "imc_simc"
     assert result.ki_source == "imc_simc"
 
@@ -251,7 +253,8 @@ def test_smartpi_gain_safe_without_reliable_deadtime():
 def test_smartpi_gain_uses_official_bounds():
     """Calculated gains should be clamped to official bounds."""
     high = _calculate_gains(a=1e-5, tau_min=1.0, deadtime_s=120.0, cycle_min=10.0)
-    low = _calculate_gains(a=100.0, tau_min=1_000_000.0, deadtime_s=120.0, cycle_min=10.0)
+    # A long dead time keeps the SIMC integral time large enough to reach KI_MIN.
+    low = _calculate_gains(a=100.0, tau_min=1_000_000.0, deadtime_s=3600.0, cycle_min=10.0)
 
     assert high.kp == KP_MAX
     assert high.ki == KI_MAX

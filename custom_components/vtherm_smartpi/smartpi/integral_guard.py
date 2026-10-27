@@ -58,6 +58,8 @@ class IntegralGuardDecision:
     block_positive: bool
     block_negative: bool
     mode_suffix: str
+    # Whether memory opposing the recovery may unwind toward zero.
+    allow_unwind: bool = True
 
 
 def constrain_guarded_integral_delta(
@@ -66,22 +68,25 @@ def constrain_guarded_integral_delta(
     requested_delta: float,
     block_positive: bool,
     block_negative: bool,
+    allow_unwind: bool = True,
 ) -> tuple[float, str]:
     """Constrain an integral update while allowing opposing memory to unwind.
 
     A directional guard protects against new accumulation in one direction. It
-    must not trap integral memory that already points in the opposite direction,
-    because neutralizing that memory is required to remove a steady-state error.
+    must not trap integral memory that already points in the opposite direction
+    when the recovery stalls, because neutralizing that memory is then required
+    to remove a steady-state error. While the recovery progresses, that memory
+    is the model bias the integral carries and is kept (``allow_unwind`` False).
 
     Returns the allowed delta and one of ``run``, ``unwind``, or ``blocked``.
     """
     if block_positive and requested_delta > 0.0:
-        if integral < 0.0:
+        if integral < 0.0 and allow_unwind:
             return min(requested_delta, -integral), "unwind"
         return 0.0, "blocked"
 
     if block_negative and requested_delta < 0.0:
-        if integral > 0.0:
+        if integral > 0.0 and allow_unwind:
             return max(requested_delta, -integral), "unwind"
         return 0.0, "blocked"
 
@@ -111,6 +116,7 @@ class SmartPIIntegralGuard:
         self._block_positive = True
         self._stable_cycles = 0
         self._peak_signed_recovery_slope_h = 0.0
+        self._stall_min = 0.0
         self._last_release_reason = "reset"
 
     def arm(self, source: IntegralGuardSource, *, block_positive: bool = True) -> None:
@@ -121,6 +127,7 @@ class SmartPIIntegralGuard:
         if self._source != source or self._block_positive != block_positive:
             self._stable_cycles = 0
             self._peak_signed_recovery_slope_h = 0.0
+            self._stall_min = 0.0
         self._source = source
         self._block_positive = block_positive
         self._last_release_reason = "armed"
@@ -130,6 +137,7 @@ class SmartPIIntegralGuard:
         self._source = IntegralGuardSource.NONE
         self._stable_cycles = 0
         self._peak_signed_recovery_slope_h = 0.0
+        self._stall_min = 0.0
         self._last_release_reason = reason
 
     def decide(
@@ -140,8 +148,16 @@ class SmartPIIntegralGuard:
         deadband_c: float,
         in_core_deadband: bool,
         signed_recovery_slope_h: float | None,
+        dt_min: float = 0.0,
+        stall_min: float = 0.0,
     ) -> IntegralGuardDecision:
-        """Return whether positive integral growth must remain blocked."""
+        """Return whether positive integral growth must remain blocked.
+
+        Memory opposing the recovery may unwind only once the recovery has
+        stalled for ``stall_min`` minutes: error still beyond the release
+        threshold while the signed recovery slope stays at or below the
+        release slope. ``stall_min`` 0 lets it unwind at once.
+        """
         if not self.active:
             return IntegralGuardDecision(False, False, "off")
 
@@ -162,10 +178,15 @@ class SmartPIIntegralGuard:
             self._stable_cycles = 0
             if signed_recovery_slope_h is not None and signed_recovery_slope_h > self._peak_signed_recovery_slope_h:
                 self._peak_signed_recovery_slope_h = signed_recovery_slope_h
+            if signed_recovery_slope_h is None or signed_recovery_slope_h <= self._release_slope():
+                self._stall_min += max(dt_min, 0.0)
+            else:
+                self._stall_min = 0.0
             return IntegralGuardDecision(
                 self._block_positive,
                 not self._block_positive,
                 self._source.value,
+                allow_unwind=self._stall_min >= stall_min,
             )
 
         if signed_recovery_slope_h is None:
@@ -175,10 +196,7 @@ class SmartPIIntegralGuard:
         if signed_recovery_slope_h > self._peak_signed_recovery_slope_h:
             self._peak_signed_recovery_slope_h = signed_recovery_slope_h
 
-        release_slope = max(
-            self._peak_signed_recovery_slope_h * INTEGRAL_GUARD_RELEASE_SLOPE_RATIO,
-            INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H,
-        )
+        release_slope = self._release_slope()
         if signed_recovery_slope_h <= release_slope:
             self._stable_cycles += 1
         else:
@@ -192,6 +210,14 @@ class SmartPIIntegralGuard:
             self._block_positive,
             not self._block_positive,
             self._source.value,
+            allow_unwind=self._stall_min >= stall_min,
+        )
+
+    def _release_slope(self) -> float:
+        """Signed recovery slope (C/h) at or below which the recovery has collapsed."""
+        return max(
+            self._peak_signed_recovery_slope_h * INTEGRAL_GUARD_RELEASE_SLOPE_RATIO,
+            INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H,
         )
 
 

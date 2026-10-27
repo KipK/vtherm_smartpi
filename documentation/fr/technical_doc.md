@@ -288,21 +288,25 @@ Le retard est appris sur des épisodes à puissance constante, que fournit le bo
 
 $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
-3. calcul de $K_i = K_p / \tau$,
+3. calcul du temps intégral SIMC (Skogestad, 2003)
+   $T_i = \min(\tau, 4(\lambda + L))$ (`GAIN_TI_LAMBDA_FACTOR = 4`), puis
+   $K_i = K_p / T_i$,
 4. bornage des gains ($K_p \in [0.10, 5.0]$, $K_i \in [0.001, 0.050]$) puis application des gels de gouvernance.
 
-Avec une dynamique de pièce typique ($\tau$ de plusieurs heures), $K_p / \tau$
-passe sous `KI_MIN = 0.001` : le $K_i$ appliqué vaut donc généralement le
-plancher `KI_MIN`, et l'atténuation de $K_i$ près de la consigne est bornée par
-ce même plancher.
+Pour une pièce, $\tau$ (de plusieurs heures à plusieurs jours) dépasse largement l'horizon
+en boucle fermée $\lambda + L$ : la pièce se comporte presque comme un intégrateur et
+$T_i = 4(\lambda + L)$. Avec $T_i = \tau$, $K_i$ tomberait sur le plancher `KI_MIN = 0.001`
+et l'intégrale mettrait des jours à corriger une erreur de modèle. L'atténuation de $K_i$
+près de la consigne est bornée par ce même plancher.
 
 Le temps intégral effectif $T_i = K_p / K_i$ des gains appliqués est publié en
-minutes dans `control.ti_min` (`None` quand $K_i \le 0$). Avec $K_i$ sur le
-plancher, $T_i$ suit tout de même l'inertie de la pièce par $K_p$
-($K_p = 1 / (|a| (\lambda + L))$ croît avec $\tau$) : les valeurs de banc sont
-d'environ 146 min pour $\tau \approx 3$ h, 247 min pour $\tau \approx 5$ h et
-390 min pour $\tau \approx 8$ h. Dans une pièce rapide ($\tau \approx 1$ h),
-$K_p / \tau$ est au-dessus du plancher et $K_i$ suit le modèle.
+minutes dans `control.ti_min` (`None` quand $K_i \le 0$).
+
+À chaque changement du $K_i$ appliqué, l'intégrale est multipliée par
+$K_{i,old} / K_{i,new}$ : la puissance intégrale $K_i \cdot I$ reste inchangée (transfert
+sans à-coup). Le rescale s'applique à tout changement, même minime : l'atténuation près
+de la consigne fait varier $K_i$ par petits pas, et un seuil laisserait dériver $K_i \cdot I$
+pendant les maintiens.
 
 `GainScheduler.generation` compte les changements des gains du modèle non
 atténués (IMC/SIMC ou gains de sécurité). Elle n'avance que tant que les gains
@@ -447,12 +451,18 @@ Le code actuel applique aussi une garde explicite sur la croissance positive de 
 - après une reprise suivant power shedding,
 - pendant une trajectoire de récupération de perturbation.
 
-Cette garde n'empêche pas la décharge de l'intégrale. Si l'intégrale mémorisée
-s'oppose déjà au rattrapage demandé, la garde autorise
-la résorption de cette mémoire jusqu'à zéro. Elle continue d'interdire toute
-nouvelle accumulation au-delà de zéro dans la direction protégée. Une intégrale
-négative héritée de l'ancienne consigne ne peut donc plus maintenir la pièce
-sous une nouvelle consigne plus élevée.
+Cette garde n'empêche pas la décharge de l'intégrale. Une intégrale qui s'oppose
+déjà au rattrapage demandé porte en général le biais du modèle (erreur du
+feed-forward), toujours valable à la nouvelle consigne : la garde la conserve
+tant que le rattrapage progresse. Quand le rattrapage cale, avec une erreur de
+release encore au-delà de son seuil et une pente signée de rapprochement
+inférieure ou égale à la pente de release pendant `INTEGRAL_GUARD_STALL_CYCLES = 3`
+cycles, la garde autorise la résorption de cette mémoire jusqu'à zéro. Elle
+continue d'interdire toute nouvelle accumulation au-delà de zéro dans la
+direction protégée. Une intégrale négative héritée de l'ancienne consigne ne
+peut donc pas maintenir la pièce sous une nouvelle consigne plus élevée, et un
+changement de consigne n'efface pas le biais qui évite le dépassement à la
+nouvelle consigne.
 
 La garde est relâchée seulement quand deux conditions sont réunies :
 
@@ -518,7 +528,7 @@ Les protections complémentaires actuellement présentes sont :
 
 L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse. Il comporte deux parties :
 
-- intégration conditionnelle : l'intégrale cesse de croître lorsque la demande non contrainte dépasse la limite haute applicable ;
+- intégration conditionnelle : l'intégrale cesse de croître lorsque la demande non contrainte dépasse la limite haute applicable. À moins de `NEAR_SETPOINT_UNWIND_STEPS = 1.5` pas de capteur observés de la consigne, une sortie saturée par rapport à l'erreur laisse tout de même l'intégrale revenir vers zéro, sans le franchir (`I:UNWIND(SAT_HI|SAT_LO)`), à condition que la sortie sans le terme proportionnel (`u_ff + Ki·I`) reste dans ses limites : avec un capteur quantifié, une mesure à un pas de la consigne sature la sortie par le seul terme proportionnel, et une intégrale bloquée combinée au gel de deadband maintiendrait un écart permanent. Une sortie tenue à sa limite par `u_ff + Ki·I` (par exemple à `max_on_percent`) conserve l'intégrale, qui porte alors le biais du modèle ;
 - rétro-calculation : à chaque tick dont le mode intégral est `I:RUN`, `I:SKIP`, `I:GUARD` ou `I:CLAMP`, l'excès de la sortie PI (`u_ff + u_pi`, bornée à `[0, 1]`) au-delà de l'image linéaire de `max_on_percent` corrige l'intégrale de `beta * excès / Ki`, avec `beta = dt / max(Kp/Ki, dt)` (constante de temps de poursuite égale à `Ti = Kp/Ki`). La correction ne déplace l'intégrale que vers zéro et s'arrête à zéro : un excès porté par le seul terme proportionnel n'entraîne jamais l'intégrale dans l'autre sens. L'intégrale reste bornée à `±2/Ki`. Seule l'intégrale change : `u_pi` conserve la décomposition qui a produit la commande.
 
 Ne sont pas traités comme une saturation : la quantification de Versatile Thermostat et la rétention de vanne (`dpercent`, période), les durées minimales on/off et le limiteur de pente. Le comportement est symétrique en HEAT et COOL, n'utilise pas les accusés de commande de Versatile Thermostat et est identique avec les anciennes versions de Versatile Thermostat. Le diagnostic `aw_du` est la correction (excès, `<= 0`) appliquée au dernier tick.
@@ -833,6 +843,9 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | ----------------------------- | ------- |
 | `KP_SAFE`                     | `0.55`  |
 | `KI_SAFE`                     | `0.010` |
+| `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
+| `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
+| `INTEGRAL_GUARD_STALL_CYCLES` | `3`     |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |
 | `SMARTPI_RECALC_INTERVAL_SEC` | `60`    |

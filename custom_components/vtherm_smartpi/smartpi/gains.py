@@ -19,6 +19,7 @@ from .const import (
     GAIN_LAMBDA_DEADTIME_FACTOR,
     GAIN_LAMBDA_MIN_MIN,
     GAIN_LAMBDA_VALVE_DEADTIME_FACTOR,
+    GAIN_TI_LAMBDA_FACTOR,
     KI_MAX,
     KI_MIN,
     KI_SAFE,
@@ -152,7 +153,11 @@ class GainScheduler:
             )
             kp_calc = 1.0 / (abs(float(estimator.a)) * (lambda_min + L_min))
             kp = clamp(kp_calc, KP_MIN, KP_MAX)
-            ti = float(tau_min)
+            # SIMC (Skogestad 2003): the integral time of a lag-dominant
+            # (integrating) process is bounded by 4 (lambda + L), so that load
+            # disturbances are rejected within the closed-loop time scale
+            # instead of the room time constant.
+            ti = min(float(tau_min), GAIN_TI_LAMBDA_FACTOR * (lambda_min + L_min))
             ki = clamp(kp / ti, KI_MIN, KI_MAX)
             if valve_mode_enabled:
                 kp_source = "imc_simc_valve"

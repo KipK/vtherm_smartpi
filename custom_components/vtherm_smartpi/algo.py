@@ -78,6 +78,8 @@ from .smartpi.const import (
     CALIBRATION_TIMEOUT_MIN,
     ERROR_FILTER_TAU,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
+    NEAR_SETPOINT_UNWIND_STEPS,
+    INTEGRAL_GUARD_STALL_CYCLES,
     clamp,
 )
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
@@ -521,8 +523,9 @@ class SmartPI:
         slope_h: float | None,
         in_core_deadband: bool,
         trajectory_active: bool,
-    ) -> tuple[bool, bool, str]:
-        """Return which integral direction must stay blocked."""
+        dt_min: float = 0.0,
+    ) -> tuple[bool, bool, str, bool]:
+        """Return which integral direction must stay blocked and whether opposing memory may unwind."""
         release_error = error_p if trajectory_active else error_i
         decision = self.integral_guard.decide(
             raw_error=error_i,
@@ -530,9 +533,16 @@ class SmartPI:
             deadband_c=self.deadband_c,
             in_core_deadband=in_core_deadband,
             signed_recovery_slope_h=signed_recovery_slope_h(slope_h, hvac_mode),
+            dt_min=dt_min,
+            stall_min=INTEGRAL_GUARD_STALL_CYCLES * self._cycle_min,
         )
         self._last_integral_guard_mode = decision.mode_suffix
-        return decision.block_positive, decision.block_negative, decision.mode_suffix
+        return (
+            decision.block_positive,
+            decision.block_negative,
+            decision.mode_suffix,
+            decision.allow_unwind,
+        )
 
     def update_learning(
         self,
@@ -1574,8 +1584,10 @@ class SmartPI:
         )
         new_ki = self.gain_scheduler.ki
 
-        # Bumpless Gain Scheduling: Rescale integral to preserve identical energy output
-        if old_ki > 0.0 and new_ki > 0.0 and abs(old_ki - new_ki) > 1e-6:
+        # Bumpless Gain Scheduling: Rescale integral to preserve identical energy output.
+        # Any change is rescaled: with Ki above its floor the near-band taper moves
+        # it by small steps, and a threshold would let Ki * I drift during holds.
+        if old_ki > 0.0 and new_ki > 0.0 and old_ki != new_ki:
             self.ctl.integral = self.ctl.integral * (old_ki / new_ki)
             _LOGGER.debug(
                 "%s - Ki changed from %.5f to %.5f, rescaled integral to %.4f for bumpless gain transfer",
@@ -1946,6 +1958,7 @@ class SmartPI:
             block_positive_integral,
             block_negative_integral,
             positive_integral_guard_mode,
+            allow_guard_unwind,
         ) = self._update_integral_guard(
             error_i=error_i,
             error_p=e_p,
@@ -1953,6 +1966,7 @@ class SmartPI:
             slope_h=slope,
             in_core_deadband=in_core_deadband,
             trajectory_active=trajectory_i_active,
+            dt_min=dt_min,
         )
         if in_deadband_now and not cycle_boundary:
             self._disable_ff3_for_next_cycle_in_deadband()
@@ -2024,9 +2038,11 @@ class SmartPI:
             block_positive_integral=block_positive_integral,
             block_negative_integral=block_negative_integral,
             positive_integral_guard_mode=positive_integral_guard_mode,
+            allow_guard_unwind=allow_guard_unwind,
             deadband_allow_p=self._deadband_allow_p,
             integrator_hold_source=integrator_hold_source,
             u_max=u_max,
+            unwind_band_c=NEAR_SETPOINT_UNWIND_STEPS * self.learn_win.balance.resolution_c,
         )
 
         # Anti-windup on the limit known at this tick (max_on_percent).

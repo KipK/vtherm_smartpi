@@ -176,15 +176,24 @@ class SmartPIController:
         block_positive_integral: bool = False,
         block_negative_integral: bool = False,
         positive_integral_guard_mode: str = "recovery_guard",
+        allow_guard_unwind: bool = True,
         deadband_allow_p: bool = False,
         integrator_hold_source: str = "external",
         u_max: float = 1.0,
+        unwind_band_c: float | None = None,
     ) -> float:
         """
         Main PID Calculation logic.
         Updates self.integral, self.u_pi, self.u_cmd.
         Returns u_cmd (clamped 0-1). Conditional integration treats `u_max`,
         the static upper output limit in linear demand space, as saturation.
+        Within `unwind_band_c` of the setpoint (about one sensor step), when
+        the output without the proportional term stays within its limits, the
+        saturation comes from the proportional response to one sensor step,
+        not from a transient or an actuator limit: conditional integration
+        still lets the integral unwind toward zero there, so that a quantized
+        measurement does not freeze a steady offset (deadband on one level,
+        saturation on the next).
         """
         self.last_integral_hold_source = "none"
         self.sat_i = False
@@ -251,19 +260,44 @@ class SmartPIController:
                 self.last_integral_hold_source = str(integrator_hold_source)
             else:
                 # Conditional Integration
-                if (sat == "SAT_HI" and error > 0) or (sat == "SAT_LO" and error < 0):
+                near_setpoint = unwind_band_c is not None and 0.0 < abs(error) <= unwind_band_c
+                saturated_against = (sat == "SAT_HI" and error > 0) or (
+                    sat == "SAT_LO" and error < 0
+                )
+                # One sensor step from the setpoint, a saturation produced by
+                # the proportional term alone may still unwind the integral
+                # toward zero (never across it): winding further into the
+                # saturation stays blocked, and an output held at its limit by
+                # FF + I keeps the integral, which then carries the model bias.
+                u_without_p = u_ff + ki * self.integral
+                saturated_by_p = 0.0 <= u_without_p <= u_max
+                unwind_only = (
+                    saturated_against
+                    and near_setpoint
+                    and saturated_by_p
+                    and self.integral * error < 0.0
+                )
+                if saturated_against and not unwind_only:
                     self.last_i_mode = f"I:SKIP({sat})"
                     u_pi = u_pi_pre
                     self.sat_i = True
                 else:
                     d_integral = error * dt_min
                     self.last_i_mode = "I:RUN"
+                    if unwind_only:
+                        d_integral = (
+                            max(d_integral, -self.integral)
+                            if self.integral > 0.0
+                            else min(d_integral, -self.integral)
+                        )
+                        self.last_i_mode = f"I:UNWIND({sat})"
 
                     d_integral, guard_delta_mode = constrain_guarded_integral_delta(
                         integral=self.integral,
                         requested_delta=d_integral,
                         block_positive=block_positive_integral,
                         block_negative=block_negative_integral,
+                        allow_unwind=allow_guard_unwind,
                     )
                     if guard_delta_mode == "blocked":
                         self.last_i_mode = f"I:GUARD({positive_integral_guard_mode})"

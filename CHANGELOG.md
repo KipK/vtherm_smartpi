@@ -4,40 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Learning: a learning slope is submitted only once its fitted change over the
-  window covers at least 1.5 sensor steps (smallest observed step, at least
-  0.05 °C). The slope is tested at each update, and a 0.1 °C sensor flickering
-  between two levels in a slowly cooling room could submit a short window as
-  soon as its slope looked significant, with `b` learned up to about 50 % off.
-  Learning windows of coarse sensors last longer.
-- Learning: each `a` measurement keeps its observation (slope, indoor/outdoor
-  gap, power) and is recomputed with every new published `b`, so `a`
-  measurements made before `b` was accurate follow its corrections.
-  Measurements saved without their observation keep their value.
-- Learning: `b` needs 4 measurements instead of 8 to end the bootstrap and to
-  allow `a` learning.
-- Learning: SmartPI learns the response lag of the installation (actuator,
-  emitter, air mixing, sensor) on constant-power heating phases, from the
-  intercept of the settled temperature ramp with the passive trajectory. `a`
-  windows start once the response has settled (3 lags after the power step,
-  at most half of the median heating phase) and are learned with the power
-  actually delivered (pure delay, then first-order lag); `b` windows start 3
-  lags after the power cut. The first `a` publication waits for this lag, or
-  for 7 heating phases without a usable estimate. Windows within the transient
-  underestimated `a`, by up to about half with a 20-minute lag. The bootstrap lasts
-  longer in slow rooms or with slow sensors.
-- Learning: `a` is first published from 4 measurements when they agree (median
-  absolute deviation at most 10 % of their median), otherwise from 6. The
-  feed-forward uses `a` as soon as it is published.
-- Learning: an active learning window shorter than one PWM cycle is not
-  submitted. Stopping a short window as soon as its slope looked significant
-  favoured the steepest noisy slopes.
-- Learning: a learning window is closed at its last observation when updates
-  are not contiguous (heating guard cut, interval capped at one cycle). Its
-  slope no longer spans the unobserved period.
-- Diagnostics: `analysis.learning.response_lag` publishes the response lag,
-  the number of estimates, the median heating phase duration and the outcome of
-  the last phase.
+- Learning: more accurate heating gain (`a`), especially with slow emitters
+  (radiators, floor heating) and slow or coarse sensors. SmartPI measures
+  how long the installation takes to respond after the heating starts, ignores
+  the start of each heating phase until the room has really started warming,
+  and accounts for the heat actually delivered. In return, the initial learning
+  can take a few hours longer in slow rooms.
+- Learning: the heat-loss coefficient (`b`) is no longer distorted by a sensor
+  flickering between two values, and the initial learning needs 4 cooling
+  phases instead of 8.
+- Learning: `a` is corrected automatically when `b` is refined, and can be
+  published from 4 consistent measurements instead of 6.
+- Regulation: the integral term corrects lasting errors (sun, weather,
+  model error) in a few hours instead of several days.
+- Regulation: less overshoot after a setpoint change: the correction already
+  learned by the integral term is no longer discarded at each setpoint change.
+- Regulation: with a sensor of 0.1 °C or coarser, the temperature no longer
+  stays stuck one step away from the setpoint.
+- Diagnostics: `analysis.learning.response_lag` shows the measured response
+  delay of the installation.
 
 ## [0.5.1]
 

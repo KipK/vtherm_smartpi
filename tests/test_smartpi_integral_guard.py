@@ -263,3 +263,58 @@ def test_negative_guard_allows_opposing_integral_to_unwind_without_crossing_zero
 
     assert delta == 0.0
     assert mode == "blocked"
+
+
+def _setpoint_guard() -> SmartPIIntegralGuard:
+    guard = SmartPIIntegralGuard("test")
+    guard.arm(IntegralGuardSource.SETPOINT_CHANGE, block_positive=True)
+    return guard
+
+
+def _decide(guard: SmartPIIntegralGuard, slope_h: float, dt_min: float = 1.0, stall_min: float = 30.0):
+    return guard.decide(
+        raw_error=1.0,
+        release_error=1.0,
+        deadband_c=0.05,
+        in_core_deadband=False,
+        signed_recovery_slope_h=slope_h,
+        dt_min=dt_min,
+        stall_min=stall_min,
+    )
+
+
+def test_opposing_memory_is_kept_while_the_recovery_progresses():
+    """The integral keeps the model bias it carries while the room rises."""
+    guard = _setpoint_guard()
+    for _ in range(120):
+        decision = _decide(guard, slope_h=0.8)
+    assert decision.block_positive is True
+    assert decision.allow_unwind is False
+
+    delta, mode = constrain_guarded_integral_delta(
+        integral=-0.4, requested_delta=0.7, block_positive=True, block_negative=False,
+        allow_unwind=decision.allow_unwind,
+    )
+    assert (delta, mode) == (0.0, "blocked")
+
+
+def test_opposing_memory_unwinds_once_the_recovery_stalls():
+    """A recovery stalled below the target lets the opposing memory unwind."""
+    guard = _setpoint_guard()
+    for _ in range(10):
+        _decide(guard, slope_h=0.8)
+    for _ in range(29):
+        decision = _decide(guard, slope_h=0.05)
+    assert decision.allow_unwind is False
+    decision = _decide(guard, slope_h=0.05)
+    assert decision.block_positive is True
+    assert decision.allow_unwind is True
+
+    # A recovery that moves again restarts the stall count.
+    decision = _decide(guard, slope_h=0.8)
+    assert decision.allow_unwind is False
+
+
+def test_without_stall_duration_the_opposing_memory_unwinds_at_once():
+    guard = _setpoint_guard()
+    assert _decide(guard, slope_h=0.8, stall_min=0.0).allow_unwind is True

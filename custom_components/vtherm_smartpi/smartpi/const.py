@@ -131,6 +131,10 @@ GAIN_LAMBDA_DEADTIME_FACTOR = 3.0
 GAIN_LAMBDA_VALVE_DEADTIME_FACTOR = 4.0
 GAIN_LAMBDA_CYCLE_FACTOR = 2.0
 GAIN_LAMBDA_MIN_MIN = 5.0
+GAIN_TI_LAMBDA_FACTOR = 4.0      # SIMC: Ti = min(tau, 4 (lambda + L))
+# A saturated output may unwind the integral toward zero within this many
+# observed sensor steps of the setpoint (quantization trap).
+NEAR_SETPOINT_UNWIND_STEPS = 1.5
 
 
 # Anti-windup / integrator behavior
@@ -196,6 +200,7 @@ INTEGRAL_GUARD_RELEASE_ERROR_RATIO = 2.0 # Release positive-I guard only once th
 INTEGRAL_GUARD_RELEASE_SLOPE_RATIO = 0.35 # Release positive-I guard when the signed recovery slope has collapsed enough
 INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H = 0.12 # Absolute signed-slope floor (°C/h) below which stabilization may be accepted
 INTEGRAL_GUARD_RELEASE_PERSISTENCE = 3    # Consecutive evaluations required before re-enabling positive integral growth
+INTEGRAL_GUARD_STALL_CYCLES = 3.0  # Stalled recovery (cycles) before opposing integral memory may unwind
 # Error filter time constant
 ERROR_FILTER_TAU = 25.0 # Minutes (matches alpha ~0.35 at 10min)
 
