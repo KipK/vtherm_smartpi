@@ -313,7 +313,10 @@ Start simple:
 - keep the default hysteresis thresholds if your sensor is accurate and reports often (see below otherwise),
 - keep `FF3` enabled unless you have a specific reason to disable it,
 - keep the setpoint filter enabled by default,
-- adjust the deadband first if the temperature oscillates too much around the target.
+- adjust the deadband first if the temperature oscillates too much around the target,
+- enable the Versatile Thermostat window detection (window sensor or automatic detection).
+
+When Versatile Thermostat detects an open window, SmartPI freezes its integral term during the opening and holds it after the window closes, while the heating takes effect again. An opening that Versatile Thermostat does not detect is seen as an ordinary heat loss: the integral term compensates it, then the room can overshoot the setpoint slightly after the window closes.
 
 Do not try to tune several parameters at once during the first learning period. It is better to let SmartPI complete a clean first learning cycle, then adjust only what is really needed.
 

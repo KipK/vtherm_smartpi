@@ -306,7 +306,10 @@ Pour démarrer simplement :
 - gardez les seuils d'hystérésis par défaut si votre sonde est précise et publie souvent (voir ci-dessous sinon),
 - laissez `FF3` activé sauf raison précise de le désactiver,
 - laissez le filtre de consigne activé par défaut,
-- ajustez d'abord la deadband si la température oscille trop autour de la cible.
+- ajustez d'abord la deadband si la température oscille trop autour de la cible,
+- activez la détection d'ouverture de Versatile Thermostat (capteur de fenêtre ou détection automatique).
+
+Quand Versatile Thermostat détecte une fenêtre ouverte, SmartPI fige son terme intégral pendant l'ouverture et le maintient après la fermeture, le temps que le chauffage fasse de nouveau effet. Une ouverture que Versatile Thermostat ne détecte pas est vue comme une perte de chaleur ordinaire : le terme intégral la compense, puis la pièce peut légèrement dépasser la consigne après la fermeture.
 
 Évitez de modifier plusieurs paramètres à la fois pendant la première phase d'apprentissage. Il vaut mieux laisser SmartPI terminer un cycle d'apprentissage propre, puis ne changer que ce qui est réellement nécessaire.
 
