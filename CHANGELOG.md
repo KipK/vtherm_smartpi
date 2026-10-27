@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
   phases instead of 8.
 - Learning: `a` is corrected automatically when `b` is refined, and can be
   published from 4 consistent measurements instead of 6.
+- Learning: a heating measurement lasts at least one PWM cycle, so that a
+  short measurement made steeper by sensor noise is no longer kept.
 - Regulation: the integral term corrects lasting errors (sun, weather,
   model error) in a few hours instead of several days.
 - Regulation: less overshoot after a setpoint change: the correction already
