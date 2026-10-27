@@ -64,6 +64,15 @@ Le bloc `live` est organisé par responsabilité :
 `trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
 est disponible, `twin`.
 
+`analysis.deadtime` suit la détection du temps mort :
+
+| Champ | Signification |
+|---|---|
+| `state` | État du détecteur (`WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`) |
+| `last_power` | Dernière puissance vue par le détecteur |
+| `waiting_elapsed_s` | Âge de la réponse attendue en secondes, `null` quand aucune détection n'est armée |
+| `heat_last_outcome` / `cool_last_outcome` | Issue de la dernière attente d'une réponse montante / descendante : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `null` avant la première |
+
 `analysis.learning.response_lag` décrit le retard de réponse utilisé par l'apprentissage de `a` :
 
 | Champ | Signification |

@@ -321,6 +321,14 @@ AB_SETTLE_ACTIVE_CAP_FRAC = 0.5        # Active gate cap, fraction of the median
 # arrive on average more often than every 10 s (a sample is added on each
 # value change or after 60 s).
 TIN_HISTORY_RETENTION_MIN = DT_MAX_MIN + 60
+# Dead time detection: an active response (power on) is attributed to the
+# power step within this delay. A passive response (power off) may follow a
+# long release of the heat stored in the emitter (floor heating): in the
+# bootstrap its wait only ends by a detection or by a power restart, which
+# needs a drop the detection sees first, so the delay only bounds how late a
+# drop is still attributed to the power cut.
+DEADTIME_ACTIVE_TIMEOUT_S = 14400.0
+DEADTIME_PASSIVE_TIMEOUT_S = 43200.0
 TIN_HISTORY_MAX_SAMPLES = 1800
 
 

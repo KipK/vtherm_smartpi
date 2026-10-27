@@ -22,6 +22,13 @@ All notable changes to this project will be documented in this file.
   configured. The near-setpoint guards (cut above the setpoint, restart below
   it) no longer act during this phase: the cut stopped the heating well before
   the configured stop threshold and interrupted the learning.
+- Initial learning: with a slow emitter such as floor heating, the delay
+  before the room cools after the heating stops is measured even when the
+  temperature keeps rising and plateaus for several hours (up to 12 h instead
+  of 4 h). Such installations could stay in the initial learning forever.
+- Diagnostics: `analysis.deadtime` shows the outcome of the last delay
+  measurement (detected, timed out, aborted) and the age of the one in
+  progress.
 - Regulation: the integral term corrects lasting errors (sun, weather,
   model error) in a few hours instead of several days.
 - Regulation: less overshoot after a setpoint change: the correction already

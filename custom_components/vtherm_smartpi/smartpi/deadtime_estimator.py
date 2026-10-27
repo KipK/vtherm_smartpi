@@ -15,7 +15,12 @@ from ..hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
 )
-from .const import TIN_HISTORY_MAX_SAMPLES, TIN_HISTORY_RETENTION_MIN
+from .const import (
+    DEADTIME_ACTIVE_TIMEOUT_S,
+    DEADTIME_PASSIVE_TIMEOUT_S,
+    TIN_HISTORY_MAX_SAMPLES,
+    TIN_HISTORY_RETENTION_MIN,
+)
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 _TIN_HISTORY_RETENTION_S = TIN_HISTORY_RETENTION_MIN * 60.0
@@ -41,7 +46,8 @@ class DeadTimeEstimator:
         self.min_power_heat_threshold = 0.80
         self.min_power_cool_threshold = 0.80
         self.detection_threshold = 0.05
-        self.timeout_seconds = 14400.0  # 4 hours timeout for slow systems with inertia
+        self.timeout_seconds = DEADTIME_ACTIVE_TIMEOUT_S
+        self.passive_timeout_seconds = DEADTIME_PASSIVE_TIMEOUT_S
 
         # State
         self.state = "OFF"  # OFF, HEATING, COOLING, WAITING_HEAT_RESPONSE, WAITING_COOL_RESPONSE
@@ -55,6 +61,13 @@ class DeadTimeEstimator:
         self.cool_start_time: float | None = None
         self.cool_peak_temp: float | None = None
         self._waiting_power_on: bool | None = None
+        # Last instant near the trough (heat) or the peak (cool) of the
+        # response being waited for: the dead time does not depend on the
+        # retention of the temperature history when the drop comes late.
+        self._near_extreme_time: float | None = None
+        # Outcome of the last detection per response ("detected", "timeout",
+        # "aborted"), published for diagnostics.
+        self.last_outcome: dict[str, str | None] = {"heat": None, "cool": None}
 
         # Last detections; the published dead time is their median so that a
         # single aberrant detection does not move it.
@@ -115,6 +128,8 @@ class DeadTimeEstimator:
         self.cool_start_time = None
         self.cool_peak_temp = None
         self._waiting_power_on = None
+        self._near_extreme_time = None
+        self.last_outcome = {"heat": None, "cool": None}
         self._history_heat.clear()
         self._history_cool.clear()
         self._tin_history.clear()
@@ -130,8 +145,21 @@ class DeadTimeEstimator:
         self.cool_start_time = None
         self.cool_peak_temp = None
         self._waiting_power_on = None
+        self._near_extreme_time = None
         self._tin_history.clear()
         self._tin_lp_history.clear()
+
+    @property
+    def waiting_elapsed_s(self) -> float | None:
+        """Age of the response being waited for, None when no detection is armed."""
+        start = (
+            self.heat_start_time if self.state == "WAITING_HEAT_RESPONSE"
+            else self.cool_start_time if self.state == "WAITING_COOL_RESPONSE"
+            else None
+        )
+        if start is None or not self._tin_history:
+            return None
+        return max(0.0, self._tin_history[-1][0] - start)
 
     def ensure_hvac_mode(self, hvac_mode: VThermHvacMode | None) -> bool:
         """Ensure persisted transition data uses physical response semantics.
@@ -184,7 +212,13 @@ class DeadTimeEstimator:
         power_on: bool,
     ) -> None:
         """Arm a physical rising or falling temperature response."""
+        # A response still waited for is replaced by the new power transition.
+        if self.state == "WAITING_HEAT_RESPONSE":
+            self.last_outcome["heat"] = "aborted"
+        elif self.state == "WAITING_COOL_RESPONSE":
+            self.last_outcome["cool"] = "aborted"
         self._waiting_power_on = power_on
+        self._near_extreme_time = now
         if response == "cool":
             self.cool_start_time = now
             self.cool_peak_temp = tin
@@ -301,8 +335,10 @@ class DeadTimeEstimator:
             if self.state == "WAITING_HEAT_RESPONSE":
                 self.heat_start_time = None
                 self.heat_trough_temp = None
+                self.last_outcome["heat"] = "aborted"
             else:
                 self.cool_start_time = None
+                self.last_outcome["cool"] = "aborted"
             current_response = active_response if power_on else passive_response
             self.state = "COOLING" if current_response == "cool" else "HEATING"
             self._waiting_power_on = None
@@ -312,17 +348,20 @@ class DeadTimeEstimator:
                 elapsed = now - self.heat_start_time
 
                 # Check Timeout
-                if elapsed > self.timeout_seconds:
+                if elapsed > self._timeout_s():
                     self.state = "HEATING"
                     self._waiting_power_on = None
+                    self.last_outcome["heat"] = "timeout"
                     _LOGGER.debug("DeadTime: Heat Timeout (%.0fs)", elapsed)
                 else:
                     if tin < self.heat_trough_temp:
                         self.heat_trough_temp = tin
+                    if tin <= self.heat_trough_temp + 0.01:
+                        self._near_extreme_time = now
                     delta = tin - self.heat_trough_temp
                     if delta >= self.detection_threshold:
                         # 3.A Look back for inflection point
-                        inflection_time = now
+                        inflection_time = self._near_extreme_time or now
                         for t_hist, v_hist in reversed(self._tin_lp_history):
                             if t_hist < self.heat_start_time:
                                 break
@@ -337,6 +376,7 @@ class DeadTimeEstimator:
                         self._add_sample_heat(dt)
                         self.state = "HEATING"
                         self._waiting_power_on = None
+                        self.last_outcome["heat"] = "detected"
                         _LOGGER.info("SmartPI: Heat Deadtime detected = %.1fs (ascension delayed by %.1fs)", dt, now - inflection_time)
 
         elif self.state == "WAITING_COOL_RESPONSE":
@@ -344,20 +384,23 @@ class DeadTimeEstimator:
                 elapsed = now - self.cool_start_time
 
                 # Check Timeout
-                if elapsed > self.timeout_seconds:
+                if elapsed > self._timeout_s():
                     self.state = "COOLING"
                     self._waiting_power_on = None
+                    self.last_outcome["cool"] = "timeout"
                     _LOGGER.debug("DeadTime: Cool Timeout (%.0fs)", elapsed)
                 else:
                     # Peak update
                     if tin > self.cool_peak_temp:
                         self.cool_peak_temp = tin
+                    if tin >= self.cool_peak_temp - 0.01:
+                        self._near_extreme_time = now
 
                     # Drop detection
                     delta = self.cool_peak_temp - tin
                     if delta >= self.detection_threshold:
                         # 3.A Look back for inflection point
-                        inflection_time = now
+                        inflection_time = self._near_extreme_time or now
                         for t_hist, v_hist in reversed(self._tin_lp_history):
                             if t_hist < self.cool_start_time:
                                 break
@@ -371,6 +414,7 @@ class DeadTimeEstimator:
                         self._add_sample_cool(dt)
                         self.state = "COOLING"
                         self._waiting_power_on = None
+                        self.last_outcome["cool"] = "detected"
                         _LOGGER.info("SmartPI: Cool Deadtime detected = %.1fs (drop delayed by %.1fs)", dt, now - inflection_time)
 
         # Default states if running without detection
@@ -381,6 +425,10 @@ class DeadTimeEstimator:
                 self.state = "OFF"
 
         self.last_power = u_applied
+
+    def _timeout_s(self) -> float:
+        """Wait limit of the armed response: active after a power start, passive after a cut."""
+        return self.timeout_seconds if self._waiting_power_on else self.passive_timeout_seconds
 
     def _add_sample_heat(self, dt: float):
         self._history_heat.append(dt)

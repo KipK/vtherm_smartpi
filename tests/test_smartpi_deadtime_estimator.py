@@ -544,3 +544,74 @@ def test_smartpi_routes_raw_temperature_to_tin_history(stable: bool) -> None:
     assert t_int_lp != pytest.approx(19.5)
     assert smartpi.dt_est.tin_history[-1][1] == 19.5
     assert smartpi.dt_est._tin_lp_history[-1][1] == pytest.approx(t_int_lp)
+
+
+# ---------------------------------------------------------------------------
+# Slow passive responses (floor heating): late drop after a residual rise
+# ---------------------------------------------------------------------------
+
+def _heat_then_cut(est, cut_at: float) -> float:
+    """Heat at full power from t=0 (after a long OFF), cut at ``cut_at``; return the cut time."""
+    est.update(0.0, 20.0, 0.0)
+    est.update(1000.0, 20.0, 1.0)
+    t = 1000.0
+    while t < cut_at:
+        t += 60.0
+        est.update(t, 20.0, 1.0)
+    est.update(cut_at, 20.0, 0.0)
+    return cut_at
+
+
+def test_passive_drop_after_four_hours_is_still_detected():
+    """A slab keeps warming then plateaus: the drop comes 6 h after the cut."""
+    est = DeadTimeEstimator()
+    cut = _heat_then_cut(est, 4000.0)
+    assert est.state == "WAITING_COOL_RESPONSE"
+    t = cut
+    peak_at = cut + 5 * 3600.0
+    while t < cut + 6.5 * 3600.0:
+        t += 60.0
+        temp = 20.0 + 0.6 * min(t - cut, peak_at - cut) / (peak_at - cut)  # rise to the peak, then plateau
+        if t > cut + 6 * 3600.0:
+            temp -= 0.06  # drop beyond the detection threshold
+        est.update(t, temp, 0.0)
+    assert est.deadtime_cool_reliable is True
+    # Measured to the last instant near the peak, not to the late drop.
+    assert est.deadtime_cool_s == pytest.approx(6 * 3600.0, abs=120.0)
+    assert est.last_outcome["cool"] == "detected"
+
+
+def test_passive_peak_time_does_not_need_the_temperature_history():
+    """The dead time stays right when the history no longer holds the peak."""
+    est = DeadTimeEstimator()
+    cut = _heat_then_cut(est, 4000.0)
+    t = cut
+    while t < cut + 2 * 3600.0:
+        t += 60.0
+        est.update(t, 20.0 + 0.3 * (t - cut) / 7200.0, 0.0)
+    near_peak = t
+    est._tin_lp_history.clear()  # retention dropped every sample up to now
+    est.update(t + 60.0, 20.24, 0.0)
+    assert est.deadtime_cool_s == pytest.approx(near_peak - cut, abs=1.0)
+
+
+def test_passive_wait_times_out_after_the_passive_limit():
+    est = DeadTimeEstimator()
+    cut = _heat_then_cut(est, 4000.0)
+    est.update(cut + 5 * 3600.0, 20.0, 0.0)
+    assert est.state == "WAITING_COOL_RESPONSE"
+    assert est.waiting_elapsed_s == pytest.approx(5 * 3600.0)
+    est.update(cut + est.passive_timeout_seconds + 1.0, 20.0, 0.0)
+    assert est.state == "COOLING"
+    assert est.deadtime_cool_s is None
+    assert est.last_outcome["cool"] == "timeout"
+    assert est.waiting_elapsed_s is None
+
+
+def test_power_restart_aborts_the_passive_wait():
+    est = DeadTimeEstimator()
+    cut = _heat_then_cut(est, 4000.0)
+    est.update(cut + 3600.0, 20.1, 0.0)
+    est.update(cut + 3660.0, 20.1, 1.0)
+    assert est.last_outcome["cool"] == "aborted"
+    assert est.deadtime_cool_s is None
