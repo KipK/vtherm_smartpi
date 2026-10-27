@@ -1,6 +1,8 @@
 """An active learning window is not submitted before one PWM cycle."""
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.ab_estimator import ABEstimator
 from custom_components.vtherm_smartpi.smartpi.const import (
@@ -76,3 +78,18 @@ def test_without_cycle_the_active_window_is_submitted_earlier():
     gated, _ = _run(30, CYCLE_MIN)
     assert early is not None and gated is not None
     assert early < CYCLE_MIN <= gated
+
+
+def test_bootstrap_minimum_is_capped_by_the_heating_phases():
+    """A bootstrap heating phase may be shorter than one cycle: half the median phase is enough."""
+    win = LearningWindowManager("t")
+    lag = win.response_lag
+    lag._durations.extend([600.0, 600.0, 600.0])  # 10 min heating phases
+    assert win._bootstrap_active_window_min(CYCLE_MIN * 2, is_hysteresis=True) == pytest.approx(5.0)
+    assert win._bootstrap_active_window_min(4.0, is_hysteresis=True) == 4.0
+    assert win._bootstrap_active_window_min(CYCLE_MIN * 2, is_hysteresis=False) == CYCLE_MIN * 2
+
+
+def test_bootstrap_minimum_without_measured_phases_stays_the_cycle():
+    win = LearningWindowManager("t")
+    assert win._bootstrap_active_window_min(CYCLE_MIN, is_hysteresis=True) == CYCLE_MIN

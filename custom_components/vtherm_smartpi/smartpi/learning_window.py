@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 from .const import (
+    AB_SETTLE_ACTIVE_CAP_FRAC,
     AB_B_MIN_PASSIVE_GRADIENT_C,
     AB_B_OUTDOOR_TARGET_MARGIN_C,
     DELTA_MIN,
@@ -364,7 +365,9 @@ class LearningWindowManager:
                 a_learning_allowed=a_learning_allowed,
                 a_learning_block_reason=a_learning_block_reason,
                 raw_temp=raw_temp,
-                min_active_window_min=min_active_window_min,
+                min_active_window_min=self._bootstrap_active_window_min(
+                    min_active_window_min, is_hysteresis
+                ),
             )
         finally:
             self._updating = False
@@ -388,6 +391,21 @@ class LearningWindowManager:
                     else "pool: segment added",
                 )
         return result
+
+    def _bootstrap_active_window_min(self, min_active_window_min: float, is_hysteresis: bool) -> float:
+        """Minimum active window duration (min), capped by the bootstrap heating phases.
+
+        In the bootstrap the heater runs at full power between the hysteresis
+        thresholds, so a heating phase may be shorter than one PWM cycle. The
+        minimum then falls to half the median heating phase, measured on the
+        previous phases (fixed before the data of the window, as the cycle).
+        """
+        if not is_hysteresis:
+            return min_active_window_min
+        episode_s = self._response_lag.episode_median_s
+        if episode_s is None:
+            return min_active_window_min
+        return min(min_active_window_min, AB_SETTLE_ACTIVE_CAP_FRAC * episode_s / 60.0)
 
     def _close_window_at_gap(self, now: float, dt_s: float) -> None:
         """Close a window at its last observation when the intervals are not contiguous.

@@ -62,16 +62,24 @@ class SmartPIGuards:
         near_band_above: float,
         is_device_active: bool,
         hvac_mode: VThermHvacMode,
-        is_calibration: bool
+        is_calibration: bool,
+        is_bootstrap: bool = False,
     ) -> str:
         """
         Check for Guard Cut condition (HEAT only).
 
         Triggers when the measured temperature exceeds target + near_band_above
         while the heater is active; resets at or below that threshold minus
-        NEAR_BAND_HYSTERESIS_C.
+        NEAR_BAND_HYSTERESIS_C. The bootstrap heats between its own hysteresis
+        thresholds: the guard does not act there and a running cut is released.
         Returns: GuardAction.CUT_TRIGGER, CUT_MAINTAIN, CUT_RESET, or NONE.
         """
+        if is_bootstrap:
+            if self._guard_cut_active:
+                self._guard_cut_active = False
+                return GuardAction.CUT_RESET
+            return GuardAction.NONE
+
         # Pre-conditions
         if (
             current_temp is None 
@@ -118,12 +126,22 @@ class SmartPIGuards:
         in_near_band: bool,
         on_percent: float,
         hvac_mode: VThermHvacMode,
-        is_calibration: bool
+        is_calibration: bool,
+        is_bootstrap: bool = False,
     ) -> str:
         """
         Check for Guard Kick condition.
+
+        The bootstrap restarts the heating at its own hysteresis threshold: the
+        guard does not act there and a running kick is released.
         Returns: GuardAction.KICK_TRIGGER, KICK_MAINTAIN, KICK_RESET, or NONE.
         """
+        if is_bootstrap:
+            if self._guard_kick_active:
+                self._guard_kick_active = False
+                return GuardAction.KICK_RESET
+            return GuardAction.NONE
+
         # Pre-conditions
         if (
             current_temp is None 

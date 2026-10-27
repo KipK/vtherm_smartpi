@@ -122,7 +122,10 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
 - does not submit an active window shorter than one PWM cycle
   (`active_window_shorter_than_cycle`): its duration is set before its data, since
   stopping as soon as a short window looks significant favours the steepest noisy
-  slopes,
+  slopes. In the bootstrap the heater runs at full power between the hysteresis
+  thresholds and a heating phase may be shorter than one cycle: the minimum is
+  then capped at half the median heating phase (`AB_SETTLE_ACTIVE_CAP_FRAC`),
+  measured on the previous phases,
 - closes the window at its last observation when two updates are not contiguous
   (heating guard cut, interval capped at one cycle): the window is submitted on
   the data up to that instant when its slope is robust there, otherwise abandoned
@@ -549,7 +552,7 @@ The restart therefore keeps only useful persistent PI memory, without restoring 
 
 Additional protections currently present are:
 
-- `SmartPIGuards` (heating mode only): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus `NEAR_BAND_HYSTERESIS_C = 0.05°C`; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized,
+- `SmartPIGuards` (heating mode only, outside the bootstrap and the calibration): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus `NEAR_BAND_HYSTERESIS_C = 0.05°C`; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized. In the bootstrap the heating runs between its own hysteresis thresholds and a running guard is released,
 - per-tick anti-windup on the applicable upper limit (see below),
 - signed integral guard during resumes, catch-up phases, and setpoint changes,
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,

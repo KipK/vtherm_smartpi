@@ -363,7 +363,8 @@ class SmartPIHandler:
                 near_band_above=algo.deadband_mgr.near_band_above_deg,
                 is_device_active=t.is_device_active,
                 hvac_mode=t.vtherm_hvac_mode,
-                is_calibration=(algo.phase == SmartPIPhase.CALIBRATION)
+                is_calibration=(algo.phase == SmartPIPhase.CALIBRATION),
+                is_bootstrap=(algo.phase == SmartPIPhase.HYSTERESIS),
             )
 
             if guard_cut_action == GuardAction.CUT_TRIGGER:
@@ -378,7 +379,8 @@ class SmartPIHandler:
                 in_near_band=algo.in_near_band,
                 on_percent=algo.calculated_on_percent,
                 hvac_mode=t.vtherm_hvac_mode,
-                is_calibration=(algo.phase == SmartPIPhase.CALIBRATION)
+                is_calibration=(algo.phase == SmartPIPhase.CALIBRATION),
+                is_bootstrap=(algo.phase == SmartPIPhase.HYSTERESIS),
             )
 
             if guard_kick_action == GuardAction.KICK_TRIGGER:

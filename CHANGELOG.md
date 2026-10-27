@@ -15,8 +15,13 @@ All notable changes to this project will be documented in this file.
   phases instead of 8.
 - Learning: `a` is corrected automatically when `b` is refined, and can be
   published from 4 consistent measurements instead of 6.
-- Learning: a heating measurement lasts at least one PWM cycle, so that a
-  short measurement made steeper by sensor noise is no longer kept.
+- Learning: a heating measurement lasts at least one PWM cycle, or half a
+  heating phase during the initial learning, so that a short measurement made
+  steeper by sensor noise is no longer kept.
+- Initial learning: the heating runs between the two hysteresis thresholds as
+  configured. The near-setpoint guards (cut above the setpoint, restart below
+  it) no longer act during this phase: the cut stopped the heating well before
+  the configured stop threshold and interrupted the learning.
 - Regulation: the integral term corrects lasting errors (sun, weather,
   model error) in a few hours instead of several days.
 - Regulation: less overshoot after a setpoint change: the correction already
