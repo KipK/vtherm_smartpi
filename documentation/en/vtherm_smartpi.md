@@ -334,6 +334,27 @@ Widening them further does not speed up learning and degrades the accuracy of `a
 
 The more slowly the room loses heat (good insulation, mild weather), the longer the cooling phases and the longer bootstrap takes.
 
+### PWM cycle by installation
+
+The PWM cycle duration is the Versatile Thermostat cycle setting. It is the period over which SmartPI spreads its heating power: at 30 %, the heater is on for 3 minutes of a 10-minute cycle. A longer cycle switches the heater less often, but lets the temperature swing during each cycle and slows the regulation, because SmartPI sizes its response to at least two cycles. A shorter cycle than needed gives no comfort gain and only wears the relay.
+
+| Installation | Sensor 0.1 °C reporting on change | Precise sensor (0.01 °C) reporting every 5 min | Sensor 0.2 °C |
+| --- | --- | --- | --- |
+| Convector or radiant panel in a light room | 5 min | 5 min | 5 min |
+| Fast electric emitter in a heavy or well insulated room | 15 min | 30 min | 30 min |
+| Water or oil radiator | 10 min | 30 min | 30 min |
+| High-inertia water radiator | 15 min | 30 min | 60 min |
+| Electric floor heating | 20 min | 15 min | not recommended: the initial learning rarely completes |
+
+Why these values:
+
+- in a light room the temperature reacts within minutes: from 10 minutes, the swing within each cycle exceeds the deadband and the error doubles,
+- with a 0.1 °C sensor that reports often, a longer cycle mainly delays the initial learning,
+- a precise or slow sensor tolerates long cycles with the same comfort, with far fewer switchings (48 per day at 30 minutes against 288 at 5 minutes),
+- with floor heating, cycles longer than 15 to 20 minutes degrade the initial learning: the heating gain is learned less accurately, and with a sensor reporting every 5 minutes the learning may not complete.
+
+These values come from simulations of each installation type. A cycle within one step of the table is fine; keep the shortest one when in doubt about how fast the room reacts.
+
 ## Configuration
 
 | Parameter                      | Role                                                                                              | Default value |

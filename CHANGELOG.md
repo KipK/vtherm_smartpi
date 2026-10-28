@@ -43,6 +43,8 @@ All notable changes to this project will be documented in this file.
   stays stuck one step away from the setpoint.
 - Diagnostics: `analysis.learning.response_lag` shows the measured response
   delay of the installation.
+- Documentation: recommended PWM cycle duration by installation type and
+  temperature sensor.
 
 ## [0.5.1]
 

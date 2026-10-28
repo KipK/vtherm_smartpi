@@ -327,6 +327,27 @@ Pendant le bootstrap, SmartPI chauffe en tout-ou-rien entre consigne − *hysté
 
 Plus la pièce perd lentement sa chaleur (bonne isolation, temps doux), plus les phases de refroidissement sont longues et plus le bootstrap prend du temps.
 
+### Cycle PWM selon l'installation
+
+La durée du cycle PWM est le réglage de cycle de Versatile Thermostat. C'est la période sur laquelle SmartPI répartit sa puissance de chauffe : à 30 %, le chauffage est allumé 3 minutes sur un cycle de 10 minutes. Un cycle plus long commute moins souvent, mais laisse la température onduler pendant chaque cycle et ralentit la régulation, car SmartPI dimensionne sa réponse sur au moins deux cycles. Un cycle plus court que nécessaire n'apporte aucun confort et use seulement le relais.
+
+| Installation | Sonde 0,1 °C publiant à chaque changement | Sonde précise (0,01 °C) publiant toutes les 5 min | Sonde 0,2 °C |
+| --- | --- | --- | --- |
+| Convecteur ou panneau rayonnant dans une pièce légère | 5 min | 5 min | 5 min |
+| Émetteur électrique rapide dans une pièce lourde ou bien isolée | 15 min | 30 min | 30 min |
+| Radiateur à eau ou à huile | 10 min | 30 min | 30 min |
+| Radiateur à eau à forte inertie | 15 min | 30 min | 60 min |
+| Plancher chauffant électrique | 20 min | 15 min | déconseillé : l'apprentissage initial aboutit rarement |
+
+Pourquoi ces valeurs :
+
+- dans une pièce légère, la température réagit en quelques minutes : dès 10 minutes, l'ondulation sur chaque cycle dépasse la deadband et l'erreur double,
+- avec une sonde 0,1 °C qui publie souvent, un cycle plus long retarde surtout l'apprentissage initial,
+- une sonde précise ou lente tolère des cycles longs avec le même confort, et beaucoup moins de commutations (48 par jour à 30 minutes contre 288 à 5 minutes),
+- avec un plancher chauffant, au-delà de 15 à 20 minutes, l'apprentissage initial se dégrade : le gain de chauffe est appris moins précisément et, avec une sonde publiant toutes les 5 minutes, l'apprentissage peut ne pas aboutir.
+
+Ces valeurs viennent de simulations de chaque type d'installation. Un cycle à un cran près du tableau convient ; en cas de doute sur la rapidité de la pièce, garder le plus court.
+
 ## Configuration
 
 | Paramètre                            | Rôle                                                                                                   | Valeur par défaut |
