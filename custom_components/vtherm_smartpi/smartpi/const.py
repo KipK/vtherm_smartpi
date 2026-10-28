@@ -180,6 +180,9 @@ DEADBAND_HYSTERESIS = 0.025
 # - above setpoint: scale it down with a factor
 NEAR_BAND_ABOVE_FACTOR = 0.40
 NEAR_BAND_HYSTERESIS_C = 0.05
+# The guard cut resets at least this many observed sensor steps below its
+# threshold, so that a reading flickering between two levels cannot re-trigger it.
+GUARD_CUT_RESET_STEPS = 1.5
 
 class TrajectoryPhase(str, Enum):
     """Trajectory state for setpoint shaping."""

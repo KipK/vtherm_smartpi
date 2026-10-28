@@ -398,3 +398,23 @@ async def test_handler_tells_the_guards_about_the_bootstrap():
 
     assert algo.guards.check_guard_cut.call_args.kwargs["is_bootstrap"] is True
     assert algo.guards.check_guard_kick.call_args.kwargs["is_bootstrap"] is True
+
+
+def test_guard_cut_resets_one_and_a_half_sensor_steps_below_its_threshold():
+    """A reading flickering between two sensor levels cannot re-trigger the cut."""
+    guards = SmartPIGuards()
+    guards.sensor_step_c = 0.1
+    assert _cut(guards, 20.3) == GuardAction.CUT_TRIGGER
+    # One step below the reading, within the former 0.05 C reset: still cut.
+    assert _cut(guards, 20.1) == GuardAction.CUT_MAINTAIN
+    assert _cut(guards, 20.06) == GuardAction.CUT_MAINTAIN
+    assert _cut(guards, 20.05) == GuardAction.CUT_RESET
+
+
+def test_guard_kick_reset_does_not_depend_on_the_sensor_step():
+    guards = SmartPIGuards()
+    guards.sensor_step_c = 0.1
+    kick = dict(target_temp=20.0, near_band_below=0.3, in_near_band=True, on_percent=0.5,
+                hvac_mode=VThermHvacMode_HEAT, is_calibration=False)
+    assert guards.check_guard_kick(current_temp=19.6, **kick) == GuardAction.KICK_TRIGGER
+    assert guards.check_guard_kick(current_temp=19.75, **kick) == GuardAction.KICK_RESET

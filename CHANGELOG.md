@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.6.0-rc.1]
+## [0.6.0-rc.2]
 
 - Learning: more accurate heating gain (`a`), especially with slow emitters
   (radiators, floor heating) and slow or coarse sensors. SmartPI measures
@@ -33,6 +33,12 @@ All notable changes to this project will be documented in this file.
   model error) in a few hours instead of several days.
 - Regulation: less overshoot after a setpoint change: the correction already
   learned by the integral term is no longer discarded at each setpoint change.
+- Regulation: with a noisy sensor, the overheat guard no longer switches the
+  heating off and on at every reading near its threshold. It now releases
+  1.5 sensor steps below its threshold, and the room is still observed while it
+  holds the heating off. Before, a reading flickering between two values could
+  restart the PWM cycle about once a minute and keep the regulation frozen most
+  of the time.
 - Regulation: with a sensor of 0.1 °C or coarser, the temperature no longer
   stays stuck one step away from the setpoint.
 - Diagnostics: `analysis.learning.response_lag` shows the measured response

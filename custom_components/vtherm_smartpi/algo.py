@@ -1754,8 +1754,23 @@ class SmartPI:
         if self._validate_and_handle_off(target_temp, current_temp, hvac_mode, power_shedding, off_reason):
             return
 
+        self.guards.sensor_step_c = self.learn_win.balance.resolution_c
+
         # Guard Cut: force 0% if active
         if self.guards.guard_cut_active:
+            # The output is forced but the room is still observed: the dead time
+            # detection and the published temperature follow the cut.
+            if current_temp is not None:
+                t_int_lp, _ = self.tint_filter.update(current_temp, now)
+                if self.phase != SmartPIPhase.HYSTERESIS and not self.calibration_mgr.is_calibrating:
+                    self.dt_est.update(
+                        now=now,
+                        tin=t_int_lp,
+                        tin_raw=current_temp,
+                        u_applied=self._committed_on_percent,
+                        hvac_mode=hvac_mode,
+                    )
+                self._last_current_temp = current_temp
             self.fftrim_coord.invalidate_context(
                 "guard_cut",
                 now_monotonic=now,
