@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.6.0-rc.2]
+## [0.6.0-rc.3]
 
 - Learning: more accurate heating gain (`a`), especially with slow emitters
   (radiators, floor heating) and slow or coarse sensors. SmartPI measures
@@ -11,10 +11,12 @@ All notable changes to this project will be documented in this file.
   and accounts for the heat actually delivered. In return, the initial learning
   can take a few hours longer in slow rooms.
 - Learning: the heat-loss coefficient (`b`) is no longer distorted by a sensor
-  flickering between two values, and the initial learning needs 4 cooling
-  phases instead of 8.
-- Learning: `a` is corrected automatically when `b` is refined, and can be
-  published from 4 consistent measurements instead of 6.
+  flickering between two values.
+- Learning: `a` is corrected automatically when `b` is refined.
+- Initial learning: `b` is published after 5 cooling phases instead of 8, and
+  `a` after 5 heating measurements instead of 6, or 4 when they agree closely.
+  Both are the median of their measurements, and an odd count resists as many
+  wrong measurements as the next even one.
 - Learning: a heating measurement lasts at least one PWM cycle, or half a
   heating phase during the initial learning, so that a short measurement made
   steeper by sensor noise is no longer kept.

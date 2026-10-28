@@ -215,8 +215,10 @@ B_STABILITY_MAD_RATIO_MAX = 0.60   # MAD(b) / median(b)
 # --- SmartPI Robust Learning Constants ---
 # Median+MAD Strategy Constants
 AB_HISTORY_SIZE = 31      # Keep last 31 (ODD) values
-AB_MIN_SAMPLES_B = 4      # Min samples for b publication (OFF phase)
-AB_MIN_SAMPLES_A = 6      # Min samples for a publication (ON phase)
+# The bootstrap publishes the plain median of its measurements: an odd count
+# tolerates as many outliers as the next even one, (N - 1) // 2.
+AB_MIN_SAMPLES_B = 5      # Min samples for b publication (OFF phase)
+AB_MIN_SAMPLES_A = 5      # Min samples for a publication (ON phase)
 # The first a publication may take place from this count when the collected
 # measurements agree (median absolute deviation within the fraction below).
 AB_MIN_SAMPLES_A_CONSISTENT = 4
@@ -236,7 +238,7 @@ AB_B_CONVERGENCE_MIN_SAMPLES: int = 11
 AB_B_CONVERGENCE_MAD_RATIO: float = 0.30
 AB_B_CONVERGENCE_RANGE_RATIO: float = 0.10
 AB_B_CONVERGENCE_MIN_BHIST: int = 5
-AB_A_SOFT_GATE_MIN_B: int = 4
+AB_A_SOFT_GATE_MIN_B: int = 5
 
 # --- ABEstimator weighted-median aggregation parameters ---
 AB_WMED_PLATEAU_N: int = 11          # Most-recent N points assigned weight 1.0 (plateau)

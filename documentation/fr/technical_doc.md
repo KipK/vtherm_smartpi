@@ -81,12 +81,12 @@ En phase `HYSTERESIS`, l'apprentissage suit un ordre strict :
 
 Règles effectivement codées :
 
-- `AB_MIN_SAMPLES_B = 4`,
-- `AB_MIN_SAMPLES_A = 6`,
-- `AB_A_SOFT_GATE_MIN_B = 4`.
+- `AB_MIN_SAMPLES_B = 5`,
+- `AB_MIN_SAMPLES_A = 5`,
+- `AB_A_SOFT_GATE_MIN_B = 5`.
 
-SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 4 mesures et que `a` est publié.
-`a` est publié à 6 mesures, ou dès `AB_MIN_SAMPLES_A_CONSISTENT = 4` mesures lorsqu'elles
+SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 5 mesures et que `a` est publié.
+`a` est publié à 5 mesures, ou dès `AB_MIN_SAMPLES_A_CONSISTENT = 4` mesures lorsqu'elles
 concordent : leur écart absolu médian est au plus `AB_A_CONSISTENT_MAX_REL_MAD = 0.10`
 de leur médiane. La première publication de `a` attend aussi le modèle de puissance
 délivrée (3.7) : tant que le retard de réponse n'est pas résolu, les mesures sont
@@ -344,7 +344,7 @@ Le `warmup_scale` n'est pas un simple interrupteur. Il est le produit :
 
 Le trim FF2 reste gelé (`ff_warmup`) tant que `warmup_scale` est inférieur à 1.
 
-$k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (`a` non publié avec moins de 6 mesures, ou moins de 4 mesures de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
+$k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (`a` non publié avec moins de 5 mesures, ou moins de 5 mesures de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
 
 $T_{ext}$ est la dernière température extérieure valide reçue par SmartPI. Lorsque la sonde extérieure ne fournit aucune valeur, FF1, le modèle de consigne et la near-band continuent d'utiliser cette dernière valeur, sans limite d'âge. Tant qu'aucune température extérieure n'a été reçue, $u_{ff1}$ et $u_{ff2}$ sont tous deux nuls (`ff_reason` `ff_no_ext_temp`).
 
@@ -802,11 +802,11 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | Constante                      | Valeur |
 | ------------------------------ | ------ |
 | `AB_HISTORY_SIZE`              | `31`   |
-| `AB_MIN_SAMPLES_B`             | `4`    |
-| `AB_MIN_SAMPLES_A`             | `6`    |
+| `AB_MIN_SAMPLES_B`             | `5`    |
+| `AB_MIN_SAMPLES_A`             | `5`    |
 | `AB_MIN_SAMPLES_A_CONSISTENT`  | `4`    |
 | `AB_A_CONSISTENT_MAX_REL_MAD`  | `0.10` |
-| `AB_A_SOFT_GATE_MIN_B`         | `4`    |
+| `AB_A_SOFT_GATE_MIN_B`         | `5`    |
 | `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
 | `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
 | `AB_B_CONVERGENCE_MIN_SAMPLES` | `11`   |

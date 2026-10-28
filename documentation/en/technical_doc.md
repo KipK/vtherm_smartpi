@@ -80,12 +80,12 @@ In phase `HYSTERESIS`, learning follows a strict order:
 
 Rules effectively coded:
 
-- `AB_MIN_SAMPLES_B = 4`,
-- `AB_MIN_SAMPLES_A = 6`,
-- `AB_A_SOFT_GATE_MIN_B = 4`.
+- `AB_MIN_SAMPLES_B = 5`,
+- `AB_MIN_SAMPLES_A = 5`,
+- `AB_A_SOFT_GATE_MIN_B = 5`.
 
-SmartPI leaves `HYSTERESIS` once `b` has 4 measurements and `a` is published.
-`a` is published at 6 measurements, or from `AB_MIN_SAMPLES_A_CONSISTENT = 4`
+SmartPI leaves `HYSTERESIS` once `b` has 5 measurements and `a` is published.
+`a` is published at 5 measurements, or from `AB_MIN_SAMPLES_A_CONSISTENT = 4`
 measurements when they agree: their median absolute deviation is at most
 `AB_A_CONSISTENT_MAX_REL_MAD = 0.10` of their median. The first publication of
 `a` also waits for the delivered power model (3.7): while the response lag is not
@@ -374,7 +374,7 @@ power.
 The FF2 trim stays frozen (`ff_warmup`) while `warmup_scale` is below 1.
 
 $k_{ff}$ is zero, and therefore $u_{ff1}$ is zero, whenever the model is not
-ready (`a` not published with fewer than 6 measurements, or fewer than 4 `b`
+ready (`a` not published with fewer than 5 measurements, or fewer than 5 `b`
 measurements), `tau` is not reliable, or the sign
 of `a` does not match the active mode.
 
@@ -822,11 +822,11 @@ acceptance or rejection without changing the learning decision.
 | Constant                       | Value  |
 | ------------------------------ | ------ |
 | `AB_HISTORY_SIZE`              | `31`   |
-| `AB_MIN_SAMPLES_B`             | `4`    |
-| `AB_MIN_SAMPLES_A`             | `6`    |
+| `AB_MIN_SAMPLES_B`             | `5`    |
+| `AB_MIN_SAMPLES_A`             | `5`    |
 | `AB_MIN_SAMPLES_A_CONSISTENT`  | `4`    |
 | `AB_A_CONSISTENT_MAX_REL_MAD`  | `0.10` |
-| `AB_A_SOFT_GATE_MIN_B`         | `4`    |
+| `AB_A_SOFT_GATE_MIN_B`         | `5`    |
 | `AB_CONFIDENCE_MIN_SAMPLES_A`  | `11`   |
 | `AB_CONFIDENCE_MIN_SAMPLES_B`  | `11`   |
 | `AB_B_CONVERGENCE_MIN_SAMPLES` | `11`   |
