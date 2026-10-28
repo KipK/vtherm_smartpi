@@ -7,11 +7,12 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.config_entries import SIGNAL_CONFIG_ENTRY_CHANGED, ConfigEntry, ConfigEntryState
+from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import service as service_helper
 from vtherm_api.log_collector import get_vtherm_logger
@@ -35,9 +36,9 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 _LOGGER = get_vtherm_logger(__name__)
 
 
-def _register_factory(hass: HomeAssistant) -> None:
+def _register_factory(hass: HomeAssistant, api_class: type[VThermAPI] = VThermAPI) -> None:
     """Register the SmartPI factory in the shared VT API."""
-    api = VThermAPI.get_vtherm_api(hass)
+    api = api_class.get_vtherm_api(hass)
     if api is None:
         _LOGGER.warning("Unable to register SmartPI factory because VThermAPI is unavailable")
         return
@@ -45,6 +46,19 @@ def _register_factory(hass: HomeAssistant) -> None:
     factory = SmartPIHandlerFactory()
     if api.get_prop_algorithm(factory.name) is None:
         api.register_prop_algorithm(factory)
+
+
+def _keep_factory_registered(hass: HomeAssistant) -> None:
+    """Register the SmartPI factory again when VT rebuilds its API after its last entry is unloaded."""
+    # VT cannot run on a bare VThermAPI, so the API is rebuilt with the VT class, as VT does.
+    api_class = type(VThermAPI.get_vtherm_api(hass))
+
+    @callback
+    def _async_config_entry_changed(_change, entry: ConfigEntry) -> None:
+        if entry.domain == "versatile_thermostat" and entry.state is ConfigEntryState.SETUP_IN_PROGRESS:
+            _register_factory(hass, api_class)
+
+    async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _async_config_entry_changed)
 
 
 def _register_services(hass: HomeAssistant) -> None:
@@ -196,6 +210,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     if not await async_check_vtherm_version(hass):
         return False
     _register_factory(hass)
+    _keep_factory_registered(hass)
     _register_services(hass)
     return True
 
