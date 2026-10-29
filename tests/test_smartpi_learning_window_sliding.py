@@ -313,6 +313,9 @@ def test_window_anchored_past_cooling_deadtime():
         in_near_band=False,
         t_heat_episode_start=None,
         t_cool_episode_start=cool_episode_start,
+        # Bootstrap: outside it, the passive dead time also gates the window
+        # from the power cut seen by the response lag estimator.
+        is_hysteresis=True,
     )
 
     assert win.active, (

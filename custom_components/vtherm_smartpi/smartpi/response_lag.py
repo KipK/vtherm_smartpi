@@ -326,12 +326,24 @@ class ResponseLagEstimator:
             return None
         return self._ep_start + settle
 
-    def passive_gate_end(self) -> float | None:
-        """Earliest start of a passive window after the last power cut."""
-        lag = self.lag_s
-        if lag is None or self._ep_start is not None or self._off_start is None:
+    def passive_gate_end(self, min_settle_s: float | None = None) -> float | None:
+        """Earliest start of a passive window after the last power cut.
+
+        The settling time is the longer of AB_SETTLE_K_PASSIVE published lags
+        and min_settle_s (ignored when None or non-positive). None when neither
+        is available.
+        """
+        if self._ep_start is not None or self._off_start is None:
             return None
-        return self._off_start + AB_SETTLE_K_PASSIVE * lag
+        settle = None
+        lag = self.lag_s
+        if lag is not None:
+            settle = AB_SETTLE_K_PASSIVE * lag
+        if min_settle_s is not None and min_settle_s > 0.0:
+            settle = min_settle_s if settle is None else max(settle, min_settle_s)
+        if settle is None:
+            return None
+        return self._off_start + settle
 
     # ------------------------------------------------------------------
     # Observation

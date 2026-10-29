@@ -318,6 +318,14 @@ RESPONSE_LAG_RESOLVABLE_FRAC = 0.9
 AB_SETTLE_K_ACTIVE = 3.0               # Delivered power model corrects the remainder
 AB_SETTLE_K_PASSIVE = 3.0              # b is not corrected (learned before a)
 AB_SETTLE_ACTIVE_CAP_FRAC = 0.5        # Active gate cap, fraction of the median episode
+# Passive gate floor, in passive dead times. After a cut, a first-order
+# emitter keeps delivering u0 * exp(-t / tau) and the room only starts to
+# cool once this falls below the loss power u_ss: the passive dead time,
+# learned after full-power phases, is at least tau * ln(1 / u_ss) plus the
+# detection delay. The gate lasts the longer of this floor and the settling
+# time of the published lag, since either one may fall short of the emitter
+# decay.
+AB_SETTLE_K_PASSIVE_DEADTIME = 1.5
 
 # Indoor temperature histories of the dead time estimator (learning slopes and
 # dead time inflection lookback). Samples are kept by age so that a learning

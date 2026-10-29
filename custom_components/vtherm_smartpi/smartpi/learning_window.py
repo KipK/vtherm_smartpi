@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Optional
 
 from .const import (
     AB_SETTLE_ACTIVE_CAP_FRAC,
+    AB_SETTLE_K_PASSIVE_DEADTIME,
     AB_B_MIN_PASSIVE_GRADIENT_C,
     AB_B_OUTDOOR_TARGET_MARGIN_C,
     DELTA_MIN,
@@ -715,7 +716,19 @@ class LearningWindowManager:
             if u_active > U_ON_MIN:
                 settle_end, settle_param = self._response_lag.active_gate_end(), "a"
             elif u_active < U_OFF_MAX:
-                settle_end, settle_param = self._response_lag.passive_gate_end(), "b"
+                # The emitter keeps heating after a cut: the passive dead time
+                # gives a floor of this residual power decay, used with or
+                # without a published lag. The bootstrap keeps its own guards
+                # and calibration is exempt.
+                min_settle_s = (
+                    None
+                    if is_hysteresis or is_calibrating
+                    else _passive_settle_s(dt_est, hvac_mode)
+                )
+                settle_end, settle_param = (
+                    self._response_lag.passive_gate_end(min_settle_s),
+                    "b",
+                )
             in_transient = settle_end is not None and settle_end >= now
             if settle_end is not None and proposed_start_ts < settle_end:
                 proposed_start_ts = settle_end
@@ -1018,6 +1031,25 @@ def _published_b(estimator: "ABEstimator") -> float | None:
     b = getattr(estimator, "b", None)
     if isinstance(count, int) and count > 0 and isinstance(b, (int, float)):
         return float(b)
+    return None
+
+
+def _passive_settle_s(
+    dt_est: "DeadTimeEstimator", hvac_mode: "VThermHvacMode | None"
+) -> float | None:
+    """Return the passive settling floor, or None.
+
+    It is AB_SETTLE_K_PASSIVE_DEADTIME times the reliable dead time of the
+    passive response (fall in HEAT, rise in COOL).
+    """
+    from ..hvac_mode import VThermHvacMode_COOL
+
+    if hvac_mode == VThermHvacMode_COOL:
+        value, reliable = dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable
+    else:
+        value, reliable = dt_est.deadtime_cool_s, dt_est.deadtime_cool_reliable
+    if reliable is True and isinstance(value, (int, float)) and value > 0.0:
+        return AB_SETTLE_K_PASSIVE_DEADTIME * float(value)
     return None
 
 

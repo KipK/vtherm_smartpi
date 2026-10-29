@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Learning: the heat-loss coefficient (`b`) learned during regulation is no
+  longer underestimated after the heating stops. An emitter keeps giving off
+  heat for a while after a stop; SmartPI now waits for the longer of 1.5 times
+  the measured cooling delay and three response delays before measuring the
+  cooling, even when the response delay is unknown. With floor heating, fewer
+  `b` measurements are taken in regulation.
+
 ## [0.6.0-rc.3]
 
 - Learning: more accurate heating gain (`a`), especially with slow emitters

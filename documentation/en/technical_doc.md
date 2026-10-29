@@ -115,10 +115,15 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
 - blocks bootstrap collection until the required dead times are reliable,
 - applies a post-resume pause (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - anchors the window start after the dead-time end when needed,
-- delays the window start until the response transient has decayed, once the
-  response lag is published (3.7): an `a` window starts at least
-  `min(3 lag, half the median active episode)` after the power step, a `b` window
-  at least `3 lag` after the power cut (`skip: response transient (a|b)`),
+- delays the window start until the response transient has decayed
+  (`skip: response transient (a|b)`): once the response lag is published (3.7),
+  an `a` window starts at least `min(3 lag, half the median active episode)` after
+  the power step. A `b` window starts after the power cut at least the longer of
+  `3 lag` (published lag) and `AB_SETTLE_K_PASSIVE_DEADTIME = 1.5` reliable
+  passive dead times: the emitter keeps heating after a cut, and since the room
+  only starts to cool once this residual heat falls below the losses, the passive
+  dead time bounds its decay even when the lag is unknown. In the bootstrap and
+  the calibration only the `3 lag` term applies,
 - does not submit an active window shorter than one PWM cycle
   (`active_window_shorter_than_cycle`): its duration is set before its data, since
   stopping as soon as a short window looks significant favours the steepest noisy
