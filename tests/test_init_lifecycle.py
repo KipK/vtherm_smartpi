@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock
 
 from awesomeversion import AwesomeVersion
 import pytest
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.core import CoreState
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from vtherm_api.vtherm_api import VThermAPI
 
@@ -21,6 +23,7 @@ from custom_components.vtherm_smartpi import (
     async_unload_entry,
 )
 from custom_components.vtherm_smartpi.const import (
+    CONF_PROP_FUNCTION,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
@@ -334,3 +337,27 @@ async def test_disabled_dedicated_entry_does_not_count_as_dedicated(hass) -> Non
     disabled.add_to_hass(hass)
 
     assert _get_dedicated_target_unique_ids(hass) == {TARGET_UNIQUE_ID}
+
+
+@pytest.mark.asyncio
+async def test_reloading_the_only_vtherm_entry_keeps_smartpi(hass) -> None:
+    """Reloading the only VTherm entry keeps SmartPI although VT rebuilds its API."""
+    assert await async_setup_component(hass, "versatile_thermostat", {})
+    assert await async_setup(hass, {})
+    vt_entry = MockConfigEntry(
+        domain="versatile_thermostat",
+        data={
+            "name": "Living room",
+            "thermostat_type": "thermostat_over_switch",
+            "temperature_sensor_entity_id": "sensor.room_temperature",
+            "underlying_entity_ids": ["switch.heater"],
+            CONF_PROP_FUNCTION: PROP_FUNCTION_SMART_PI,
+        },
+    )
+    vt_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(vt_entry.entry_id)
+
+    assert await hass.config_entries.async_reload(vt_entry.entry_id)
+
+    vtherm = hass.data[CLIMATE_DOMAIN].get_entity("climate.living_room")
+    assert vtherm._algo_handler is not None
