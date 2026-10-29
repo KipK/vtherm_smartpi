@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.6.0-rc.4]
+## [0.6.0-rc.3]
 
 - Versatile Thermostat: a thermostat no longer stops with "Unknown
   proportional function: smartpi" after its options are saved or its entry is
