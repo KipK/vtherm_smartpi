@@ -35,8 +35,10 @@ from .const import (
     RESPONSE_LAG_PASSIVE_SPAN_S,
     RESPONSE_LAG_RESOLVE_EPISODES,
     RESPONSE_LAG_RESOLVABLE_FRAC,
+    RESPONSE_LAG_RESTART_MAX_GAP_S,
     RESPONSE_LAG_U_TOL,
 )
+from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 from ..hvac_mode import VThermHvacMode_COOL
 
@@ -196,6 +198,8 @@ class ResponseLagEstimator:
         self._ep_off_before_s: float | None = None
         self._ep_t_ext: float | None = None
         self._off_start: float | None = None
+        # Context saved before a restart, applied on the first observation.
+        self._restore: dict | None = None
 
     # ------------------------------------------------------------------
     # Published values
@@ -250,6 +254,11 @@ class ResponseLagEstimator:
     @property
     def estimates_count(self) -> int:
         return len(self._estimates)
+
+    @property
+    def episodes_count(self) -> int:
+        """Active episodes ended since the start of the learning."""
+        return self._episodes
 
     @property
     def episode_median_s(self) -> float | None:
@@ -378,6 +387,8 @@ class ResponseLagEstimator:
         if self._last_now is not None and now <= self._last_now:
             return
         t_step = now - dt_s
+        if self._restore is not None:
+            self._resume_after_restart(t_step, u, mode)
         if self._last_now is not None and t_step > self._last_now + _CONTIGUITY_TOL_S:
             # Unobserved time (guard cut, OFF, interval capped at one cycle):
             # the power over the gap is unknown.
@@ -401,6 +412,42 @@ class ResponseLagEstimator:
             self._off_start = t_step
         elif not on and self._off_start is None:
             self._off_start = t_step
+
+    def _resume_after_restart(self, t_resume: float, u: float, mode: str | None) -> None:
+        """Resume the passive period or the episode saved before a restart.
+
+        The power over the stop is unknown: the saved context is only resumed
+        across a stop of at most RESPONSE_LAG_RESTART_MAX_GAP_S, during which
+        the actuator keeps its last state, and in the saved hvac mode (a mode
+        change clears the estimator before). An episode is resumed when the
+        first applied power equals its power; otherwise it is counted as an
+        ended episode without an estimate.
+        """
+        restore = self._restore
+        self._restore = None
+        if restore is None:
+            return
+        gap = t_resume - restore["last_obs"]
+        short_stop = (
+            0.0 <= gap <= RESPONSE_LAG_RESTART_MAX_GAP_S
+            and mode is not None
+            and mode == self._model_hvac_mode
+        )
+        episode = restore.get("episode")
+        if episode is None:
+            if short_stop and restore.get("off_start") is not None:
+                # The heater was not driven during the stop: still passive.
+                self._off_start = restore["off_start"]
+            return
+        if short_stop and u > _POWER_ON and abs(u - episode["u0"]) <= RESPONSE_LAG_U_TOL:
+            self._ep_start = episode["start"]
+            self._ep_u0 = episode["u0"]
+            self._ep_const = episode["const"]
+            self._ep_off_before_s = episode["off_before_s"]
+            self._ep_t_ext = episode["t_ext"]
+            return
+        self._episodes += 1
+        self._last_reason = "episode interrupted by restart"
 
     def _on_gap(
         self,
@@ -609,17 +656,108 @@ class ResponseLagEstimator:
         self._last_reason = ""
         self._clear_runtime()
 
+    def _restart_context(self) -> dict | None:
+        """Return the passive period or the episode to resume, in monotonic time."""
+        if self._restore is not None:
+            # Not yet applied: no observation since the previous restart.
+            return self._restore
+        if self._last_now is None:
+            return None
+        if self._ep_start is not None:
+            return {
+                "last_obs": self._last_now,
+                "off_start": None,
+                "episode": {
+                    "start": self._ep_start,
+                    "u0": self._ep_u0,
+                    "const": self._ep_const,
+                    "off_before_s": self._ep_off_before_s,
+                    "t_ext": self._ep_t_ext,
+                },
+            }
+        if self._off_start is None:
+            return None
+        return {"last_obs": self._last_now, "off_start": self._off_start, "episode": None}
+
     def save_state(self) -> dict:
-        return {
+        state = {
             "estimates": [list(e) for e in self._estimates],
             "durations": list(self._durations),
             "published": self._published,
             "episodes": self._episodes,
             "hvac_mode": self._model_hvac_mode,
         }
+        context = self._restart_context()
+        if context is not None:
+            episode = context["episode"]
+            state["restart"] = {
+                "last_obs_wall": monotonic_to_wall_ts(context["last_obs"]),
+                "off_start_wall": monotonic_to_wall_ts(context["off_start"]),
+                "episode": None if episode is None else {
+                    "start_wall": monotonic_to_wall_ts(episode["start"]),
+                    "u0": episode["u0"],
+                    "const": episode["const"],
+                    "off_before_s": episode["off_before_s"],
+                    "t_ext": episode["t_ext"],
+                },
+            }
+        return state
+
+    @staticmethod
+    def _load_restart(value: object) -> dict | None:
+        """Validate a saved restart context and convert it to monotonic time."""
+        if not isinstance(value, dict):
+            return None
+
+        def _number(v: object) -> float | None:
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                return None
+            return float(v)
+
+        last_obs = wall_to_monotonic_ts(value.get("last_obs_wall"))
+        if last_obs is None:
+            return None
+        episode = value.get("episode")
+        if episode is None:
+            off_start = wall_to_monotonic_ts(value.get("off_start_wall"))
+            if off_start is None or off_start > last_obs:
+                return None
+            return {"last_obs": last_obs, "off_start": off_start, "episode": None}
+        if not isinstance(episode, dict):
+            return None
+        start = wall_to_monotonic_ts(episode.get("start_wall"))
+        u0 = _number(episode.get("u0"))
+        const = episode.get("const")
+        off_before = episode.get("off_before_s")
+        if off_before is not None:
+            off_before = _number(off_before)
+            if off_before is None or off_before < 0.0:
+                return None
+        t_ext = episode.get("t_ext")
+        if t_ext is not None:
+            t_ext = _number(t_ext)
+            if t_ext is None:
+                return None
+        if start is None or start > last_obs or u0 is None or u0 <= _POWER_ON or not isinstance(const, bool):
+            return None
+        return {
+            "last_obs": last_obs,
+            "off_start": None,
+            "episode": {
+                "start": start,
+                "u0": u0,
+                "const": const,
+                "off_before_s": off_before,
+                "t_ext": t_ext,
+            },
+        }
 
     def load_state(self, state: dict | None) -> None:
-        """Restore the estimates; the episode in progress is not attributable."""
+        """Restore the estimates and the passive period or episode in progress.
+
+        The saved period or episode is resumed or counted on the first
+        observation (see _resume_after_restart).
+        """
         self.clear()
         if not state:
             return
@@ -647,3 +785,5 @@ class ResponseLagEstimator:
         if isinstance(published, (int, float)) and math.isfinite(published) and published >= 0.0:
             self._published = float(published)
         self._refresh_published()
+        if self._model_hvac_mode is not None:
+            self._restore = self._load_restart(state.get("restart"))

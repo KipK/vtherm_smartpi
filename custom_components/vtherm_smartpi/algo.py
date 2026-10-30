@@ -80,6 +80,7 @@ from .smartpi.const import (
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     NEAR_SETPOINT_UNWIND_STEPS,
     INTEGRAL_GUARD_STALL_CYCLES,
+    RESPONSE_LAG_RESTART_MAX_GAP_S,
     clamp,
 )
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
@@ -130,7 +131,9 @@ from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
 from .smartpi.timestamp_utils import (
     elapsed_wall_minutes,
+    monotonic_to_wall_ts,
     normalize_wall_timestamp,
+    wall_to_monotonic_ts,
 )
 from .const import HVAC_OFF_REASON_WINDOW_DETECTION
 
@@ -324,6 +327,10 @@ class SmartPI:
         # Last complete FFResult (used by diagnostics and on_cycle_completed)
         self._last_ff_result: FFResult | None = None
 
+        # Bootstrap on/off output saved before a restart (monotonic time),
+        # applied by the first calculation.
+        self._hysteresis_restore: dict | None = None
+
         # --- Safety-First Governance (Delegated to self.gov) ---
         if saved_state:
             self.load_state(saved_state)
@@ -403,6 +410,8 @@ class SmartPI:
 
         # Reset new component managers (Phase 2.5 refactoring)
         self.learn_win.reset_all()
+        self.est.a_model_ready = self.learn_win.response_lag.resolved
+        self._hysteresis_restore = None
         self.deadband_mgr.reset()
         self.calibration_mgr.reset()
         self.gain_scheduler.reset()
@@ -1112,7 +1121,60 @@ class SmartPI:
             "ff_trim_delta": self.fftrim_coord.last_ff_trim_delta,
             "tint_filter_state": self.tint_filter.save_state(),
         }
+        hysteresis = self._hysteresis_output_context()
+        if hysteresis is not None:
+            state["hysteresis_output"] = {
+                "on": hysteresis["on"],
+                "wall_ts": monotonic_to_wall_ts(hysteresis["ts"]),
+                "hvac_mode": hysteresis["hvac_mode"],
+            }
         return state
+
+    def _hysteresis_output_context(self) -> dict | None:
+        """Return the bootstrap on/off output to resume after a restart."""
+        if self._hysteresis_restore is not None:
+            # Not yet applied: no calculation since the previous restart.
+            return self._hysteresis_restore
+        if (
+            self.phase != SmartPIPhase.HYSTERESIS
+            or self._last_calculate_time is None
+            or self._last_hvac_mode not in (VThermHvacMode_HEAT, VThermHvacMode_COOL)
+            or self._committed_on_percent not in (0.0, 1.0)
+        ):
+            return None
+        return {
+            "on": self._committed_on_percent == 1.0,
+            "ts": self._last_calculate_time,
+            "hvac_mode": str(self._last_hvac_mode),
+        }
+
+    @staticmethod
+    def _load_hysteresis_output(value: object) -> dict | None:
+        """Validate a saved bootstrap on/off output and convert its time."""
+        if not isinstance(value, dict) or not isinstance(value.get("on"), bool):
+            return None
+        mode = value.get("hvac_mode")
+        if mode not in (str(VThermHvacMode_HEAT), str(VThermHvacMode_COOL)):
+            return None
+        ts = wall_to_monotonic_ts(value.get("wall_ts"))
+        if ts is None:
+            return None
+        return {"on": value["on"], "ts": ts, "hvac_mode": mode}
+
+    def _take_hysteresis_restore(self, now: float, hvac_mode: VThermHvacMode | None) -> float | None:
+        """Consume the saved bootstrap output; return it when it applies.
+
+        It applies after a stop of at most RESPONSE_LAG_RESTART_MAX_GAP_S in
+        the same hvac mode: over such a stop the actuator keeps its last state,
+        as an uninterrupted hysteresis would have.
+        """
+        restore = self._hysteresis_restore
+        self._hysteresis_restore = None
+        if restore is None or hvac_mode is None or str(hvac_mode) != restore["hvac_mode"]:
+            return None
+        if not 0.0 <= now - restore["ts"] <= RESPONSE_LAG_RESTART_MAX_GAP_S:
+            return None
+        return 1.0 if restore["on"] else 0.0
 
     def load_state(self, state: dict) -> None:
         """Restore algorithm state from the current nested persistence format."""
@@ -1134,7 +1196,13 @@ class SmartPI:
         self.gov.load_state(state.get("gov_state", {}))
         self.ctl.load_state(state.get("ctl_state", {}))
         self.sp_mgr.load_state(state.get("sp_mgr_state", {}))
-        self.learn_win.load_state(state.get("lw_state", {}))
+        lw_state = state.get("lw_state", {})
+        self.learn_win.load_state(lw_state)
+        if isinstance(lw_state, dict) and "response_lag" in lw_state:
+            # The flag is otherwise refreshed by the first learning update: a
+            # restored unresolved model must keep the bootstrap from the first
+            # calculation. States without the block keep the default.
+            self.est.a_model_ready = self.learn_win.response_lag.resolved
         self._learning_start_date = self.learn_win.learning_start_date
         self.deadband_mgr.load_state(state.get("db_state", {}))
         self.calibration_mgr.load_state(state.get("cal_state", {}))
@@ -1152,6 +1220,7 @@ class SmartPI:
         self.resume_hold.clear()
         self._last_integral_guard_mode = "reboot_reset"
         self.twin.load_state(state.get("twin_state", {}))
+        self._hysteresis_restore = self._load_hysteresis_output(state.get("hysteresis_output"))
 
         # Load main algorithm scalars
         self._deadtime_skip_count_a = int(state.get("deadtime_skip_count_a", 0))
@@ -1750,6 +1819,9 @@ class SmartPI:
                     self._name,
                 )
 
+        # The saved bootstrap output only applies to the first calculation.
+        hysteresis_restore = self._take_hysteresis_restore(now, hvac_mode)
+
         # --- 1. Validation & Handle OFF ---
         if self._validate_and_handle_off(target_temp, current_temp, hvac_mode, power_shedding, off_reason):
             return
@@ -1917,6 +1989,14 @@ class SmartPI:
                 hvac_mode=hvac_mode,
             )
             out = self.ctl.calculate_hysteresis(target_temp_filt, current_temp, hvac_mode, self._hyst_off, self._hyst_on)
+            if out is None and hysteresis_restore is not None:
+                # Inside the band after a short restart: resume the saved
+                # on/off state instead of starting from OFF.
+                out = hysteresis_restore
+            if out is None and self._on_percent not in (0.0, 1.0):
+                # The band keeps an on/off output. A modulated output left by
+                # an earlier phase is not a hysteresis state: start from OFF.
+                out = 0.0
             if out is not None:
                 self._set_linear_output(out)
 

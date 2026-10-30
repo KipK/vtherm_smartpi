@@ -91,7 +91,19 @@ concordent : leur écart absolu médian est au plus `AB_A_CONSISTENT_MAX_REL_MAD
 de leur médiane. La première publication de `a` attend aussi le modèle de puissance
 délivrée (3.7) : tant que le retard de réponse n'est pas résolu, les mesures sont
 collectées sans publication. Les deux buffers continuent ensuite à se remplir jusqu'à
-`AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale.
+`AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale. Après un redémarrage,
+l'état restauré du retard de réponse fixe la phase dès le premier calcul ; un état
+sauvegardé sans bloc de retard de réponse attend la première mise à jour de l'apprentissage.
+
+Dans la bande d'hystérésis, la sortie conserve son état tout-ou-rien précédent. Une
+sortie modulée laissée par une autre phase n'est pas un état d'hystérésis : elle est
+ramenée à 0 jusqu'au prochain seuil. L'état tout-ou-rien est persisté avec l'heure
+murale du dernier calcul. Au redémarrage, le premier calcul le reprend dans la bande
+lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` (3.7) et que
+le mode HVAC est inchangé, comme l'aurait fait une hystérésis jamais interrompue.
+Hors de la bande, les seuils décident. Sinon, et pour un état sauvegardé sans cet
+état, la sortie repart à 0. Une phase de chauffe en cours peut ainsi reprendre après
+un redémarrage court.
 
 La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dérive repose sur `b_converged_for_a()` :
 
@@ -266,6 +278,8 @@ La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée
 
 Les `RESPONSE_LAG_HISTORY = 7` dernières estimations sont conservées. Le retard est publié lorsqu'au moins `RESPONSE_LAG_MIN_ESTIMATES = 3` estimations donnent un écart-type combiné de leur médiane pondérée par l'inverse des variances au plus égal à `RESPONSE_LAG_MAX_REL_UNC = 0.15` de cette médiane (plancher `RESPONSE_LAG_UNC_FLOOR_S = 30 s`) ; les estimations situées à plus de trois écarts-types de la médiane ne sont pas combinées. Un ensemble incohérent conserve la valeur publiée, afin que des estimations dispersées n'activent et ne désactivent pas le modèle de puissance délivrée. Une discontinuité de plus de 1 s entre deux mises à jour termine l'épisode au dernier instant observé, et la coupure de puissance est datée à la reprise.
 
+Un redémarrage reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive, ou début, puissance, constance, durée passive préalable et température extérieure de l'épisode) et reconverti en horloge monotone au chargement. Il s'applique à la première observation qui suit, lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` et que le mode HVAC est inchangé. Pendant un arrêt court, l'actionneur conserve son dernier état ; au-delà (hôte arrêté, coupure de courant, mise à jour), la puissance n'est pas connue. Une période passive reprend, et l'arrêt compte comme passif. Un épisode reprend lorsque la première puissance appliquée après le redémarrage est égale à la sienne à `RESPONSE_LAG_U_TOL` près. Sinon, il est compté comme épisode terminé, sans estimation (`episode interrupted by restart`), et une puissance non nulle ouvre un nouvel épisode sans période passive connue. Les franchissements viennent de l'historique brut du détecteur de temps mort, persisté de la même façon ; il ne contient aucun échantillon pendant l'arrêt. Un état sauvegardé sans ce contexte ne reprend rien.
+
 L'inversion suppose une réponse à retard unique (premier ordre). Elle ne restitue le temps de séjour moyen que pour un tel émetteur, ou lorsque l'épisode dure plusieurs fois le retard. Sur un émetteur qui combine un retard pur et une inertie, ou deux inerties successives, l'ordonnée à l'origine d'un épisode court est plus tardive que celle d'un retard unique de même temps de séjour : le retard publié est alors surestimé, d'environ 1,3 fois sur les formes simulées, ou n'est jamais publié lorsque l'épisode reste dans le régime transitoire.
 
 L'ordonnée à l'origine fixe le retard moyen de la réponse, pas sa forme. Le modèle de puissance délivrée la répartit en un retard pur $L = \min(\text{temps mort actif}, T_{ar})$, puis en un retard du premier ordre de $T_{ar} - L$. Le temps mort est détecté après le début de la réponse ; il borne donc le retard pur par le haut : le modèle ne délivre jamais de puissance plus tôt qu'un retard pur de même ordonnée à l'origine. Sans retard publié ni temps mort fiable, la puissance délivrée est égale à la puissance appliquée. Pour une fenêtre active qui débute $t_0$ après l'échelon et dure $W$, la fraction délivrée moyenne vaut, avec $\tau = T_{ar} - L$ :
@@ -274,7 +288,7 @@ $$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-L)/\tau}\right)\mathbb{
 
 Le modèle est résolu dès que le retard est publié, ou après `RESPONSE_LAG_RESOLVE_EPISODES = 7` épisodes actifs sans publication (la puissance appliquée est alors utilisée). Jusque-là, les mesures de `a` sont collectées sans publication. Lorsque le retard publié apparaît ou varie de plus de `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` avant la première publication de `a`, les mesures collectées sont recalculées avec la nouvelle puissance délivrée. Seules les fenêtres admises par la porte de stabilisation sont recalculées ; les autres sont écartées, puisque leur correction dépend de la forme de la réponse.
 
-L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`, `episode_median_s`, `last_reason`) et persisté avec l'état d'apprentissage.
+L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`, `episodes_target`, `episode_median_s`, `last_reason`) et persisté avec l'état d'apprentissage. `episodes` compte les épisodes actifs terminés depuis le début de l'apprentissage, y compris après la publication du retard ; `episodes_target` vaut `RESPONSE_LAG_RESOLVE_EPISODES`. Lorsque les deux collectes ont atteint leur seuil et que `a` attend ce modèle, `learning.bootstrap_status` vaut `step2 - waiting response lag: estimates N, episodes K/7`.
 
 Le retard est appris sur des épisodes à puissance constante, que fournit le bootstrap par hystérésis. En régulation PWM, le rapport cyclique change d'un cycle à l'autre : une installation déjà sortie du bootstrap en fournit donc rarement.
 
@@ -713,12 +727,13 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "ff_v2_trim": {...},
     "ff_trim_delta": ...,
     "tint_filter_state": {...},
+    "hysteresis_output": {...},  # bootstrap uniquement
 }
 ```
 
 La boucle de régulation planifie au plus une écriture différée de ce payload par fenêtre de cinq minutes ; Home Assistant vide une écriture en attente à l'arrêt. Les services et la suppression de l'entité écrivent immédiatement un snapshot.
 
-Les timestamps d'événements passés (historiques de température, début de calibration) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
+Les timestamps d'événements passés (historiques de température, début de calibration, période passive et épisode du retard de réponse) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
 
 Les pools de bilan intégral et les compteurs d'issues de fenêtres ne sont pas
 persistés : ils repartent vides à chaque démarrage. Les observations des mesures de
@@ -838,6 +853,7 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
 | `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
 | `RESPONSE_LAG_U_TOL`           | `0.05` |
+| `RESPONSE_LAG_RESTART_MAX_GAP_S` | `600` |
 | `RESPONSE_LAG_PASSIVE_SPAN_S`  | `3600` |
 | `RESPONSE_LAG_MIN_INVERSION_SLOPE` | `0.05` |
 | `RESPONSE_LAG_RESOLVABLE_FRAC` | `0.9`  |

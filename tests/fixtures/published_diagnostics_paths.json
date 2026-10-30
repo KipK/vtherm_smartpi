@@ -57,6 +57,8 @@
   "analysis.learning.learn_skip_count",
   "analysis.learning.response_lag",
   "analysis.learning.response_lag.episode_median_s",
+  "analysis.learning.response_lag.episodes",
+  "analysis.learning.response_lag.episodes_target",
   "analysis.learning.response_lag.estimates",
   "analysis.learning.response_lag.lag_s",
   "analysis.learning.response_lag.last_reason",

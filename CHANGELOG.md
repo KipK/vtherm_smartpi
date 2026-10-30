@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0-rc.4]
+
+- Initial learning: after a restart, SmartPI no longer switches briefly to a
+  partial power while it waits for the response delay.
+- Initial learning: a short restart (up to 10 minutes) keeps the heating on or
+  off as it was, and no longer loses the heating phase in progress.
+- Diagnostics: `bootstrap_status` shows when the learning waits for the
+  response delay; `response_lag` shows the heating phases counted.
+
 ## [0.6.0-rc.3]
 
 - Versatile Thermostat: a thermostat no longer stops with "Unknown

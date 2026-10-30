@@ -80,8 +80,18 @@ learning:
 |---|---|
 | `lag_s` | Published response lag in seconds, `null` until a consistent set of estimates |
 | `estimates` | Number of retained estimates (at most 7) |
+| `episodes` | Number of active episodes ended since the start of the learning; it keeps counting after the lag is published and may exceed `episodes_target` |
+| `episodes_target` | Number of episodes after which the delivered power model is resolved without a published lag (`7`) |
 | `episode_median_s` | Median duration of the recent active episodes in seconds, `null` with fewer than 3 episodes |
-| `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used) |
+| `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used). `episode interrupted by restart`: episode in progress at a restart, not resumed, counted without an estimate. May be empty right after a restart |
+
+During the bootstrap, `learning.bootstrap_status` describes the current step:
+
+| Value | Meaning |
+|---|---|
+| `step1 - deadtime: heat:… cool:…` | Waiting for the active and passive dead times |
+| `step2 - collecting emeas: A:n/5 B:n/5` | Collecting the `a` and `b` measurements |
+| `step2 - waiting response lag: estimates N, episodes K/7` | Collections complete; the `a` publication waits for the delivered power model (published lag, or `K` reaches 7) |
 
 `valve` is `null` unless the thermostat drives a valve. In valve mode it contains:
 

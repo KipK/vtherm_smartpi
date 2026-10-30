@@ -309,6 +309,11 @@ RESPONSE_LAG_MIN_CROSSINGS = 3        # Level crossings required for the late li
 # the bootstrap (measurements of different power models are not comparable).
 RESPONSE_LAG_MODEL_CHANGE_REL = 0.5
 RESPONSE_LAG_U_TOL = 0.05              # Power deviation ending a constant-power episode
+# Longest stop of the regulation (restart) across which the passive period or
+# the active episode in progress is resumed. A restart of Home Assistant or of
+# the thermostat takes a few minutes and keeps the last actuator state; over a
+# longer stop (host down, power outage, update) the heater power is unknown.
+RESPONSE_LAG_RESTART_MAX_GAP_S = 600.0
 RESPONSE_LAG_MAX_S = DT_MAX_MIN * 60.0  # Upper bound of an estimate
 # An intercept at or beyond this fraction of its asymptotic limit (infinite
 # lag) cannot be resolved from the episode.

@@ -90,7 +90,20 @@ measurements when they agree: their median absolute deviation is at most
 `AB_A_CONSISTENT_MAX_REL_MAD = 0.10` of their median. The first publication of
 `a` also waits for the delivered power model (3.7): while the response lag is not
 resolved, measurements are collected without publication. Both buffers continue
-filling up to `AB_HISTORY_SIZE = 31` during normal SmartPI regulation.
+filling up to `AB_HISTORY_SIZE = 31` during normal SmartPI regulation. After a
+restart, the restored response lag state sets the phase from the first
+calculation; a state saved without a response lag block waits for the first
+learning update.
+
+Inside the hysteresis band, the output keeps its previous on/off state. A
+modulated output left by another phase is not a hysteresis state: it is set to 0
+until the next threshold. The on/off state is persisted with the wall-clock time
+of the last calculation. After a restart, the first calculation resumes it inside
+the band when the stop lasted at most `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s`
+(3.7) and the HVAC mode is unchanged, as an uninterrupted hysteresis would have.
+Outside the band, the thresholds decide. Otherwise, and for a state saved without
+it, the output starts at 0. A heating phase in progress can thus resume after a
+short restart.
 
 The `b` convergence used for drift-aware `a` learning relies on `b_converged_for_a()`:
 
@@ -285,6 +298,22 @@ away from the median are not combined. An inconsistent set keeps the published
 value, so dispersed estimates do not switch the delivered power model on and off. A discontinuity of more than 1 s between two updates ends the
 episode at the last observed instant, and the power cut is dated at the resume.
 
+A restart resumes the passive period or the active episode in progress at the
+save. The context is persisted as wall-clock times (last observed instant, then
+start of the passive period, or start, power, constancy, preceding passive time
+and outdoor temperature of the episode) and converted back to the monotonic
+clock on load. It applies to the first following observation, when the stop
+lasted at most `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` and the HVAC mode is
+unchanged. During a short stop the actuator keeps its last state; beyond it (host
+down, power outage, update) the power is unknown. A passive period resumes, and
+the stop counts as passive. An episode resumes when the first applied power after
+the restart equals its power within `RESPONSE_LAG_U_TOL`. Otherwise it is counted
+as an ended episode without an estimate (`episode interrupted by restart`), and a
+nonzero power opens a new episode without a known passive period. The crossings
+come from the raw history of the dead time detector, persisted the same way; it
+holds no sample during the stop. A state saved without this context resumes
+nothing.
+
 The inversion assumes a single-lag (first-order) response. It recovers the mean
 residence time only for such an emitter, or when the episode lasts several times
 the lag. On an emitter that combines a pure delay and an inertia, or two
@@ -315,7 +344,12 @@ windows that the settling gate admits are recomputed; the others are dropped,
 since their correction depends on the shape of the response.
 
 The state is published in `analysis.learning.response_lag` (`lag_s`, `estimates`,
-`episode_median_s`, `last_reason`) and persisted with the learning state.
+`episodes`, `episodes_target`, `episode_median_s`, `last_reason`) and persisted
+with the learning state. `episodes` counts the active episodes ended since the
+start of the learning, also after the lag is published; `episodes_target` is
+`RESPONSE_LAG_RESOLVE_EPISODES`. When both collections have reached their count
+and `a` waits for this model, `learning.bootstrap_status` reads
+`step2 - waiting response lag: estimates N, episodes K/7`.
 
 The lag is learned on constant-power episodes, which the hysteresis bootstrap
 provides. In PWM regulation the duty cycle changes from cycle to cycle, so an
@@ -748,12 +782,13 @@ The current payload from `SmartPI.save_state()` notably contains:
     "ff_v2_trim": {...},
     "ff_trim_delta": ...,
     "tint_filter_state": {...},
+    "hysteresis_output": {...},  # bootstrap only
 }
 ```
 
 The control loop schedules at most one delayed write of this payload per five-minute window; Home Assistant flushes a pending write at shutdown. Services and entity removal write a snapshot immediately.
 
-Past event timestamps (temperature histories, calibration start) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
+Past event timestamps (temperature histories, calibration start, passive period and episode of the response lag) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
 
 The integral-balance pools and the window-outcome counters are not persisted:
 they start empty at each startup. The observations of the `a` measurements are
@@ -870,6 +905,7 @@ acceptance or rejection without changing the learning decision.
 | `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
 | `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
 | `RESPONSE_LAG_U_TOL`           | `0.05` |
+| `RESPONSE_LAG_RESTART_MAX_GAP_S` | `600` |
 | `RESPONSE_LAG_PASSIVE_SPAN_S`  | `3600` |
 | `RESPONSE_LAG_MIN_INVERSION_SLOPE` | `0.05` |
 | `RESPONSE_LAG_RESOLVABLE_FRAC` | `0.9`  |
