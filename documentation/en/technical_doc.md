@@ -270,7 +270,8 @@ at constant power (deviation at most `RESPONSE_LAG_U_TOL = 0.05`):
   response over the fitted interval (monotonic in the lag). An episode is not
   used when the inversion is too flat (`RESPONSE_LAG_MIN_INVERSION_SLOPE = 0.05`)
   or when the intercept reaches `RESPONSE_LAG_RESOLVABLE_FRAC = 0.9` of its
-  limit for an infinite lag;
+  limit for an infinite lag. An estimate above `RESPONSE_LAG_MAX_S`
+  (`DT_MAX_MIN` × 60 = 14,400 s) is also discarded (`intercept not resolvable`);
 - each estimate carries its standard deviation, propagated from the fit
   residuals and from an assumed relative uncertainty of `b` of
   `RESPONSE_LAG_B_REL_UNC = 0.10`.
@@ -283,6 +284,14 @@ deviation of their inverse-variance weighted median at most
 away from the median are not combined. An inconsistent set keeps the published
 value, so dispersed estimates do not switch the delivered power model on and off. A discontinuity of more than 1 s between two updates ends the
 episode at the last observed instant, and the power cut is dated at the resume.
+
+The inversion assumes a single-lag (first-order) response. It recovers the mean
+residence time only for such an emitter, or when the episode lasts several times
+the lag. On an emitter that combines a pure delay and an inertia, or two
+successive inertias, the intercept of a short episode falls later than that of a
+single lag with the same residence time: the published lag is then overestimated,
+by about 1.3 times on the simulated shapes, or is never published when the episode
+stays in the transient regime.
 
 The intercept fixes the mean delay of the response, not its shape. The
 delivered power model splits it into a pure delay
@@ -860,6 +869,12 @@ acceptance or rejection without changing the learning decision.
 | `RESPONSE_LAG_MIN_OFF_LAGS`    | `5`    |
 | `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
 | `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
+| `RESPONSE_LAG_U_TOL`           | `0.05` |
+| `RESPONSE_LAG_PASSIVE_SPAN_S`  | `3600` |
+| `RESPONSE_LAG_MIN_INVERSION_SLOPE` | `0.05` |
+| `RESPONSE_LAG_RESOLVABLE_FRAC` | `0.9`  |
+| `RESPONSE_LAG_B_REL_UNC`       | `0.10` |
+| `RESPONSE_LAG_MAX_S`           | `DT_MAX_MIN` × 60 (`14400`) |
 | `AB_SETTLE_K_ACTIVE`           | `3`    |
 | `AB_SETTLE_K_PASSIVE`          | `3`    |
 | `AB_SETTLE_ACTIVE_CAP_FRAC`    | `0.5`  |
