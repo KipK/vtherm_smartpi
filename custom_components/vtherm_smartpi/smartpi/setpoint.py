@@ -17,6 +17,8 @@ from .const import (
     TRAJECTORY_MIN_P_ERROR_RATIO,
     TRAJECTORY_RELEASE_TAU_FACTOR as DEFAULT_RELEASE_TAU_FACTOR,
 )
+from .integral_guard import integral_guard_release_error_threshold
+from .recovery_plateau import RecoveryPlateauDetector, plateau_block_min
 from .trajectory import SmartPITrajectoryGenerator
 from .thermal_model import propagate_1r1c
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
@@ -67,6 +69,12 @@ class SmartPISetpointManager:
         self._last_bumpless_u_delta: float | None = None
         self._last_bumpless_ready: bool | None = None
         self._trajectory_source: str = "none"
+        # A disturbance trajectory stuck on a plateau ends; no new disturbance
+        # trajectory starts before the error leaves the trigger zone.
+        self._disturbance_plateau = RecoveryPlateauDetector()
+        self._disturbance_plateau_ts: float | None = None
+        self._disturbance_retrigger_blocked: bool = False
+        self._disturbance_plateau_ended: bool = False
 
     @property
     def trajectory_active(self) -> bool:
@@ -142,6 +150,58 @@ class SmartPISetpointManager:
         """Reset the trajectory state only."""
         self._trajectory.reset()
         self._trajectory_source = "none"
+        self._disturbance_plateau.reset()
+        self._disturbance_plateau_ts = None
+
+    def _clear_disturbance_plateau_latch(self) -> None:
+        """Allow disturbance trajectories again and drop an unread plateau end."""
+        self._disturbance_retrigger_blocked = False
+        self._disturbance_plateau_ended = False
+
+    @property
+    def disturbance_retrigger_blocked(self) -> bool:
+        """Return True while a plateau end blocks new disturbance trajectories.
+
+        The block lasts until the signed error falls below the trigger
+        threshold minus the tracking hysteresis, a target change or a reset.
+        """
+        return self._disturbance_retrigger_blocked
+
+    def consume_disturbance_plateau_end(self) -> bool:
+        """Return True once after a disturbance trajectory ended on a plateau."""
+        ended = self._disturbance_plateau_ended
+        self._disturbance_plateau_ended = False
+        return ended
+
+    def _disturbance_plateau_reached(
+        self,
+        *,
+        signed_error: float,
+        now_monotonic: float,
+        cycle_min: float,
+        deadband_c: float,
+    ) -> bool:
+        """Feed the plateau test of an active disturbance trajectory.
+
+        The trajectory brakes the P path because the model predicts that the
+        committed power closes the error. A recovery whose mean signed error
+        no longer moves above the integral-guard release error shows that
+        this prediction does not hold.
+        """
+        if not (self.trajectory_active and self._trajectory_source == "disturbance"):
+            return False
+        last_ts = self._disturbance_plateau_ts
+        self._disturbance_plateau_ts = now_monotonic
+        if last_ts is None:
+            return False
+        # A gap between two updates never counts for more than one cycle.
+        dt_min = min(max(now_monotonic - last_ts, 0.0) / 60.0, max(float(cycle_min), 0.0))
+        return self._disturbance_plateau.update(
+            error=signed_error,
+            dt_min=dt_min,
+            block_min=plateau_block_min(cycle_min),
+            floor_c=integral_guard_release_error_threshold(deadband_c),
+        )
 
     def _clear_pending_target_change_braking(self) -> None:
         """Forget any delayed braking request inherited from a setpoint increase."""
@@ -179,6 +239,7 @@ class SmartPISetpointManager:
         self._last_bumpless_ready = None
         self._trajectory_source = "none"
         self._clear_pending_target_change_braking()
+        self._clear_disturbance_plateau_latch()
         self._reset_trajectory()
 
     def clear_runtime_transients(self) -> None:
@@ -190,6 +251,7 @@ class SmartPISetpointManager:
         self._last_bumpless_u_delta = None
         self._last_bumpless_ready = None
         self._clear_pending_target_change_braking()
+        self._clear_disturbance_plateau_latch()
         self._reset_trajectory()
         if self.effective_setpoint is not None:
             self.filtered_setpoint = self.effective_setpoint
@@ -458,10 +520,28 @@ class SmartPISetpointManager:
         # change restarts from passthrough, and delayed braking is re-armed
         # solely from the final signed demand versus the current room state.
         if target_changed:
+            self._disturbance_retrigger_blocked = False
             if signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD:
                 self._pending_target_change_braking = True
             else:
                 self._clear_pending_target_change_braking()
+            self.set_passthrough(target_temp)
+            return target_temp
+
+        # The room has left the trigger zone: a new crossing of the trigger
+        # threshold is a new disturbance, which must be braked and guarded.
+        if signed_error < TRAJECTORY_ENABLE_ERROR_THRESHOLD - TRAJECTORY_BRAKE_RELEASE_HYST_C:
+            self._disturbance_retrigger_blocked = False
+
+        if self._disturbance_plateau_reached(
+            signed_error=signed_error,
+            now_monotonic=now_monotonic,
+            cycle_min=cycle_min,
+            deadband_c=deadband_c,
+        ):
+            self._disturbance_retrigger_blocked = True
+            self._disturbance_plateau_ended = True
+            self._clear_pending_target_change_braking()
             self.set_passthrough(target_temp)
             return target_temp
 
@@ -537,6 +617,7 @@ class SmartPISetpointManager:
                 )
                 disturbance_braking_window = (
                     allow_disturbance_trigger
+                    and not self._disturbance_retrigger_blocked
                     and signed_error >= TRAJECTORY_ENABLE_ERROR_THRESHOLD
                     and braking_window
                 )

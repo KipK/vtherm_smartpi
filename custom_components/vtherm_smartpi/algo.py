@@ -2041,6 +2041,13 @@ class SmartPI:
             in_deadtime_window=lambda: self.in_deadtime_window,
         )
         if (
+            self.sp_mgr.consume_disturbance_plateau_end()
+            and self.integral_guard.source == IntegralGuardSource.DISTURBANCE_RECOVERY
+        ):
+            # The disturbance trajectory ended on a plateau: only the
+            # integral can still close the residual error.
+            self.integral_guard.clear("disturbance_plateau")
+        if (
             self.sp_mgr.trajectory_active
             and self.sp_mgr.trajectory_source == "disturbance"
         ):

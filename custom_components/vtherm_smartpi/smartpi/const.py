@@ -204,6 +204,10 @@ INTEGRAL_GUARD_RELEASE_SLOPE_RATIO = 0.35 # Release positive-I guard when the si
 INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H = 0.12 # Absolute signed-slope floor (°C/h) below which stabilization may be accepted
 INTEGRAL_GUARD_RELEASE_PERSISTENCE = 3    # Consecutive evaluations required before re-enabling positive integral growth
 INTEGRAL_GUARD_STALL_CYCLES = 3.0  # Stalled recovery (cycles) before opposing integral memory may unwind
+INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES = 3.0  # Block length (cycles) of the mean-error test that detects a stuck recovery
+INTEGRAL_GUARD_PLATEAU_BLOCKS = 2  # Consecutive stationary blocks before a disturbance recovery counts as stuck
+INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS = 4  # Look-back (blocks) of the net-progress test of a plateau
+INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C = 0.03  # Net fall of the mean error over the look-back that still counts as a recovering tail
 # Error filter time constant
 ERROR_FILTER_TAU = 25.0 # Minutes (matches alpha ~0.35 at 10min)
 

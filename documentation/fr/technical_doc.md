@@ -482,6 +482,29 @@ peut donc pas maintenir la pièce sous une nouvelle consigne plus élevée, et u
 changement de consigne n'efface pas le biais qui évite le dépassement à la
 nouvelle consigne.
 
+Une trajectoire de récupération de perturbation freine la branche P parce que
+le modèle prédit que la puissance engagée suffit à refermer l'écart. Quand ce
+modèle est biaisé, la pièce peut se stabiliser sur un palier sous la consigne :
+la trajectoire ne se termine jamais et la garde bloque l'intégrale qui seule
+pourrait refermer l'écart. Un test de palier termine alors la trajectoire :
+
+- l'erreur signée est moyennée par blocs de
+  `INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES = 3` cycles,
+- un bloc est stationnaire si sa moyenne reste au-dessus de l'erreur de release
+  et ne varie pas de plus que la pente de release appliquée sur un bloc,
+- il faut `INTEGRAL_GUARD_PLATEAU_BLOCKS = 2` blocs stationnaires consécutifs,
+- et aucun progrès net sur `INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS = 4` blocs :
+  la moyenne ne doit pas avoir baissé de plus de
+  `INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C = 0.03 °C`. Une queue de récupération
+  lente, vue par une sonde quantifiée, n'est donc pas prise pour un palier.
+
+À la détection, la trajectoire repasse en passthrough et la garde de
+récupération de perturbation est relâchée. Aucune nouvelle trajectoire de
+perturbation ne démarre tant que l'erreur n'est pas redescendue sous le seuil
+de déclenchement moins l'hystérésis de suivi, ou jusqu'à un changement de
+consigne ou une réinitialisation. Une nouvelle perturbation reste donc freinée
+et gardée normalement.
+
 La garde est relâchée seulement quand deux conditions sont réunies :
 
 - l'erreur de release est revenue proche de l'échelle de la deadband configurée,
@@ -872,6 +895,10 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
 | `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
 | `INTEGRAL_GUARD_STALL_CYCLES` | `3`     |
+| `INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES` | `3` |
+| `INTEGRAL_GUARD_PLATEAU_BLOCKS` | `2` |
+| `INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS` | `4` |
+| `INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C` | `0.03` |
 | `GUARD_CUT_RESET_STEPS`       | `1.5`   |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |

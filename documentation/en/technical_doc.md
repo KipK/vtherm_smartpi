@@ -549,6 +549,28 @@ previous setpoint therefore cannot hold the room below a new, higher setpoint,
 and a setpoint step does not erase the bias that keeps the room from
 overshooting at the new setpoint.
 
+A disturbance-recovery trajectory brakes the P branch because the model
+predicts that the committed power is enough to close the gap. When this model
+is biased, the room can settle on a plateau below the setpoint: the trajectory
+never ends, and the guard blocks the integral that alone could close the gap. A
+plateau test then ends the trajectory:
+
+- the signed error is averaged over blocks of
+  `INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES = 3` cycles,
+- a block is stationary if its average stays above the release error and does
+  not vary by more than the release slope applied over one block,
+- `INTEGRAL_GUARD_PLATEAU_BLOCKS = 2` consecutive stationary blocks are required,
+- and no net progress over `INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS = 4` blocks:
+  the average must not have dropped by more than
+  `INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C = 0.03 °C`. A slow recovery tail, seen
+  through a quantized probe, is therefore not mistaken for a plateau.
+
+On detection, the trajectory switches back to passthrough and the
+disturbance-recovery guard is released. No new disturbance trajectory starts
+until the error has dropped back below the trigger threshold minus the tracking
+hysteresis, or until a setpoint change or a reset. A new disturbance therefore
+remains braked and guarded normally.
+
 The guard is released only when two conditions are met:
 
 - the release error has returned close to the configured deadband scale,
@@ -924,6 +946,10 @@ acceptance or rejection without changing the learning decision.
 | `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
 | `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
 | `INTEGRAL_GUARD_STALL_CYCLES` | `3`     |
+| `INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES` | `3` |
+| `INTEGRAL_GUARD_PLATEAU_BLOCKS` | `2` |
+| `INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS` | `4` |
+| `INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C` | `0.03` |
 | `GUARD_CUT_RESET_STEPS`       | `1.5`   |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |
