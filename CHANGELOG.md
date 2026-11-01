@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0-rc.5]
+
+- Learning: `b` is learned again while the heating stays off after a setpoint
+  decrease. When the heating was running at the time of the decrease, the
+  overheat guard held it off for the whole fall to the new setpoint, often the
+  whole night, and SmartPI learned nothing during that time.
+
 ## [0.6.0-rc.4]
 
 - Versatile Thermostat: a thermostat no longer stops with "Unknown

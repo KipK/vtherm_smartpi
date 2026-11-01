@@ -257,6 +257,8 @@ class SmartPI:
 
         # Track last time calculate() was executed for dt-based integration
         self._last_calculate_time: Optional[float] = None
+        # Last learning tick while the guard cut holds the output at zero
+        self._guard_cut_learning_ts: Optional[float] = None
         # Wall-clock time of the last valid active regulation tick. OFF saves
         # preserve this value so prolonged inactivity remains measurable.
         self._last_active_wall_ts: float | None = None
@@ -563,6 +565,7 @@ class SmartPI:
         hvac_mode: VThermHvacMode | None = None,
         target_temp: float | None = None,
         raw_temp: float | None = None,
+        a_learning_block_reason: str | None = None,
     ) -> None:
         """
         Feed learning data from the heartbeat tick.
@@ -578,14 +581,15 @@ class SmartPI:
             hvac_mode: Current HVAC mode.
             target_temp: Current target temperature.
             raw_temp: Raw measured indoor temperature (defaults to current_temp).
+            a_learning_block_reason: Reason blocking ON/A learning, if any
+                (a setpoint change blocks it with its own reason).
         """
         now = time.monotonic()
 
         if not self._learning_enabled:
             return
 
-        a_learning_block_reason = None
-        if setpoint_changed:
+        if a_learning_block_reason is None and setpoint_changed:
             a_learning_block_reason = "skip: setpoint transition"
 
         # Delegate to LearningWindowManager
@@ -613,6 +617,51 @@ class SmartPI:
             a_learning_block_reason=a_learning_block_reason,
             raw_temp=raw_temp,
             min_active_window_min=self._cycle_min,
+        )
+
+    def _update_learning_during_guard_cut(
+        self,
+        *,
+        now: float,
+        current_temp: float,
+        raw_temp: float,
+        ext_temp: float | None,
+        target_temp: float | None,
+        hvac_mode: VThermHvacMode | None,
+    ) -> None:
+        """Feed the learning while the guard cut holds the output at zero.
+
+        The room cools without heating during the cut (for instance during the
+        whole fall after a setpoint decrease): it is a passive window for b and
+        for the response lag baseline. The governance sees the forced zero
+        command outside any band, and ON/A windows stay blocked.
+        """
+        last = self._guard_cut_learning_ts
+        if last is None:
+            last = self._last_calculate_time
+        self._guard_cut_learning_ts = now
+        if last is None:
+            return
+        # A gap between two ticks never counts for more than one cycle
+        dt_min = min(max(now - last, 0.0) / 60.0, self._cycle_min)
+        if dt_min <= 0.0:
+            return
+        self.deadband_mgr.in_deadband = False
+        self.deadband_mgr.in_near_band = False
+        self.gov.update_regime(
+            self.gov.determine_regime(
+                self.phase, ext_temp, False, False, True, 0.0, False, False
+            )
+        )
+        self.update_learning(
+            dt_min=dt_min,
+            current_temp=current_temp,
+            ext_temp=ext_temp,
+            u_active=self._committed_on_percent,
+            hvac_mode=hvac_mode,
+            target_temp=target_temp,
+            raw_temp=raw_temp,
+            a_learning_block_reason="skip: guard cut",
         )
 
     def stage_command(self, hvac_mode: VThermHvacMode) -> int:
@@ -1831,9 +1880,9 @@ class SmartPI:
         # Guard Cut: force 0% if active
         if self.guards.guard_cut_active:
             # The output is forced but the room is still observed: the dead time
-            # detection and the published temperature follow the cut.
+            # detection, the learning and the published temperature follow the cut.
             if current_temp is not None:
-                t_int_lp, _ = self.tint_filter.update(current_temp, now)
+                t_int_lp, t_int_clean = self.tint_filter.update(current_temp, now)
                 if self.phase != SmartPIPhase.HYSTERESIS and not self.calibration_mgr.is_calibrating:
                     self.dt_est.update(
                         now=now,
@@ -1843,6 +1892,14 @@ class SmartPI:
                         hvac_mode=hvac_mode,
                     )
                 self._last_current_temp = current_temp
+                self._update_learning_during_guard_cut(
+                    now=now,
+                    current_temp=t_int_clean,
+                    raw_temp=current_temp,
+                    ext_temp=ext_current_temp,
+                    target_temp=target_temp,
+                    hvac_mode=hvac_mode,
+                )
             self.fftrim_coord.invalidate_context(
                 "guard_cut",
                 now_monotonic=now,
@@ -1852,6 +1909,8 @@ class SmartPI:
             self._set_linear_output(0.0)
             self._last_calculate_time = None
             return
+        # The learning stays contiguous across the end of a guard cut.
+        guard_cut_learning_ts, self._guard_cut_learning_ts = self._guard_cut_learning_ts, None
 
         self._refresh_active_timestamp_and_expire_controller_memory()
 
@@ -1938,9 +1997,12 @@ class SmartPI:
             )
 
         # Heartbeat learning update
-        if dt_min > 0:
+        learning_dt_min = dt_min
+        if learning_dt_min <= 0 and guard_cut_learning_ts is not None:
+            learning_dt_min = min(max(now - guard_cut_learning_ts, 0.0) / 60.0, self._cycle_min)
+        if learning_dt_min > 0:
             self.update_learning(
-                dt_min=dt_min,
+                dt_min=learning_dt_min,
                 current_temp=t_int_clean,
                 ext_temp=ext_current_temp,
                 u_active=self._committed_on_percent,

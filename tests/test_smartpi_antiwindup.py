@@ -169,6 +169,7 @@ def test_resume_after_override_does_not_integrate_gap(override):
     from custom_components.vtherm_smartpi.smartpi.const import (
         AB_MIN_SAMPLES_A,
         AB_MIN_SAMPLES_B,
+        RESPONSE_LAG_RESOLVE_EPISODES,
     )
 
     algo = make_algo(integral=0.0, i_mode="I:RUN")
@@ -177,6 +178,9 @@ def test_resume_after_override_does_not_integrate_gap(override):
     algo.est.b = 0.002
     algo.est.a_meas_hist.extend([0.02] * AB_MIN_SAMPLES_A)
     algo.est.b_meas_hist.extend([0.002] * AB_MIN_SAMPLES_B)
+    # A model past the bootstrap has a resolved response lag: the learning,
+    # fed during a guard cut, keeps the stable phase.
+    algo.learn_win.response_lag._episodes = RESPONSE_LAG_RESOLVE_EPISODES
     clock = [10_000.0]
     target, current = 20.0, 19.0
     error = abs(target - current)

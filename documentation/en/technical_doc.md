@@ -145,7 +145,7 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
   then capped at half the median heating phase (`AB_SETTLE_ACTIVE_CAP_FRAC`),
   measured on the previous phases,
 - closes the window at its last observation when two updates are not contiguous
-  (heating guard cut, interval capped at one cycle): the window is submitted on
+  (interval capped at one cycle): the window is submitted on
   the data up to that instant when its slope is robust there, otherwise abandoned
   (`skip: observation gap`); it never spans the unobserved period,
 - monitors power stability through the coefficient of variation (`U_CV_MAX`),
@@ -624,7 +624,7 @@ The restart therefore keeps only useful persistent PI memory, without restoring 
 
 Additional protections currently present are:
 
-- `SmartPIGuards` (heating mode only, outside the bootstrap and the calibration): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus the larger of `NEAR_BAND_HYSTERESIS_C = 0.05°C` and `GUARD_CUT_RESET_STEPS = 1.5` observed sensor steps (a reading flickering between two levels around the threshold would otherwise re-trigger the cut, and restart the cycle, at every measurement). During a cut the output stays at 0 and the integral is frozen (`I:OVERRIDE(guard_cut)`), but the temperature filter, the dead time detector and the published temperature keep following the room; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized. In the bootstrap the heating runs between its own hysteresis thresholds and a running guard is released,
+- `SmartPIGuards` (heating mode only, outside the bootstrap and the calibration): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus the larger of `NEAR_BAND_HYSTERESIS_C = 0.05°C` and `GUARD_CUT_RESET_STEPS = 1.5` observed sensor steps (a reading flickering between two levels around the threshold would otherwise re-trigger the cut, and restart the cycle, at every measurement). During a cut the output stays at 0 and the integral is frozen (`I:OVERRIDE(guard_cut)`), but the temperature filter, the dead time detector, the published temperature and the learning keep following the room. The room then cools without heating, for example during the whole fall after a setpoint decrease: this is a passive window for `b` and for the response lag baseline. The governance sees a zero command outside any band, and `a` windows are blocked (`skip: guard cut`). The learning stays contiguous at the end of the cut; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized. In the bootstrap the heating runs between its own hysteresis thresholds and a running guard is released,
 - per-tick anti-windup on the applicable upper limit (see below),
 - signed integral guard during resumes, catch-up phases, and setpoint changes,
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
