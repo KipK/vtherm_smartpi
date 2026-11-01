@@ -4,11 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## [0.6.0-rc.6]
 
-
-
-
-## [0.6.0-rc.]
-
 - Calibration: with a sensor flickering between two values, the heating deadtime is no longer measured as zero. The calibration now detects the room
   response on the filtered temperature, as the regulation does.
 - Learning: `b` is learned again while the heating stays off after a setpoint
