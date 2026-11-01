@@ -227,6 +227,7 @@ class CalibrationManager:
         dt_est: "DeadTimeEstimator",
         max_on_percent: float | None,
         twin_diag: dict | None = None,
+        filtered_temp: float | None = None,
     ) -> CalibrationResult:
         """
         Execute calibration state machine.
@@ -234,6 +235,8 @@ class CalibrationManager:
         Args:
             target_temp: Target temperature (°C)
             current_temp: Current temperature (°C)
+            filtered_temp: Filtered temperature driving the dead time detection,
+                as in regulation (defaults to current_temp)
             hvac_mode: Current HVAC mode (VThermHvacMode)
             dt_est: DeadTimeEstimator instance for feeding measurements
             max_on_percent: Maximum on_percent allowed
@@ -333,10 +336,14 @@ class CalibrationManager:
             on_percent = max_on_percent
 
         # Feed Estimator (Critical for detection!)
+        # The detection runs on the filtered temperature, as in regulation: a
+        # raw reading flickering by one sensor step would detect a response at
+        # the power step. The raw reading feeds the slope history.
         if current_temp is not None:
             dt_est.update(
                 now=time.monotonic(),
-                tin=current_temp,
+                tin=current_temp if filtered_temp is None else filtered_temp,
+                tin_raw=current_temp,
                 u_applied=on_percent,
                 hvac_mode=hvac_mode,
             )

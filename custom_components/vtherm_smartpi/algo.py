@@ -1115,6 +1115,7 @@ class SmartPI:
         target_temp: float,
         current_temp: float,
         hvac_mode: VThermHvacMode,
+        filtered_temp: float | None = None,
     ) -> None:
         """Execute the forced calibration state machine.
 
@@ -1127,6 +1128,7 @@ class SmartPI:
             dt_est=self.dt_est,
             max_on_percent=self._linear_max_on(),
             twin_diag=self._last_twin_diag,
+            filtered_temp=filtered_temp,
         )
 
         # Apply result
@@ -2031,7 +2033,9 @@ class SmartPI:
                 hvac_mode=hvac_mode,
             )
             self.ctl.clear_integral_hold()
-            self._calculate_forced_calibration(target_temp, current_temp, hvac_mode)
+            self._calculate_forced_calibration(
+                target_temp, current_temp, hvac_mode, filtered_temp=t_int_lp
+            )
             self._output_initialized = True
             self.ctl.last_i_mode = "calibration"
             self._last_target_temp = target_temp
