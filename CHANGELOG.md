@@ -8,9 +8,6 @@ All notable changes to this project will be documented in this file.
   decrease. When the heating was running at the time of the decrease, the
   overheat guard held it off for the whole fall to the new setpoint, often the
   whole night, and SmartPI learned nothing during that time.
-
-## [0.6.0-rc.4]
-
 - Versatile Thermostat: a thermostat no longer stops with "Unknown
   proportional function: smartpi" after its options are saved or its entry is
   reloaded. SmartPI registers itself again each time Versatile Thermostat
