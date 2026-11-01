@@ -4,12 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [0.6.0-rc.6]
 
-- Calibration: with a sensor flickering between two values, the heating dead
   time is no longer measured as zero. The calibration now detects the room
   response on the filtered temperature, as the regulation does.
-
-## [0.6.0-rc.5]
-
 - Learning: `b` is learned again while the heating stays off after a setpoint
   decrease. When the heating was running at the time of the decrease, the
   overheat guard held it off for the whole fall to the new setpoint, often the
