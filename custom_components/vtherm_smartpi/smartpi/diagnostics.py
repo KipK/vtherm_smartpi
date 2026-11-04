@@ -706,11 +706,17 @@ def _build_valve_diagnostics(algo: SmartPI) -> Dict[str, Any] | None:
     return {**config, "quantization_step_linear_percent": step}
 
 
+def _build_tar_learning(algo: SmartPI) -> Dict[str, Any]:
+    """Return the experimental T_ar learning state (fast and refined values, applied value)."""
+    dt_est = algo.dt_est
+    return algo.tar_learning.diagnostics(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the canonical SmartPI live diagnostics."""
     tau_info = algo.est.tau_reliability()
     twin_diag = algo._last_twin_diag or {}
-    return {
+    tree = {
         "control": _build_control(algo),
         "power": _build_power(algo),
         "temperature": _build_temperature(algo),
@@ -724,3 +730,6 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "analysis": _build_analysis(algo, twin_diag),
         "valve": _build_valve_diagnostics(algo),
     }
+    if getattr(algo, "tar_learning", None) is not None:
+        tree["tar_learning"] = _build_tar_learning(algo)
+    return tree

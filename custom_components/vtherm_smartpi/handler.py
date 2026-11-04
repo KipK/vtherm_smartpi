@@ -12,7 +12,9 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from datetime import timedelta
 
 from .algo import SmartPI
-from .state_store import SmartPIStateStore
+from .state_store import SmartPIStateStore, SmartPITarStore
+from .smartpi.tar_learning.const import TAR_SAVE_DELAY_S
+from .smartpi.tar_learning.deps import dependencies_importable
 from .smartpi.const import (
     SMARTPI_RECALC_INTERVAL_SEC,
     SmartPIPhase,
@@ -35,11 +37,14 @@ from .const import (
     CONF_SMART_PI_KNEE_DEMAND,
     CONF_SMART_PI_KNEE_VALVE,
     CONF_SMART_PI_MAX_VALVE,
+    CONF_SMART_PI_TAR_LEARNING,
     DEFAULT_OPTIONS,
+    DEFAULT_SMART_PI_TAR_LEARNING,
     DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
     diag_update_signal,
     EventType,
+    HVAC_OFF_REASON_WINDOW_DETECTION,
     SIGNAL_SMARTPI_TARGET_UPDATED,
 )
 from .hvac_mode import VThermHvacMode_OFF, VThermHvacMode_HEAT, VThermHvacMode_COOL
@@ -59,6 +64,8 @@ class SmartPIHandler:
         """Initialize handler with parent thermostat reference."""
         self._thermostat = thermostat
         self._store: SmartPIStateStore | None = None
+        self._tar_store: SmartPITarStore | None = None
+        self._tar_task = None
         self._recalc_timer_remove = None
         # Remover of the applied-command receipt callback; None without receipts
         self._receipt_remove = None
@@ -82,6 +89,8 @@ class SmartPIHandler:
         # Initialize storage with slugified name to allow retrieval if re-created
         safe_name = slugify(t.name)
         self._store = SmartPIStateStore(t.hass, safe_name)
+        tar_learning = bool(entry.get(CONF_SMART_PI_TAR_LEARNING, DEFAULT_SMART_PI_TAR_LEARNING))
+        self._tar_store = SmartPITarStore(t.hass, safe_name, TAR_SAVE_DELAY_S) if tar_learning else None
 
         # Use the thermostat's cycle_min property directly for consistency
         # (base_thermostat reads CONF_CYCLE_MIN in __init__)
@@ -143,6 +152,7 @@ class SmartPIHandler:
             deadband_allow_p=deadband_allow_p,
             enable_valve_linearization=valve_linearization_enabled,
             valve_curve_params=self._valve_curve_params,
+            tar_learning=tar_learning,
         )
         t.prop_algorithm.configure_valve_linearization(
             valve_linearization_enabled,
@@ -190,6 +200,49 @@ class SmartPIHandler:
                     _LOGGER.debug("%s - SmartPI state loaded", t)
             except Exception as e:
                 _LOGGER.error("%s - Failed to load SmartPI state: %s", t, e)
+        algo = t.prop_algorithm
+        if self._tar_store and isinstance(algo, SmartPI) and getattr(algo, "tar_learning", None) is not None:
+            try:
+                algo.tar_learning.load_state(await self._tar_store.async_load())
+            except Exception as e:
+                _LOGGER.error("%s - Failed to load SmartPI T_ar learning data: %s", t, e)
+            available = dependencies_importable()
+            algo.tar_learning.set_dependencies(available)
+
+    @staticmethod
+    def _tar_exclusion(t, algo) -> str | None:
+        """Why the heater is not under SmartPI's command at this tick (None when it is)."""
+        if t.vtherm_hvac_mode != VThermHvacMode_HEAT:
+            return "hvac not heating"
+        window_manager = getattr(t, "window_manager", None)
+        if (
+            getattr(window_manager, "is_window_detected", None) is True
+            or t.hvac_off_reason == HVAC_OFF_REASON_WINDOW_DETECTION
+        ):
+            return "window open"
+        if t.is_overpowering_detected is True:
+            return "power shedding"
+        if algo.vt_safety_override:
+            return "safety mode"
+        on_percent = t.on_percent
+        if on_percent is None:
+            return "command unknown"
+        if abs(on_percent - algo.on_percent) > 1e-6:
+            return "command overridden"
+        return None
+
+    def _process_tar_learning(self, algo) -> None:
+        """Start the due T_ar learning computations and persist its data."""
+        tar = getattr(algo, "tar_learning", None)
+        if tar is None:
+            return
+        t = self._thermostat
+        if tar.active and (self._tar_task is None or self._tar_task.done()):
+            self._tar_task = t.hass.async_create_background_task(
+                tar.async_run(t.hass), f"{DOMAIN}_tar_learning"
+            )
+        if self._tar_store is not None and tar.dirty:
+            self._tar_store.schedule_save(tar)
 
     async def async_startup(self):
         """Startup actions."""
@@ -219,6 +272,9 @@ class SmartPIHandler:
             try:
                 # Snapshot now; the write itself cannot be awaited from this sync method.
                 t.hass.async_create_task(self._store.save_now(t.prop_algorithm))
+                tar = getattr(t.prop_algorithm, "tar_learning", None)
+                if self._tar_store is not None and tar is not None:
+                    t.hass.async_create_task(self._tar_store.save_now(tar))
             except Exception as e:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
@@ -407,6 +463,15 @@ class SmartPIHandler:
                 off_reason=t.hvac_off_reason,
                 temperature_measure_id=getattr(t, "last_temperature_measure", None),
             )
+            if isinstance(algo, SmartPI) and getattr(algo, "tar_learning", None) is not None:
+                algo.observe_tar_learning(
+                    t.target_temperature,
+                    t.current_temperature,
+                    t.current_outdoor_temperature,
+                    t.vtherm_hvac_mode,
+                    excluded=self._tar_exclusion(t, algo),
+                )
+                self._process_tar_learning(algo)
 
             # Force cycle restart on deadband and near-band transitions so the
             # physically engaged PWM follows the zone change quickly.

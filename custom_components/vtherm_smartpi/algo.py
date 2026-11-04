@@ -128,6 +128,7 @@ from .smartpi.integral_guard import (
     signed_recovery_slope_h,
 )
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
+from .smartpi.tar_learning.manager import TarLearningManager
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
 from .smartpi.timestamp_utils import (
     elapsed_wall_minutes,
@@ -182,6 +183,7 @@ class SmartPI:
         deadband_allow_p: bool = False,
         enable_valve_linearization: bool = False,
         valve_curve_params: ValveCurveParams | None = None,
+        tar_learning: bool = False,
     ) -> None:
         self._name = name
         self._cycle_min = cycle_min
@@ -296,6 +298,13 @@ class SmartPI:
 
         # --- Dead Time (L) Support ---
         self.dt_est = DeadTimeEstimator()
+        # Experimental learning of the HEAT active dead time (None when the option is off)
+        self.tar_learning: TarLearningManager | None = None
+        if tar_learning:
+            time_zone = getattr(getattr(hass, "config", None), "time_zone", None)
+            self.tar_learning = TarLearningManager(
+                name, time_zone if isinstance(time_zone, str) else None
+            )
         # --- Thermal Twin 1R1C (diagnostics-only) ---
         self.twin = self._new_thermal_twin()
         self._last_twin_diag: dict = {}
@@ -402,6 +411,8 @@ class SmartPI:
 
         # Reset Dead Time Estimator
         self.dt_est.reset()
+        if self.tar_learning is not None:
+            self.tar_learning.reset()
         self._t_heat_episode_start = None
         self._t_cool_episode_start = None
         self._deadtime_skip_count_a = 0
@@ -762,6 +773,10 @@ class SmartPI:
                 quality=trace_quality,
             )
         self._update_deadtime_episode_status(linear_power, hvac_mode, now)
+        if self.tar_learning is not None and not self._valve_mode_enabled:
+            self.tar_learning.on_applied(
+                time.time(), linear_power, cycle_start, self._cycle_min, hvac_mode
+            )
         if cycle_start:
             self._setpoint_changed_in_cycle = False
             # Reset governance regime tracking for new cycle
@@ -1071,11 +1086,58 @@ class SmartPI:
         """Return the accumulated time integral in seconds."""
         return self.learn_win.t_int_s
 
+    def regulation_dead_time(self, hvac_mode: VThermHvacMode | None = None):
+        """Dead-time source of the regulation.
+
+        It is the dead-time estimator itself, unless the experimental T_ar
+        learning applies a learned HEAT active dead time; the estimator values
+        are never modified.
+        """
+        if self.tar_learning is None:
+            return self.dt_est
+        mode = hvac_mode if hvac_mode is not None else self._last_hvac_mode
+        return self.tar_learning.regulation_dead_time(self.dt_est, mode)
+
+    def observe_tar_learning(
+        self,
+        target_temp: float | None,
+        current_temp: float | None,
+        ext_current_temp: float | None,
+        hvac_mode: VThermHvacMode | None,
+        excluded: str | None = None,
+    ) -> None:
+        """Record the signals of the T_ar learning (no-op when the option is off).
+
+        excluded: why the applied power is not SmartPI's command (None when it is).
+        """
+        if self.tar_learning is None:
+            return
+        if excluded is None and self.vt_safety_override:
+            excluded = "safety mode"
+        try:
+            self.tar_learning.observe(
+                time.time(),
+                hvac_mode=hvac_mode,
+                temp=current_temp,
+                ext=ext_current_temp,
+                setpoint=target_temp,
+                phase=str(self.phase.value) if isinstance(self.phase, SmartPIPhase) else str(self.phase),
+                b=self.est.b,
+                dtc=self.dt_est.deadtime_cool_s,
+                dtc_reliable=self.dt_est.deadtime_cool_reliable,
+                lag=self.learn_win.response_lag.lag_s,
+                cycle_min=self._cycle_min,
+                supported=not self._valve_mode_enabled,
+                excluded=excluded,
+            )
+        except Exception:  # noqa: BLE001 - the learning must never disturb the regulation
+            _LOGGER.exception("%s - T_ar learning: observation failed", self._name)
+
     @property
     def in_deadtime_window(self) -> bool:
         """Check if we are currently inside the estimated dead time window."""
         return deadtime_window_active(
-            self.dt_est,
+            self.regulation_dead_time(),
             self._t_heat_episode_start,
             self._t_cool_episode_start,
             time.monotonic(),
@@ -1093,7 +1155,7 @@ class SmartPI:
             hvac_mode=hvac_mode,
             current_temp=current_temp,
             ext_temp=ext_temp,
-            dt_est=self.dt_est,
+            dt_est=self.regulation_dead_time(hvac_mode),
             estimator=self.est,
             cycle_min=self.cycle_min,
             deadband_c=self.deadband_c,
@@ -1517,7 +1579,7 @@ class SmartPI:
             cycle_min=self._cycle_min,
             a=self.est.a,
             b=self.est.b,
-            deadtime_heat_s=self.dt_est.deadtime_heat_s,
+            deadtime_heat_s=self.regulation_dead_time(hvac_mode).deadtime_heat_s,
         )
         return self.ff3_state.record(ff3_result, ff3_context)
 
@@ -1659,7 +1721,7 @@ class SmartPI:
             near_band_error=self._e_filt if self._e_filt is not None else error_i,
             hvac_mode=hvac_mode,
             tau_reliable=self._tau_reliable,
-            dt_est=self.dt_est,
+            dt_est=self.regulation_dead_time(hvac_mode),
             estimator=self.est,
             current_temp=current_temp,
             ext_temp=ext_current_temp,
@@ -1694,7 +1756,7 @@ class SmartPI:
             tau_reliable=self._tau_reliable,
             tau_min=tau_info.tau_min,
             estimator=self.est,
-            dt_est=self.dt_est,
+            dt_est=self.regulation_dead_time(hvac_mode),
             in_near_band=self.deadband_mgr.in_near_band,
             governance_decision=gov_decision_g,
             near_band_ratio=near_band_ratio,
@@ -2101,7 +2163,7 @@ class SmartPI:
             in_core_deadband=in_core_deadband,
             deadband_c=self.deadband_c,
             hvac_mode=hvac_mode,
-            dt_est=self.dt_est,
+            dt_est=self.regulation_dead_time(hvac_mode),
             ctl=self.ctl,
             guard=self.integral_guard,
             in_deadtime_window=lambda: self.in_deadtime_window,
@@ -2282,7 +2344,7 @@ class SmartPI:
             a=self.est.a,
             b=self.est.b,
             mode=mode,
-            deadtime_heat_s=self.dt_est.deadtime_heat_s,
+            deadtime_heat_s=self.regulation_dead_time(hvac_mode).deadtime_heat_s,
             deadtime_cool_s=self.dt_est.deadtime_cool_s,
             deadtime_heat_reliable=self.dt_est.deadtime_heat_reliable,
             deadtime_cool_reliable=self.dt_est.deadtime_cool_reliable,

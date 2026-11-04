@@ -24,6 +24,7 @@
     - [Automatic recalibration](#automatic-recalibration)
   - [Recommended settings](#recommended-settings)
   - [Configuration](#configuration)
+    - [Emitter delay learning (experimental)](#emitter-delay-learning-experimental)
   - [Diagnostics and Markdown card](#diagnostics-and-markdown-card)
   - [Regulation panel with Equinox](#regulation-panel-with-equinox)
   - [Services](#services)
@@ -375,12 +376,54 @@ These values come from simulations of each installation type. A cycle within one
 | **Demand at knee**             | SmartPI demand corresponding to the valve slope change.                                           | `80%`         |
 | **Valve opening at knee**      | Physical valve opening at the slope change.                                                       | `15%`         |
 | **Maximum valve opening**      | Maximum allowed opening when linearization is enabled.                                            | `100%`        |
+| **Learn the emitter delay T_ar (experimental)** | Learns the heating response delay during normal regulation and uses it in place of the bootstrap value. See [Emitter delay learning (experimental)](#emitter-delay-learning-experimental). | `disabled` |
 
 ### PWM cycle restart on band transitions
 
 When this option is disabled, a deadband or near-band transition updates the next SmartPI command but does not interrupt the PWM cycle already in progress. This is the recommended behavior for short cycles, because restarting cycles too often can create unnecessary switching.
 
 Enable it only on very slow thermal systems with long PWM cycles, where waiting for the next cycle boundary can delay the physical response too much after entering or leaving deadband or near-band.
+
+### Emitter delay learning (experimental)
+
+The emitter delay `T_ar` is the time between the start of the heating and the rise of the room temperature. The bootstrap measures it once (`deadtime_heat_s`). With this option, SmartPI also learns it during normal regulation and uses the learned value for the regulation. The option is experimental and disabled by default.
+
+**What it learns**
+
+- **Fast value.** Each morning comfort step is a step response of the emitter: a setpoint rise of at least 1 °C between 03:00 and 10:00 (local time). Two hours after the step, SmartPI fits the rise of the temperature. A room with thermal mass (recognised on nights without heating) gets an air-walls model in that fit. The fast value is published once 3 confirmed mornings agree: median of the last 5, with a spread of at most 25 %.
+- **Confirmation.** A morning is unconfirmed when the night before stayed at least 1 h without any heater start between 23:00 and the step. Sleepers who get up during the fit window bias the rise, and a night that starts without heating is the visible sign of that risk. An unconfirmed morning is shown in the diagnostics and never used.
+- **Refined value.** Every day at 08:00, SmartPI fits a model of the room with its walls and its emitter over the nights (18:00 to 08:00) of the last 3 days. It compares that fit with the one made 3 days earlier. When both agree, they give the room class (thermal mass or not), the wall parameters and an emitter time constant `τe`.
+- **Regulated nights only.** `τe` replaces the fast value only when the 6 nights of both windows were regulated from 23:00 to the comfort step: constant setpoint, a heater start in every half hour, temperature within 0.3 °C of the setpoint, steady power, no data gap. Otherwise `τe` is a diagnostic only.
+
+**What it changes**
+
+- The applied value is the refined value when published, else the fast value, else the bootstrap value.
+- A learned value is applied only between 0.5 and 2 times the bootstrap value. Outside that range it is shown with an out-of-bound flag and the bootstrap value stays in use.
+- The applied value is used by the gains, the near band, the integral hold after a heater start or a resume, FF3 and the thermal twin. The learning of `a` and `b`, the feed-forward trim, the calibration and AutoCalib keep the bootstrap value.
+- The bootstrap value is never modified. Disabling the option returns to it at once.
+
+**Data quality**
+
+The learning only uses periods when SmartPI controls the heater with valid data. These periods are excluded, and they interrupt a night, an identification window or a morning step like missing data (they are never filled in):
+
+- no data for more than 20 minutes, an unavailable indoor or outdoor temperature, or an unknown command;
+- 10 minutes before and after a restart of Home Assistant or of the thermostat, and the downtime between them;
+- a temperature jump of more than 0.5 °C at more than 20 °C/h, which no heating produces (the value is ignored; a new level confirmed by 3 readings is kept);
+- window open, power shedding, safety mode, HVAC mode other than heating, or a command overridden by Versatile Thermostat.
+
+A morning is evaluated only when the 2 hours before the step and the 2 h 15 after it are valid. A night counts as regulated only when its whole sleep span is valid. An identification window ignores the invalid 10-minute bins and needs at least 50 valid bins in runs of at least one hour.
+
+**Requirements and limits**
+
+- Heating only (nothing is learned or applied in cooling), and heaters driven by PWM cycles; not available in valve mode.
+- A morning comfort step of at least 1 °C, and a bootstrap dead time already measured.
+- The fast value needs 3 confirmed mornings. In a room whose nights start without heating, mornings stay unconfirmed: the fast value is not published there.
+- The refined value needs 6 consecutive regulated nights, which requires an eco setpoint reached before 23:00 and held all night.
+- An occupant present only in the evening, before 23:00, is not detected.
+- The computations run in the background: up to a few seconds per day and per thermostat, about 20 MB at peak. SmartPI keeps 7 days of signals in its own storage file.
+- They use the `numpy` and `scipy` packages, installed with the integration and loaded only by the computations of the enabled option. If they cannot be loaded, the option has no effect and the diagnostics show `dependencies_unavailable`.
+
+The `live.tar_learning` block of the [diagnostics](./diagnostics.md#emitter-delay-learning) shows the learned values, their status and the applied value.
 
 ## Diagnostics and Markdown card
 

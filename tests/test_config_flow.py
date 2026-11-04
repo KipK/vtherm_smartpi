@@ -379,3 +379,30 @@ async def test_options_flow_shows_valve_linearization_from_dedicated_target_conf
     assert result["step_id"] == "init"
     schema_keys = _schema_keys(result["data_schema"])
     assert CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION in schema_keys
+
+
+@pytest.mark.asyncio
+async def test_thermostat_and_options_flows_offer_the_tar_learning_option_off(hass) -> None:
+    """The experimental T_ar learning is offered in both forms and is off by default."""
+    from custom_components.vtherm_smartpi.const import CONF_SMART_PI_TAR_LEARNING
+
+    entry = MockConfigEntry(domain=DOMAIN, title="SmartPI defaults", unique_id=DOMAIN, data=dict(DEFAULT_OPTIONS))
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    climate_entry = registry.async_get_or_create("climate", VT_DOMAIN, "tar-target", suggested_object_id="tar_target")
+    hass.states.async_set(climate_entry.entity_id, "heat", {"configuration": {"type": "thermostat_over_switch"}})
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"target_vtherm_unique_id": climate_entry.entity_id}
+    )
+    assert result["step_id"] == "thermostat_settings"
+    key = next(k for k in result["data_schema"].schema if k.schema == CONF_SMART_PI_TAR_LEARNING)
+    assert key.default() is False
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_SMART_PI_TAR_LEARNING: True})
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_SMART_PI_TAR_LEARNING] is True
+
+    options = await hass.config_entries.options.async_init(entry.entry_id)
+    key = next(k for k in options["data_schema"].schema if k.schema == CONF_SMART_PI_TAR_LEARNING)
+    assert key.default() is False

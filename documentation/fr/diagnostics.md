@@ -59,6 +59,7 @@ Le bloc `live` est organisé par responsabilité :
 | `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
+| `tar_learning` | Apprentissage expérimental du retard de l'émetteur ; présent uniquement lorsque l'option est activée |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
@@ -101,6 +102,35 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `opening_remap_active` | `true` lorsque les réglages d'ouverture de Versatile Thermostat modifient l'ouverture envoyée à la vanne |
 | `quantization_step_linear_percent` | Demande linéaire, en pourcentage, déplacée par un pas de vanne de `1%` à la position de vanne engagée ; `1.0` sans linéarisation, `null` lorsque la vanne est fermée |
 | `issues` | Codes de filtrage, de retard de commande ou de transformation d'ouverture en conflit avec la linéarisation SmartPI : `dpercent_filter`, `period_filter`, `opening_remap`. Les mêmes avertissements apparaissent dans les Réparations de Home Assistant ; un filtrage ou un retard ne prouve pas, à lui seul, un échec de l'apprentissage |
+
+### Apprentissage du retard de l'émetteur
+
+`tar_learning` est présent uniquement lorsque l'option expérimentale est activée (voir [Apprentissage du retard de l'émetteur](./vtherm_smartpi.md#apprentissage-du-retard-de-lémetteur-expérimental)) :
+
+| Champ | Signification |
+|---|---|
+| `status` | `active`, `checking_dependencies` (jusqu'au démarrage du thermostat), `dependencies_unavailable` (numpy/scipy ne peuvent pas être chargés : valeur du bootstrap utilisée) ou `valve_mode_not_supported` |
+| `gate` | Règle de confirmation des valeurs du matin (`G1`) |
+| `applied_s` | Temps mort HEAT actif utilisé par la régulation, en secondes |
+| `source` | Origine de `applied_s` : `bootstrap`, `fast` ou `refined` |
+| `bootstrap_s` | Temps mort du bootstrap/calibration (`model.deadtime_heat_s`), jamais modifié |
+| `in_force_s` / `in_force_source` | Valeur apprise en vigueur (affinée, sinon rapide) et son origine, `null` avant toute publication |
+| `out_of_bound` | `true` lorsque la valeur en vigueur est hors de l'intervalle de 0,5 à 2 fois `bootstrap_s` et n'est donc pas appliquée |
+| `fast.value_s` | Valeur rapide publiée (matins confirmés), `null` avant 3 matins confirmés |
+| `fast.confirmed_mornings` | Nombre de matins acceptés et confirmés |
+| `fast.last_value_s` | Valeur du dernier matin accepté |
+| `fast.last_status` | `confirmed`, `unconfirmed` ou `none` pour le dernier matin accepté |
+| `fast.last_unconfirmed_reason` | Raison pour laquelle le dernier matin accepté n'est pas confirmé |
+| `fast.last_morning` | Dernier matin évalué : `day`, `accepted`, `reason` (première règle non respectée ou `accepted`), `path` (`night` : référence issue de la classe de nuit, nuit avec ou sans chauffage ; `night_regulated` : nuit régulée avec cette référence ; `regulated` : nuit régulée refusée par la classe de nuit), `room_class` |
+| `refined.tau_e_s` | Valeur affinée publiée `τe`, `null` avant une publication |
+| `refined.class` | Classe de la pièce en vigueur issue de l'identification : `mass`, `one` ou `unknown` |
+| `refined.k_per_s`, `refined.tau_w_h` | Couplage air-murs et constante de temps des murs en vigueur (pièce classée `mass`) |
+| `refined.last_evaluation` | Dernière évaluation quotidienne : `day`, `regulated_nights` (les six nuits sont retenues), `class` et `tau_e_s` avant la règle des nuits régulées |
+| `night_room_class` | Classe de la pièce d'après les nuits sans chauffage (`mass`, `one`, `inconclusive`) |
+| `pending_steps` | Étapes du matin en attente de leur réponse de 2 h |
+| `data_invalid_reason` | Raison pour laquelle les données actuelles sont exclues (par exemple `window open`, `temperature jump`, `hvac not heating`), `null` lorsqu'elles sont valides |
+| `history_h` | Heures de signaux conservées |
+| `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |
 
 FFTrim utilise des blocs canoniques imbriqués :
 

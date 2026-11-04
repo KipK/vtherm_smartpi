@@ -59,6 +59,7 @@ The `live` block is organized by responsibility:
 | `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
+| `tar_learning` | Experimental emitter delay learning; present only when the option is enabled |
 
 `analysis` groups the advanced live values into `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` and, when
@@ -102,6 +103,35 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `opening_remap_active` | `true` when the Versatile Thermostat opening settings change the opening sent to the valve |
 | `quantization_step_linear_percent` | Linear demand, in percent, moved by one `1%` valve step at the committed valve position; `1.0` without linearization, `null` when the valve is closed |
 | `issues` | Codes for command filtering, delay or an opening remap conflicting with SmartPI linearization: `dpercent_filter`, `period_filter`, `opening_remap`. The same warnings appear in Home Assistant Repairs; filtering or delay alone does not prove a learning failure |
+
+### Emitter delay learning
+
+`tar_learning` is present only when the experimental option is enabled (see [Emitter delay learning](./vtherm_smartpi.md#emitter-delay-learning-experimental)):
+
+| Field | Meaning |
+|---|---|
+| `status` | `active`, `checking_dependencies` (until the thermostat has started), `dependencies_unavailable` (numpy/scipy cannot be loaded: bootstrap value in use) or `valve_mode_not_supported` |
+| `gate` | Confirmation rule of the morning values (`G1`) |
+| `applied_s` | HEAT active dead time used by the regulation, in seconds |
+| `source` | Origin of `applied_s`: `bootstrap`, `fast` or `refined` |
+| `bootstrap_s` | Bootstrap/calibration dead time (`model.deadtime_heat_s`), never modified |
+| `in_force_s` / `in_force_source` | Learned value in force (refined, else fast) and its origin, `null` before any publication |
+| `out_of_bound` | `true` when the value in force lies outside 0.5 to 2 times `bootstrap_s` and is therefore not applied |
+| `fast.value_s` | Published fast value (confirmed mornings), `null` before 3 confirmed mornings |
+| `fast.confirmed_mornings` | Number of accepted and confirmed mornings |
+| `fast.last_value_s` | Value of the last accepted morning |
+| `fast.last_status` | `confirmed`, `unconfirmed` or `none` for the last accepted morning |
+| `fast.last_unconfirmed_reason` | Why the last accepted morning is unconfirmed |
+| `fast.last_morning` | Last evaluated morning: `day`, `accepted`, `reason` (first failed rule or `accepted`), `path` (`night`: baseline from the night class, night with or without heating; `night_regulated`: regulated night with that baseline; `regulated`: regulated night refused by the night class), `room_class` |
+| `refined.tau_e_s` | Published refined value `τe`, `null` before a publication |
+| `refined.class` | Room class in force from the identification: `mass`, `one` or `unknown` |
+| `refined.k_per_s`, `refined.tau_w_h` | Air-wall coupling and wall time constant in force (room classed `mass`) |
+| `refined.last_evaluation` | Last daily evaluation: `day`, `regulated_nights` (the six nights qualify), `class` and `tau_e_s` before the regulated-night rule |
+| `night_room_class` | Room class from the nights without heating (`mass`, `one`, `inconclusive`) |
+| `pending_steps` | Morning steps waiting for their 2 h response |
+| `data_invalid_reason` | Why the current data are excluded (for example `window open`, `temperature jump`, `hvac not heating`), `null` when they are valid |
+| `history_h` | Hours of signals kept |
+| `last_error` | Last computation error, `null` when none |
 
 FFTrim uses nested canonical blocks:
 

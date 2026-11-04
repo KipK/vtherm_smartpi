@@ -25,10 +25,12 @@ from .const import (
     CONF_SMART_PI_MAX_VALVE,
     CONF_SMART_PI_MIN_VALVE,
     CONF_SMART_PI_RELEASE_TAU_FACTOR,
+    CONF_SMART_PI_TAR_LEARNING,
     CONF_SMART_PI_USE_FF3,
     CONF_SMART_PI_USE_SETPOINT_FILTER,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
+    DEFAULT_SMART_PI_TAR_LEARNING,
     DOMAIN,
 )
 
@@ -47,6 +49,7 @@ def build_main_options_schema(
     defaults: dict[str, Any],
     *,
     include_valve_linearization: bool,
+    include_tar_learning: bool = False,
 ) -> vol.Schema:
     """Build the SmartPI main options schema."""
     schema = {
@@ -146,7 +149,15 @@ def build_main_options_schema(
                 default=defaults[CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION],
             )
         ] = bool
+    if include_tar_learning:
+        schema[
+            vol.Optional(
+                CONF_SMART_PI_TAR_LEARNING,
+                default=bool(defaults.get(CONF_SMART_PI_TAR_LEARNING, DEFAULT_SMART_PI_TAR_LEARNING)),
+            )
+        ] = bool
     return vol.Schema(schema)
+
 
 
 def build_valve_curve_schema(defaults: dict[str, Any]) -> vol.Schema:
@@ -217,12 +228,15 @@ def build_user_target_schema() -> vol.Schema:
     )
 
 
-def build_user_settings_schema(defaults: dict[str, Any], is_valve: bool) -> vol.Schema:
+def build_user_settings_schema(
+    defaults: dict[str, Any], is_valve: bool, include_tar_learning: bool = False
+) -> vol.Schema:
     """Build the SmartPI per-thermostat settings schema."""
     schema = dict(
         build_main_options_schema(
             defaults,
             include_valve_linearization=is_valve,
+            include_tar_learning=include_tar_learning,
         ).schema
     )
     return vol.Schema(schema)
@@ -389,6 +403,7 @@ class SmartPIConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=build_user_settings_schema(
                 _schema_defaults(data),
                 self._pending_thermostat_is_valve,
+                include_tar_learning=True,
             ),
         )
 
@@ -476,6 +491,7 @@ class SmartPIOptionsFlow(OptionsFlow):
             data_schema=build_main_options_schema(
                 defaults,
                 include_valve_linearization=is_valve_target,
+                include_tar_learning=True,
             ),
         )
 

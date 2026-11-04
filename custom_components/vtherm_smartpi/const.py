@@ -25,6 +25,8 @@ CONF_SMART_PI_MIN_VALVE = "smart_pi_min_valve"
 CONF_SMART_PI_KNEE_DEMAND = "smart_pi_knee_demand"
 CONF_SMART_PI_KNEE_VALVE = "smart_pi_knee_valve"
 CONF_SMART_PI_MAX_VALVE = "smart_pi_max_valve"
+# Experimental: learn the emitter response delay (HEAT active dead time) during regulation
+CONF_SMART_PI_TAR_LEARNING = "smart_pi_tar_learning"
 
 DEFAULT_MINIMAL_ACTIVATION_DELAY = 0
 DEFAULT_MINIMAL_DEACTIVATION_DELAY = 0
@@ -42,6 +44,7 @@ DEFAULT_MIN_VALVE = 7.0
 DEFAULT_KNEE_DEMAND = 80.0
 DEFAULT_KNEE_VALVE = 15.0
 DEFAULT_MAX_VALVE = 100.0
+DEFAULT_SMART_PI_TAR_LEARNING = False
 
 DEFAULT_OPTIONS: dict[str, float | bool | int] = {
     CONF_MINIMAL_ACTIVATION_DELAY: DEFAULT_MINIMAL_ACTIVATION_DELAY,

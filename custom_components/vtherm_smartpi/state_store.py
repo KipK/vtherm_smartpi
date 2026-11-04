@@ -64,3 +64,39 @@ class SmartPIStateStore:
             self._save_due = now + SAVE_DELAY_SEC
         except Exception as e:
             _LOGGER.error("Failed to schedule SmartPI state save: %s", e)
+
+
+TAR_STORAGE_KEY = "vtherm_smartpi.{}.tar_learning"
+
+
+class SmartPITarStore:
+    """Load and save the experimental T_ar learning data of one thermostat.
+
+    The learning keeps several days of signals: it has its own store, written
+    with a longer debounce than the algorithm state.
+    """
+
+    def __init__(self, hass: HomeAssistant, safe_name: str, save_delay_s: float) -> None:
+        self._store = Store(hass, STORAGE_VERSION, TAR_STORAGE_KEY.format(safe_name))
+        self._save_delay_s = save_delay_s
+        self._save_due = 0.0
+
+    async def async_load(self) -> dict[str, Any] | None:
+        """Load the saved learning data."""
+        return await self._store.async_load()
+
+    def save_now(self, manager) -> Coroutine[Any, Any, None]:
+        """Snapshot the learning data and return the coroutine writing it."""
+        self._save_due = 0.0
+        return self._store.async_save(manager.save_state())
+
+    def schedule_save(self, manager) -> None:
+        """Schedule a debounced write unless one is already pending."""
+        now = time.monotonic()
+        if now < self._save_due:
+            return
+        try:
+            self._store.async_delay_save(manager.save_state, self._save_delay_s)
+            self._save_due = now + self._save_delay_s
+        except Exception as e:
+            _LOGGER.error("Failed to schedule SmartPI T_ar learning save: %s", e)
