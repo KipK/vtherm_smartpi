@@ -261,6 +261,8 @@ class SmartPI:
         self._last_calculate_time: Optional[float] = None
         # Last learning tick while the guard cut holds the output at zero
         self._guard_cut_learning_ts: Optional[float] = None
+        # Last integral tick while the guard cut holds the output at zero
+        self._guard_cut_integral_ts: Optional[float] = None
         # Wall-clock time of the last valid active regulation tick. OFF saves
         # preserve this value so prolonged inactivity remains measurable.
         self._last_active_wall_ts: float | None = None
@@ -629,6 +631,37 @@ class SmartPI:
             raw_temp=raw_temp,
             min_active_window_min=self._cycle_min,
         )
+
+    def _unwind_integral_during_guard_cut(
+        self,
+        now: float,
+        target_temp: float | None,
+        current_temp: float | None,
+    ) -> None:
+        """Integrate the overshoot that holds the guard cut, toward zero only.
+
+        The cut forces 0 % while the PI still requests power: a positive
+        integral that keeps the room above the cut threshold must see that
+        error, or the release restores the same power and the cut repeats.
+        The error is integrated while the PI request stays positive (the
+        conditional integration of the regulation: never into SAT_LO), and
+        the integral never crosses zero.
+        """
+        last = self._guard_cut_integral_ts
+        if last is None:
+            last = self._last_calculate_time
+        self._guard_cut_integral_ts = now
+        if last is None or target_temp is None or current_temp is None:
+            return
+        dt_min = min(max(now - last, 0.0) / 60.0, self._cycle_min)
+        error = float(target_temp) - float(current_temp)  # the cut is HEAT only
+        if dt_min <= 0.0 or error >= 0.0 or self.ctl.integral <= 0.0:
+            return
+        request = self.ctl.u_ff + self.Kp * error + self.Ki * self.ctl.integral
+        if request <= 0.0:
+            return
+        self.ctl.integral = max(self.ctl.integral + error * dt_min, 0.0)
+        self.ctl.u_i = self.Ki * self.ctl.integral
 
     def _update_learning_during_guard_cut(
         self,
@@ -1970,11 +2003,13 @@ class SmartPI:
                 hvac_mode=hvac_mode,
             )
             self.ctl.last_i_mode = "I:OVERRIDE(guard_cut)"
+            self._unwind_integral_during_guard_cut(now, target_temp, current_temp)
             self._set_linear_output(0.0)
             self._last_calculate_time = None
             return
         # The learning stays contiguous across the end of a guard cut.
         guard_cut_learning_ts, self._guard_cut_learning_ts = self._guard_cut_learning_ts, None
+        self._guard_cut_integral_ts = None
 
         self._refresh_active_timestamp_and_expire_controller_memory()
 

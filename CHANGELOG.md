@@ -9,6 +9,10 @@ All notable changes to this project will be documented in this file.
   over regulated nights, from a multi-day model of the room, and uses it in place
   of the bootstrap value within 0.5 to 2 times that value. The bootstrap value
   is kept, so disabling the option reverts at once. Requires `numpy` and `scipy`.
+- Regulation: a room no longer cycles between the overheat cut and the
+  restart. During the cut the integral now sees the overshoot and comes back
+  toward zero while the PI still asks for power, instead of staying frozen and
+  restoring the same excess power at each restart.
 - Calibration: a cool-down is no longer stopped as unreachable on an absurd
   equilibrium. With the heating off, the twin's disturbance estimate is a
   leftover from the last heating; the passive phase is now judged on the more
