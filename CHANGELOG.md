@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Calibration: a cool-down is no longer stopped as unreachable on an absurd
+  equilibrium. With the heating off, the twin's disturbance estimate is a
+  leftover from the last heating; the passive phase is now judged on the more
+  favourable of that equilibrium and the outdoor temperature, and a heating
+  phase waits until the estimate is fresh again.
+
 ## [0.6.0]
 
 - Calibration: with a sensor flickering between two values, the heating deadtime is no longer measured as zero. The calibration now detects the room

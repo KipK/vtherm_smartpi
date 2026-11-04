@@ -260,6 +260,8 @@ def _twin(**overrides):
         "T_steady_max_valid": True,
         "T_steady_passive": 15.0,
         "T_steady_passive_valid": True,
+        "d_hat_fresh": True,
+        "Text_used": 10.0,
     }
     diag.update(overrides)
     return diag
@@ -405,6 +407,46 @@ def test_active_reachability_uses_the_allowed_power():
     # The passive phases ignore the power limit.
     passive = _twin(T_steady_passive=18.0)
     assert _calc(_manager(SmartPICalibrationPhase.COOL_DOWN), passive, max_on=0.2).result == SmartPICalibrationResult.PENDING
+
+
+@pytest.mark.parametrize(
+    "phase, mode, twin, expected",
+    [
+        # Stale d_hat inflated by a small b: the outdoor temperature still lets the room cool
+        (SmartPICalibrationPhase.COOL_DOWN, VThermHvacMode_HEAT,
+         _twin(d_hat_fresh=False, T_steady_passive=79.92, Text_used=15.8), SmartPICalibrationResult.PENDING),
+        # Warm outdoors: unreachable with or without the stale d_hat
+        (SmartPICalibrationPhase.COOL_DOWN, VThermHvacMode_HEAT,
+         _twin(d_hat_fresh=False, T_steady_passive=79.92, Text_used=22.0), SmartPICalibrationResult.UNREACHABLE),
+        (SmartPICalibrationPhase.COOL_DOWN_FINAL, VThermHvacMode_HEAT,
+         _twin(d_hat_fresh=False, T_steady_passive=21.0, Text_used=20.5), SmartPICalibrationResult.UNREACHABLE),
+        # A stale negative d_hat does not make the threshold unreachable either
+        (SmartPICalibrationPhase.COOL_DOWN, VThermHvacMode_HEAT,
+         _twin(d_hat_fresh=False, T_steady_passive=15.0, Text_used=19.6), SmartPICalibrationResult.PENDING),
+        # COOL passive warm-up mirrors the HEAT cool-down
+        (SmartPICalibrationPhase.HEAT_UP, VThermHvacMode_COOL,
+         _twin(cooling_model_available=True, d_hat_fresh=False, T_steady_passive=20.6, Text_used=25.0),
+         SmartPICalibrationResult.PENDING),
+        (SmartPICalibrationPhase.HEAT_UP, VThermHvacMode_COOL,
+         _twin(cooling_model_available=True, d_hat_fresh=False, T_steady_passive=20.6, Text_used=20.6),
+         SmartPICalibrationResult.UNREACHABLE),
+        # Outdoor temperature unknown: the passive phase is not judged
+        (SmartPICalibrationPhase.COOL_DOWN, VThermHvacMode_HEAT,
+         _twin(d_hat_fresh=False, T_steady_passive=30.0, Text_used=None), SmartPICalibrationResult.PENDING),
+        # Active phases wait for a fresh d_hat
+        (SmartPICalibrationPhase.HEAT_UP, VThermHvacMode_HEAT,
+         _twin(d_hat_fresh=False, T_steady_max=20.6), SmartPICalibrationResult.PENDING),
+        (SmartPICalibrationPhase.COOL_DOWN, VThermHvacMode_COOL,
+         _twin(cooling_model_available=True, d_hat_fresh=False, T_steady_max=19.6), SmartPICalibrationResult.PENDING),
+        (SmartPICalibrationPhase.HEAT_UP, VThermHvacMode_HEAT,
+         _twin(d_hat_fresh=None, T_steady_max=20.6), SmartPICalibrationResult.PENDING),
+    ],
+)
+def test_stale_disturbance_estimate_is_not_trusted(phase, mode, twin, expected):
+    """Without a fresh d_hat, passive phases keep the more favourable equilibrium and active phases wait."""
+    result = _calc(_manager(phase), twin, mode)
+
+    assert result.result == expected
 
 
 def test_completed_result_reports_every_way_a_run_ends():

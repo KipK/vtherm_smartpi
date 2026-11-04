@@ -135,6 +135,9 @@ class CalibrationManager:
         equilibrium lies beyond it by CALIBRATION_REACHABILITY_MARGIN_C.
         Returns None when the measured temperature already reached the
         threshold, when the twin is not reliable or when the phase is reachable.
+        Without a fresh disturbance estimate, an active phase is not judged and
+        a passive phase is judged on the more favourable of T_steady_passive
+        and the outdoor temperature.
         """
         diag = twin_diag or {}
         if (
@@ -156,10 +159,23 @@ class CalibrationManager:
         ):
             return None
         active = not is_cool if going_up else is_cool
+        d_hat_fresh = diag.get("d_hat_fresh") is True
+        # The twin disturbance d_hat is only estimated under power: an active
+        # phase waits until it is fresh before being judged.
+        if active and not d_hat_fresh:
+            return None
         key = "T_steady_max" if active else "T_steady_passive"
         level = diag.get(key)
         if level is None or diag.get(f"{key}_valid") is not True:
             return None
+        if not active and not d_hat_fresh:
+            # A passive phase sees a d_hat left over from the last heating,
+            # which a small b can turn into an absurd equilibrium. Keep the
+            # equilibrium most favourable to the threshold, with or without it.
+            text = diag.get("Text_used")
+            if text is None:
+                return None
+            level = max(level, text) if going_up else min(level, text)
         passive = diag.get("T_steady_passive")
         if (
             active
