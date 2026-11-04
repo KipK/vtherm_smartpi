@@ -449,7 +449,8 @@ def silence(e: dict, why: str) -> dict:
     """An evaluation kept as a diagnostic only: unknown for the pipeline, raw class and tau_e kept."""
     return {"cls": "unknown", "why_mass": why, "why_one": why, "te_pair": [None, None], "te_ok": False,
             "te": None, "day": e.get("day"), "silenced": True, "cls_raw": e["cls"], "te_raw": e.get("te"),
-            "te_ok_raw": e.get("te_ok"), "k_raw": e.get("k"), "tau_w_raw": e.get("tau_w")}
+            "te_ok_raw": e.get("te_ok"), "k_raw": e.get("k"), "tau_w_raw": e.get("tau_w"),
+            "a_raw": e.get("a"), "b_raw": e.get("b")}
 
 
 def class_in_force(evals: list[tuple[int, str]], morning: int) -> str:

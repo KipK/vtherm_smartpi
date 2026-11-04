@@ -61,6 +61,11 @@ def _r(x: float | None, digits: int = 1) -> float | None:
     return None if x is None else round(float(x), digits)
 
 
+def _per_min(x: float | None) -> float | None:
+    """A per-second identified parameter in per-minute units, rounded like model.a and model.b."""
+    return None if x is None else round(float(x) * 60.0, 6)
+
+
 class TarLearningManager:
     """T_ar learning of one thermostat."""
 
@@ -416,6 +421,9 @@ class TarLearningManager:
                     "regulated_nights": bool(last_eval.get("regulated")),
                     "class": last_eval.get("cls_raw", last_eval.get("cls")),
                     "tau_e_s": _r(last_eval.get("te_raw", last_eval.get("te"))),
+                    # Identified a and b in the units of model.a and model.b (per minute)
+                    "a": _per_min(last_eval.get("a_raw", last_eval.get("a"))),
+                    "b": _per_min(last_eval.get("b_raw", last_eval.get("b"))),
                 },
             },
             "night_room_class": last_room.get("room_class") if last_room else None,

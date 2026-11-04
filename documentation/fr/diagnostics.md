@@ -125,7 +125,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `refined.tau_e_s` | Valeur affinée publiée `τe`, `null` avant une publication |
 | `refined.class` | Classe de la pièce en vigueur issue de l'identification : `mass`, `one` ou `unknown` |
 | `refined.k_per_s`, `refined.tau_w_h` | Couplage air-murs et constante de temps des murs en vigueur (pièce classée `mass`) |
-| `refined.last_evaluation` | Dernière évaluation quotidienne : `day`, `regulated_nights` (les six nuits sont retenues), `class` et `tau_e_s` avant la règle des nuits régulées |
+| `refined.last_evaluation` | Dernière évaluation quotidienne : `day`, `regulated_nights` (les six nuits sont retenues), `class` et `tau_e_s` avant la règle des nuits régulées, ainsi que les `a` et `b` identifiés, dans les unités de `model.a` et `model.b` (pour information, jamais appliqués ; pour une pièce classée `mass`, `b` est la perte de l'air vers l'extérieur, les murs étant modélisés à part, il diffère donc du `model.b` effectif) |
 | `night_room_class` | Classe de la pièce d'après les nuits sans chauffage (`mass`, `one`, `inconclusive`) |
 | `pending_steps` | Étapes du matin en attente de leur réponse de 2 h |
 | `data_invalid_reason` | Raison pour laquelle les données actuelles sont exclues (par exemple `window open`, `temperature jump`, `hvac not heating`), `null` lorsqu'elles sont valides |

@@ -74,6 +74,11 @@ async def test_end_to_end_run_reproduces_the_reference_pipeline() -> None:
     diag = m.diagnostics(480.0, True)
     assert diag["source"] == "refined" and diag["refined"]["class"] == "mass"
     assert diag["applied_s"] == pytest.approx(m.te_pub["value"], abs=0.05)
+    # Identified a and b are shown per minute, like model.a and model.b; b matches the simulated room
+    last = diag["refined"]["last_evaluation"]
+    assert last["a"] == pytest.approx(exp["evals"][-1]["a"] * 60.0, rel=1e-3)
+    assert last["b"] == pytest.approx(exp["evals"][-1]["b"] * 60.0, rel=1e-3)
+    assert last["b"] == pytest.approx(exp["b_true"], rel=0.05)
 
     # Persistence across a restart: same learned values, same applied value
     restored = TarLearningManager("e2e", "UTC")

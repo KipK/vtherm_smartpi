@@ -126,7 +126,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `refined.tau_e_s` | Published refined value `τe`, `null` before a publication |
 | `refined.class` | Room class in force from the identification: `mass`, `one` or `unknown` |
 | `refined.k_per_s`, `refined.tau_w_h` | Air-wall coupling and wall time constant in force (room classed `mass`) |
-| `refined.last_evaluation` | Last daily evaluation: `day`, `regulated_nights` (the six nights qualify), `class` and `tau_e_s` before the regulated-night rule |
+| `refined.last_evaluation` | Last daily evaluation: `day`, `regulated_nights` (the six nights qualify), `class` and `tau_e_s` before the regulated-night rule, and the identified `a` and `b` in the units of `model.a` and `model.b` (information only, never applied; for a room classed `mass`, `b` is the loss of the air to the outside, the walls being modelled apart, so it differs from the effective `model.b`) |
 | `night_room_class` | Room class from the nights without heating (`mass`, `one`, `inconclusive`) |
 | `pending_steps` | Morning steps waiting for their 2 h response |
 | `data_invalid_reason` | Why the current data are excluded (for example `window open`, `temperature jump`, `hvac not heating`), `null` when they are valid |
