@@ -415,7 +415,7 @@ A morning is evaluated only when the 2 hours before the step and the 2 h 15 afte
 
 **Requirements and limits**
 
-- Heating only (nothing is learned or applied in cooling), and heaters driven by PWM cycles; not available in valve mode.
+- Heating only (nothing is learned or applied in cooling), and heaters driven by PWM cycles. In valve mode the option has no effect and the diagnostics show `valve_mode_not_supported`: the heating power of a valve is known only through the valve curve, and a curve that is missing or does not match the valve gives a wrong delay; on a slow emitter, the learned delay also left the morning rise short of the comfort setpoint.
 - A morning comfort step of at least 1 °C, and a bootstrap dead time already measured.
 - The fast value needs 3 confirmed mornings. In a room whose nights start without heating, mornings stay unconfirmed: the fast value is not published there.
 - The refined value needs 6 consecutive regulated nights, which requires an eco setpoint reached before 23:00 and held all night.

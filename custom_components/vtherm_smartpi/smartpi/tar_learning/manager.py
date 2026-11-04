@@ -30,6 +30,7 @@ from .const import (
     TAR_MAX_MORNINGS,
     TAR_MAX_NIGHTS,
     TAR_MAX_WINDOWS,
+    TAR_VALVE_MODE_SUPPORTED,
 )
 from .history import TarHistory
 from .policy import AppliedValue, RegulationDeadTime, applied_value, fast_publication
@@ -146,23 +147,27 @@ class TarLearningManager:
         dtc_reliable: bool,
         lag: float | None,
         cycle_min: float,
-        supported: bool = True,
+        valve: bool = False,
         excluded: str | None = None,
     ) -> None:
         """Record one regulation tick.
 
+        valve: the heater is a valve (applied power recorded as a level), not a PWM switch.
         excluded: why SmartPI is not in control of the heater (window open, power
         shedding, safety mode, command overridden...), None when it is; the
         tick is then recorded as invalid.
         """
-        if not supported:
-            # PWM heaters only: the heater edges are rebuilt from the applied cycles
+        if valve and not TAR_VALVE_MODE_SUPPORTED:
             if self.supported:
                 self.supported = False
                 self.history = TarHistory()
             return
+        self.supported = True
         if self.status == STATUS_UNAVAILABLE:
             return
+        if bool(valve) != self.history.valve:
+            # The recorded heater signal changes kind: the history restarts.
+            self.history = TarHistory(valve=bool(valve))
         if hvac_mode != VThermHvacMode_HEAT and not excluded:
             excluded = "hvac not heating"
         self._cycle_s = max(float(cycle_min) * 60.0, 60.0)
@@ -177,8 +182,16 @@ class TarLearningManager:
             self._last_prune = now
         self.dirty = True
 
-    def on_applied(self, now: float, power: float, cycle_start: bool, cycle_min: float, hvac_mode) -> None:
-        if self.status == STATUS_UNAVAILABLE or not self.supported or hvac_mode != VThermHvacMode_HEAT:
+    def on_applied(self, now: float, power: float, cycle_start: bool, cycle_min: float, hvac_mode,
+                   valve: bool = False) -> None:
+        """Record an applied command: a PWM cycle (power x cycle on) or a valve level (heat-equivalent power)."""
+        if self.status == STATUS_UNAVAILABLE or not self.supported or bool(valve) != self.history.valve:
+            return
+        if valve:
+            # A valve outside HEAT delivers no heating power.
+            self.history.applied_level(now, power if hvac_mode == VThermHvacMode_HEAT else 0.0, cycle_start)
+            return
+        if hvac_mode != VThermHvacMode_HEAT:
             return
         self.history.applied_cycle(now, power, max(float(cycle_min) * 60.0, 60.0), cycle_start)
 
@@ -227,7 +240,7 @@ class TarLearningManager:
             "on": list(h.on), "off": list(h.off),
             "phases": list(h.phases), "params": list(h.params), "gaps": h.invalid_intervals(now),
             "first_t": h.first_t, "last_t": h.last_t, "t_last": now,
-            "cycle_s": self._cycle_s,
+            "cycle_s": self._cycle_s, "pw": h.power_levels(),
         }
 
     def _b_at(self, t: float) -> float | None:

@@ -3,15 +3,19 @@
 Times are epoch seconds. The history keeps, over the last
 TAR_HISTORY_RETENTION_S:
 - the indoor temperature at each change of value;
-- the heater on/off edges, rebuilt from the applied cycles (PWM: on from the
-  cycle start for power x cycle);
+- the heater on/off edges. A PWM heater's edges are rebuilt from the applied
+  cycles (on from the cycle start for power x cycle). A valve's applied power
+  is recorded as a level held until its next change (pw_t, pw_v); its heater
+  starts are the cycle starts with a positive level and the rises of the
+  level, its heater cuts the falls of the level to zero;
 - the outdoor temperature, the setpoint, the SmartPI phase and the published
   parameters (b, reliable cool dead time, response lag) at each change;
 - the invalid intervals.
 Every list is capped; the zero-order-hold timelines keep their last sample
 before the retention cutoff.
 
-Data quality: samples enter only through record() and applied_cycle(), where
+Data quality: samples enter only through record(), applied_cycle() and
+applied_level(), where
 explicit deterministic rules mark intervals invalid (``gaps``):
 - no observation for more than TAR_GAP_S (data gap, downtime);
 - an unavailable indoor or outdoor temperature, or a command that is not known;
@@ -37,6 +41,7 @@ from .const import (
     TAR_SPIKE_RATE_C_PER_H,
     TAR_HISTORY_MAX_EDGES,
     TAR_HISTORY_MAX_EVENTS,
+    TAR_HISTORY_MAX_LEVELS,
     TAR_HISTORY_MAX_OUTDOOR,
     TAR_HISTORY_MAX_TEMPERATURES,
     TAR_HISTORY_RETENTION_S,
@@ -44,6 +49,7 @@ from .const import (
 
 _TEMP_DIGITS = 3
 _TIME_DIGITS = 1
+_LEVEL_DIGITS = 4
 
 
 def _cap(lst: list, n: int) -> None:
@@ -54,7 +60,11 @@ def _cap(lst: list, n: int) -> None:
 class TarHistory:
     """Signals of one room over the retention window."""
 
-    def __init__(self) -> None:
+    def __init__(self, valve: bool = False) -> None:
+        # Actuator of the recorded heater signal: PWM edges, or valve levels
+        self.valve = bool(valve)
+        self.pw_t: list[float] = []
+        self.pw_v: list[float] = []
         self.temp_t: list[float] = []
         self.temp_v: list[float] = []
         self.ext_t: list[float] = []
@@ -76,6 +86,7 @@ class TarHistory:
         self._heater_on = False
         self._cycle_start: float | None = None
         self._off_due: float | None = None
+        self._level = 0.0
 
     # ------------------------------------------------------------------
     # Recording
@@ -224,6 +235,29 @@ class TarHistory:
             self._edge(t, True)
         self._off_due = off_at if power < 1.0 else start + cycle_s + 1.0
 
+    def applied_level(self, t: float, power: float, cycle_start: bool) -> None:
+        """Record an applied valve command (heat-equivalent power 0..1), held until the next one."""
+        if self.last_t is not None and t < self.last_t - 1.0:
+            return
+        level = round(min(max(float(power), 0.0), 1.0), _LEVEL_DIGITS)
+        tr = round(t, _TIME_DIGITS)
+        if level > 0.0 and (cycle_start or level > self._level):
+            self.on.append(tr)
+            _cap(self.on, TAR_HISTORY_MAX_EDGES)
+        elif level <= 0.0 < self._level:
+            self.off.append(tr)
+            _cap(self.off, TAR_HISTORY_MAX_EDGES)
+        if not self.pw_v or self.pw_v[-1] != level:
+            self.pw_t.append(tr)
+            self.pw_v.append(level)
+            _cap(self.pw_t, TAR_HISTORY_MAX_LEVELS)
+            _cap(self.pw_v, TAR_HISTORY_MAX_LEVELS)
+        self._level = level
+
+    def power_levels(self) -> tuple[list[float], list[float]] | None:
+        """Valve power timeline (times, levels), None for a PWM heater."""
+        return (list(self.pw_t), list(self.pw_v)) if self.valve else None
+
     def flush(self, now: float) -> None:
         """Close the on period of the running cycle when it ended before now."""
         self._advance(now)
@@ -249,6 +283,9 @@ class TarHistory:
         del self.ext_v[:i]
         del self.on[: bisect.bisect_left(self.on, cutoff)]
         del self.off[: bisect.bisect_left(self.off, cutoff)]
+        i = max(0, bisect.bisect_left(self.pw_t, cutoff) - 1)
+        del self.pw_t[:i]
+        del self.pw_v[:i]
         for lst in (self.setpoints, self.phases, self.params):
             i = max(0, bisect.bisect_left([x[0] for x in lst], cutoff) - 1)
             del lst[:i]
@@ -285,6 +322,9 @@ class TarHistory:
             "ext_v": self.ext_v,
             "on": self.on,
             "off": self.off,
+            "valve": self.valve,
+            "pw_t": self.pw_t,
+            "pw_v": self.pw_v,
             "setpoints": [list(x) for x in self.setpoints],
             "phases": [list(x) for x in self.phases],
             "params": [list(x) for x in self.params],
@@ -307,6 +347,9 @@ class TarHistory:
             h.ext_v = [float(x) for x in data.get("ext_v", [])]
             h.on = [float(x) for x in data.get("on", [])]
             h.off = [float(x) for x in data.get("off", [])]
+            h.valve = bool(data.get("valve", False))
+            h.pw_t = [float(x) for x in data.get("pw_t", [])]
+            h.pw_v = [float(x) for x in data.get("pw_v", [])]
             h.setpoints = [(float(a), float(b)) for a, b in data.get("setpoints", [])]
             h.phases = [(float(a), str(b)) for a, b in data.get("phases", [])]
             h.params = [(float(x[0]), x[1], x[2], x[3]) for x in data.get("params", [])]
@@ -318,10 +361,16 @@ class TarHistory:
                 h.gaps.append((since, max(float(h.last_t), since + 1.0)))
             # The first observation after a restart marks the downtime and its margins invalid.
             h._restart_pending = h.last_t is not None
-            if len(h.temp_t) != len(h.temp_v) or len(h.ext_t) != len(h.ext_v):
+            if len(h.temp_t) != len(h.temp_v) or len(h.ext_t) != len(h.ext_v) or len(h.pw_t) != len(h.pw_v):
                 return cls()
             # A stopped heater cannot be on across a restart: close an open on period.
-            if len(h.on) > len(h.off) and h.last_t is not None:
+            if h.valve:
+                if h.pw_v and h.pw_v[-1] > 0.0 and h.last_t is not None:
+                    t_cut = round(max(h.pw_t[-1], h.last_t), _TIME_DIGITS)
+                    h.pw_t.append(t_cut)
+                    h.pw_v.append(0.0)
+                    h.off.append(t_cut)
+            elif len(h.on) > len(h.off) and h.last_t is not None:
                 h.off.append(round(max(h.on[-1], h.last_t), _TIME_DIGITS))
         except (TypeError, ValueError, IndexError):
             return cls()

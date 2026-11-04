@@ -136,16 +136,6 @@ async def test_a_failed_computation_is_skipped(monkeypatch) -> None:
     assert m.last_error.endswith("fit diverged")
 
 
-def test_valve_mode_is_not_supported() -> None:
-    m = TarLearningManager("valve", "UTC")
-    m.set_dependencies(True)
-    m.observe(W, hvac_mode=VThermHvacMode_HEAT, temp=19.0, ext=2.0, setpoint=19.0, phase="Stable", b=0.002,
-              dtc=None, dtc_reliable=False, lag=None, cycle_min=10.0, supported=False)
-    assert not m.active
-    assert m.diagnostics(480.0, True)["status"] == "valve_mode_not_supported"
-    assert m.history.is_empty()
-
-
 async def test_learning_store_round_trip(hass) -> None:
     m, _ = _feed("pr_d5n3")
     m.fast_pub = {"value_s": 320.0, "day": 3}

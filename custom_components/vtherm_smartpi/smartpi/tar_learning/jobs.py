@@ -56,6 +56,14 @@ def _valid_fn(gaps, first_t, last_t):
     return ok
 
 
+def _power(snap: dict):
+    """Valve power level timeline of the snapshot (arrays), None for a PWM heater."""
+    pw = snap.get("pw")
+    if pw is None:
+        return None
+    return np.asarray(pw[0], dtype=float), np.asarray(pw[1], dtype=float)
+
+
 def morning_job(snap: dict[str, Any]) -> dict[str, Any]:
     """Evaluate one morning comfort step."""
     clock = _clock(snap)
@@ -79,7 +87,7 @@ def morning_job(snap: dict[str, Any]) -> dict[str, Any]:
         anch=anch, ext=ExtTL(ext_t, ext_v), ext_t=ext_t, ext_v=ext_v, on=on, off=off,
         spans=room_mass.passive_spans(on, off, snap["t_last"]), params_at=params_at, phase_at=phase_at,
         clock=clock, cycle_s=float(snap["cycle_s"]), b_pub=float(snap["b_pub"]),
-        valid_until=_valid_until(snap["gaps"]),
+        valid_until=_valid_until(snap["gaps"]), power=_power(snap),
     )
     nights = list(snap["nights"])
     day = clock.day_of(snap["t_sp"])
@@ -101,6 +109,7 @@ def window_job(snap: dict[str, Any]) -> dict[str, Any]:
     gaps = snap["gaps"]
     first_t, last_t = float(snap["first_t"]), float(snap["last_t"])
     out: dict[str, Any] = {"windows": {}, "nights": {}}
+    power = _power(snap)
     if snap.get("window_days"):
         t_lo = min(identification.window_bounds(clock, d)[0] for d in snap["window_days"]) - 86400.0
         t_hi = max(identification.window_bounds(clock, d)[1] for d in snap["window_days"])
@@ -108,7 +117,7 @@ def window_job(snap: dict[str, Any]) -> dict[str, Any]:
         g0 = ID_DT * np.floor(g0 / ID_DT)
         d = identification.grid_data(snap["pub_t"], snap["pub_v"], snap["on"], snap["off"], snap["ext_t"],
                                      snap["ext_v"], float(g0), t_hi + 2 * ID_DT, clock,
-                                     _valid_mask(gaps, first_t))
+                                     _valid_mask(gaps, first_t), power=power)
         pub_t = np.asarray(snap["pub_t"], dtype=float)
         for day in snap["window_days"]:
             t0, t1 = identification.window_bounds(clock, day)
@@ -119,7 +128,7 @@ def window_job(snap: dict[str, Any]) -> dict[str, Any]:
         out["nights"][str(n)] = gates.regulated_night(
             clock, n, snap["on"], snap["off"], np.asarray(snap["pub_t"], dtype=float),
             np.asarray(snap["pub_v"], dtype=float), snap["sp0"], [tuple(x) for x in snap["sp_events"]],
-            float(snap["cycle_s"]), init_on=False, valid_fn=_valid_fn(gaps, first_t, last_t))
+            float(snap["cycle_s"]), init_on=False, valid_fn=_valid_fn(gaps, first_t, last_t), power=power)
     return out
 
 

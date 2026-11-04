@@ -1,5 +1,6 @@
 """Signal primitives of the T_ar learning (numpy): temperature anchors, outdoor
-timeline, heater power on a grid.
+timeline, heater power on a grid (from PWM heater edges or from a valve power
+level timeline).
 
 Units: times in s, temperatures in C, the loss b per minute at the interfaces.
 """
@@ -155,6 +156,30 @@ def duty_bins(on, off, grid_start: np.ndarray, step: float, init_on: bool | None
         return cum[k] + st[k] * (s - tt[k])
 
     return (cumulative(grid_start + step) - cumulative(grid_start)) / step
+
+
+def level_bins(pw_t, pw_v, grid_start: np.ndarray, step: float) -> np.ndarray:
+    """Mean over each bin of a power level timeline (zero-order hold, 0 before its first sample)."""
+    t = np.asarray(pw_t, dtype=float)
+    v = np.asarray(pw_v, dtype=float)
+    grid_start = np.asarray(grid_start, dtype=float)
+    if len(t) == 0 or len(grid_start) == 0:
+        return np.zeros(len(grid_start))
+    tt = np.r_[min(float(t[0]), float(grid_start[0])) - 1.0, t]
+    vv = np.r_[0.0, v]
+    cum = np.r_[0.0, np.cumsum(vv[:-1] * np.diff(tt))]
+
+    def cumulative(s):
+        k = np.clip(np.searchsorted(tt, s, side="right") - 1, 0, len(vv) - 1)
+        return cum[k] + vv[k] * (s - tt[k])
+
+    return (cumulative(grid_start + step) - cumulative(grid_start)) / step
+
+
+def level_on_grid(pw_t, pw_v, t0: float, t1: float, step: float = FIT_DT):
+    """Valve power level (0..1) averaged over each step of the grid [t0, t1)."""
+    grid = np.arange(t0, t1, step)
+    return grid, np.clip(level_bins(pw_t, pw_v, grid, step), 0.0, 1.0)
 
 
 def bin_mean(t, v, grid_start: np.ndarray, step: float) -> np.ndarray:

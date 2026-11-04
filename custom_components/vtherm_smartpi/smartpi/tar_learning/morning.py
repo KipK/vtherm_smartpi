@@ -55,7 +55,7 @@ from .room_mass import (
     predict_2exp,
     room_class_long,
 )
-from .signals import Anchors, ExtTL, sensor_period, u_on_grid
+from .signals import Anchors, ExtTL, level_on_grid, sensor_period, u_on_grid
 
 WINDOWS = ("W45", "Wsp", "W2h")
 # Decision paths: night-class baseline (night without heating or regulated night),
@@ -85,6 +85,14 @@ class MorningInputs:
     b_pub: float
     valid_until: Callable[[float, float], float] | None = None
     cache: KernelCache = field(default_factory=KernelCache)
+    # Valve power level timeline (times, levels); None for a PWM heater (edges)
+    power: tuple | None = None
+
+    def u_grid(self, t0: float, t1: float):
+        """Heater input (0..1) on the fit grid [t0, t1)."""
+        if self.power is not None:
+            return level_on_grid(self.power[0], self.power[1], t0, t1)
+        return u_on_grid(self.on, self.off, t0, t1)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +207,7 @@ def _fit_step(inp: MorningInputs, du, gw, t_s: float, ends: dict, tb, loss: dict
 
 def morning_night_class(inp: MorningInputs, t_sp: float, sp_to: float, nights: list[dict]) -> dict:
     """Night indicator and the night-class paths of one morning; appends the night to `nights`."""
-    on, off, anch = inp.on, inp.off, inp.anch
+    on, anch = inp.on, inp.anch
     starts = [x for x in on if t_sp - 30.0 <= x <= t_sp + 900.0]
     t_s = float(starts[0]) if starts else None
     seg = night_segment(anch, inp.spans, inp.params_at, t_s if t_s is not None else t_sp, inp.clock,
@@ -218,7 +226,7 @@ def morning_night_class(inp: MorningInputs, t_sp: float, sp_to: float, nights: l
         return row
     passive = not any(t_s - 7200.0 <= x < t_s - 30.0 for x in on)
     g0 = t_s - 1800.0
-    grid, u = u_on_grid(on, off, g0, t_s + 7200.0 + DT)
+    grid, u = inp.u_grid(g0, t_s + 7200.0 + DT)
     u_base = 0.0 if passive else float(np.mean(u[grid < t_s]))
     i0 = int(np.searchsorted(grid, t_s))
     du = u[i0:] - u_base
@@ -301,9 +309,9 @@ def baseline_cycles(anch, t_sp: float, cycle_s: float):
 
 def branch_r(inp: MorningInputs, t_sp: float, eco: float | None, sp_to: float) -> dict:
     """Regulated branch of one morning: statistics, setup of the response fit and the 1R1C fit."""
-    anch, on, off, cycle_s = inp.anch, inp.on, inp.off, inp.cycle_s
+    anch, on, cycle_s = inp.anch, inp.on, inp.cycle_s
     g0 = t_sp - R_SPAN_S
-    grid, u = u_on_grid(on, off, g0, t_sp + R_POST_S + DT)
+    grid, u = inp.u_grid(g0, t_sp + R_POST_S + DT)
     st = stationarity(anch, on, grid, u, t_sp, cycle_s, eco)
     t_end = t_sp + R_POST_S
     reach = anch.first_reach(t_sp, sp_to - 0.1)

@@ -22,6 +22,12 @@ TAR_GATE_G1 = "G1"
 TAR_GATE_GT4 = "GT4"
 TAR_FAST_GATE = TAR_GATE_G1
 
+# Valve mode: the history records the applied heat-equivalent power as a level
+# timeline, but the learning stays off for valves. The learned value is only as
+# right as the valve curve that converts the opening to heating power, and on a
+# slow emitter its use left the comfort rise short of the setpoint.
+TAR_VALVE_MODE_SUPPORTED = False
+
 SOURCE_BOOTSTRAP = "bootstrap"
 SOURCE_FAST = "fast"
 SOURCE_REFINED = "refined"
@@ -32,6 +38,8 @@ SOURCE_REFINED = "refined"
 TAR_HISTORY_RETENTION_S = 7.0 * DAY
 TAR_HISTORY_MAX_TEMPERATURES = 60000
 TAR_HISTORY_MAX_EDGES = 12000
+# Valve power levels (one per change of the applied valve command)
+TAR_HISTORY_MAX_LEVELS = 60000
 TAR_HISTORY_MAX_OUTDOOR = 12000
 TAR_HISTORY_MAX_EVENTS = 4000
 TAR_MAX_NIGHTS = 60

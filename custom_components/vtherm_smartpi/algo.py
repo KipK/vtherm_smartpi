@@ -806,9 +806,12 @@ class SmartPI:
                 quality=trace_quality,
             )
         self._update_deadtime_episode_status(linear_power, hvac_mode, now)
-        if self.tar_learning is not None and not self._valve_mode_enabled:
+        if self.tar_learning is not None:
+            # linear_power is the heat-equivalent power of the applied command
+            # (valve curve inverted), the input unit of the model a and b.
             self.tar_learning.on_applied(
-                time.time(), linear_power, cycle_start, self._cycle_min, hvac_mode
+                time.time(), linear_power, cycle_start, self._cycle_min, hvac_mode,
+                valve=self._valve_mode_enabled,
             )
         if cycle_start:
             self._setpoint_changed_in_cycle = False
@@ -1160,7 +1163,7 @@ class SmartPI:
                 dtc_reliable=self.dt_est.deadtime_cool_reliable,
                 lag=self.learn_win.response_lag.lag_s,
                 cycle_min=self._cycle_min,
-                supported=not self._valve_mode_enabled,
+                valve=self._valve_mode_enabled,
                 excluded=excluded,
             )
         except Exception:  # noqa: BLE001 - the learning must never disturb the regulation

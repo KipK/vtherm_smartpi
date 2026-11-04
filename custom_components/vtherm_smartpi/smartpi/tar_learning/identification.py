@@ -60,7 +60,7 @@ from .const import (
     NIGHT_FROM_H,
     NIGHT_TO_H,
 )
-from .signals import Anchors, bin_mean, duty_bins
+from .signals import Anchors, bin_mean, duty_bins, level_bins
 
 LAM_C = 1.0 / (np.exp(np.linspace(math.log(0.3), math.log(600.0), 26)) * H)
 TW_C = np.exp(np.linspace(math.log(ID_TW_LO / H), math.log(ID_TW_HI / H), 22)) * H
@@ -70,17 +70,25 @@ LAM_LO, LAM_HI = float(LAM_C.min()), float(LAM_C.max())
 # ---------------------------------------------------------------------------
 # Grid data
 # ---------------------------------------------------------------------------
-def grid_data(pub_t, pub_v, on, off, ext_t, ext_v, t0: float, t_end: float, clock, valid_mask=None) -> dict:
+def grid_data(pub_t, pub_v, on, off, ext_t, ext_v, t0: float, t_end: float, clock, valid_mask=None,
+              power=None) -> dict:
     """Data on the 600 s grid [t0, t_end - step): anchors interpolated at the bin starts, heater duty of the
-    bins (and of 60 s bins for the emitter), bin-mean outdoor temperature, local hour, validity."""
+    bins (and of 60 s bins for the emitter), bin-mean outdoor temperature, local hour, validity.
+
+    power: valve power level timeline (times, levels); the duty is then its bin mean instead of the
+    duty of the heater edges."""
     step = ID_DT
     grid = np.arange(t0, t_end - step, step)
     anch = Anchors(pub_t, pub_v)
     y = np.interp(grid, anch.t, anch.v)
     first = anch.t[0] if len(anch.t) else t0
-    u = duty_bins(on, off, grid, step, init_on=False)
     fine = np.arange(t0, grid[-1] + step, ID_FINE_S)
-    u_fine = duty_bins(on, off, fine, ID_FINE_S, init_on=False)
+    if power is None:
+        u = duty_bins(on, off, grid, step, init_on=False)
+        u_fine = duty_bins(on, off, fine, ID_FINE_S, init_on=False)
+    else:
+        u = level_bins(power[0], power[1], grid, step)
+        u_fine = level_bins(power[0], power[1], fine, ID_FINE_S)
     te = bin_mean(ext_t, ext_v, grid, step)
     valid = grid >= first
     if valid_mask is not None:

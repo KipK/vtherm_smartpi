@@ -95,11 +95,14 @@ def quarters(a: float, b: float) -> list[tuple[float, float]]:
 
 
 def regulated_night(clock, night_day: int, on, off, pub_t, pub_v, sp0: float, ev, cycle_s: float,
-                    init_on: bool = False, valid_fn=None) -> dict:
-    """Regulated-night gate of the night that starts on the evening of `night_day`."""
+                    init_on: bool = False, valid_fn=None, power=None) -> dict:
+    """Regulated-night gate of the night that starts on the evening of `night_day`.
+
+    power: valve power level timeline (times, levels), used for the holding power instead of the edges.
+    """
     import numpy as np  # pylint: disable=import-outside-toplevel
 
-    from .signals import duty_bins  # pylint: disable=import-outside-toplevel
+    from .signals import duty_bins, level_bins  # pylint: disable=import-outside-toplevel
 
     a = clock.at(night_day, RN_SPAN_START_H)
     lo = clock.at(night_day + 1, RN_SP_RISE_FROM_H)
@@ -126,7 +129,12 @@ def regulated_night(clock, night_day: int, on, off, pub_t, pub_v, sp0: float, ev
     out["max_dev"] = None if any(v is None for v in devs) else float(max(abs(v) for v in devs))
     n = int(round((b - a) / cycle_s))
     bins_start = np.asarray([b - (j + 1) * cycle_s for j in range(n)][::-1])
-    um = duty_bins(on, np.asarray(off, dtype=float), bins_start, cycle_s, init_on=init_on) if n >= 3 else None
+    if n < 3:
+        um = None
+    elif power is not None:
+        um = level_bins(power[0], power[1], bins_start, cycle_s)
+    else:
+        um = duty_bins(on, np.asarray(off, dtype=float), bins_start, cycle_s, init_on=init_on)
     if um is not None:
         tc = (bins_start + 0.5 * cycle_s - b) / H
         s_u, c_u = np.polyfit(tc, um, 1)

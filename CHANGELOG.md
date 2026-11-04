@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
   over regulated nights, from a multi-day model of the room, and uses it in place
   of the bootstrap value within 0.5 to 2 times that value. The bootstrap value
   is kept, so disabling the option reverts at once. Requires `numpy` and `scipy`.
+  PWM heaters only: in valve mode the option has no effect.
 - Regulation: a room no longer cycles between the overheat cut and the
   restart. During the cut the integral now sees the overshoot and comes back
   toward zero while the PI still asks for power, instead of staying frozen and

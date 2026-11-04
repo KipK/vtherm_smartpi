@@ -408,7 +408,7 @@ Un matin n'est évalué que si les 2 heures précédant la montée et les 2 h 15
 
 **Prérequis et limites**
 
-- Chauffage uniquement (rien n'est appris ni appliqué en refroidissement), avec des chauffages pilotés par cycles PWM ; non disponible en mode vanne.
+- Chauffage uniquement (rien n'est appris ni appliqué en refroidissement), avec des chauffages pilotés par cycles PWM. En mode vanne, l'option n'a aucun effet et les diagnostics affichent `valve_mode_not_supported` : la puissance de chauffe d'une vanne n'est connue qu'à travers sa courbe, et une courbe absente ou qui ne correspond pas à la vanne donne un retard faux ; sur un émetteur lent, le retard appris a aussi laissé la montée du matin sous la consigne de confort.
 - Une montée de consigne du matin d'au moins 1 °C, et un temps mort du bootstrap déjà mesuré.
 - La valeur rapide demande 3 matins confirmés. Dans une pièce dont les nuits démarrent sans chauffage, les matins restent non confirmés : la valeur rapide n'y est pas publiée.
 - La valeur affinée demande 6 nuits régulées consécutives, ce qui suppose une consigne éco atteinte avant 23:00 et maintenue toute la nuit.
