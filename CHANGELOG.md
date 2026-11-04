@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Regulation: a room no longer cycles between the overheat cut and the
+  restart. During the cut the integral now sees the overshoot and comes back
+  toward zero while the PI still asks for power, instead of staying frozen and
+  restoring the same excess power at each restart.
 - Calibration: a cool-down is no longer stopped as unreachable on an absurd
   equilibrium. With the heating off, the twin's disturbance estimate is a
   leftover from the last heating; the passive phase is now judged on the more
