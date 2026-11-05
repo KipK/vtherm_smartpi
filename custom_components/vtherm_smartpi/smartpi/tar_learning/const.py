@@ -16,6 +16,9 @@ DAY = 86400.0
 # A learned value is applied only within [low, high] x the bootstrap dead time.
 TAR_APPLY_BOUND_LOW = 0.5
 TAR_APPLY_BOUND_HIGH = 2.0
+# The gain rule expects an effective dead time. The learned value is the first
+# moment of the emitter response, twice the effective dead time of a first-order lag.
+TAR_GAIN_DEADTIME_FACTOR = 0.5
 
 # Confirmation gate of the fast morning value: "G1" or "GT4".
 TAR_GATE_G1 = "G1"

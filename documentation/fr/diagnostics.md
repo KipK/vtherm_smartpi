@@ -113,6 +113,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `gate` | Règle de confirmation des valeurs du matin (`G1`) |
 | `applied_s` | Temps mort HEAT actif utilisé par la régulation, en secondes |
 | `source` | Origine de `applied_s` : `bootstrap`, `fast` ou `refined` |
+| `gains_s` | Temps mort utilisé par les gains, en secondes : la moitié de `applied_s` pour une valeur apprise, `applied_s` lui-même pour la valeur du bootstrap |
 | `bootstrap_s` | Temps mort du bootstrap/calibration (`model.deadtime_heat_s`), jamais modifié |
 | `in_force_s` / `in_force_source` | Valeur apprise en vigueur (affinée, sinon rapide) et son origine, `null` avant toute publication |
 | `out_of_bound` | `true` lorsque la valeur en vigueur est hors de l'intervalle de 0,5 à 2 fois `bootstrap_s` et n'est donc pas appliquée |

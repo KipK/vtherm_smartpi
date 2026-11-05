@@ -1134,6 +1134,17 @@ class SmartPI:
         mode = hvac_mode if hvac_mode is not None else self._last_hvac_mode
         return self.tar_learning.regulation_dead_time(self.dt_est, mode)
 
+    def gain_dead_time(self, hvac_mode: VThermHvacMode | None = None):
+        """Dead-time source of the gain rule.
+
+        The rule expects an effective dead time: a learned HEAT value is applied
+        as its effective equivalent, the other consumers use it as learned.
+        """
+        if self.tar_learning is None:
+            return self.dt_est
+        mode = hvac_mode if hvac_mode is not None else self._last_hvac_mode
+        return self.tar_learning.gain_dead_time(self.dt_est, mode)
+
     def observe_tar_learning(
         self,
         target_temp: float | None,
@@ -1792,7 +1803,7 @@ class SmartPI:
             tau_reliable=self._tau_reliable,
             tau_min=tau_info.tau_min,
             estimator=self.est,
-            dt_est=self.regulation_dead_time(hvac_mode),
+            dt_est=self.gain_dead_time(hvac_mode),
             in_near_band=self.deadband_mgr.in_near_band,
             governance_decision=gov_decision_g,
             near_band_ratio=near_band_ratio,

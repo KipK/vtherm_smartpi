@@ -399,7 +399,7 @@ The emitter delay `T_ar` is the time between the start of the heating and the ri
 
 - The applied value is the refined value when published, else the fast value, else the bootstrap value.
 - A learned value is applied only between 0.5 and 2 times the bootstrap value. Outside that range it is shown with an out-of-bound flag and the bootstrap value stays in use.
-- The applied value is used by the gains, the near band, the integral hold after a heater start or a resume, FF3 and the thermal twin. The learning of `a` and `b`, the feed-forward trim, the calibration and AutoCalib keep the bootstrap value.
+- The applied value is used by the near band, the integral hold after a heater start or a resume, FF3 and the thermal twin. The gains use half of it: the gain rule expects an apparent dead time, which is what the bootstrap measures, and the learned value is the mean delay of the emitter, about twice as long. The learning of `a` and `b`, the feed-forward trim, the calibration and AutoCalib keep the bootstrap value.
 - The bootstrap value is never modified. Disabling the option returns to it at once.
 
 **Data quality**

@@ -26,6 +26,7 @@ from .const import (
     STEP_MIN_RISE_C,
     STEP_TO_H,
     TAR_FAST_GATE,
+    TAR_GAIN_DEADTIME_FACTOR,
     TAR_MAX_EVALUATIONS,
     TAR_MAX_MORNINGS,
     TAR_MAX_NIGHTS,
@@ -227,6 +228,13 @@ class TarLearningManager:
             return dt_est
         return RegulationDeadTime(dt_est, ap.value_s)
 
+    def gain_dead_time(self, dt_est, hvac_mode):
+        """Dead-time source of the gain rule: the learned value as an effective dead time."""
+        view = self.regulation_dead_time(dt_est, hvac_mode)
+        if view is dt_est:
+            return dt_est
+        return RegulationDeadTime(dt_est, TAR_GAIN_DEADTIME_FACTOR * view.deadtime_heat_s)
+
     # ------------------------------------------------------------------
     # Scheduling
     # ------------------------------------------------------------------
@@ -408,6 +416,8 @@ class TarLearningManager:
             "status": self.public_status,
             "gate": self.gate,
             "applied_s": _r(ap.value_s),
+            "gains_s": _r(ap.value_s if ap.source == SOURCE_BOOTSTRAP or ap.value_s is None
+                          else TAR_GAIN_DEADTIME_FACTOR * ap.value_s),
             "source": ap.source,
             "bootstrap_s": _r(bootstrap_s),
             "in_force_s": _r(ap.in_force_s),

@@ -114,6 +114,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `gate` | Confirmation rule of the morning values (`G1`) |
 | `applied_s` | HEAT active dead time used by the regulation, in seconds |
 | `source` | Origin of `applied_s`: `bootstrap`, `fast` or `refined` |
+| `gains_s` | Dead time used by the gains, in seconds: half of `applied_s` for a learned value, `applied_s` itself for the bootstrap value |
 | `bootstrap_s` | Bootstrap/calibration dead time (`model.deadtime_heat_s`), never modified |
 | `in_force_s` / `in_force_source` | Learned value in force (refined, else fast) and its origin, `null` before any publication |
 | `out_of_bound` | `true` when the value in force lies outside 0.5 to 2 times `bootstrap_s` and is therefore not applied |

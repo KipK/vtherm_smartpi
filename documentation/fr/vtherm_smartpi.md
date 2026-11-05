@@ -392,7 +392,7 @@ Le retard de l'émetteur `T_ar` est le délai entre le début du chauffage et la
 
 - La valeur appliquée est la valeur affinée lorsqu'elle est publiée, sinon la valeur rapide, sinon la valeur du bootstrap.
 - Une valeur apprise n'est appliquée qu'entre 0,5 et 2 fois la valeur du bootstrap. Hors de cette plage, elle est affichée avec un indicateur de hors bornes et la valeur du bootstrap reste utilisée.
-- La valeur appliquée sert aux gains, à la bande proche, au maintien de l'intégrale après un démarrage ou une reprise du chauffage, à FF3 et au jumeau thermique. L'apprentissage de `a` et `b`, la correction feed-forward, la calibration et AutoCalib conservent la valeur du bootstrap.
+- La valeur appliquée sert à la bande proche, au maintien de l'intégrale après un démarrage ou une reprise du chauffage, à FF3 et au jumeau thermique. Les gains en utilisent la moitié : leur règle de réglage attend un temps mort apparent, celui que mesure le bootstrap, alors que la valeur apprise est le retard moyen de l'émetteur, environ deux fois plus long. L'apprentissage de `a` et `b`, la correction feed-forward, la calibration et AutoCalib conservent la valeur du bootstrap.
 - La valeur du bootstrap n'est jamais modifiée. Désactiver l'option revient immédiatement à elle.
 
 **Qualité des données**

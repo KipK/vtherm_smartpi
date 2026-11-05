@@ -57,6 +57,7 @@ def test_out_of_bound_value_is_not_applied() -> None:
     assert diag["out_of_bound"] is True
     assert diag["source"] == "bootstrap"
     assert diag["in_force_s"] == 1200.0
+    assert diag["gains_s"] == diag["applied_s"] == diag["bootstrap_s"]
 
 
 def test_learned_value_drives_the_regulation_without_touching_the_bootstrap() -> None:
@@ -65,6 +66,13 @@ def test_learned_value_drives_the_regulation_without_touching_the_bootstrap() ->
     def prepare(algo):
         _active(300.0)(algo)
         holder["algo"] = algo
+        calculate = algo.gain_scheduler.calculate
+
+        def spy(**kwargs):
+            holder.setdefault("gain_dead_times", set()).add(kwargs["dt_est"].deadtime_heat_s)
+            return calculate(**kwargs)
+
+        algo.gain_scheduler.calculate = spy
 
     rows = sim.run(REFERENCE["hours"], tar_learning=True, prepare=prepare)
     assert _sha(rows) != REFERENCE["sha256"]
@@ -75,10 +83,15 @@ def test_learned_value_drives_the_regulation_without_touching_the_bootstrap() ->
     view = algo.regulation_dead_time(VThermHvacMode_HEAT)
     assert view.deadtime_heat_s == 300.0
     assert algo.regulation_dead_time(VThermHvacMode_COOL) is algo.dt_est
+    # The gain rule gets the learned value as an effective dead time, half the learned one
+    assert algo.gain_dead_time(VThermHvacMode_HEAT).deadtime_heat_s == 150.0
+    assert algo.gain_dead_time(VThermHvacMode_COOL) is algo.dt_est
+    assert holder["gain_dead_times"] == {150.0}
     diag = algo.get_published_diagnostics()
     assert diag["model"]["deadtime_heat_s"] == 480.0
     assert diag["tar_learning"]["source"] == "fast"
     assert diag["tar_learning"]["applied_s"] == 300.0
+    assert diag["tar_learning"]["gains_s"] == 150.0
 
 
 def _algo(tar: bool) -> SmartPI:
@@ -94,12 +107,14 @@ def test_turning_the_option_off_reverts_at_once() -> None:
     on.tar_learning.fast_pub = {"value_s": 300.0, "day": 0}
     on._last_hvac_mode = VThermHvacMode_HEAT
     assert on.regulation_dead_time().deadtime_heat_s == 300.0
+    assert on.gain_dead_time().deadtime_heat_s == 150.0
     state = on.save_state()
     assert "tar_learning" not in state  # the learner keeps its own store
     off = _algo(False)
     off.load_state(state)
     assert off.tar_learning is None
     assert off.regulation_dead_time(VThermHvacMode_HEAT) is off.dt_est
+    assert off.gain_dead_time(VThermHvacMode_HEAT) is off.dt_est
     assert off.dt_est.deadtime_heat_s == 480.0
     assert "tar_learning" not in off.get_published_diagnostics()
 
@@ -109,6 +124,7 @@ def test_unavailable_dependencies_fall_back_to_bootstrap() -> None:
     algo.tar_learning.fast_pub = {"value_s": 300.0, "day": 0}
     algo.tar_learning.set_dependencies(False)
     assert algo.regulation_dead_time(VThermHvacMode_HEAT) is algo.dt_est
+    assert algo.gain_dead_time(VThermHvacMode_HEAT) is algo.dt_est
     diag = algo.get_published_diagnostics()["tar_learning"]
     assert diag["status"] == "dependencies_unavailable"
     assert diag["source"] == "bootstrap"
