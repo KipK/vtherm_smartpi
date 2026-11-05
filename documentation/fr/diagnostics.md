@@ -110,7 +110,6 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | Champ | Signification |
 |---|---|
 | `status` | `active`, `checking_dependencies` (jusqu'au démarrage du thermostat), `dependencies_unavailable` (numpy/scipy ne peuvent pas être chargés : valeur du bootstrap utilisée) ou `valve_mode_not_supported` |
-| `gate` | Règle de confirmation des valeurs du matin (`G1`) |
 | `applied_s` | Temps mort HEAT actif utilisé par la régulation, en secondes |
 | `source` | Origine de `applied_s` : `bootstrap`, `fast` ou `refined` |
 | `gains_s` | Temps mort utilisé par les gains, en secondes : la moitié de `applied_s` pour une valeur apprise, `applied_s` lui-même pour la valeur du bootstrap |
@@ -121,13 +120,13 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `fast.confirmed_mornings` | Nombre de matins acceptés et confirmés |
 | `fast.last_value_s` | Valeur du dernier matin accepté |
 | `fast.last_status` | `confirmed`, `unconfirmed` ou `none` pour le dernier matin accepté |
-| `fast.last_unconfirmed_reason` | Raison pour laquelle le dernier matin accepté n'est pas confirmé |
-| `fast.last_morning` | Dernier matin évalué : `day`, `accepted`, `reason` (première règle non respectée ou `accepted`), `path` (`night` : référence issue de la classe de nuit, nuit avec ou sans chauffage ; `night_regulated` : nuit régulée avec cette référence ; `regulated` : nuit régulée refusée par la classe de nuit), `room_class` |
+| `fast.last_unconfirmed_reason` | Raison pour laquelle le dernier matin accepté n'est pas confirmé (par exemple une nuit restée au moins 1 heure sans chauffe entre 23 h et la montée en confort), en anglais |
+| `fast.last_morning` | Dernier matin évalué : `day`, `accepted`, `reason` (`accepted`, ou la raison, en anglais, pour laquelle le matin n'a pas donné de valeur, par exemple `temperature rise too small`), `room_class` |
 | `refined.tau_e_s` | Valeur affinée publiée `τe`, `null` avant une publication |
-| `refined.class` | Classe de la pièce en vigueur issue de l'identification : `mass`, `one` ou `unknown` |
-| `refined.k_per_s`, `refined.tau_w_h` | Couplage air-murs et constante de temps des murs en vigueur (pièce classée `mass`) |
-| `refined.last_evaluation` | Dernière évaluation quotidienne : `day`, `regulated_nights` (les six nuits sont retenues), `class` et `tau_e_s` avant la règle des nuits régulées, ainsi que les `a` et `b` identifiés, dans les unités de `model.a` et `model.b` (pour information, jamais appliqués ; pour une pièce classée `mass`, `b` est la perte de l'air vers l'extérieur, les murs étant modélisés à part, il diffère donc du `model.b` effectif) |
-| `night_room_class` | Classe de la pièce d'après les nuits sans chauffage (`mass`, `one`, `inconclusive`) |
+| `refined.class` | Type de pièce en vigueur issu de l'identification : `thermal_mass` (pièce à masse thermique), `no_thermal_mass` ou `undetermined` |
+| `refined.k_per_s`, `refined.tau_w_h` | Couplage air-murs et constante de temps des murs en vigueur (pièce `thermal_mass`) |
+| `refined.last_evaluation` | Dernière évaluation quotidienne : `day`, `regulated_nights` (les six nuits sont retenues), `class` et `tau_e_s` avant la règle des nuits régulées, ainsi que les `a` et `b` identifiés, dans les unités de `model.a` et `model.b` (pour information, jamais appliqués ; pour une pièce `thermal_mass`, `b` est la perte de l'air vers l'extérieur, les murs étant modélisés à part, il diffère donc du `model.b` effectif) |
+| `night_room_class` | Type de pièce d'après les nuits sans chauffage : `thermal_mass`, `no_thermal_mass` ou `undetermined` |
 | `pending_steps` | Étapes du matin en attente de leur réponse de 2 h |
 | `data_invalid_reason` | Raison pour laquelle les données actuelles sont exclues (par exemple `window open`, `temperature jump`, `hvac not heating`), `null` lorsqu'elles sont valides |
 | `history_h` | Heures de signaux conservées |

@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from ...hvac_mode import VThermHvacMode_HEAT
-from . import gates
+from . import gates, public
 from .clock import LocalClock
 from .const import (
     ID_WIN_DAYS,
@@ -414,7 +414,6 @@ class TarLearningManager:
         last_room = next((m for m in reversed(self.mornings) if m.get("room_class")), None)
         return {
             "status": self.public_status,
-            "gate": self.gate,
             "applied_s": _r(ap.value_s),
             "gains_s": _r(ap.value_s if ap.source == SOURCE_BOOTSTRAP or ap.value_s is None
                           else TAR_GAIN_DEADTIME_FACTOR * ap.value_s),
@@ -428,28 +427,28 @@ class TarLearningManager:
                 "confirmed_mornings": self.fast_count,
                 "last_value_s": _r(last_acc.get("T")) if last_acc else None,
                 "last_status": fast_status,
-                "last_unconfirmed_reason": last_acc.get("unconfirmed_why") if last_acc else None,
+                "last_unconfirmed_reason": public.unconfirmed_reason(last_acc.get("unconfirmed_why")) if last_acc else None,
                 "last_morning": None if last is None else {
-                    "day": last.get("day"), "accepted": last.get("accepted"), "reason": last.get("why"),
-                    "path": last.get("path"), "room_class": last.get("cls"),
+                    "day": last.get("day"), "accepted": last.get("accepted"),
+                    "reason": public.morning_reason(last.get("why")), "room_class": public.room_class(last.get("cls")),
                 },
             },
             "refined": {
                 "tau_e_s": _r(self.te_pub["value"]) if self.te_pub else None,
-                "class": self.refined_cls,
+                "class": public.room_class(self.refined_cls),
                 "k_per_s": None if wall is None else float(f"{wall['k_per_s']:.4g}"),
                 "tau_w_h": None if wall is None else _r(wall["tau_w_s"] / 3600.0, 2),
                 "last_evaluation": None if last_eval is None else {
                     "day": last_eval.get("day"),
                     "regulated_nights": bool(last_eval.get("regulated")),
-                    "class": last_eval.get("cls_raw", last_eval.get("cls")),
+                    "class": public.room_class(last_eval.get("cls_raw", last_eval.get("cls"))),
                     "tau_e_s": _r(last_eval.get("te_raw", last_eval.get("te"))),
                     # Identified a and b in the units of model.a and model.b (per minute)
                     "a": _per_min(last_eval.get("a_raw", last_eval.get("a"))),
                     "b": _per_min(last_eval.get("b_raw", last_eval.get("b"))),
                 },
             },
-            "night_room_class": last_room.get("room_class") if last_room else None,
+            "night_room_class": public.room_class(last_room.get("room_class")) if last_room else None,
             "pending_steps": len(self.pending),
             "data_invalid_reason": self.history.invalid_reason,
             "history_h": (_r((self.history.last_t - self.history.first_t) / 3600.0)

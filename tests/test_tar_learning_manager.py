@@ -72,13 +72,17 @@ async def test_end_to_end_run_reproduces_the_reference_pipeline() -> None:
     for g, e in zip(got, exp["evals"]):
         assert g[2] == pytest.approx(e["te"], rel=1e-3)
     diag = m.diagnostics(480.0, True)
-    assert diag["source"] == "refined" and diag["refined"]["class"] == "mass"
+    assert diag["source"] == "refined" and diag["refined"]["class"] == "thermal_mass"
     assert diag["applied_s"] == pytest.approx(m.te_pub["value"], abs=0.05)
     # Identified a and b are shown per minute, like model.a and model.b; b matches the simulated room
     last = diag["refined"]["last_evaluation"]
     assert last["a"] == pytest.approx(exp["evals"][-1]["a"] * 60.0, rel=1e-3)
     assert last["b"] == pytest.approx(exp["evals"][-1]["b"] * 60.0, rel=1e-3)
     assert last["b"] == pytest.approx(exp["b_true"], rel=0.05)
+    # Plain values only: no internal rule names or method codes
+    assert "gate" not in diag and "path" not in diag["fast"]["last_morning"]
+    assert diag["night_room_class"] in ("thermal_mass", "no_thermal_mass", "undetermined")
+    assert last["class"] in ("thermal_mass", "no_thermal_mass", "undetermined")
 
     # Persistence across a restart: same learned values, same applied value
     restored = TarLearningManager("e2e", "UTC")

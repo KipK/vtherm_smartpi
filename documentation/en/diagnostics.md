@@ -111,7 +111,6 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | Field | Meaning |
 |---|---|
 | `status` | `active`, `checking_dependencies` (until the thermostat has started), `dependencies_unavailable` (numpy/scipy cannot be loaded: bootstrap value in use) or `valve_mode_not_supported` |
-| `gate` | Confirmation rule of the morning values (`G1`) |
 | `applied_s` | HEAT active dead time used by the regulation, in seconds |
 | `source` | Origin of `applied_s`: `bootstrap`, `fast` or `refined` |
 | `gains_s` | Dead time used by the gains, in seconds: half of `applied_s` for a learned value, `applied_s` itself for the bootstrap value |
@@ -122,13 +121,13 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `fast.confirmed_mornings` | Number of accepted and confirmed mornings |
 | `fast.last_value_s` | Value of the last accepted morning |
 | `fast.last_status` | `confirmed`, `unconfirmed` or `none` for the last accepted morning |
-| `fast.last_unconfirmed_reason` | Why the last accepted morning is unconfirmed |
-| `fast.last_morning` | Last evaluated morning: `day`, `accepted`, `reason` (first failed rule or `accepted`), `path` (`night`: baseline from the night class, night with or without heating; `night_regulated`: regulated night with that baseline; `regulated`: regulated night refused by the night class), `room_class` |
+| `fast.last_unconfirmed_reason` | Why the last accepted morning is unconfirmed (for example a night with at least 1 hour without heating between 23:00 and the comfort step) |
+| `fast.last_morning` | Last evaluated morning: `day`, `accepted`, `reason` (`accepted`, or why the morning gave no value, for example `temperature rise too small`), `room_class` |
 | `refined.tau_e_s` | Published refined value `τe`, `null` before a publication |
-| `refined.class` | Room class in force from the identification: `mass`, `one` or `unknown` |
-| `refined.k_per_s`, `refined.tau_w_h` | Air-wall coupling and wall time constant in force (room classed `mass`) |
-| `refined.last_evaluation` | Last daily evaluation: `day`, `regulated_nights` (the six nights qualify), `class` and `tau_e_s` before the regulated-night rule, and the identified `a` and `b` in the units of `model.a` and `model.b` (information only, never applied; for a room classed `mass`, `b` is the loss of the air to the outside, the walls being modelled apart, so it differs from the effective `model.b`) |
-| `night_room_class` | Room class from the nights without heating (`mass`, `one`, `inconclusive`) |
+| `refined.class` | Type of room in force from the identification: `thermal_mass`, `no_thermal_mass` or `undetermined` |
+| `refined.k_per_s`, `refined.tau_w_h` | Air-wall coupling and wall time constant in force (room with `thermal_mass`) |
+| `refined.last_evaluation` | Last daily evaluation: `day`, `regulated_nights` (the six nights qualify), `class` and `tau_e_s` before the regulated-night rule, and the identified `a` and `b` in the units of `model.a` and `model.b` (information only, never applied; for a room with `thermal_mass`, `b` is the loss of the air to the outside, the walls being modelled apart, so it differs from the effective `model.b`) |
+| `night_room_class` | Type of room from the nights without heating: `thermal_mass`, `no_thermal_mass` or `undetermined` |
 | `pending_steps` | Morning steps waiting for their 2 h response |
 | `data_invalid_reason` | Why the current data are excluded (for example `window open`, `temperature jump`, `hvac not heating`), `null` when they are valid |
 | `history_h` | Hours of signals kept |
