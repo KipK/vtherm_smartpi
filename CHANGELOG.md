@@ -11,6 +11,9 @@ All notable changes to this project will be documented in this file.
   is kept, so disabling the option reverts at once. The gains use half of the
   learned value, as an apparent dead time. Requires `numpy` and `scipy`.
   PWM heaters only: in valve mode the option has no effect.
+
+## [0.6.1]
+
 - Regulation: a room no longer cycles between the overheat cut and the
   restart. During the cut the integral now sees the overshoot and comes back
   down while the PI still asks for power, as long as it alone holds the room
