@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6.1]
 
 - Regulation: a room no longer cycles between the overheat cut and the
   restart. During the cut the integral now sees the overshoot and comes back
