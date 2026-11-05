@@ -79,6 +79,7 @@ from .smartpi.const import (
     ERROR_FILTER_TAU,
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     NEAR_SETPOINT_UNWIND_STEPS,
+    NEAR_BAND_HYSTERESIS_C,
     INTEGRAL_GUARD_STALL_CYCLES,
     RESPONSE_LAG_RESTART_MAX_GAP_S,
     clamp,
@@ -627,14 +628,20 @@ class SmartPI:
         target_temp: float | None,
         current_temp: float | None,
     ) -> None:
-        """Integrate the overshoot that holds the guard cut, toward zero only.
+        """Integrate the overshoot that holds the guard cut, down to the release point.
 
         The cut forces 0 % while the PI still requests power: a positive
         integral that keeps the room above the cut threshold must see that
         error, or the release restores the same power and the cut repeats.
         The error is integrated while the PI request stays positive (the
-        conditional integration of the regulation: never into SAT_LO), and
-        the integral never crosses zero.
+        conditional integration of the regulation: never into SAT_LO).
+
+        Once the feed-forward balances the losses, the integral alone holds
+        the room Ki * I / Kp above the setpoint. The unwinding stops when this
+        offset is back at the cut threshold minus its hysteresis: a smaller
+        integral cannot hold the room above the threshold and is not what
+        keeps the cut (the heat need left after a setpoint decrease, the
+        overshoot of a rise), so it is kept.
         """
         last = self._guard_cut_integral_ts
         if last is None:
@@ -644,12 +651,16 @@ class SmartPI:
             return
         dt_min = min(max(now - last, 0.0) / 60.0, self._cycle_min)
         error = float(target_temp) - float(current_temp)  # the cut is HEAT only
-        if dt_min <= 0.0 or error >= 0.0 or self.ctl.integral <= 0.0:
+        if dt_min <= 0.0 or error >= 0.0 or self.Ki <= 0.0:
+            return
+        release_offset = max(self.deadband_mgr.near_band_above_deg - NEAR_BAND_HYSTERESIS_C, 0.0)
+        integral_floor = self.Kp * release_offset / self.Ki
+        if self.ctl.integral <= integral_floor:
             return
         request = self.ctl.u_ff + self.Kp * error + self.Ki * self.ctl.integral
         if request <= 0.0:
             return
-        self.ctl.integral = max(self.ctl.integral + error * dt_min, 0.0)
+        self.ctl.integral = max(self.ctl.integral + error * dt_min, integral_floor)
         self.ctl.u_i = self.Ki * self.ctl.integral
 
     def _update_learning_during_guard_cut(

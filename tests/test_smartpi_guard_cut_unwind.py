@@ -6,6 +6,7 @@ import pytest
 
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.smartpi.const import NEAR_BAND_HYSTERESIS_C
 
 
 def _algo(integral: float, u_ff: float = 0.18, kp: float = 0.5, ki: float = 0.05) -> SmartPI:
@@ -50,18 +51,45 @@ def test_positive_integral_unwinds_during_the_cut() -> None:
     assert algo.ctl.u_i == pytest.approx(algo.Ki * algo.ctl.integral)
 
 
-def test_unwinding_stops_at_zero() -> None:
+def _integral_floor(algo: SmartPI) -> float:
+    """Integral that holds the room at the cut threshold minus its hysteresis."""
+    return algo.Kp * (algo.deadband_mgr.near_band_above_deg - NEAR_BAND_HYSTERESIS_C) / algo.Ki
+
+
+def test_unwinding_stops_at_the_release_point() -> None:
+    """The integral alone no longer holds the room above the cut threshold: the rest is kept."""
+    algo = _algo(integral=6.0)
+    floor = _integral_floor(algo)
+    assert 0.0 < floor < 6.0
+    _ticks(algo, [1000.0, 1060.0, 4660.0, 8260.0, 11860.0], current_temp=19.2)
+    assert algo.ctl.integral == pytest.approx(floor)
+    assert algo.Ki * algo.ctl.integral / algo.Kp == pytest.approx(
+        algo.deadband_mgr.near_band_above_deg - NEAR_BAND_HYSTERESIS_C
+    )
+
+
+def test_unwinding_stops_at_zero_without_a_release_margin() -> None:
     algo = _algo(integral=0.1)
+    algo.deadband_mgr._near_band_above_deg = NEAR_BAND_HYSTERESIS_C
     _ticks(algo, [1000.0, 1060.0], current_temp=19.2)
     assert algo.ctl.integral == 0.0
+
+
+def test_the_heat_need_is_kept_after_a_setpoint_decrease() -> None:
+    """A cut that follows a setpoint decrease sees the step, not an integral bias."""
+    algo = _algo(integral=4.0, u_ff=0.36, kp=0.9, ki=0.01)
+    assert algo.ctl.integral < _integral_floor(algo)
+    _ticks(algo, [1000.0, 1060.0, 1120.0, 1180.0], current_temp=20.0, target_temp=19.0)
+    assert algo.ctl.integral == 4.0
 
 
 @pytest.mark.parametrize(
     "integral, u_ff, kp, current_temp",
     [
-        (6.0, 0.0, 5.0, 19.2),  # the PI no longer requests power: no integration into SAT_LO
+        (6.0, 0.0, 2.0, 19.2),  # the PI no longer requests power: no integration into SAT_LO
         (-50.0, 0.49, 0.5, 19.37),  # a negative integral is never pushed further
         (6.0, 0.18, 0.5, 18.9),  # below the setpoint: nothing to unwind
+        (1.0, 0.18, 0.5, 19.2),  # already under the release point
     ],
 )
 def test_integral_is_kept_outside_the_unwinding_conditions(integral, u_ff, kp, current_temp) -> None:
