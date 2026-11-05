@@ -13,8 +13,9 @@ All notable changes to this project will be documented in this file.
   PWM heaters only: in valve mode the option has no effect.
 - Regulation: a room no longer cycles between the overheat cut and the
   restart. During the cut the integral now sees the overshoot and comes back
-  toward zero while the PI still asks for power, instead of staying frozen and
-  restoring the same excess power at each restart.
+  down while the PI still asks for power, as long as it alone holds the room
+  above the cut threshold. The heating need left after a setpoint decrease is
+  kept.
 - Calibration: a cool-down is no longer stopped as unreachable on an absurd
   equilibrium. With the heating off, the twin's disturbance estimate is a
   leftover from the last heating; the passive phase is now judged on the more
