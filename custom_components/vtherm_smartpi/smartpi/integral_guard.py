@@ -12,6 +12,9 @@ from .const import (
     INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H,
     INTEGRAL_GUARD_RELEASE_PERSISTENCE,
     INTEGRAL_GUARD_RELEASE_SLOPE_RATIO,
+    INTEGRAL_GUARD_RELEASE_STALL_RATIO,
+    INTEGRAL_GUARD_RESUME_PROGRESS_C,
+    INTEGRAL_GUARD_SOFT_RELEASE_SCALE,
 )
 
 
@@ -51,6 +54,15 @@ def signed_recovery_slope_h(
     return float(slope_h)
 
 
+RESUME_SOURCES = frozenset(
+    {
+        IntegralGuardSource.OFF_RESUME,
+        IntegralGuardSource.WINDOW_RESUME,
+        IntegralGuardSource.POWER_SHEDDING_RESUME,
+    }
+)
+
+
 @dataclass(slots=True)
 class IntegralGuardDecision:
     """Current authorization state for positive integral growth."""
@@ -60,6 +72,8 @@ class IntegralGuardDecision:
     mode_suffix: str
     # Whether memory opposing the recovery may unwind toward zero.
     allow_unwind: bool = True
+    # Factor applied to the integral update (1.0 outside a soft release).
+    integral_scale: float = 1.0
 
 
 def constrain_guarded_integral_delta(
@@ -118,16 +132,65 @@ class SmartPIIntegralGuard:
         self._peak_signed_recovery_slope_h = 0.0
         self._stall_min = 0.0
         self._last_release_reason = "reset"
+        # Last |error| seen beyond the release threshold while armed
+        self._last_abs_error: float | None = None
+        # Error before an interruption; recovering up to it is not progress
+        self._resume_error_ref: float | None = None
+        self._suspended_stall: tuple[bool, float, float | None] | None = None
+        # Direction (+1 / -1) of a stalled recovery released softly, 0 when none
+        self._soft_sign = 0
+
+    @property
+    def soft_release_active(self) -> bool:
+        """Return True while a stalled recovery is released at a reduced integral rate."""
+        return self._soft_sign != 0
+
+    def suspend(self) -> None:
+        """Deactivate the guard for a resume and keep its stall clock.
+
+        A resume that re-arms the guard in the same direction continues the
+        stall clock: the interruption does not show that the recovery moved
+        again. A soft release in progress is kept as well.
+        """
+        carried = (self._block_positive, self._stall_min, self._last_abs_error) if self.active else None
+        soft_sign = self._soft_sign
+        self.reset()
+        self._suspended_stall = carried
+        self._soft_sign = soft_sign
+
+    def drop_suspended_stall(self) -> None:
+        """Forget the stall clock kept by ``suspend``."""
+        self._suspended_stall = None
 
     def arm(self, source: IntegralGuardSource, *, block_positive: bool = True) -> None:
-        """Arm the guard for the given recovery source."""
+        """Arm the guard for the given recovery source.
+
+        A resume in the direction of a soft release in progress does not arm
+        the guard: the recovery was already found stalled and the integral
+        keeps closing it at the reduced rate.
+        """
         if source == IntegralGuardSource.NONE:
             self.clear("none")
             return
+        direction = 1 if block_positive else -1
+        if source in RESUME_SOURCES and not self.active and self._soft_sign == direction:
+            self._suspended_stall = None
+            return
+        kept = None
+        if source in RESUME_SOURCES:
+            if self.active and self._block_positive == block_positive:
+                kept = (self._stall_min, self._last_abs_error)
+            elif self._suspended_stall is not None and self._suspended_stall[0] == block_positive:
+                kept = self._suspended_stall[1:]
+        self._suspended_stall = None
+        self._soft_sign = 0
         if self._source != source or self._block_positive != block_positive:
             self._stable_cycles = 0
             self._peak_signed_recovery_slope_h = 0.0
             self._stall_min = 0.0
+            self._resume_error_ref = None
+            if kept is not None:
+                self._stall_min, self._resume_error_ref = kept
         self._source = source
         self._block_positive = block_positive
         self._last_release_reason = "armed"
@@ -139,6 +202,9 @@ class SmartPIIntegralGuard:
         self._peak_signed_recovery_slope_h = 0.0
         self._stall_min = 0.0
         self._last_release_reason = reason
+        self._last_abs_error = None
+        self._resume_error_ref = None
+        self._suspended_stall = None
 
     def decide(
         self,
@@ -157,8 +223,27 @@ class SmartPIIntegralGuard:
         stalled for ``stall_min`` minutes: error still beyond the release
         threshold while the signed recovery slope stays at or below the
         release slope. ``stall_min`` 0 lets it unwind at once.
+
+        A recovery still stalled after ``INTEGRAL_GUARD_RELEASE_STALL_RATIO``
+        times ``stall_min`` releases the guard: proportional and feed-forward
+        action have settled short of the target and only the integral can
+        close the remaining error. The release is soft: the integral runs at
+        ``INTEGRAL_GUARD_SOFT_RELEASE_SCALE`` of its rate until the error
+        reaches the core deadband or changes sign, so that it does not
+        overshoot the holding power while the room lags behind it. A
+        disturbance recovery keeps its own release at the end of its plateau.
         """
         if not self.active:
+            if self._soft_sign != 0:
+                if in_core_deadband or raw_error * self._soft_sign <= 0.0:
+                    self._soft_sign = 0
+                else:
+                    return IntegralGuardDecision(
+                        False,
+                        False,
+                        "soft_release",
+                        integral_scale=INTEGRAL_GUARD_SOFT_RELEASE_SCALE,
+                    )
             return IntegralGuardDecision(False, False, "off")
 
         if in_core_deadband:
@@ -178,10 +263,28 @@ class SmartPIIntegralGuard:
             self._stable_cycles = 0
             if signed_recovery_slope_h is not None and signed_recovery_slope_h > self._peak_signed_recovery_slope_h:
                 self._peak_signed_recovery_slope_h = signed_recovery_slope_h
+            abs_error = abs(release_error)
+            self._last_abs_error = abs_error
+            if (
+                self._resume_error_ref is not None
+                and abs_error < self._resume_error_ref - INTEGRAL_GUARD_RESUME_PROGRESS_C
+            ):
+                self._resume_error_ref = None
             if signed_recovery_slope_h is None or signed_recovery_slope_h <= self._release_slope():
                 self._stall_min += max(dt_min, 0.0)
-            else:
+            elif self._resume_error_ref is None:
                 self._stall_min = 0.0
+            # else: recovering the dip of an interruption is not progress; the
+            # stall clock holds until the error falls below its earlier level
+            if (
+                stall_min > 0.0
+                and self._stall_min >= INTEGRAL_GUARD_RELEASE_STALL_RATIO * stall_min
+                and self._source != IntegralGuardSource.DISTURBANCE_RECOVERY
+            ):
+                soft_sign = 1 if self._block_positive else -1
+                self.clear("stalled_above_threshold")
+                self._soft_sign = soft_sign
+                return IntegralGuardDecision(False, False, "released_stalled")
             return IntegralGuardDecision(
                 self._block_positive,
                 not self._block_positive,
@@ -293,6 +396,8 @@ class ResumeDeadtimeHold:
                 deadband_c=deadband_c,
             ):
                 guard.arm(source)
+            else:
+                guard.drop_suspended_stall()
             self.source = IntegralGuardSource.NONE
             self.started = False
             return
@@ -313,6 +418,8 @@ class ResumeDeadtimeHold:
                 deadband_c=deadband_c,
             ):
                 guard.arm(source)
+            else:
+                guard.drop_suspended_stall()
             self.source = IntegralGuardSource.NONE
             self.started = False
             return
@@ -322,6 +429,7 @@ class ResumeDeadtimeHold:
             in_core_deadband=in_core_deadband,
             deadband_c=deadband_c,
         ):
+            guard.drop_suspended_stall()
             if ctl.integral_hold_mode == source.value:
                 ctl.clear_integral_hold()
             self.source = IntegralGuardSource.NONE

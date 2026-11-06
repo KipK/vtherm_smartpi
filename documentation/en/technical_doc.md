@@ -549,6 +549,20 @@ previous setpoint therefore cannot hold the room below a new, higher setpoint,
 and a setpoint step does not erase the bias that keeps the room from
 overshooting at the new setpoint.
 
+After a setpoint change or a resume, the proportional and feed-forward action
+can settle short of the target, beyond the release threshold, and only the
+integral can close the remaining error. When the recovery stays stalled for
+`INTEGRAL_GUARD_RELEASE_STALL_RATIO = 2` times the unwind stall, the guard
+releases. The release is soft: the integral runs at
+`INTEGRAL_GUARD_SOFT_RELEASE_SCALE = 0.20` of its rate until the error reaches
+the core deadband or changes sign, so it does not overshoot the holding power
+while a slow room lags behind it (`soft_release` in the integral guard mode).
+A window, power-shedding or OFF resume in the same direction keeps the stall
+clock, or the soft release in progress, instead of starting over; recovering
+the dip of the interruption counts as progress only once the error falls
+`INTEGRAL_GUARD_RESUME_PROGRESS_C = 0.05 °C` below its level before the
+interruption. A disturbance recovery keeps its own plateau release below.
+
 A disturbance-recovery trajectory brakes the P branch because the model
 predicts that the committed power is enough to close the gap. When this model
 is biased, the room can settle on a plateau below the setpoint: the trajectory
@@ -946,6 +960,9 @@ acceptance or rejection without changing the learning decision.
 | `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
 | `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
 | `INTEGRAL_GUARD_STALL_CYCLES` | `3`     |
+| `INTEGRAL_GUARD_RELEASE_STALL_RATIO` | `2.0` |
+| `INTEGRAL_GUARD_SOFT_RELEASE_SCALE` | `0.20` |
+| `INTEGRAL_GUARD_RESUME_PROGRESS_C` | `0.05` |
 | `INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES` | `3` |
 | `INTEGRAL_GUARD_PLATEAU_BLOCKS` | `2` |
 | `INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS` | `4` |

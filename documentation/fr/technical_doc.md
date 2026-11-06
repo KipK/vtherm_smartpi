@@ -482,6 +482,22 @@ peut donc pas maintenir la pièce sous une nouvelle consigne plus élevée, et u
 changement de consigne n'efface pas le biais qui évite le dépassement à la
 nouvelle consigne.
 
+Après un changement de consigne ou une reprise, les actions proportionnelle et
+feed-forward peuvent se stabiliser avant la cible, au-delà du seuil de release,
+et seule l'intégrale peut alors refermer l'écart restant. Quand le rattrapage
+reste calé pendant `INTEGRAL_GUARD_RELEASE_STALL_RATIO = 2` fois la durée de
+calage de la résorption, la garde est relâchée. Ce relâchement est progressif :
+l'intégrale avance à `INTEGRAL_GUARD_SOFT_RELEASE_SCALE = 0.20` de sa vitesse
+jusqu'à ce que l'erreur atteigne la bande morte centrale ou change de signe,
+pour ne pas dépasser la puissance de maintien pendant qu'une pièce lente est en
+retard sur elle (`soft_release` dans le mode de la garde de l'intégrale). Une
+reprise après fenêtre, délestage ou OFF dans le même sens conserve le compteur
+de calage, ou le relâchement progressif en cours, au lieu de repartir de zéro ;
+rattraper le creux de l'interruption ne compte comme un progrès qu'une fois
+l'erreur redescendue de `INTEGRAL_GUARD_RESUME_PROGRESS_C = 0.05 °C` sous son
+niveau d'avant l'interruption. Une récupération de perturbation garde sa propre
+sortie sur palier, décrite ci-dessous.
+
 Une trajectoire de récupération de perturbation freine la branche P parce que
 le modèle prédit que la puissance engagée suffit à refermer l'écart. Quand ce
 modèle est biaisé, la pièce peut se stabiliser sur un palier sous la consigne :
@@ -895,6 +911,9 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
 | `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
 | `INTEGRAL_GUARD_STALL_CYCLES` | `3`     |
+| `INTEGRAL_GUARD_RELEASE_STALL_RATIO` | `2.0` |
+| `INTEGRAL_GUARD_SOFT_RELEASE_SCALE` | `0.20` |
+| `INTEGRAL_GUARD_RESUME_PROGRESS_C` | `0.05` |
 | `INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES` | `3` |
 | `INTEGRAL_GUARD_PLATEAU_BLOCKS` | `2` |
 | `INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS` | `4` |
