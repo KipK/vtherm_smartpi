@@ -1,4 +1,4 @@
-"""Constants of the experimental T_ar learning (emitter response delay).
+"""Constants of the T_ar learning (emitter response delay).
 
 The rule parameters below are part of the validated methods: changing one changes
 the behaviour that was qualified, so they are not configuration knobs.

@@ -707,7 +707,7 @@ def _build_valve_diagnostics(algo: SmartPI) -> Dict[str, Any] | None:
 
 
 def _build_tar_learning(algo: SmartPI) -> Dict[str, Any]:
-    """Return the experimental T_ar learning state (fast and refined values, applied value)."""
+    """Return the T_ar learning state (fast and refined values, applied value)."""
     dt_est = algo.dt_est
     return algo.tar_learning.diagnostics(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
 

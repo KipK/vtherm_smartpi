@@ -70,7 +70,7 @@ TAR_STORAGE_KEY = "vtherm_smartpi.{}.tar_learning"
 
 
 class SmartPITarStore:
-    """Load and save the experimental T_ar learning data of one thermostat.
+    """Load and save the T_ar learning data of one thermostat.
 
     The learning keeps several days of signals: it has its own store, written
     with a longer debounce than the algorithm state.

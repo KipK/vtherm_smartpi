@@ -4,13 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Experimental option "Learn the emitter delay T_ar" (heating, off by default):
-  SmartPI learns the heating response delay from the morning comfort steps and,
-  over regulated nights, from a multi-day model of the room, and uses it in place
-  of the bootstrap value within 0.5 to 2 times that value. The bootstrap value
-  is kept, so disabling the option reverts at once. The gains use half of the
-  learned value, as an apparent dead time. Requires `numpy` and `scipy`.
-  PWM heaters only: in valve mode the option has no effect.
+- Emitter delay learning (heating, always on): SmartPI learns the heating
+  response delay from the morning comfort steps and, over regulated nights,
+  from a multi-day model of the room, and uses it in place of the bootstrap
+  value within 0.5 to 2 times that value. The bootstrap value is kept. The gains
+  use half of the learned value, as an apparent dead time. Requires `numpy` and
+  `scipy`. PWM heaters only: in valve mode nothing is learned or applied.
 
 ## [0.6.1]
 

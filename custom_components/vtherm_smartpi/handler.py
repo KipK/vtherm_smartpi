@@ -37,9 +37,7 @@ from .const import (
     CONF_SMART_PI_KNEE_DEMAND,
     CONF_SMART_PI_KNEE_VALVE,
     CONF_SMART_PI_MAX_VALVE,
-    CONF_SMART_PI_TAR_LEARNING,
     DEFAULT_OPTIONS,
-    DEFAULT_SMART_PI_TAR_LEARNING,
     DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
     diag_update_signal,
@@ -89,8 +87,7 @@ class SmartPIHandler:
         # Initialize storage with slugified name to allow retrieval if re-created
         safe_name = slugify(t.name)
         self._store = SmartPIStateStore(t.hass, safe_name)
-        tar_learning = bool(entry.get(CONF_SMART_PI_TAR_LEARNING, DEFAULT_SMART_PI_TAR_LEARNING))
-        self._tar_store = SmartPITarStore(t.hass, safe_name, TAR_SAVE_DELAY_S) if tar_learning else None
+        self._tar_store = SmartPITarStore(t.hass, safe_name, TAR_SAVE_DELAY_S)
 
         # Use the thermostat's cycle_min property directly for consistency
         # (base_thermostat reads CONF_CYCLE_MIN in __init__)
@@ -152,7 +149,7 @@ class SmartPIHandler:
             deadband_allow_p=deadband_allow_p,
             enable_valve_linearization=valve_linearization_enabled,
             valve_curve_params=self._valve_curve_params,
-            tar_learning=tar_learning,
+            tar_learning=True,
         )
         t.prop_algorithm.configure_valve_linearization(
             valve_linearization_enabled,

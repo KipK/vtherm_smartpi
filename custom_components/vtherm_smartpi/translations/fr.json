@@ -22,8 +22,7 @@
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
           "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
-          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne",
-          "smart_pi_tar_learning": "Apprendre le retard de l'émetteur T_ar (expérimental, chauffage seulement)"
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
       },
       "thermostat_valve_curve": {
@@ -63,8 +62,7 @@
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
           "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
-          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne",
-          "smart_pi_tar_learning": "Apprendre le retard de l'émetteur T_ar (expérimental, chauffage seulement)"
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
         }
       },
       "valve_curve": {

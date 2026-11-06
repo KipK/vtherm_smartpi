@@ -59,7 +59,7 @@ Le bloc `live` est organisé par responsabilité :
 | `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
-| `tar_learning` | Apprentissage expérimental du retard de l'émetteur ; présent uniquement lorsque l'option est activée |
+| `tar_learning` | Apprentissage du retard de l'émetteur |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
@@ -105,7 +105,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 
 ### Apprentissage du retard de l'émetteur
 
-`tar_learning` est présent uniquement lorsque l'option expérimentale est activée (voir [Apprentissage du retard de l'émetteur](./vtherm_smartpi.md#apprentissage-du-retard-de-lémetteur-expérimental)) :
+`tar_learning` décrit l'apprentissage du retard de l'émetteur (voir [Apprentissage du retard de l'émetteur](./vtherm_smartpi.md#apprentissage-du-retard-de-lémetteur)) :
 
 | Champ | Signification |
 |---|---|

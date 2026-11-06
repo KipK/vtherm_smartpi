@@ -22,9 +22,9 @@
       - [Sortie du bootstrap](#sortie-du-bootstrap)
     - [Phase stable](#phase-stable)
     - [Recalibration automatique](#recalibration-automatique)
+    - [Apprentissage du retard de l'émetteur](#apprentissage-du-retard-de-lémetteur)
   - [Réglages conseillés](#réglages-conseillés)
   - [Configuration](#configuration)
-    - [Apprentissage du retard de l'émetteur (expérimental)](#apprentissage-du-retard-de-lémetteur-expérimental)
   - [Diagnostics et carte Markdown](#diagnostics-et-carte-markdown)
   - [Panel de régulation avec Equinox](#panel-de-régulation-avec-equinox)
   - [Services](#services)
@@ -298,6 +298,47 @@ Points utiles à connaître :
 - si la pièce ne peut pas atteindre un seuil de calibration (par exemple lorsqu'il fait chaud dehors), le cycle s'arrête immédiatement, aucune tentative n'est comptée et la suivante attend 24 heures,
 - après plusieurs échecs de recalibration, SmartPI continue de fonctionner et signale un modèle dégradé dans les diagnostics.
 
+### Apprentissage du retard de l'émetteur
+
+Le retard de l'émetteur `T_ar` est le délai entre le début du chauffage et la hausse de la température de la pièce. Le bootstrap le mesure une seule fois (`deadtime_heat_s`). SmartPI l'apprend aussi pendant la régulation normale et utilise la valeur apprise pour la régulation. Cet apprentissage est toujours actif et ne demande aucun réglage.
+
+**Ce qui est appris**
+
+- **Valeur rapide.** Chaque montée de consigne du matin de confort est une réponse indicielle de l'émetteur : une hausse de consigne d'au moins 1 °C entre 03:00 et 10:00 (heure locale). Deux heures après la montée, SmartPI ajuste la hausse de la température. Une pièce à forte inertie (reconnue sur les nuits sans chauffage) bénéficie d'un modèle air-murs dans cet ajustement. La valeur rapide est publiée une fois que 3 matins confirmés concordent : médiane des 5 derniers, avec une dispersion d'au plus `25%`.
+- **Confirmation.** Un matin est non confirmé lorsque la nuit précédente est restée au moins 1 h sans aucun démarrage du chauffage entre 23:00 et la montée de consigne. Les dormeurs qui se lèvent pendant la fenêtre d'ajustement faussent la hausse, et une nuit qui démarre sans chauffage est le signe visible de ce risque. Un matin non confirmé est affiché dans les diagnostics et n'est jamais utilisé.
+- **Valeur affinée.** Chaque jour à 08:00, SmartPI ajuste un modèle de la pièce avec ses murs et son émetteur sur les nuits (18:00 à 08:00) des 3 derniers jours. Il compare cet ajustement à celui réalisé 3 jours plus tôt. Lorsque les deux concordent, ils donnent la classe de la pièce (inertie forte ou non), les paramètres des murs et une constante de temps de l'émetteur `τe`.
+- **Nuits régulées uniquement.** `τe` remplace la valeur rapide seulement lorsque les 6 nuits des deux fenêtres ont été régulées de 23:00 jusqu'à la montée de consigne : consigne constante, un démarrage du chauffage à chaque demi-heure, température à moins de 0,3 °C de la consigne, puissance stable, aucune interruption de données. Sinon, `τe` n'est qu'un diagnostic.
+
+**Ce que cela modifie**
+
+- La valeur appliquée est la valeur affinée lorsqu'elle est publiée, sinon la valeur rapide, sinon la valeur du bootstrap.
+- Une valeur apprise n'est appliquée qu'entre 0,5 et 2 fois la valeur du bootstrap. Hors de cette plage, elle est affichée avec un indicateur de hors bornes et la valeur du bootstrap reste utilisée.
+- La valeur appliquée sert à la bande proche, au maintien de l'intégrale après un démarrage ou une reprise du chauffage, à FF3 et au jumeau thermique. Les gains en utilisent la moitié : leur règle de réglage attend un temps mort apparent, celui que mesure le bootstrap, alors que la valeur apprise est le retard moyen de l'émetteur, environ deux fois plus long. L'apprentissage de `a` et `b`, la correction feed-forward, la calibration et AutoCalib conservent la valeur du bootstrap.
+- La valeur du bootstrap n'est jamais modifiée. La régulation y revient immédiatement dès qu'aucune valeur apprise ne s'applique.
+
+**Qualité des données**
+
+L'apprentissage n'utilise que les périodes où SmartPI pilote le chauffage avec des données valides. Ces périodes sont exclues et interrompent une nuit, une fenêtre d'identification ou une montée de consigne comme une donnée manquante (elles ne sont jamais comblées) :
+
+- aucune donnée depuis plus de 20 minutes, température intérieure ou extérieure indisponible, ou commande inconnue ;
+- 10 minutes avant et après un redémarrage de Home Assistant ou du thermostat, ainsi que l'arrêt entre les deux ;
+- un saut de température de plus de 0,5 °C à plus de 20 °C/h, qu'aucun chauffage ne produit (la valeur est ignorée ; un nouveau niveau confirmé par 3 lectures est conservé) ;
+- une fenêtre ouverte, un délestage, le mode sécurité, un mode HVAC autre que le chauffage, ou une commande remplacée par Versatile Thermostat.
+
+Un matin n'est évalué que si les 2 heures précédant la montée et les 2 h 15 qui la suivent sont valides. Une nuit n'est régulée que si toute sa plage de sommeil est valide. Une fenêtre d'identification ignore les tranches de 10 minutes invalides et exige au moins 50 tranches valides, en séquences d'au moins une heure.
+
+**Prérequis et limites**
+
+- Chauffage uniquement (rien n'est appris ni appliqué en refroidissement), avec des chauffages pilotés par cycles PWM. En mode vanne, rien n'est appris ni appliqué et les diagnostics affichent `valve_mode_not_supported` : la puissance de chauffe d'une vanne n'est connue qu'à travers sa courbe, et une courbe absente ou qui ne correspond pas à la vanne donne un retard faux ; sur un émetteur lent, le retard appris a aussi laissé la montée du matin sous la consigne de confort.
+- Une montée de consigne du matin d'au moins 1 °C, et un temps mort du bootstrap déjà mesuré.
+- La valeur rapide demande 3 matins confirmés. Dans une pièce dont les nuits démarrent sans chauffage, les matins restent non confirmés : la valeur rapide n'y est pas publiée.
+- La valeur affinée demande 6 nuits régulées consécutives, ce qui suppose une consigne éco atteinte avant 23:00 et maintenue toute la nuit.
+- Un occupant présent uniquement en soirée, avant 23:00, n'est pas détecté.
+- Les calculs s'exécutent en arrière-plan : jusqu'à quelques secondes par jour et par thermostat, environ 20 Mo au pic. SmartPI conserve 7 jours de signaux dans son propre fichier de stockage.
+- Ils utilisent les paquets `numpy` et `scipy`, installés avec l'intégration et chargés seulement par les calculs en arrière-plan. S'ils ne peuvent pas être chargés, rien n'est appris, la valeur du bootstrap reste utilisée et les diagnostics affichent `dependencies_unavailable`.
+
+Le bloc `live.tar_learning` des [diagnostics](./diagnostics.md#apprentissage-du-retard-de-lémetteur) affiche les valeurs apprises, leur statut et la valeur appliquée.
+
 ## Réglages conseillés
 
 Les réglages par défaut conviennent dans la plupart des installations.
@@ -369,54 +410,12 @@ Ces valeurs viennent de simulations de chaque type d'installation. Un cycle à u
 | **Demande au coude**                 | Demande SmartPI correspondant au changement de pente de la vanne.                                      | `80%`             |
 | **Ouverture de vanne au coude**      | Ouverture physique de la vanne au changement de pente.                                                 | `15%`             |
 | **Ouverture maximale de vanne**      | Ouverture maximale autorisée lorsque la linéarisation est activée.                                     | `100%`            |
-| **Apprendre le retard de l'émetteur T_ar (expérimental)** | Apprend le délai de réponse du chauffage pendant la régulation normale et l'utilise à la place de la valeur du bootstrap. Voir [Apprentissage du retard de l'émetteur (expérimental)](#apprentissage-du-retard-de-lémetteur-expérimental). | `désactivé` |
 
 ### Redémarrage PWM aux transitions de bande
 
 Lorsque cette option est désactivée, une transition de deadband ou de near-band met à jour la prochaine commande SmartPI mais n'interrompt pas le cycle PWM déjà en cours. C'est le comportement conseillé avec des cycles courts, car redémarrer trop souvent les cycles peut créer des commutations inutiles.
 
 Activez cette option uniquement sur les systèmes thermiques à très forte inertie avec des cycles PWM longs, lorsque attendre la prochaine frontière de cycle retarde trop la réponse physique après une entrée ou une sortie de deadband ou de near-band.
-
-### Apprentissage du retard de l'émetteur (expérimental)
-
-Le retard de l'émetteur `T_ar` est le délai entre le début du chauffage et la hausse de la température de la pièce. Le bootstrap le mesure une seule fois (`deadtime_heat_s`). Avec cette option, SmartPI l'apprend aussi pendant la régulation normale et utilise la valeur apprise pour la régulation. L'option est expérimentale et désactivée par défaut.
-
-**Ce qui est appris**
-
-- **Valeur rapide.** Chaque montée de consigne du matin de confort est une réponse indicielle de l'émetteur : une hausse de consigne d'au moins 1 °C entre 03:00 et 10:00 (heure locale). Deux heures après la montée, SmartPI ajuste la hausse de la température. Une pièce à forte inertie (reconnue sur les nuits sans chauffage) bénéficie d'un modèle air-murs dans cet ajustement. La valeur rapide est publiée une fois que 3 matins confirmés concordent : médiane des 5 derniers, avec une dispersion d'au plus `25%`.
-- **Confirmation.** Un matin est non confirmé lorsque la nuit précédente est restée au moins 1 h sans aucun démarrage du chauffage entre 23:00 et la montée de consigne. Les dormeurs qui se lèvent pendant la fenêtre d'ajustement faussent la hausse, et une nuit qui démarre sans chauffage est le signe visible de ce risque. Un matin non confirmé est affiché dans les diagnostics et n'est jamais utilisé.
-- **Valeur affinée.** Chaque jour à 08:00, SmartPI ajuste un modèle de la pièce avec ses murs et son émetteur sur les nuits (18:00 à 08:00) des 3 derniers jours. Il compare cet ajustement à celui réalisé 3 jours plus tôt. Lorsque les deux concordent, ils donnent la classe de la pièce (inertie forte ou non), les paramètres des murs et une constante de temps de l'émetteur `τe`.
-- **Nuits régulées uniquement.** `τe` remplace la valeur rapide seulement lorsque les 6 nuits des deux fenêtres ont été régulées de 23:00 jusqu'à la montée de consigne : consigne constante, un démarrage du chauffage à chaque demi-heure, température à moins de 0,3 °C de la consigne, puissance stable, aucune interruption de données. Sinon, `τe` n'est qu'un diagnostic.
-
-**Ce que cela modifie**
-
-- La valeur appliquée est la valeur affinée lorsqu'elle est publiée, sinon la valeur rapide, sinon la valeur du bootstrap.
-- Une valeur apprise n'est appliquée qu'entre 0,5 et 2 fois la valeur du bootstrap. Hors de cette plage, elle est affichée avec un indicateur de hors bornes et la valeur du bootstrap reste utilisée.
-- La valeur appliquée sert à la bande proche, au maintien de l'intégrale après un démarrage ou une reprise du chauffage, à FF3 et au jumeau thermique. Les gains en utilisent la moitié : leur règle de réglage attend un temps mort apparent, celui que mesure le bootstrap, alors que la valeur apprise est le retard moyen de l'émetteur, environ deux fois plus long. L'apprentissage de `a` et `b`, la correction feed-forward, la calibration et AutoCalib conservent la valeur du bootstrap.
-- La valeur du bootstrap n'est jamais modifiée. Désactiver l'option revient immédiatement à elle.
-
-**Qualité des données**
-
-L'apprentissage n'utilise que les périodes où SmartPI pilote le chauffage avec des données valides. Ces périodes sont exclues et interrompent une nuit, une fenêtre d'identification ou une montée de consigne comme une donnée manquante (elles ne sont jamais comblées) :
-
-- aucune donnée depuis plus de 20 minutes, température intérieure ou extérieure indisponible, ou commande inconnue ;
-- 10 minutes avant et après un redémarrage de Home Assistant ou du thermostat, ainsi que l'arrêt entre les deux ;
-- un saut de température de plus de 0,5 °C à plus de 20 °C/h, qu'aucun chauffage ne produit (la valeur est ignorée ; un nouveau niveau confirmé par 3 lectures est conservé) ;
-- une fenêtre ouverte, un délestage, le mode sécurité, un mode HVAC autre que le chauffage, ou une commande remplacée par Versatile Thermostat.
-
-Un matin n'est évalué que si les 2 heures précédant la montée et les 2 h 15 qui la suivent sont valides. Une nuit n'est régulée que si toute sa plage de sommeil est valide. Une fenêtre d'identification ignore les tranches de 10 minutes invalides et exige au moins 50 tranches valides, en séquences d'au moins une heure.
-
-**Prérequis et limites**
-
-- Chauffage uniquement (rien n'est appris ni appliqué en refroidissement), avec des chauffages pilotés par cycles PWM. En mode vanne, l'option n'a aucun effet et les diagnostics affichent `valve_mode_not_supported` : la puissance de chauffe d'une vanne n'est connue qu'à travers sa courbe, et une courbe absente ou qui ne correspond pas à la vanne donne un retard faux ; sur un émetteur lent, le retard appris a aussi laissé la montée du matin sous la consigne de confort.
-- Une montée de consigne du matin d'au moins 1 °C, et un temps mort du bootstrap déjà mesuré.
-- La valeur rapide demande 3 matins confirmés. Dans une pièce dont les nuits démarrent sans chauffage, les matins restent non confirmés : la valeur rapide n'y est pas publiée.
-- La valeur affinée demande 6 nuits régulées consécutives, ce qui suppose une consigne éco atteinte avant 23:00 et maintenue toute la nuit.
-- Un occupant présent uniquement en soirée, avant 23:00, n'est pas détecté.
-- Les calculs s'exécutent en arrière-plan : jusqu'à quelques secondes par jour et par thermostat, environ 20 Mo au pic. SmartPI conserve 7 jours de signaux dans son propre fichier de stockage.
-- Ils utilisent les paquets `numpy` et `scipy`, installés avec l'intégration et chargés seulement par les calculs de l'option activée. S'ils ne peuvent pas être chargés, l'option n'a aucun effet et les diagnostics affichent `dependencies_unavailable`.
-
-Le bloc `live.tar_learning` des [diagnostics](./diagnostics.md#apprentissage-du-retard-de-lémetteur) affiche les valeurs apprises, leur statut et la valeur appliquée.
 
 ## Diagnostics et carte Markdown
 

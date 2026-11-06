@@ -59,7 +59,7 @@ The `live` block is organized by responsibility:
 | `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
-| `tar_learning` | Experimental emitter delay learning; present only when the option is enabled |
+| `tar_learning` | Emitter delay learning |
 
 `analysis` groups the advanced live values into `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` and, when
@@ -106,7 +106,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 
 ### Emitter delay learning
 
-`tar_learning` is present only when the experimental option is enabled (see [Emitter delay learning](./vtherm_smartpi.md#emitter-delay-learning-experimental)):
+`tar_learning` describes the emitter delay learning (see [Emitter delay learning](./vtherm_smartpi.md#emitter-delay-learning)):
 
 | Field | Meaning |
 |---|---|

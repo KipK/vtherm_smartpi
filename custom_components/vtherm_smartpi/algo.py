@@ -301,7 +301,7 @@ class SmartPI:
 
         # --- Dead Time (L) Support ---
         self.dt_est = DeadTimeEstimator()
-        # Experimental learning of the HEAT active dead time (None when the option is off)
+        # Learning of the HEAT active dead time (None when the algorithm runs without it)
         self.tar_learning: TarLearningManager | None = None
         if tar_learning:
             time_zone = getattr(getattr(hass, "config", None), "time_zone", None)
@@ -1136,7 +1136,7 @@ class SmartPI:
     def regulation_dead_time(self, hvac_mode: VThermHvacMode | None = None):
         """Dead-time source of the regulation.
 
-        It is the dead-time estimator itself, unless the experimental T_ar
+        It is the dead-time estimator itself, unless the T_ar
         learning applies a learned HEAT active dead time; the estimator values
         are never modified.
         """
@@ -1164,7 +1164,7 @@ class SmartPI:
         hvac_mode: VThermHvacMode | None,
         excluded: str | None = None,
     ) -> None:
-        """Record the signals of the T_ar learning (no-op when the option is off).
+        """Record the signals of the T_ar learning (no-op when the learning is disabled).
 
         excluded: why the applied power is not SmartPI's command (None when it is).
         """

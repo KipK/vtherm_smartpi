@@ -1,4 +1,4 @@
-"""Orchestration of the experimental T_ar learning (event loop side, pure Python).
+"""Orchestration of the T_ar learning (event loop side, pure Python).
 
 The manager records the room signals (history.py), detects the morning comfort
 steps, schedules the computations (jobs.py, run in an executor), keeps their

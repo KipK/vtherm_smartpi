@@ -382,10 +382,8 @@ async def test_options_flow_shows_valve_linearization_from_dedicated_target_conf
 
 
 @pytest.mark.asyncio
-async def test_thermostat_and_options_flows_offer_the_tar_learning_option_off(hass) -> None:
-    """The experimental T_ar learning is offered in both forms and is off by default."""
-    from custom_components.vtherm_smartpi.const import CONF_SMART_PI_TAR_LEARNING
-
+async def test_thermostat_and_options_flows_do_not_offer_a_tar_learning_option(hass) -> None:
+    """The T_ar learning is always on: neither form offers a switch for it."""
     entry = MockConfigEntry(domain=DOMAIN, title="SmartPI defaults", unique_id=DOMAIN, data=dict(DEFAULT_OPTIONS))
     entry.add_to_hass(hass)
     registry = er.async_get(hass)
@@ -397,12 +395,7 @@ async def test_thermostat_and_options_flows_offer_the_tar_learning_option_off(ha
         result["flow_id"], {"target_vtherm_unique_id": climate_entry.entity_id}
     )
     assert result["step_id"] == "thermostat_settings"
-    key = next(k for k in result["data_schema"].schema if k.schema == CONF_SMART_PI_TAR_LEARNING)
-    assert key.default() is False
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_SMART_PI_TAR_LEARNING: True})
-    assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_SMART_PI_TAR_LEARNING] is True
+    assert "smart_pi_tar_learning" not in _schema_keys(result["data_schema"])
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
-    key = next(k for k in options["data_schema"].schema if k.schema == CONF_SMART_PI_TAR_LEARNING)
-    assert key.default() is False
+    assert "smart_pi_tar_learning" not in _schema_keys(options["data_schema"])
