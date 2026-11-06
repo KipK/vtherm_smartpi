@@ -538,8 +538,8 @@ class SmartPI:
         in_core_deadband: bool,
         trajectory_active: bool,
         dt_min: float = 0.0,
-    ) -> tuple[bool, bool, str, bool]:
-        """Return which integral direction must stay blocked and whether opposing memory may unwind."""
+    ) -> tuple[bool, bool, str, bool, float]:
+        """Return the blocked integral directions, whether opposing memory may unwind, and the integral rate factor."""
         release_error = error_p if trajectory_active else error_i
         decision = self.integral_guard.decide(
             raw_error=error_i,
@@ -556,6 +556,7 @@ class SmartPI:
             decision.block_negative,
             decision.mode_suffix,
             decision.allow_unwind,
+            decision.integral_scale,
         )
 
     def update_learning(
@@ -2019,7 +2020,7 @@ class SmartPI:
                 IntegralGuardSource.WINDOW_RESUME,
                 IntegralGuardSource.POWER_SHEDDING_RESUME,
             }:
-                self.integral_guard.reset()
+                self.integral_guard.suspend()
                 self._last_integral_guard_mode = "resume_pending"
                 self.resume_hold.start(resume_guard_source)
             else:
@@ -2173,6 +2174,7 @@ class SmartPI:
             block_negative_integral,
             positive_integral_guard_mode,
             allow_guard_unwind,
+            integral_scale,
         ) = self._update_integral_guard(
             error_i=error_i,
             error_p=e_p,
@@ -2257,6 +2259,7 @@ class SmartPI:
             integrator_hold_source=integrator_hold_source,
             u_max=u_max,
             unwind_band_c=NEAR_SETPOINT_UNWIND_STEPS * self.learn_win.balance.resolution_c,
+            integral_scale=integral_scale,
         )
 
         # Anti-windup on the limit known at this tick (max_on_percent).

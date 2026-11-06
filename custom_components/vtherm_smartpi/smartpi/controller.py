@@ -181,6 +181,7 @@ class SmartPIController:
         integrator_hold_source: str = "external",
         u_max: float = 1.0,
         unwind_band_c: float | None = None,
+        integral_scale: float = 1.0,
     ) -> float:
         """
         Main PID Calculation logic.
@@ -194,6 +195,8 @@ class SmartPIController:
         still lets the integral unwind toward zero there, so that a quantized
         measurement does not freeze a steady offset (deadband on one level,
         saturation on the next).
+        `integral_scale` multiplies the integral update (soft release of a
+        stalled recovery).
         """
         self.last_integral_hold_source = "none"
         self.sat_i = False
@@ -282,7 +285,7 @@ class SmartPIController:
                     u_pi = u_pi_pre
                     self.sat_i = True
                 else:
-                    d_integral = error * dt_min
+                    d_integral = error * dt_min * integral_scale
                     self.last_i_mode = "I:RUN"
                     if unwind_only:
                         d_integral = (

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Regulation: a room no longer stays below the setpoint for good after a
+  setpoint increase or a power-shedding, window or OFF resume. When the
+  proportional and feed-forward action settle short of the setpoint, the
+  integral was held until the room came within 0.1 °C, which it never did. A
+  recovery that stays stalled now releases the integral, which then closes the
+  gap at a reduced rate to avoid overshooting. Frequent power shedding no longer
+  restarts the stall detection at each resume.
+
 ## [0.6.1]
 
 - Regulation: a room no longer cycles between the overheat cut and the
