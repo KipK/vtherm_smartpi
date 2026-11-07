@@ -44,8 +44,8 @@ class DummySmartPI(SmartPI):
 
     def get_published_diagnostics(self):
         return {
-            "control": {"phase": self.phase.value},
-            "temperature": {"indoor": 20.5},
+            "control": {"phase": self.phase.value, "kp": 0.4, "ki": 0.002},
+            "temperature": {"indoor": 20.5, "integral_error": 75.0},
             "setpoint": {"filtered_setpoint": 21.0},
             "power": {
                 "applied_percent": 30.0,
@@ -513,7 +513,8 @@ def test_diagnostic_sensor_builds_stable_envelope_and_deduplicates(hass) -> None
         "schema_version": 2,
         "live": live.get_published_diagnostics(),
         "history": {
-            "temperature": {"indoor": 20.5},
+            "control": {"kp": 0.4, "ki": 0.002},
+            "temperature": {"indoor": 20.5, "integral_error": 75.0},
             "setpoint": {"filtered_setpoint": 21.0},
             "power": {
                 "applied_percent": 30.0,
@@ -551,6 +552,13 @@ def test_diagnostic_sensor_records_history_changes_without_changing_live(hass, m
     assert sensor._update_from_climate() is True
     history = sensor.extra_state_attributes["history"]
     assert history["power"]["command_percent"] == 28.7
+
+    payload["temperature"]["integral_error"] = 80.0
+    payload["control"]["ki"] = 0.0025
+    assert sensor._update_from_climate() is True
+    history = sensor.extra_state_attributes["history"]
+    assert history["temperature"]["integral_error"] == 80.0
+    assert history["control"] == {"kp": 0.4, "ki": 0.0025}
     assert history["setpoint"]["filtered_setpoint"] == 21.0
     assert sensor._unrecorded_attributes == frozenset({"live"})
     assert sensor._update_from_climate() is False

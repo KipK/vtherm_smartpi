@@ -831,7 +831,7 @@ puissance précédente (`legacy_gap_fill`) reste utilisable.
 - `build_published_diagnostics()` : la fonction qui construit ce payload.
 
 `diagnostic_history.py` enveloppe ce payload dans `schema_version`, `live` et le
-bloc stable de huit séries `history`. Les entités normales excluent `live` du
+bloc stable de onze séries `history`. Les entités normales excluent `live` du
 Recorder ; la sous-classe debug l'enregistre directement. Le mode debug ne fait que sélectionner la classe de capteur enregistrée ; il n'ajoute pas de second bloc de diagnostic.
 
 `analysis.learning.learn_ok_count` et `learn_skip_count` sont des compteurs

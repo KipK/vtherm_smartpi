@@ -26,11 +26,14 @@ Debug mode records both `live` and `history`. The content is not duplicated
 inside `history`: the historical contract remains identical in both modes.
 Debug mode therefore changes retention, not publication.
 
-The `history` block contains these eight series:
+The `history` block contains these eleven series:
 
 | Path under `history` | Meaning |
 |---|---|
 | `temperature.indoor` | Indoor temperature |
+| `temperature.integral_error` | Integral state (°C·min); `ki × integral_error` is its share of the command (0 to 1) |
+| `control.kp` | Proportional gain |
+| `control.ki` | Integral gain |
 | `setpoint.filtered_setpoint` | Filtered control setpoint |
 | `power.applied_percent` | Applied command after output constraints |
 | `power.command_percent` | Requested command before actuator effects |

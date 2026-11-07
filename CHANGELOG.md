@@ -26,6 +26,9 @@ All notable changes to this project will be documented in this file.
   while the integral was restored, so part of the heating need went missing
   for half an hour. The feed-forward now comes back at the level it had before
   the restart.
+- Diagnostics: the recorded history also keeps the integral state
+  (`temperature.integral_error`) and the gains (`control.kp`, `control.ki`),
+  so their evolution can be charted.
 
 ## [0.6.1]
 
