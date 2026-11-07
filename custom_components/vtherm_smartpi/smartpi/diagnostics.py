@@ -712,6 +712,11 @@ def _build_tar_learning(algo: SmartPI) -> Dict[str, Any]:
     return algo.tar_learning.diagnostics(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
 
 
+def _build_room_model(algo: SmartPI) -> Dict[str, Any]:
+    """Return the room model state (observation only: not used by the regulation)."""
+    return algo.room_model.diagnostics()
+
+
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the canonical SmartPI live diagnostics."""
     tau_info = algo.est.tau_reliability()
@@ -732,4 +737,6 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     }
     if getattr(algo, "tar_learning", None) is not None:
         tree["tar_learning"] = _build_tar_learning(algo)
+    if getattr(algo, "room_model", None) is not None:
+        tree["room_model"] = _build_room_model(algo)
     return tree

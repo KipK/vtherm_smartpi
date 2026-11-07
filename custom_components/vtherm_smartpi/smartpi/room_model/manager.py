@@ -1,0 +1,291 @@
+"""Orchestration of the room model (event loop side, pure Python).
+
+The room model runs in observation only: nothing in the regulation reads it.
+The manager feeds the observer at each regulation tick and with each applied
+command, schedules the daily identification (jobs.py, run in an executor on
+the history recorded by the T_ar learning), publishes the qualified
+parameters, and holds the persistence and the diagnostics.
+
+Emitter: the first moment of the emitter response is the HEAT dead time in
+force (learned T_ar or bootstrap); its first-order part tau_e is the refined
+T_ar value when published (else the whole first moment), the delay L the rest.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import logging
+import time
+from typing import Any
+
+from ...hvac_mode import VThermHvacMode_HEAT
+from ..tar_learning.clock import LocalClock
+from ..tar_learning.const import ID_WIN_DAYS, ID_WINDOW_END_H
+from ..tar_learning.manager import STATUS_UNAVAILABLE
+from . import gates, public
+from .const import RM_HORIZON_LABELS, RM_MAX_RECORDS, RM_MAX_WINDOWS, RM_PUB_LAST
+from .model import RoomParams
+from .observer import HEALTH_NO_MODEL, HEALTH_OK, HEALTH_PAUSED, HEALTH_WAITING, RoomObserver
+
+_LOGGER = logging.getLogger(__name__)
+
+STATE_VERSION = 1
+_JOB_DELAY_S = 1200.0
+
+
+def _run_job(snap: dict) -> dict:
+    """Executor entry point: the numerical modules are imported here, never on the event loop."""
+    from . import jobs  # pylint: disable=import-outside-toplevel
+
+    return jobs.identify_job(snap)
+
+
+def _per_min(x: float | None) -> float | None:
+    """A per-second parameter in per-minute units, rounded like model.a and model.b."""
+    return None if x is None else round(float(x) * 60.0, 6)
+
+
+def _r(x: float | None, digits: int) -> float | None:
+    return None if x is None else round(float(x), digits)
+
+
+def _date(day: int | None) -> str | None:
+    return None if day is None else _dt.date.fromordinal(int(day)).isoformat()
+
+
+def _measure_key(meas_id: Any) -> tuple[Any, float | None]:
+    """Identity and epoch time of a temperature measurement id (a datetime in the integration)."""
+    if meas_id is None:
+        return None, None
+    if hasattr(meas_id, "timestamp"):
+        try:
+            return meas_id.isoformat(), float(meas_id.timestamp())
+        except (TypeError, ValueError, OverflowError):
+            return str(meas_id), None
+    return str(meas_id), None
+
+
+class RoomModelManager:
+    """Room model of one thermostat, in observation only."""
+
+    def __init__(self, name: str, time_zone: str | None, tar) -> None:
+        self._name = name
+        self._tz = time_zone
+        self._clock = LocalClock(time_zone)
+        self._tar = tar
+        self._running = False
+        self.dirty = False
+        self._a_per_min: float | None = None
+        self._emitter: tuple[float, float] | None = None
+        self._reset_results()
+
+    def _reset_results(self) -> None:
+        self.observer = RoomObserver(self._clock)
+        self.params: RoomParams | None = None
+        self.q: float | None = None
+        self.windows: dict[str, dict] = {}
+        self.candidates: list[dict] = []
+        self.records: list[dict] = []
+        self.published_day: int | None = None
+        self.wall_code: str | None = None
+        self.last_error: str | None = None
+
+    def reset(self) -> None:
+        """Forget the identified parameters and the observer state."""
+        self._reset_results()
+        self.dirty = True
+
+    # ------------------------------------------------------------------
+    # Status
+    # ------------------------------------------------------------------
+    @property
+    def active(self) -> bool:
+        """The identification can run (numerical dependencies found, heater supported)."""
+        return self._tar is not None and self._tar.active
+
+    def _blocked_reason(self) -> str | None:
+        if self._tar is None:
+            return public.REASON_DEPENDENCIES
+        if not self._tar.supported:
+            return public.REASON_VALVE
+        if self._tar.status == STATUS_UNAVAILABLE:
+            return public.REASON_DEPENDENCIES
+        return None
+
+    # ------------------------------------------------------------------
+    # Inputs (called from the regulation, must stay cheap)
+    # ------------------------------------------------------------------
+    def observe(self, now: float, *, hvac_mode, temp: float | None, measure_id: Any, ext: float | None,
+                excluded: str | None, a_per_min: float | None, first_moment_s: float | None) -> None:
+        """Record one regulation tick.
+
+        excluded: why SmartPI is not in control of the heater, None when it is.
+        first_moment_s: HEAT dead time in force, the first moment of the emitter response.
+        """
+        self._a_per_min = a_per_min if a_per_min and a_per_min > 0.0 else None
+        self._emitter = self._emitter_split(first_moment_s)
+        key, meas_t = _measure_key(measure_id)
+        active = hvac_mode == VThermHvacMode_HEAT and not excluded
+        self.observer.observe(now, temp=temp, meas_key=key, meas_t=meas_t, ext=ext, active=active)
+        self.dirty = True
+
+    def on_applied(self, now: float, power: float, cycle_start: bool, cycle_min: float, hvac_mode,
+                   valve: bool = False) -> None:
+        """Record an applied command: a PWM cycle (power x cycle on) or a valve level."""
+        tl = self.observer.timeline
+        if hvac_mode != VThermHvacMode_HEAT:
+            tl.stop(now)
+        elif valve:
+            tl.applied_level(now, power)
+        else:
+            tl.applied_cycle(now, power, max(float(cycle_min) * 60.0, 60.0), cycle_start)
+        tl.prune(now)
+
+    def _emitter_split(self, first_moment_s: float | None) -> tuple[float, float] | None:
+        if first_moment_s is None or first_moment_s < 0.0:
+            return None
+        te_pub = getattr(self._tar, "te_pub", None) if self._tar is not None else None
+        tau = float(te_pub["value"]) if te_pub and te_pub.get("value") is not None else float(first_moment_s)
+        tau = min(tau, float(first_moment_s))
+        return tau, float(first_moment_s) - tau
+
+    # ------------------------------------------------------------------
+    # Daily identification
+    # ------------------------------------------------------------------
+    def _next_job(self, now: float):
+        tar = self._tar
+        if tar is None or tar.history.is_empty():
+            return None
+        day = self._clock.day_of(now)
+        if str(day) in self.windows or now < self._clock.at(day, ID_WINDOW_END_H) + _JOB_DELAY_S:
+            return None
+        snap = tar.signals_snapshot(now)
+        snap["sp"] = [list(x) for x in tar.history.setpoints]
+        snap["day"] = day
+        snap["tau_e"], snap["L"] = self._emitter if self._emitter else (None, None)
+        snap["a_per_min"] = self._a_per_min
+        snap["excluded_nights"] = self.observer.disturbed_nights()
+        snap["prev"] = self.windows.get(str(day - ID_WIN_DAYS))
+        return snap
+
+    async def async_run(self, hass, now: float | None = None) -> None:
+        """Run the identification of the day in the executor, once."""
+        if self._running or not self.active:
+            return
+        self._running = True
+        try:
+            t = time.time() if now is None else now
+            snap = self._next_job(t)
+            if snap is None:
+                return
+            day = snap["day"]
+            try:
+                result = await hass.async_add_executor_job(_run_job, snap)
+            except ImportError as err:
+                _LOGGER.warning("%s - room model: %s", self._name, err)
+                self._tar.set_dependencies(False)
+                return
+            except Exception as err:  # noqa: BLE001 - a failed fit must never stop the regulation
+                _LOGGER.exception("%s - room model: identification failed", self._name)
+                self.last_error = str(err)
+                result = {"day": day, "why": gates.WHY_FAILED, "decision": {"why": gates.WHY_FAILED, "wall": None}}
+            self._apply(result)
+            self.dirty = True
+        finally:
+            self._running = False
+
+    def _apply(self, rec: dict) -> None:
+        day = int(rec["day"])
+        self.windows[str(day)] = {k: rec.get(k) for k in ("day", "why", "q", "precise", "full", "reduced")}
+        for k in sorted(self.windows, key=int)[:-RM_MAX_WINDOWS]:
+            del self.windows[k]
+        dec = rec.get("decision") or {}
+        self.records.append({"day": day, "why": dec.get("why"), "struct": dec.get("struct"), "wall": dec.get("wall"),
+                             "prior": (rec.get("prior") or {}).get("value"), "held": rec.get("held"),
+                             "excluded_nights": rec.get("excluded_nights")})
+        del self.records[:-RM_MAX_RECORDS]
+        if dec.get("candidate") is None:
+            if self.params is None:
+                self.wall_code = dec.get("wall")
+            return
+        self.candidates.append(dict(dec["candidate"], struct=dec["struct"], day=day))
+        del self.candidates[:-RM_PUB_LAST * 3]
+        params = RoomParams.from_dict(gates.published(self.candidates))
+        if params is None:
+            return
+        self.params = params
+        self.published_day = day
+        self.wall_code = dec.get("wall")
+        self.q = rec.get("q")
+        self.observer.configure(params, self.q)
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+    def diagnostics(self) -> dict[str, Any]:
+        p = self.params
+        obs = self.observer
+        last = self.records[-1] if self.records else None
+        blocked = self._blocked_reason()
+        last_why = blocked or (last.get("why") if last else None)
+        health = obs.health()
+        fc = obs.forecast() if health not in (HEALTH_NO_MODEL, HEALTH_WAITING, HEALTH_PAUSED) else None
+        wx = obs.wall_extra() if health == HEALTH_OK else None
+        score = obs.score.summary()
+        full = p is not None and p.full
+        return {
+            "status": public.status(p.struct if p else None, last_why, bool(self.records)),
+            "tracking": public.tracking(health),
+            "walls": public.walls(p.struct if p else None, self.wall_code),
+            "a": _per_min(p.a) if p else None,
+            "b_eq": _per_min(p.b_eq) if p else None,
+            "b_air": _per_min(p.alpha) if full else None,
+            "b_wall": _per_min(p.c) if full else None,
+            "forecast_c": None if fc is None else {k: round(v, 2) for k, v in zip(RM_HORIZON_LABELS, fc)},
+            "forecast_error_c": {k: _r(v, 3) for k, v in zip(RM_HORIZON_LABELS, score["rmse"])},
+            "forecast_checks": dict(zip(RM_HORIZON_LABELS, score["count"])),
+            "unchanged_temperature_error_c": {k: _r(v, 3) for k, v in zip(RM_HORIZON_LABELS,
+                                                                            score["unchanged_rmse"])},
+            "wall_extra_power_percent": None if wx is None else round(100.0 * wx, 1),
+            "identified_day": _date(self.published_day) if p else None,
+            "last_identification_day": _date(last["day"]) if last else None,
+            "last_refusal_reason": public.reason(last_why),
+            "sensor_resolution_c": _r(self.q, 3),
+            "last_error": self.last_error,
+        }
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+    def save_state(self) -> dict[str, Any]:
+        self.dirty = False
+        return {
+            "version": STATE_VERSION,
+            "params": self.params.to_dict() if self.params else None,
+            "q": self.q,
+            "published_day": self.published_day,
+            "wall_code": self.wall_code,
+            "windows": self.windows,
+            "candidates": self.candidates,
+            "records": self.records,
+            "observer": self.observer.to_dict(),
+        }
+
+    def load_state(self, state: dict[str, Any] | None) -> None:
+        if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
+            return
+        try:
+            self.params = RoomParams.from_dict(state.get("params"))
+            q = state.get("q")
+            self.q = None if q is None else float(q)
+            pd = state.get("published_day")
+            self.published_day = None if pd is None else int(pd)
+            self.wall_code = state.get("wall_code")
+            self.windows = {str(k): dict(v) for k, v in (state.get("windows") or {}).items()}
+            self.candidates = [dict(c) for c in state.get("candidates") or []]
+            self.records = [dict(r) for r in state.get("records") or []]
+            self.observer = RoomObserver(self._clock)
+            self.observer.configure(self.params, self.q)
+            self.observer.load(state.get("observer"))
+        except (TypeError, ValueError, AttributeError) as err:
+            _LOGGER.warning("%s - room model state ignored: %s", self._name, err)
+            self._reset_results()

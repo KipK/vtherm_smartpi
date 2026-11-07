@@ -130,6 +130,7 @@ from .smartpi.integral_guard import (
 )
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.tar_learning.manager import TarLearningManager
+from .smartpi.room_model.manager import RoomModelManager
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
 from .smartpi.timestamp_utils import (
     elapsed_wall_minutes,
@@ -185,6 +186,7 @@ class SmartPI:
         enable_valve_linearization: bool = False,
         valve_curve_params: ValveCurveParams | None = None,
         tar_learning: bool = False,
+        room_model: bool = False,
     ) -> None:
         self._name = name
         self._cycle_min = cycle_min
@@ -308,6 +310,12 @@ class SmartPI:
             self.tar_learning = TarLearningManager(
                 name, time_zone if isinstance(time_zone, str) else None
             )
+        # Room model in observation only, on the history of the T_ar learning (None when off)
+        self.room_model: RoomModelManager | None = None
+        if room_model and self.tar_learning is not None:
+            self.room_model = RoomModelManager(
+                name, time_zone if isinstance(time_zone, str) else None, self.tar_learning
+            )
         # --- Thermal Twin 1R1C (diagnostics-only) ---
         self.twin = self._new_thermal_twin()
         self._last_twin_diag: dict = {}
@@ -416,6 +424,8 @@ class SmartPI:
         self.dt_est.reset()
         if self.tar_learning is not None:
             self.tar_learning.reset()
+        if self.room_model is not None:
+            self.room_model.reset()
         self._t_heat_episode_start = None
         self._t_cool_episode_start = None
         self._deadtime_skip_count_a = 0
@@ -825,6 +835,14 @@ class SmartPI:
                 time.time(), linear_power, cycle_start, self._cycle_min, hvac_mode,
                 valve=self._valve_mode_enabled,
             )
+        if self.room_model is not None:
+            try:
+                self.room_model.on_applied(
+                    time.time(), linear_power, cycle_start, self._cycle_min, hvac_mode,
+                    valve=self._valve_mode_enabled,
+                )
+            except Exception:  # noqa: BLE001 - the room model must never disturb the regulation
+                _LOGGER.exception("%s - room model: applied command not recorded", self._name)
         if cycle_start:
             self._setpoint_changed_in_cycle = False
             # Reset governance regime tracking for new cycle
@@ -1191,6 +1209,37 @@ class SmartPI:
             )
         except Exception:  # noqa: BLE001 - the learning must never disturb the regulation
             _LOGGER.exception("%s - T_ar learning: observation failed", self._name)
+
+    def observe_room_model(
+        self,
+        current_temp: float | None,
+        ext_current_temp: float | None,
+        hvac_mode: VThermHvacMode | None,
+        excluded: str | None = None,
+        measure_id: Any | None = None,
+    ) -> None:
+        """Feed the room model, which runs in observation only (no-op when it is off).
+
+        excluded: why the applied power is not SmartPI's command (None when it is).
+        measure_id: identity of the indoor temperature measurement (its time stamp).
+        """
+        if self.room_model is None:
+            return
+        if excluded is None and self.vt_safety_override:
+            excluded = "safety mode"
+        try:
+            self.room_model.observe(
+                time.time(),
+                hvac_mode=hvac_mode,
+                temp=current_temp,
+                measure_id=measure_id,
+                ext=ext_current_temp,
+                excluded=excluded,
+                a_per_min=self.est.a,
+                first_moment_s=self.regulation_dead_time(VThermHvacMode_HEAT).deadtime_heat_s,
+            )
+        except Exception:  # noqa: BLE001 - the room model must never disturb the regulation
+            _LOGGER.exception("%s - room model: observation failed", self._name)
 
     @property
     def in_deadtime_window(self) -> bool:

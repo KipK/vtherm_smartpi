@@ -251,6 +251,10 @@ class TarLearningManager:
             "cycle_s": self._cycle_s, "pw": h.power_levels(),
         }
 
+    def signals_snapshot(self, now: float) -> dict:
+        """Recorded signals as plain data, for a computation run in an executor."""
+        return self._snapshot_signals(now)
+
     def _b_at(self, t: float) -> float | None:
         b = None
         for p in self.history.params:

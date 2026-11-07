@@ -50,13 +50,30 @@ def seed_stable(algo: SmartPI) -> None:
     algo.calibration_mgr.last_calibration_time = WALL0
 
 
-def run(hours: float = 30.0, *, tar_learning: bool | None = None, prepare=None) -> list[list]:
-    """Run the closed loop; return one row of regulation outputs per calculation."""
+class _SyncHass:
+    """Executor stand-in running the jobs in the loop thread."""
+
+    async def async_add_executor_job(self, func, *args):
+        return func(*args)
+
+
+def run(hours: float = 30.0, *, tar_learning: bool | None = None, room_model: bool | None = None,
+        prepare=None) -> list[list]:
+    """Run the closed loop; return one row of regulation outputs per calculation.
+
+    room_model: the room model observes every tick, runs its daily identification and builds its
+    diagnostics once per cycle.
+    """
     clock = {"t": WALL0}
     loop = asyncio.new_event_loop()
     rows: list[list] = []
     with patch("time.time", lambda: clock["t"]), patch("time.monotonic", lambda: clock["t"] - MONO_OFFSET):
         kwargs = {} if tar_learning is None else {"tar_learning": tar_learning}
+        if room_model is not None:
+            kwargs["room_model"] = room_model
+        hass = _SyncHass()
+        pub_time = None
+        last_published = None
         algo = SmartPI(
             hass=MagicMock(),
             cycle_min=CYCLE_MIN,
@@ -87,6 +104,10 @@ def run(hours: float = 30.0, *, tar_learning: bool | None = None, prepare=None) 
                 )
                 if tar_learning:
                     algo.observe_tar_learning(sp, published, T_EXT, VThermHvacMode_HEAT)
+                if room_model:
+                    if published != last_published:
+                        pub_time, last_published = clock["t"], published
+                    algo.observe_room_model(published, T_EXT, VThermHvacMode_HEAT, measure_id=pub_time)
                 if k == 0:
                     on_percent = algo.on_percent
                     algo._commit_applied_command(on_percent, VThermHvacMode_HEAT, None, cycle_start=True)
@@ -101,5 +122,8 @@ def run(hours: float = 30.0, *, tar_learning: bool | None = None, prepare=None) 
                     temp += 10.0 * (A_TRUE * emitter - B_TRUE * (temp - T_EXT))
                     clock["t"] += 10.0
             loop.run_until_complete(algo.on_cycle_completed(e_eff=on_percent, elapsed_ratio=1.0))
+            if room_model:
+                loop.run_until_complete(algo.room_model.async_run(hass))
+                algo.room_model.diagnostics()
     loop.close()
     return rows

@@ -12,7 +12,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from datetime import timedelta
 
 from .algo import SmartPI
-from .state_store import SmartPIStateStore, SmartPITarStore
+from .state_store import SmartPIRoomModelStore, SmartPIStateStore, SmartPITarStore
+from .smartpi.room_model.const import RM_SAVE_DELAY_S
 from .smartpi.tar_learning.const import TAR_SAVE_DELAY_S
 from .smartpi.tar_learning.deps import dependencies_importable
 from .smartpi.const import (
@@ -64,6 +65,8 @@ class SmartPIHandler:
         self._store: SmartPIStateStore | None = None
         self._tar_store: SmartPITarStore | None = None
         self._tar_task = None
+        self._room_store: SmartPIRoomModelStore | None = None
+        self._room_task = None
         self._recalc_timer_remove = None
         # Remover of the applied-command receipt callback; None without receipts
         self._receipt_remove = None
@@ -88,6 +91,7 @@ class SmartPIHandler:
         safe_name = slugify(t.name)
         self._store = SmartPIStateStore(t.hass, safe_name)
         self._tar_store = SmartPITarStore(t.hass, safe_name, TAR_SAVE_DELAY_S)
+        self._room_store = SmartPIRoomModelStore(t.hass, safe_name, RM_SAVE_DELAY_S)
 
         # Use the thermostat's cycle_min property directly for consistency
         # (base_thermostat reads CONF_CYCLE_MIN in __init__)
@@ -150,6 +154,7 @@ class SmartPIHandler:
             enable_valve_linearization=valve_linearization_enabled,
             valve_curve_params=self._valve_curve_params,
             tar_learning=True,
+            room_model=True,
         )
         t.prop_algorithm.configure_valve_linearization(
             valve_linearization_enabled,
@@ -205,6 +210,11 @@ class SmartPIHandler:
                 _LOGGER.error("%s - Failed to load SmartPI T_ar learning data: %s", t, e)
             available = dependencies_importable()
             algo.tar_learning.set_dependencies(available)
+        if self._room_store and isinstance(algo, SmartPI) and getattr(algo, "room_model", None) is not None:
+            try:
+                algo.room_model.load_state(await self._room_store.async_load())
+            except Exception as e:
+                _LOGGER.error("%s - Failed to load SmartPI room model data: %s", t, e)
 
     @staticmethod
     def _tar_exclusion(t, algo) -> str | None:
@@ -241,6 +251,19 @@ class SmartPIHandler:
         if self._tar_store is not None and tar.dirty:
             self._tar_store.schedule_save(tar)
 
+    def _process_room_model(self, algo) -> None:
+        """Start the due room model identification and persist its data."""
+        room = getattr(algo, "room_model", None)
+        if room is None:
+            return
+        t = self._thermostat
+        if room.active and (self._room_task is None or self._room_task.done()):
+            self._room_task = t.hass.async_create_background_task(
+                room.async_run(t.hass), f"{DOMAIN}_room_model"
+            )
+        if self._room_store is not None and room.dirty:
+            self._room_store.schedule_save(room)
+
     async def async_startup(self):
         """Startup actions."""
         apply_valve_config_check(self._thermostat, self._valve_linearization_configured)
@@ -272,6 +295,9 @@ class SmartPIHandler:
                 tar = getattr(t.prop_algorithm, "tar_learning", None)
                 if self._tar_store is not None and tar is not None:
                     t.hass.async_create_task(self._tar_store.save_now(tar))
+                room = getattr(t.prop_algorithm, "room_model", None)
+                if self._room_store is not None and room is not None:
+                    t.hass.async_create_task(self._room_store.save_now(room))
             except Exception as e:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
@@ -469,6 +495,15 @@ class SmartPIHandler:
                     excluded=self._tar_exclusion(t, algo),
                 )
                 self._process_tar_learning(algo)
+            if isinstance(algo, SmartPI) and getattr(algo, "room_model", None) is not None:
+                algo.observe_room_model(
+                    t.current_temperature,
+                    t.current_outdoor_temperature,
+                    t.vtherm_hvac_mode,
+                    excluded=self._tar_exclusion(t, algo),
+                    measure_id=getattr(t, "last_temperature_measure", None),
+                )
+                self._process_room_model(algo)
 
             # Force cycle restart on deadband and near-band transitions so the
             # physically engaged PWM follows the zone change quickly.

@@ -23,6 +23,7 @@
     - [Stable phase](#stable-phase)
     - [Automatic recalibration](#automatic-recalibration)
     - [Emitter delay learning](#emitter-delay-learning)
+    - [Room model](#room-model)
   - [Recommended settings](#recommended-settings)
   - [Configuration](#configuration)
   - [Diagnostics and Markdown card](#diagnostics-and-markdown-card)
@@ -345,6 +346,33 @@ A morning is evaluated only when the 2 hours before the step and the 2 h 15 afte
 - They use the `numpy` and `scipy` packages, installed with the integration and loaded only by the background computations. If they cannot be loaded, nothing is learned, the bootstrap value stays in use and the diagnostics show `dependencies_unavailable`.
 
 The `live.tar_learning` block of the [diagnostics](./diagnostics.md#emitter-delay-learning) shows the learned values, their status and the applied value.
+
+### Room model
+
+SmartPI also maintains a room model in observation; it does not act on the regulation yet. The model describes the room with its air, its walls and its emitter. SmartPI uses it to forecast the room temperature and checks these forecasts against the measured temperature.
+
+**What it computes**
+
+- **Identification, once a day.** After 08:00, in the background, SmartPI fits the model on the nights (18:00 to 08:00) of the last 3 days, from the signals kept by the emitter delay learning. The model holds the heating response `a` through the emitter (with its learned delay), the loss of the air to the outside and to the walls, and the slow response of the walls. The state of the walls at the start of each night is estimated, never assumed settled. When a 3-day energy balance (mean heating power over mean indoor-outdoor difference) qualifies, it guides the fit of the static loss `b_eq`.
+- **Publication.** The values of a day are published only when the model follows the measured temperature closely and without systematic error, the values agree with those found 3 days earlier on other nights, and those earlier values also predict the new nights. The published values are the median of the last 3 accepted results. Otherwise the last published values are kept.
+- **Simple model.** The walls are kept in the model only with a precise temperature sensor (steps of 0.015 °C or less), when they carry a real share of the losses in both series of nights, and when they predict the following nights better than the simple model. Otherwise the model is the simple one, with `a` and `b_eq` only, like the A/B model.
+- **Disturbances.** A night in which SmartPI sees heat gains or losses that the model does not explain, compared with the other recent nights, is left out of the identification. A gain present every night (sleepers every night, for example) is not detected.
+- **Tracking.** Once a model is published, SmartPI follows the state of the room (air, walls and unexplained gains) at each regulation tick, with the power actually applied and the outdoor temperature. It corrects that state at each new temperature value; a value repeated by the sensor is not a new measurement. With a sensor in steps of 0.1 °C, a change is read as the crossing of the midpoint between the two values. Tracking pauses outside heating and when SmartPI is not in control (window open, power shedding, safety mode, command overridden). After a pause or a restart of up to 3 hours the state is resumed; after a longer one it restarts with the walls in balance with the air, and settles for about 3 hours.
+
+**What it shows**
+
+- The forecast of the room temperature in 1, 2, 6 and 12 hours if the current heating power were kept.
+- The error of the past forecasts against the measured temperature, over the last 7 days, next to the error of a forecast that keeps the temperature unchanged.
+- With a precise sensor and identified walls: the extra power the walls currently absorb beyond their steady share, in % of full power. It is positive while the walls warm up (after a morning rise, for example) and negative while they give heat back.
+
+**Requirements and limits**
+
+- Heaters driven by PWM cycles; valves are not supported yet.
+- A first publication needs about 6 days of recorded nights with some heating.
+- It uses the same `numpy` and `scipy` packages as the emitter delay learning, in the background: about one or two seconds per day and per thermostat.
+- Its parameters and state are kept in their own storage file and survive restarts. The `reset_smartpi_learning` service clears them.
+
+The `live.room_model` block of the [diagnostics](./diagnostics.md#room-model) shows the model status, its values, the forecasts and their errors.
 
 ## Recommended settings
 

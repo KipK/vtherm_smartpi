@@ -76,8 +76,11 @@ class SmartPITarStore:
     with a longer debounce than the algorithm state.
     """
 
+    _KEY = TAR_STORAGE_KEY
+    _LABEL = "T_ar learning"
+
     def __init__(self, hass: HomeAssistant, safe_name: str, save_delay_s: float) -> None:
-        self._store = Store(hass, STORAGE_VERSION, TAR_STORAGE_KEY.format(safe_name))
+        self._store = Store(hass, STORAGE_VERSION, self._KEY.format(safe_name))
         self._save_delay_s = save_delay_s
         self._save_due = 0.0
 
@@ -99,4 +102,14 @@ class SmartPITarStore:
             self._store.async_delay_save(manager.save_state, self._save_delay_s)
             self._save_due = now + self._save_delay_s
         except Exception as e:
-            _LOGGER.error("Failed to schedule SmartPI T_ar learning save: %s", e)
+            _LOGGER.error("Failed to schedule SmartPI %s save: %s", self._LABEL, e)
+
+
+ROOM_MODEL_STORAGE_KEY = "vtherm_smartpi.{}.room_model"
+
+
+class SmartPIRoomModelStore(SmartPITarStore):
+    """Load and save the room model of one thermostat (parameters and observer state)."""
+
+    _KEY = ROOM_MODEL_STORAGE_KEY
+    _LABEL = "room model"

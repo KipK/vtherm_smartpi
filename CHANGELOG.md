@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Room model in observation (heating, PWM heaters): SmartPI identifies each day
+  a model of the room with its air, walls and emitter, follows the room state
+  and publishes temperature forecasts and their errors in the `room_model`
+  diagnostics. It does not act on the regulation.
 - Emitter delay learning (heating, always on): SmartPI learns the heating
   response delay from the morning comfort steps and, over regulated nights,
   from a multi-day model of the room, and uses it in place of the bootstrap

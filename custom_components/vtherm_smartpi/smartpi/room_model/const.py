@@ -1,0 +1,124 @@
+"""Constants of the room model.
+
+The rule parameters below define the identification, its publication rules and
+the observer: changing one changes the qualified behaviour, so they are not
+configuration knobs.
+"""
+from __future__ import annotations
+
+import math
+
+H = 3600.0
+DAY = 86400.0
+
+# ---------------------------------------------------------------------------
+# Observer
+# ---------------------------------------------------------------------------
+# Propagation sub-step over the real elapsed time.
+RM_STEP_S = 60.0
+# Continuous process noise: air 0.05 C per sqrt(h); wall state 0.02 C of wall
+# temperature per sqrt(h) (scaled by the coupling); disturbance random walk of
+# 0.3 x the heating need of 1 C indoor-outdoor difference per sqrt(h).
+RM_Q_AIR_C = 0.05
+RM_Q_WALL_C = 0.02
+RM_Q_DIST_REL = 0.3
+# Initial standard deviations: air 0.1 C, wall 0.5 C of wall temperature,
+# disturbance 0.3 x the heating need of 1 C.
+RM_P0_AIR_C = 0.1
+RM_P0_WALL_C = 0.5
+RM_P0_DIST_REL = 0.3
+# The disturbance is bounded: |d| <= RM_D_MAX_REL x a.
+RM_D_MAX_REL = 0.3
+# Measurement variance of a precise sensor (noise +-0.02 C, 0.01 C steps);
+# a coarse sensor uses q^2 / 12 with each change read at the midpoint of its
+# two levels (the crossing of the quantisation boundary).
+RM_R_PRECISE = 0.04 ** 2 / 12.0 + 0.01 ** 2 / 12.0
+# A downtime up to this long resumes the saved state; a longer one restarts the
+# observer at the wall equilibrium.
+RM_RESUME_MAX_S = 3.0 * H
+# The observer is settling during this time after a restart at equilibrium.
+RM_SETTLE_S = 3.0 * H
+# Health checks
+RM_INNOV_EMA = 0.05          # weight of a new correction in the innovation averages
+RM_INNOV_BIAS_MAX = 2.0      # |mean normalised innovation|
+RM_INNOV_NIS_MAX = 16.0      # mean squared normalised innovation
+RM_INNOV_MIN_COUNT = 20      # corrections before the innovation checks apply
+RM_AIR_SD_MAX_C = 0.5        # air uncertainty
+RM_D_SAT_MAX_S = 6.0 * H     # disturbance held at its bound
+RM_WALL_EXTRA_MAX = 1.0      # |wall extra power| / full power: wall state implausible
+
+# Forecasts (s): open loop from the current state under the current command
+RM_HORIZONS_S = (1.0 * H, 2.0 * H, 6.0 * H, 12.0 * H)
+RM_HORIZON_LABELS = ("1h", "2h", "6h", "12h")
+# Scored forecasts: an origin every hour, replayed with the applied command
+# and the measured outdoor temperature; the last errors are kept per horizon.
+RM_SCORE_EVERY_S = 1.0 * H
+RM_SCORE_KEEP = 168
+
+# Night disturbance summary of the observer (detected heat gains or losses)
+RM_NIGHT_MIN_TRACK_S = 4.0 * H
+# A night whose mean disturbance differs from the median of the recent nights
+# by more than this (C/h) is excluded from the identification.
+RM_NIGHT_D_DEV_C_H = 0.08
+RM_NIGHTS_KEEP = 14
+
+# ---------------------------------------------------------------------------
+# Identification
+# ---------------------------------------------------------------------------
+RM_FIT_STEP_S = 60.0
+RM_MIN_SEGMENT_S = 1.0 * H
+RM_MIN_FIT_H = 18.0
+RM_MIN_EVENTS = 40
+RM_MIN_HEAT_S = 3600.0       # full-power equivalent heating over the fit periods
+RM_MIN_DELTA_C = 3.0         # mean indoor-outdoor difference over the fit periods
+RM_EVENT_WEIGHT_CAP_S = 1800.0
+RM_CHECK_STEP_S = 600.0      # residual checks on a 10 min grid
+# Soft prior on the static gain b_eq / a from the energy balance
+RM_PRIOR_SIG_Y = 0.02
+RM_PRIOR_SIG_R = 0.05
+# Search domain (per second)
+RM_TAU_AIR_GRID_H = (0.5, 1.2, 3.0, 7.0, 16.0, 40.0, 100.0, 250.0)
+RM_TAU_WALL_GRID_H = (2.0, 6.0, 20.0, 60.0, 200.0, 600.0)
+RM_G_GRID = (0.1, 0.4, 0.7, 0.9)
+RM_SEARCH_STARTS = 2
+# Plausible values (per second)
+RM_A_RANGE = (2e-5, 1e-2)
+RM_BEQ_RANGE = (1.0 / (3000.0 * H), 1.0 / (3.0 * H))
+RM_ALPHA_MAX = 1.0 / (0.25 * H)
+RM_BETA_RANGE = (1.0 / (2000.0 * H), 1.0 / (1.0 * H))
+# Wall identified: the wall carries at least this share of the air loss
+RM_WALL_SHARE_MIN = 0.1
+# The full model must beat the reduced one on the held-out data by this factor
+RM_FULL_HELDOUT_GAIN = 0.9
+
+# Residual checks (training and held-out)
+RM_RES_MEAN_MAX = {"precise": 0.03, "coarse": 0.05}
+RM_RES_RMS_MAX = {"precise": 0.08, "coarse": 0.12}
+RM_RES_HELDOUT_MEAN_MAX = {"precise": 0.05, "coarse": 0.08}
+RM_RES_HELDOUT_RMS_MAX = {"precise": 0.12, "coarse": 0.15}
+# Structure tests (runs, autocorrelation, correlations) apply only above this
+# residual level: a structure below the sensor resolution is not a model error.
+RM_RES_STRUCT_FLOOR_C = 0.015
+RM_RES_STRUCT_FLOOR_Q = 0.5
+RM_RES_RUNS_Z_MIN = -3.5
+RM_RES_AC_1H_MAX = 0.4
+RM_RES_CORR_MAX = 0.3
+
+# Agreement of two successive windows (|ln ratio|)
+RM_AGREE_TOL = {
+    "a": math.log(1.15),
+    "b_eq": math.log(1.25),
+    "alpha": math.log(1.25),
+    "c": math.log(1.35),
+}
+# Publication: median of the last qualified candidates of the same structure
+RM_PUB_LAST = 3
+RM_MAX_WINDOWS = 8
+RM_MAX_RECORDS = 14
+
+# Debounce of the room model store writes
+RM_SAVE_DELAY_S = 1800
+
+# Model structures
+STRUCT_FULL = "full"
+STRUCT_REDUCED = "reduced"

@@ -60,6 +60,7 @@ Le bloc `live` est organisé par responsabilité :
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
 | `tar_learning` | Apprentissage du retard de l'émetteur |
+| `room_model` | Modèle de pièce, en observation seulement |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
@@ -130,6 +131,30 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `pending_steps` | Étapes du matin en attente de leur réponse de 2 h |
 | `data_invalid_reason` | Raison pour laquelle les données actuelles sont exclues (par exemple `window open`, `temperature jump`, `hvac not heating`), `null` lorsqu'elles sont valides |
 | `history_h` | Heures de signaux conservées |
+| `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |
+
+### Modèle de pièce
+
+`room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Il est calculé en observation seulement : la régulation ne l'utilise pas.
+
+| Champ | Signification |
+|---|---|
+| `status` | `learning`, `identified` (modèle avec murs), `simple model` (modèle sans murs), ou `not identified: ` suivi de la raison, en anglais (par exemple `not identified: too little heating during the nights`) |
+| `tracking` | État du suivi de la pièce : `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` ou `wall state implausible` |
+| `walls` | `identified`, ou la raison pour laquelle les murs ne sont pas dans le modèle : `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model` ; `null` avant tout résultat |
+| `a` | Réponse de chauffe à pleine puissance, dans les unités de `model.a` (°C par minute) |
+| `b_eq` | Déperdition statique, dans les unités de `model.b` (par minute) : la perte qui fixe la puissance de maintien |
+| `b_air` | Taux de perte totale de l'air, vers l'extérieur et vers les murs (par minute) ; `null` pour le modèle simple |
+| `b_wall` | Part en régime établi de cette perte qui passe par les murs (par minute), avec `b_eq` = `b_air` − `b_wall` ; `null` pour le modèle simple |
+| `forecast_c` | Température prévue de la pièce à `1h`, `2h`, `6h` et `12h` si la puissance de chauffe actuelle était maintenue (°C) ; `null` tant que le suivi ne tourne pas |
+| `forecast_error_c` | Racine de l'erreur quadratique moyenne des prévisions passées, par horizon, sur les 7 derniers jours, par rapport à la température mesurée (°C) ; les prévisions sont rejouées avec la puissance réellement appliquée et la température extérieure mesurée |
+| `forecast_checks` | Nombre de prévisions passées vérifiées par horizon |
+| `unchanged_temperature_error_c` | Même erreur pour une prévision qui garde la température inchangée, comme référence |
+| `wall_extra_power_percent` | Puissance supplémentaire que les murs absorbent actuellement au-delà de leur part en régime établi, en % de la pleine puissance (négative lorsqu'ils restituent de la chaleur) ; `null` sans murs identifiés, sans sonde précise ou tant que le suivi n'est pas `ok` |
+| `identified_day` | Jour des valeurs en usage, `null` avant une publication |
+| `last_identification_day` | Jour de la dernière identification quotidienne |
+| `last_refusal_reason` | Raison pour laquelle la dernière identification quotidienne n'a rien publié (par exemple `waiting for a second series of nights to confirm`), `null` lorsqu'elle a publié |
+| `sensor_resolution_c` | Plus petit pas de la sonde de température observé dans l'historique enregistré (°C) |
 | `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |
 
 FFTrim utilise des blocs canoniques imbriqués :

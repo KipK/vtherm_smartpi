@@ -23,6 +23,7 @@
     - [Phase stable](#phase-stable)
     - [Recalibration automatique](#recalibration-automatique)
     - [Apprentissage du retard de l'émetteur](#apprentissage-du-retard-de-lémetteur)
+    - [Modèle de pièce](#modèle-de-pièce)
   - [Réglages conseillés](#réglages-conseillés)
   - [Configuration](#configuration)
   - [Diagnostics et carte Markdown](#diagnostics-et-carte-markdown)
@@ -338,6 +339,33 @@ Un matin n'est évalué que si les 2 heures précédant la montée et les 2 h 15
 - Ils utilisent les paquets `numpy` et `scipy`, installés avec l'intégration et chargés seulement par les calculs en arrière-plan. S'ils ne peuvent pas être chargés, rien n'est appris, la valeur du bootstrap reste utilisée et les diagnostics affichent `dependencies_unavailable`.
 
 Le bloc `live.tar_learning` des [diagnostics](./diagnostics.md#apprentissage-du-retard-de-lémetteur) affiche les valeurs apprises, leur statut et la valeur appliquée.
+
+### Modèle de pièce
+
+SmartPI tient aussi à jour un modèle de pièce en observation ; il n'agit pas encore sur la régulation. Le modèle décrit la pièce avec son air, ses murs et son émetteur. SmartPI s'en sert pour prévoir la température de la pièce et confronte ces prévisions à la température mesurée.
+
+**Ce qu'il calcule**
+
+- **Identification, une fois par jour.** Après 08:00, en arrière-plan, SmartPI ajuste le modèle sur les nuits (18:00 à 08:00) des 3 derniers jours, à partir des signaux conservés par l'apprentissage du retard de l'émetteur. Le modèle porte la réponse de chauffe `a` de l'émetteur (avec son retard appris), la perte de l'air vers l'extérieur et vers les murs, ainsi que la réponse lente des murs. L'état des murs au début de chaque nuit est estimé, jamais supposé stabilisé. Lorsqu'un bilan d'énergie sur 3 jours (puissance de chauffe moyenne rapportée à l'écart moyen intérieur-extérieur) remplit les conditions requises, il guide l'ajustement de la déperdition statique `b_eq`.
+- **Publication.** Les valeurs d'un jour ne sont publiées que si le modèle suit la température mesurée de près et sans erreur systématique, si ces valeurs concordent avec celles trouvées 3 jours plus tôt sur d'autres nuits, et si ces valeurs antérieures prédisent aussi les nouvelles nuits. Les valeurs publiées sont la médiane des 3 derniers résultats acceptés. Sinon, les dernières valeurs publiées sont conservées.
+- **Modèle simple.** Les murs ne restent dans le modèle qu'avec une sonde de température précise (pas de 0,015 °C ou moins), lorsqu'ils portent une part réelle des pertes dans les deux séries de nuits, et lorsqu'ils prédisent les nuits suivantes mieux que le modèle simple. Sinon, le modèle est le modèle simple, avec `a` et `b_eq` seulement, comme le modèle A/B.
+- **Perturbations.** Une nuit où SmartPI observe des apports ou des pertes de chaleur que le modèle n'explique pas, par rapport aux autres nuits récentes, est exclue de l'identification. Un apport présent chaque nuit (des dormeurs toutes les nuits, par exemple) n'est pas détecté.
+- **Suivi.** Une fois un modèle publié, SmartPI suit l'état de la pièce (air, murs et apports non expliqués) à chaque calcul de la régulation, avec la puissance réellement appliquée et la température extérieure. Il corrige cet état à chaque nouvelle valeur de température ; une valeur répétée par la sonde n'est pas une nouvelle mesure. Avec une sonde par pas de 0,1 °C, un changement est lu comme le franchissement du point médian entre les deux valeurs. Le suivi est suspendu hors chauffage et lorsque SmartPI n'a pas la main sur la commande (fenêtre ouverte, délestage, mode sécurité, commande remplacée). Après une pause ou un redémarrage de 3 heures au plus, l'état est repris ; au-delà, il repart avec les murs en équilibre avec l'air et se stabilise pendant environ 3 heures.
+
+**Ce qu'il affiche**
+
+- La prévision de la température de la pièce à 1, 2, 6 et 12 heures si la puissance de chauffe actuelle était maintenue.
+- L'erreur des prévisions passées par rapport à la température mesurée, sur les 7 derniers jours, à côté de l'erreur d'une prévision qui garde la température inchangée.
+- Avec une sonde précise et des murs identifiés : la puissance supplémentaire que les murs absorbent actuellement au-delà de leur part en régime établi, en % de la pleine puissance. Elle est positive pendant que les murs se réchauffent (après une montée le matin, par exemple) et négative pendant qu'ils restituent de la chaleur.
+
+**Prérequis et limites**
+
+- Chauffages pilotés par cycles PWM ; les vannes ne sont pas encore prises en charge.
+- Une première publication demande environ 6 jours de nuits enregistrées avec du chauffage.
+- Il utilise les mêmes paquets `numpy` et `scipy` que l'apprentissage du retard de l'émetteur, en arrière-plan : environ une à deux secondes par jour et par thermostat.
+- Ses paramètres et son état sont conservés dans leur propre fichier de stockage et survivent aux redémarrages. Le service `reset_smartpi_learning` les efface.
+
+Le bloc `live.room_model` des [diagnostics](./diagnostics.md#modèle-de-pièce) affiche l'état du modèle, ses valeurs, les prévisions et leurs erreurs.
 
 ## Réglages conseillés
 
