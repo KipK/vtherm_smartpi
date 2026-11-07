@@ -1324,6 +1324,7 @@ class SmartPI:
             "last_active_wall_ts": self._last_active_wall_ts,
             "deadtime_skip_count_a": self._deadtime_skip_count_a,
             "deadtime_skip_count_b": self._deadtime_skip_count_b,
+            "cycles_since_reset": min(self._cycles_since_reset, self.ff_warmup_cycles),
             "est_state": self.est.save_state(),
             "dt_est_state": self.dt_est.save_state(),
             "gov_state": self.gov.save_state(),
@@ -1469,6 +1470,16 @@ class SmartPI:
 
         self.set_learning_enabled(bool(state.get("learning_enabled", True)))
 
+        # The restored integral holds the share of the load that the
+        # feed-forward did not cover before the restart: resume the time_scale
+        # ramp where it stood, so that the feed-forward comes back at the same
+        # level and the restart stays bumpless.
+        try:
+            restored_cycles = int(state.get("cycles_since_reset", 0))
+        except (TypeError, ValueError):
+            restored_cycles = 0
+        self._cycles_since_reset = max(0, min(restored_cycles, self.ff_warmup_cycles))
+
         # Instant FF on reboot when model is well-learned:
         # skip the time_scale ramp by pre-setting _cycles_since_reset.
         tau_info = self.est.tau_reliability()
@@ -1485,8 +1496,9 @@ class SmartPI:
             )
         else:
             _LOGGER.debug(
-                "%s - Reboot: model not ready (ok_a=%d, tau_reliable=%s) -> FF ramp active",
+                "%s - Reboot: model not ready (ok_a=%d, tau_reliable=%s) -> FF ramp resumes at %d/%d",
                 self._name, self.est.learn_ok_count_a, tau_info.reliable,
+                self._cycles_since_reset, self.ff_warmup_cycles,
             )
 
     def _force_off_output(

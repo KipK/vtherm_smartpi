@@ -21,6 +21,11 @@ All notable changes to this project will be documented in this file.
   recovery that stays stalled now releases the integral, which then closes the
   gap at a reduced rate to avoid overshooting. Frequent power shedding no longer
   restarts the stall detection at each resume.
+- Regulation: a restart no longer causes a dip followed by an overshoot while
+  the feed-forward is still warming up. The feed-forward restarted from zero
+  while the integral was restored, so part of the heating need went missing
+  for half an hour. The feed-forward now comes back at the level it had before
+  the restart.
 
 ## [0.6.1]
 

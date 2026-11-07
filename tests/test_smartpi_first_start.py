@@ -614,3 +614,82 @@ class TestSmartPIRebootBehavior:
         assert smartpi._cycles_since_reset == 0, (
             f"Expected cycles_since_reset=0 (ramp active), got {smartpi._cycles_since_reset}"
         )
+
+    @staticmethod
+    def _low_learn_saved_state(cycles_since_reset) -> dict:
+        """Saved state of a model still in its learning warmup (ok_a < 10)."""
+        return {
+            "version": 2,
+            "cycles_since_reset": cycles_since_reset,
+            "est_state": {
+                "a": 0.025565,
+                "b": 0.001036,
+                "learn_ok_count": 15,
+                "learn_ok_count_a": 5,
+                "learn_ok_count_b": 10,
+                "a_meas_hist": [0.025] * 10,
+                "b_meas_hist": [0.001] * 10,
+                "b_hat_hist": [0.001036] * 10,
+            },
+            "ctl_state": {"integral": 120.0},
+        }
+
+    def test_reboot_resumes_the_ff_ramp_where_it_stood(self):
+        """A restart with a model still warming up keeps the FF time ramp it had reached.
+
+        The restored integral only holds the load share that the feed-forward
+        did not cover: restarting the ramp from zero would remove that share
+        of the feed-forward and the room would dip, then overshoot.
+        """
+        smartpi = SmartPI(
+            hass=MagicMock(),
+            cycle_min=10,
+            minimal_activation_delay=0,
+            minimal_deactivation_delay=0,
+            name="TestSmartPI_RampResume",
+            saved_state=self._low_learn_saved_state(6),
+        )
+
+        assert smartpi._cycles_since_reset == smartpi.ff_warmup_cycles
+        assert smartpi.integral == pytest.approx(120.0)
+
+    def test_reboot_ramp_counter_roundtrip(self):
+        """The ramp counter is saved capped at the ramp length and survives a restart."""
+        first = SmartPI(
+            hass=MagicMock(),
+            cycle_min=10,
+            minimal_activation_delay=0,
+            minimal_deactivation_delay=0,
+            name="TestSmartPI_RampRoundtrip",
+            saved_state=self._low_learn_saved_state(0),
+        )
+        first._cycles_since_reset = 3
+        assert first.save_state()["cycles_since_reset"] == 3
+        first._cycles_since_reset = 50
+        saved = first.save_state()
+        assert saved["cycles_since_reset"] == first.ff_warmup_cycles
+
+        saved["cycles_since_reset"] = 3
+        second = SmartPI(
+            hass=MagicMock(),
+            cycle_min=10,
+            minimal_activation_delay=0,
+            minimal_deactivation_delay=0,
+            name="TestSmartPI_RampRoundtrip2",
+            saved_state=saved,
+        )
+        assert second._cycles_since_reset == 3
+
+    @pytest.mark.parametrize("stored", [None, "bad", -4])
+    def test_reboot_ramp_counter_invalid_value_restarts_the_ramp(self, stored):
+        """An invalid stored ramp counter falls back to a ramp from zero."""
+        smartpi = SmartPI(
+            hass=MagicMock(),
+            cycle_min=10,
+            minimal_activation_delay=0,
+            minimal_deactivation_delay=0,
+            name="TestSmartPI_RampInvalid",
+            saved_state=self._low_learn_saved_state(stored),
+        )
+
+        assert smartpi._cycles_since_reset == 0
