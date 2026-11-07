@@ -419,6 +419,10 @@ power.
 - the number of valid learning episodes,
 - the number of cycles since reset.
 
+The cycle count is kept across restarts. The restored integral only holds the
+share of the load that the feed-forward did not cover, so the feed-forward
+comes back at the level it had before the restart, without a bump.
+
 The FF2 trim stays frozen (`ff_warmup`) while `warmup_scale` is below 1.
 
 $k_{ff}$ is zero, and therefore $u_{ff1}$ is zero, whenever the model is not

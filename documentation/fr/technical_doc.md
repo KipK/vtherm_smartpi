@@ -358,6 +358,11 @@ Le `warmup_scale` n'est pas un simple interrupteur. Il est le produit :
 - du nombre d'apprentissages valides,
 - du nombre de cycles depuis reset.
 
+Le compteur de cycles est conservé au redémarrage. L'intégrale restaurée ne
+porte que la part de la charge que le feedforward ne couvrait pas : le
+feedforward repart donc au niveau qu'il avait avant le redémarrage, sans
+à-coup.
+
 Le trim FF2 reste gelé (`ff_warmup`) tant que `warmup_scale` est inférieur à 1.
 
 $k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (`a` non publié avec moins de 5 mesures, ou moins de 5 mesures de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
