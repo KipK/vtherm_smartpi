@@ -1,4 +1,4 @@
-"""The guard cut lets a positive integral see the overshoot that holds it."""
+"""The guard cut lets a positive integral track the forced zero output."""
 
 from unittest.mock import MagicMock, patch
 
@@ -41,19 +41,38 @@ def _ticks(algo: SmartPI, times: list[float], current_temp: float, target_temp: 
             assert algo.ctl.last_i_mode == "I:OVERRIDE(guard_cut)"
 
 
-def test_positive_integral_unwinds_during_the_cut() -> None:
-    """The overshoot is integrated per minute, a tick gap counting for one cycle at most."""
-    algo = _algo(integral=6.0)
-    _ticks(algo, [1000.0, 1060.0], current_temp=19.2)
-    assert algo.ctl.integral == pytest.approx(6.0 - 0.2 * 1.0)
-    _ticks(algo, [1060.0 + 3600.0], current_temp=19.2)
-    assert algo.ctl.integral == pytest.approx(5.8 - 0.2 * 10.0)
-    assert algo.ctl.u_i == pytest.approx(algo.Ki * algo.ctl.integral)
-
-
 def _integral_floor(algo: SmartPI) -> float:
     """Integral that holds the room at the cut threshold minus its hysteresis."""
     return algo.Kp * (algo.deadband_mgr.near_band_above_deg - NEAR_BAND_HYSTERESIS_C) / algo.Ki
+
+
+def _tracked(algo: SmartPI, error: float, dt_min: float) -> float:
+    """Integral after one back-calculation step toward the applied 0 % (Ti = Kp / Ki)."""
+    request = algo.ctl.u_ff + algo.Kp * error + algo.Ki * algo.ctl.integral
+    return algo.ctl.integral - request * dt_min / algo.Kp
+
+
+def test_positive_integral_tracks_the_cut_output() -> None:
+    """d(Ki * I)/dt = -v / Ti per minute, a tick gap counting for one cycle at most."""
+    algo = _algo(integral=60.0, ki=0.005)
+    expected = _tracked(algo, -0.2, 1.0)
+    _ticks(algo, [1000.0, 1060.0], current_temp=19.2)
+    assert algo.ctl.integral == pytest.approx(expected)
+    expected = _tracked(algo, -0.2, 10.0)
+    assert expected > _integral_floor(algo)
+    _ticks(algo, [1060.0 + 3600.0], current_temp=19.2)
+    assert algo.ctl.integral == pytest.approx(expected)
+    assert algo.ctl.u_i == pytest.approx(algo.Ki * algo.ctl.integral)
+
+
+def test_unwinding_follows_the_request_not_the_overshoot() -> None:
+    """A surplus integral comes down even when the room barely exceeds the setpoint."""
+    algo = _algo(integral=60.0, ki=0.005)
+    expected = _tracked(algo, -0.01, 1.0)
+    _ticks(algo, [1000.0, 1060.0], current_temp=19.01)
+    assert algo.ctl.integral == pytest.approx(expected)
+    # Integrating the error alone would only have removed 0.01 in this minute
+    assert algo.ctl.integral < 60.0 - 0.5
 
 
 def test_unwinding_stops_at_the_release_point() -> None:

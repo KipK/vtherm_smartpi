@@ -650,13 +650,17 @@ class SmartPI:
         target_temp: float | None,
         current_temp: float | None,
     ) -> None:
-        """Integrate the overshoot that holds the guard cut, down to the release point.
+        """Track the forced zero output with the integral, down to the release point.
 
-        The cut forces 0 % while the PI still requests power: a positive
-        integral that keeps the room above the cut threshold must see that
-        error, or the release restores the same power and the cut repeats.
-        The error is integrated while the PI request stays positive (the
-        conditional integration of the regulation: never into SAT_LO).
+        The cut overrides the PI with 0 % while the PI still requests power: a
+        positive integral that keeps the room above the cut threshold must
+        follow the applied output, or the release restores the same power and
+        the cut repeats. The integral tracks the applied 0 % by
+        back-calculation, d(Ki * I)/dt = -v / Ti with v the PI request and
+        Ti = Kp / Ki, while the PI request stays positive (never into SAT_LO).
+        The unwinding rate scales with the request, not with the overshoot:
+        an integral that carries more than the heat need comes down within a
+        few cuts even when the room barely exceeds the threshold.
 
         Once the feed-forward balances the losses, the integral alone holds
         the room Ki * I / Kp above the setpoint. The unwinding stops when this
@@ -682,7 +686,11 @@ class SmartPI:
         request = self.ctl.u_ff + self.Kp * error + self.Ki * self.ctl.integral
         if request <= 0.0:
             return
-        self.ctl.integral = max(self.ctl.integral + error * dt_min, integral_floor)
+        if self.Kp > 0.0:
+            # Back-calculation with Ti = Kp / Ki: delta(Ki * I) = -v * dt / Ti
+            self.ctl.integral = max(self.ctl.integral - request * dt_min / self.Kp, integral_floor)
+        else:
+            self.ctl.integral = max(self.ctl.integral + error * dt_min, integral_floor)
         self.ctl.u_i = self.Ki * self.ctl.integral
 
     def _update_learning_during_guard_cut(
