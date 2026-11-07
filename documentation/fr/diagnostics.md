@@ -26,11 +26,14 @@ Le mode debug enregistre `live` et `history`. Le contenu n'est pas dupliqué
 dans `history` : le contrat historique reste identique dans les deux modes. Le
 mode debug change donc la conservation, pas la publication.
 
-Le bloc `history` contient ces huit séries :
+Le bloc `history` contient ces onze séries :
 
 | Chemin sous `history` | Signification |
 |---|---|
 | `temperature.indoor` | Température intérieure |
+| `temperature.integral_error` | État de l'intégrale (°C·min) ; `ki × integral_error` est sa part de la commande (0 à 1) |
+| `control.kp` | Gain proportionnel |
+| `control.ki` | Gain intégral |
 | `setpoint.filtered_setpoint` | Consigne filtrée utilisée par la régulation |
 | `power.applied_percent` | Commande appliquée après les contraintes de sortie |
 | `power.command_percent` | Commande demandée avant les effets de l'actionneur |

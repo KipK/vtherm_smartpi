@@ -11,8 +11,8 @@ from custom_components.vtherm_smartpi.smartpi.diagnostic_history import (
 
 def _live_diagnostics() -> dict:
     return {
-        "control": {"phase": "Stable"},
-        "temperature": {"indoor": 20.5, "outdoor": 8.0},
+        "control": {"phase": "Stable", "kp": 0.4, "ki": 0.002, "ti_min": 200.0},
+        "temperature": {"indoor": 20.5, "outdoor": 8.0, "integral_error": 75.0},
         "setpoint": {"filtered_setpoint": 21.0, "boost_active": False},
         "power": {
             "applied_percent": 30.0,
@@ -31,7 +31,8 @@ def _live_diagnostics() -> dict:
 def test_history_contains_only_equinox_time_series() -> None:
     """Recorder history must contain only the stable chart contract."""
     assert build_history_diagnostics(_live_diagnostics()) == {
-        "temperature": {"indoor": 20.5},
+        "control": {"kp": 0.4, "ki": 0.002},
+        "temperature": {"indoor": 20.5, "integral_error": 75.0},
         "setpoint": {"filtered_setpoint": 21.0},
         "power": {
             "applied_percent": 30.0,

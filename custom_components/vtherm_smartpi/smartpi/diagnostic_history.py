@@ -9,13 +9,19 @@ DIAGNOSTIC_SCHEMA_VERSION = 2
 
 def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
     """Return the stable Recorder payload."""
+    control = live["control"]
     temperature = live["temperature"]
     setpoint = live["setpoint"]
     power = live["power"]
     model = live["model"]
     return {
+        "control": {
+            "kp": control["kp"],
+            "ki": control["ki"],
+        },
         "temperature": {
             "indoor": temperature["indoor"],
+            "integral_error": temperature["integral_error"],
         },
         "setpoint": {
             "filtered_setpoint": setpoint["filtered_setpoint"],
