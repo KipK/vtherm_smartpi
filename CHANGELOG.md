@@ -19,6 +19,12 @@ All notable changes to this project will be documented in this file.
 - Diagnostics: the recorded history also keeps the integral state
   (`temperature.integral_error`) and the gains (`control.kp`, `control.ki`),
   so their evolution can be charted.
+- Regulation: a room whose integral carries more than the heat need no longer
+  cycles for hours between the overheat cut and the restart. During the cut
+  the integral now follows the forced zero output at the pace of the power the
+  PI still requests, instead of the small overshoot, so the surplus is gone
+  within a few cuts. The heating need left after a setpoint decrease is still
+  kept.
 
 ## [0.6.1]
 
