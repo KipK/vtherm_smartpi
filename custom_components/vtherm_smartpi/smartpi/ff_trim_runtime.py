@@ -5,7 +5,8 @@ ownership, freezes the trim on unreliable regimes and after a reboot,
 routes the causal and periodic FF trim observer results through the
 persistent trim safeguards, applies bumpless trim/integral transactions at
 the post-anti-windup cycle boundary, and feeds the distinct VT thermal
-measurements to both observers.
+measurements to both observers. While a room model source gives the holding
+power, the trim is zero and frozen.
 
 SmartPI owns the trim, the observers, the causal power trace and the
 controller; the coordinator reads and updates them through the SmartPI
@@ -108,6 +109,10 @@ class FFTrimCoordinator:
 
         if self.reboot_freeze_remaining > 0:
             spi._ff_trim.freeze("reboot")
+        elif spi._ff_holding.room_in_force:
+            # The room model gives the holding power: there is no learned
+            # bias for the trim to correct.
+            spi._ff_trim.freeze("room_model")
         elif ab_state in (ABConfidenceState.AB_BAD, ABConfidenceState.AB_DEGRADED):
             spi._ff_trim.freeze(f"ab_{ab_state.value}")
         elif spi._last_ff_result is not None and spi._last_ff_result.warmup_scale < 1.0:
@@ -122,6 +127,36 @@ class FFTrimCoordinator:
             spi._ff_trim.freeze("degraded")
         else:
             spi._ff_trim.unfreeze()
+
+    def hand_over_to_room_model(self) -> None:
+        """Set the trim to zero when a room model source takes over the holding power.
+
+        The caller moves the step of the holding power, trim included, into
+        the integral. Pending evidence and transactions are dropped, the trim
+        windows washed out, and the trim stays frozen while the room model
+        source is in force.
+        """
+        spi = self._spi
+        if spi._ff_trim.u_ff_trim != 0.0:
+            _LOGGER.info(
+                "%s - FFv2: trim %.4f handed over to the room model holding power",
+                spi._name, spi._ff_trim.u_ff_trim,
+            )
+        spi._ff_trim.u_ff_trim = 0.0
+        spi._ff_trim.clear_pending()
+        spi._ff_trim.freeze("room_model")
+        self.pending_persistent = None
+        self.transfer_pending_request_id = None
+        self._clear_transfer_values()
+        self._reset_windows_after_update()
+
+    def hand_back_from_room_model(self) -> None:
+        """Restart the trim windows when the learned holding power comes back.
+
+        A window that saw the room model holding power must not correct the
+        learned one.
+        """
+        self._reset_windows_after_update()
 
     def reset_observation_runtime(self) -> None:
         """Reset causal power, measurement identity, and logical windows."""

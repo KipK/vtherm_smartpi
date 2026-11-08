@@ -1,4 +1,8 @@
-"""Room model and the regulation: running the model in observation leaves the regulation bit-identical."""
+"""Room model and the regulation.
+
+Until the room model publishes, running it leaves the regulation bit-identical
+to the reference; once published, it gives the feed-forward holding power.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import room_model_sim as rsim
 import tar_learning_sim as sim
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
@@ -47,34 +52,51 @@ def _running(holder: dict, publish: bool = True):
     return prepare
 
 
-def test_room_model_running_is_identical_to_the_reference() -> None:
-    """Observer, forecasts, scoring, daily identification and diagnostics leave the regulation unchanged."""
+def test_published_room_model_gives_the_holding_power() -> None:
+    """A published simple model replaces the learned holding power (full weight, no trim).
+
+    The run differs from the reference from the first cycle on: the learned holding power
+    ramps up over its warmup cycles, the room model's does not. Observer, forecasts, scoring,
+    daily identification and diagnostics keep running.
+    """
     holder: dict = {}
     rows = sim.run(REFERENCE["hours"], tar_learning=True, room_model=True, prepare=_running(holder))
     assert len(rows) == REFERENCE["rows"]
-    assert _sha(rows) == REFERENCE["sha256"]
+    assert _sha(rows) != REFERENCE["sha256"]
     algo = holder["algo"]
     room = algo.room_model
     # The module really ran: the identification of the day was computed, the observer tracked the room
     assert [r["day"] for r in room.records] == [rsim.day_of(sim.WALL0)]
     assert room.windows[str(rsim.day_of(sim.WALL0))].get("reduced") is not None
-    diag = algo.get_published_diagnostics()["room_model"]
+    published = algo.get_published_diagnostics()
+    diag = published["room_model"]
     assert diag["status"] == "simple model"
     assert diag["tracking"] == "ok"
     assert diag["forecast_c"] is not None
     assert diag["forecast_checks"]["1h"] > 0
     assert diag["wall_extra_power_percent"] is None
-    # The regulation-side state the room model reads is untouched
+    assert published["feedforward"]["source"] == "room model (simple)"
+    assert published["feedforward"]["wall_power_percent"] is None
+    # Holding power at full weight from the first cycle: b_eq / a (T_sp - T_ext), no trim
+    gain = sim.B_TRUE / sim.A_TRUE
+    for row in rows[:60]:
+        t = sim.WALL0 + row[0]
+        assert row[7] == pytest.approx(gain * (sim._setpoint(t) - sim.T_EXT), abs=1e-12)
+    assert algo._ff_trim.u_ff_trim == 0.0
+    assert algo._ff_trim.freeze_reason == "room_model"
     assert algo.dt_est.deadtime_heat_s == 480.0
     assert "room_model" not in algo.save_state()
 
 
 def test_room_model_learning_is_identical_to_the_reference() -> None:
-    """Same with nothing published yet (observer waiting, identification running)."""
+    """Nothing published (observer waiting, identification running): the regulation is bit-identical."""
     holder: dict = {}
     rows = sim.run(REFERENCE["hours"], tar_learning=True, room_model=True, prepare=_running(holder, publish=False))
     assert _sha(rows) == REFERENCE["sha256"]
-    diag = holder["algo"].get_published_diagnostics()["room_model"]
+    assert holder["algo"].room_model.params is None
+    published = holder["algo"].get_published_diagnostics()
+    assert published["feedforward"]["source"] == "learned model"
+    diag = published["room_model"]
     assert diag["status"] in ("learning", "not identified: the model does not follow the measured temperature "
                                           "closely enough")
     assert diag["forecast_c"] is None

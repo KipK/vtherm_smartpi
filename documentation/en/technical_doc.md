@@ -440,6 +440,62 @@ This is combined with:
 
 - `u_ff2`: slow `FFTrim` correction, frozen while `ABConfidence` is `AB_DEGRADED` or `AB_BAD`, or while `warmup_scale` is below 1 (`ff2_freeze_reason` `ff_warmup`), and zero until a first outdoor temperature has been received.
 
+#### Holding power from the room model
+
+In HEAT with heaters driven by PWM cycles, a published room model replaces
+$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`). With $b_{eq}$ and $a$ of
+the published model and $\delta_{wall}/a$ the wall extra power of its
+tracking (`room_model.wall_extra_power_percent`, both signs):
+
+| Room model | Source (`feedforward.source`) | $u_{ff1}$ |
+|---|---|---|
+| walls identified, tracking `ok` | `room model (air and walls)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}) + \frac{\delta_{wall}}{a}, 0, 1)$ |
+| walls identified, tracking not `ok` (paused, settling, after a window, drift, ...) | `room model (static part)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}), 0, 1)$ |
+| simple model | `room model (simple)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}), 0, 1)$ |
+| nothing published, COOL, valve mode | `learned model` | the learned law above, unchanged |
+
+$b_{eq}/a$ is bounded to 3, like $k_{ff}$. A room model source applies at full
+weight (`warmup_scale = 1`) and does not use the unmeasured disturbance $d$ of
+the tracking. The static part follows the setpoint; the wall part follows the
+tracked air. With the air at the setpoint, $u_{ff1} = (b_{air}(SP - T_{ext}) - w)/a$,
+with $b_{air}$ the total loss rate of the air and $w$ the wall state.
+
+**Bumpless transfer.** A discrete change of $u_{ff1}$ moves into the integral,
+so that $u_{ff} + K_i \cdot I$ does not jump:
+
+$$ I \leftarrow clamp\left(I - \frac{\Delta u_{ff}}{K_i}, -\frac{2}{K_i}, \frac{2}{K_i}\right) $$
+
+The discrete changes are a change of source (including the wall term switched
+on or off by the tracking, and the change of weight from the learned warmup to
+full weight) and a new daily publication of the parameters. $\Delta u_{ff}$ is
+the new FF1 + FF2 minus the outgoing one, both at the current setpoint and
+outdoor temperature; the outgoing room model source keeps the wall term of the
+previous calculation. The continuous evolution of the wall term, of the
+setpoint and of the outdoor temperature is not transferred: it is the action
+of the feed-forward. The learned source's own evolution (warmup ramp, new
+`a`/`b`) is never transferred either. The transfer is applied in the
+calculation, before the PI, and may cross zero; it is cut only by the integral
+limits. Saturation and anti-windup are unchanged: they act on the total
+command. The FF trim transactions of `FFTrimCoordinator` are not used for it:
+they only run on a strict deadband cycle boundary and move the integral toward
+zero, while a change of source happens at any time and in either direction.
+
+**FF2.** Entering a room model source sets the trim to zero through the same
+transfer, drops its pending proposals and transaction, and restarts its
+windows. The trim stays at zero and frozen (`ff2_freeze_reason`
+`room_model`) while a room model source is in force: the model replaces the
+bias the trim learns, and the trim would otherwise follow the wall term. When
+the learned source comes back, the trim windows restart and the trim learns
+again from zero.
+
+**Restart.** The source in force is saved with the integral (`ff_source`). At
+the first calculation after a restart, a different source (room model store
+lost, tracking restarting) is transferred like any change of source; the same
+source resumes without transfer. A state saved without `ff_source` is taken as
+the learned source. A reset of the PI memory (HEAT/COOL change, prolonged
+pause, learning reset) forgets the source: the next one starts without
+transfer.
+
 ### 4.3 FF3
 
 `ff3.py` adds a predictive correction that is enabled by default and can be disabled by configuration:
@@ -516,6 +572,15 @@ T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
 The braking entry predicts the signed change in the active demand direction (`+1` for HEAT, `-1` for COOL) over the remaining cycle, the passive dead time and any queued next-cycle power. The braking gap is that predicted change multiplied by `TRAJECTORY_BRAKE_GAIN = 1.20`.
+
+In HEAT, when a room model is published (walls or simple model) and the heater
+is not a valve, the equilibrium gain $a/b$ of that prediction is replaced by
+the room model's $a/b_{eq}$: the committed power drives the room toward
+$T_{ext} + u \cdot a/b_{eq}$. The relaxation factor $\alpha = e^{-b \cdot h}$
+keeps the learned `b`, and the readiness checks keep the learned `a` and `b`.
+A learned `b/a` biased low by the walls otherwise overstates the committed
+rise and arms the braking too early. The thermal twin and FF3 keep the learned
+model.
 
 The canonical `live.setpoint` block publishes the summary:
 
@@ -717,11 +782,12 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `response_lag.py`      | `ResponseLagEstimator`: response lag, settling gates and delivered power model |
 | `learning_outcomes.py` | bounded counters of learning-window outcomes                |
 | `gains.py`             | gain calculation and freezing                               |
-| `controller.py`        | discrete PI, anti-windup, hold, hysteresis                  |
+| `controller.py`        | discrete PI, anti-windup, hold, hysteresis, integral transfers |
 | `deadband.py`          | deadband and near-band                                      |
 | `setpoint.py`          | analytical setpoint trajectory for the P reference          |
 | `integral_guard.py`    | directional integral guard and the I:HOLD after a window or power-shedding resume |
-| `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration, signed FF gain `b/a` and warmup scale |
+| `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration, signed FF gain `b/a` and warmup scale, room model FF1 |
+| `room_model/feedforward.py` | holding power source from the published room model, bumpless transfer of its discrete changes, static gain for the braking prediction |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator`: frozen control decomposition of scheduler requests, routing of trim observer results, bumpless trim/integral transactions at the cycle boundary, transfer state |
 | `command_ownership.py` | request identifiers, frozen snapshots and binding of the scheduler applied-command receipts |
@@ -765,6 +831,7 @@ self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
 self._command_ownership = CommandOwnershipTracker()
 self.fftrim_coord = FFTrimCoordinator(self)
 self._ab_confidence = ABConfidence()
+self._ff_holding = HoldingTransfer()
 ```
 
 ### 5.4 Current persistence
@@ -821,6 +888,7 @@ The current payload from `SmartPI.save_state()` notably contains:
     "ac_state": {...},
     "ff_v2_trim": {...},
     "ff_trim_delta": ...,
+    "ff_source": {...},  # holding power source the integral complements
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap only
 }
@@ -879,7 +947,7 @@ power (`legacy_gap_fill`) stays usable.
 - `build_published_diagnostics()`: the function that builds that payload.
 
 `diagnostic_history.py` wraps this payload in `schema_version`, `live` and the
-stable eleven-series `history` block. Normal sensor entities exclude `live` from
+stable eighteen-series `history` block. Normal sensor entities exclude `live` from
 Recorder; the debug sensor subclass records it directly. The debug option only selects the sensor class that is recorded; it does not
 add a second diagnostic block.
 

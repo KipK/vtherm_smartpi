@@ -469,6 +469,21 @@ class SmartPIController:
             new_i_power,
         )
 
+    def absorb_feedforward_step(self, *, ki: float, delta_ff: float) -> float:
+        """Move a feed-forward step into the integral so that FF + I does not jump.
+
+        I <- I - delta_ff / Ki, within the integral limits (+-2 / Ki). Unlike
+        apply_integral_power_transfer, the integral may cross zero. Returns
+        the power actually moved (equal to delta_ff unless a limit bounds it).
+        """
+        if not isfinite(float(delta_ff)) or abs(float(delta_ff)) <= 1e-12:
+            return 0.0
+        ki_value = max(float(ki), KI_MIN)
+        i_max = 2.0 / ki_value
+        old = self.integral
+        self.integral = clamp(old - float(delta_ff) / ki_value, -i_max, i_max)
+        return (old - self.integral) * ki_value
+
     def finalize_cycle(
         self,
         u_limited: float,

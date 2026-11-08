@@ -274,7 +274,7 @@ Quand le modèle thermique devient fiable, SmartPI bascule dans son mode normal 
 À ce moment-là, SmartPI :
 
 - calcule automatiquement ses gains PI à partir du modèle appris,
-- ajoute une part anticipative de maintien basée sur la pièce et la température extérieure,
+- ajoute une part anticipative de maintien basée sur la pièce et la température extérieure (issue du modèle appris, ou du [modèle de pièce](#modèle-de-pièce) une fois publié),
 - adapte son comportement près de la consigne avec une deadband et des protections supplémentaires.
 
 Près de la température cible, SmartPI cherche à éviter les micro-corrections permanentes. Le résultat attendu est une régulation plus stable, avec moins de corrections inutiles qu'un TPI fixe.
@@ -342,7 +342,7 @@ Le bloc `live.tar_learning` des [diagnostics](./diagnostics.md#apprentissage-du-
 
 ### Modèle de pièce
 
-SmartPI tient aussi à jour un modèle de pièce en observation ; il n'agit pas encore sur la régulation. Le modèle décrit la pièce avec son air, ses murs et son émetteur. SmartPI s'en sert pour prévoir la température de la pièce et confronte ces prévisions à la température mesurée.
+SmartPI tient aussi à jour un modèle de pièce. Le modèle décrit la pièce avec son air, ses murs et son émetteur. SmartPI s'en sert pour prévoir la température de la pièce et confronte ces prévisions à la température mesurée. Une fois publié, il donne la puissance de maintien de la régulation en chauffage (voir **Ce qu'il change** ci-dessous).
 
 **Ce qu'il calcule**
 
@@ -354,6 +354,21 @@ SmartPI tient aussi à jour un modèle de pièce en observation ; il n'agit pas 
 - **Suivi.** Une fois un modèle publié, SmartPI suit l'état de la pièce (air, murs et apports non expliqués) à chaque calcul de la régulation, avec la puissance réellement appliquée et la température extérieure. Il corrige cet état à chaque nouvelle valeur de température ; une valeur répétée par la sonde n'est pas une nouvelle mesure. Avec une sonde par pas de 0,1 °C, un changement est lu comme le franchissement du point médian entre les deux valeurs. Le suivi est suspendu hors chauffage et lorsque SmartPI n'a pas la main sur la commande (mode sécurité, commande remplacée). Après une pause ou un redémarrage de 3 heures au plus, l'état est repris ; au-delà, il repart avec les murs en équilibre avec l'air et se stabilise pendant environ 3 heures.
   - **Délestage.** Le délestage ne suspend pas le suivi : le chauffage est coupé à une puissance connue, donc l'état continue d'être corrigé sans chauffage dès le début du délestage (le reste du cycle interrompu n'est pas compté) jusqu'à ce que la commande de SmartPI reprenne.
   - **Fenêtre ouverte.** La fenêtre modifie l'air, pas les échanges entre l'air et les murs. Pendant qu'elle est ouverte, l'air du modèle suit la température mesurée et les murs suivent cet air. À la fermeture, le suivi reprend à partir de la température mesurée et affiche `recovering after an open window` pendant 3 heures, sans la puissance supplémentaire des murs. Une fenêtre ouverte pendant plus de 3 heures relance le suivi comme ci-dessus.
+
+**Ce qu'il change**
+
+La puissance de maintien est la part de la commande qui compense les pertes pour la consigne et la température extérieure (le feed-forward). Sans modèle de pièce publié, elle vient du modèle A/B appris. En chauffage, avec des chauffages pilotés par cycles PWM, un modèle de pièce publié la fournit à la place :
+
+- **Murs identifiés et suivi `ok` :** la perte statique du modèle pour la consigne et la température extérieure, plus la puissance supplémentaire que les murs absorbent à cet instant (ou moins la chaleur qu'ils restituent). Après un abaissement nocturne de consigne, les murs sont froids : la montée du matin reçoit plus de puissance et la pièce atteint la consigne sans long palier. Pendant la journée, lorsque les murs restituent de la chaleur, la puissance est réduite.
+- **Murs identifiés, suivi non `ok`** (en pause, en stabilisation après un redémarrage, 3 heures après une fenêtre ouverte, mesures qui s'écartent du modèle) : la perte statique seule.
+- **Modèle simple :** la perte statique seule.
+- **Rien de publié, refroidissement ou vannes :** la puissance de maintien du modèle A/B, inchangée.
+
+La puissance de maintien du modèle de pièce s'applique tout de suite, à plein poids, et la correction lente du feed-forward (FF2) est remise à zéro et reste gelée tant qu'elle est en vigueur : le modèle remplace le biais que cette correction apprend. Chaque bascule entre ces cas, et chaque nouvelle publication quotidienne, est absorbée par l'intégrale, afin que la commande ne fasse pas de saut ; l'intégrale rend ensuite sa part au rythme de la régulation. La source en vigueur est conservée lors des redémarrages.
+
+Le freinage de l'approche de la consigne utilise aussi la perte statique du modèle publié pour prévoir où la chaleur déjà engagée amène la pièce. Un modèle A/B appris, biaisé par les murs, commencerait sinon à freiner trop tôt.
+
+Le prix à payer est un léger dépassement, d'environ 0,1 °C, en fin de montée du matin dans une pièce à murs épais.
 
 **Ce qu'il affiche**
 
@@ -368,7 +383,7 @@ SmartPI tient aussi à jour un modèle de pièce en observation ; il n'agit pas 
 - Il utilise les mêmes paquets `numpy` et `scipy` que l'apprentissage du retard de l'émetteur, en arrière-plan : environ 5 à 10 secondes par jour et par thermostat.
 - Ses paramètres et son état sont conservés dans leur propre fichier de stockage et survivent aux redémarrages. Le service `reset_smartpi_learning` les efface.
 
-Le bloc `live.room_model` des [diagnostics](./diagnostics.md#modèle-de-pièce) affiche l'état du modèle, ses valeurs, les prévisions et leurs erreurs.
+Le bloc `live.room_model` des [diagnostics](./diagnostics.md#modèle-de-pièce) affiche l'état du modèle, ses valeurs, les prévisions et leurs erreurs. `live.feedforward.source` indique quel modèle fournit la puissance de maintien, et `live.feedforward.wall_power_percent` la part des murs dans celle-ci.
 
 ## Réglages conseillés
 
@@ -454,7 +469,7 @@ Pour le schéma des diagnostics et les profils Recorder, consultez le [Guide des
 
 Le capteur de diagnostic SmartPI publie une enveloppe versionnée. Les dashboards
 et cartes Markdown lisent les diagnostics complets dans `attributes.live` ; les
-graphiques historiques lisent le contrat stable de onze séries dans
+graphiques historiques lisent le contrat stable de dix-huit séries dans
 `attributes.history`.
 
 C'est l'endroit principal à consulter pour savoir :

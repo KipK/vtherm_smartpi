@@ -312,8 +312,15 @@ class SmartPISetpointManager:
         horizon_min: float,
         next_u_ref: float = 0.0,
         next_horizon_min: float = 0.0,
+        equilibrium_gain: float | None = None,
     ) -> float | None:
-        """Return the exact signed thermal change predicted by the 1R1C model."""
+        """Return the exact signed thermal change predicted by the 1R1C model.
+
+        ``equilibrium_gain`` (HEAT only): static gain b / a of the published
+        room model. It replaces the learned b / a in the equilibrium that the
+        committed power drives the room toward (offset u / gain above the
+        outdoor temperature); the learned rate b keeps the dynamics.
+        """
         if ext_current_temp is None or b <= 0.0:
             return None
 
@@ -336,6 +343,9 @@ class SmartPISetpointManager:
         # Active mode: full 1R1C model (HEAT with a > 0, COOL with a < 0).
         if hvac_mode != VThermHvacMode_COOL and a <= 0.0:
             return None
+        if hvac_mode != VThermHvacMode_COOL and equilibrium_gain is not None and equilibrium_gain > 0.0:
+            # Same equilibrium offset a * u / b as the room model's u / (b_eq / a)
+            a = b / equilibrium_gain
 
         predicted_temp = current_temp
 
@@ -472,6 +482,7 @@ class SmartPISetpointManager:
         remaining_cycle_min: float = 0.0,
         now_monotonic: float | None = None,
         allow_disturbance_trigger: bool = True,
+        equilibrium_gain: float | None = None,
     ) -> float:
         """Return SP_for_P for the proportional path.
 
@@ -479,7 +490,9 @@ class SmartPISetpointManager:
         The proportional path keeps the raw setpoint until the predicted
         braking zone is reached, then applies a smooth late-braking trajectory.
         ``stop_deadtime_s`` is the dead time of the passive response after
-        active power stops for ``hvac_mode``.
+        active power stops for ``hvac_mode``. ``equilibrium_gain`` is the
+        static gain of the published room model, used for the equilibrium of
+        the braking prediction in HEAT (see _compute_predicted_signed_change).
         """
         if not self.enabled:
             self._clear_pending_target_change_braking()
@@ -580,6 +593,7 @@ class SmartPISetpointManager:
                 horizon_min=braking_delay_min,
                 next_u_ref=next_cycle_u_ref,
                 next_horizon_min=next_cycle_horizon_min,
+                equilibrium_gain=equilibrium_gain,
             )
             total_prediction_horizon_min = braking_delay_min + next_cycle_horizon_min
             if predicted_change is not None and total_prediction_horizon_min > 0.0:

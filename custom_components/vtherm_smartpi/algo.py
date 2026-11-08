@@ -106,6 +106,7 @@ from .smartpi.feedforward import (
     compute_ff,
     compute_ff_gain,
     compute_ff_warmup_scale,
+    compute_room_ff,
 )
 from .smartpi.ff3 import FF3Result, FF3RuntimeState, compute_ff3
 from .smartpi.ff3_eligibility import (
@@ -130,6 +131,7 @@ from .smartpi.integral_guard import (
 )
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.tar_learning.manager import TarLearningManager
+from .smartpi.room_model.feedforward import HoldingTransfer, select_source, static_gain
 from .smartpi.room_model.manager import RoomModelManager
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
 from .smartpi.timestamp_utils import (
@@ -253,6 +255,9 @@ class SmartPI:
         self._last_ff_reason: str = "ff_none"
         self._last_u_ff3: float = 0.0
         self.ff3_state = FF3RuntimeState()
+        # Holding power source in force (learned b / a or room model) and the
+        # bumpless transfer of its discrete changes
+        self._ff_holding = HoldingTransfer()
 
         self._cycle_boundary_pending: bool = True  # Force boundary on first run
         self._current_cycle_start_monotonic: float | None = None
@@ -310,7 +315,8 @@ class SmartPI:
             self.tar_learning = TarLearningManager(
                 name, time_zone if isinstance(time_zone, str) else None
             )
-        # Room model in observation only, on the history of the T_ar learning (None when off)
+        # Room model, on the history of the T_ar learning (None when off); once
+        # published it gives the feed-forward holding power in heating.
         self.room_model: RoomModelManager | None = None
         if room_model and self.tar_learning is not None:
             self.room_model = RoomModelManager(
@@ -399,6 +405,7 @@ class SmartPI:
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
         self.fftrim_coord.reset()
+        self._ff_holding.reset()
         self._command_ownership.reset()
         self._e_filt = None
         self._cycles_since_reset = 0
@@ -1226,7 +1233,7 @@ class SmartPI:
         excluded: str | None = None,
         measure_id: Any | None = None,
     ) -> None:
-        """Feed the room model, which runs in observation only (no-op when it is off).
+        """Feed the room model (no-op when it is off); the next cycle reads its tracking.
 
         excluded: why the applied power is not SmartPI's command (None when it is).
         measure_id: identity of the indoor temperature measurement (its time stamp).
@@ -1349,6 +1356,8 @@ class SmartPI:
             # FFv2 components
             "ff_v2_trim": self._ff_trim.save_state(),
             "ff_trim_delta": self.fftrim_coord.last_ff_trim_delta,
+            # Holding power source the restored integral complements
+            "ff_source": self._ff_holding.save(),
             "tint_filter_state": self.tint_filter.save_state(),
         }
         hysteresis = self._hysteresis_output_context()
@@ -1472,6 +1481,9 @@ class SmartPI:
         # Load FF trim state; freeze for a few cycles after reboot
         self._ff_trim.load_state(state.get("ff_v2_trim", {}))
         self.fftrim_coord.last_ff_trim_delta = float(state.get("ff_trim_delta", 0.0))
+        # The restored integral complements this holding power source: a different
+        # source at the first cycle is transferred like any change of source.
+        self._ff_holding.load(state.get("ff_source"))
         self.tint_filter.load_state(state.get("tint_filter_state", {}))
         # Freeze trim learning briefly after reboot.
         self.fftrim_coord.freeze_after_reboot()
@@ -1652,6 +1664,7 @@ class SmartPI:
                 inactive_minutes,
             )
             self.ctl.reset()
+            self._ff_holding.reset()
         self._last_active_wall_ts = now_wall
         return expired
 
@@ -1761,6 +1774,7 @@ class SmartPI:
                 hvac_mode=hvac_mode,
                 a=self.est.a,
                 b=self.est.b,
+                equilibrium_gain=static_gain(self.room_model, hvac_mode, self._valve_mode_enabled),
                 ext_current_temp=ext_current_temp,
                 u_ref=self._committed_on_percent,
                 stop_deadtime_s=stop_deadtime_s,
@@ -1931,6 +1945,9 @@ class SmartPI:
             warmup_scale=warmup_scale,
             trim=self._ff_trim,
         )
+        nominal_ff_result = self._select_holding_power(
+            nominal_ff_result, target_temp_ff, ext_current_temp, hvac_mode
+        )
 
         u_ff3 = self._compute_ff3_for_cycle(
             cycle_boundary=cycle_boundary,
@@ -1964,6 +1981,50 @@ class SmartPI:
         )
 
         return runtime_ff
+
+    def _select_holding_power(
+        self,
+        learned_ff_result: FFResult,
+        target_temp_ff: float,
+        ext_current_temp: float | None,
+        hvac_mode: VThermHvacMode,
+    ) -> FFResult:
+        """Return the FF1 + FF2 result of the holding power source in force.
+
+        A published room model replaces the learned branch in heating with PWM
+        heaters. A discrete change of the holding power (source, published
+        parameters, wall term on or off) is moved into the integral, so that
+        the command does not jump; entering a room model source hands the FF2
+        trim over through the same transfer.
+        """
+        source = select_source(self.room_model, hvac_mode, self._valve_mode_enabled)
+        holding = self._ff_holding
+        if not source.room:
+            if holding.room_in_force:
+                self.fftrim_coord.hand_back_from_room_model()
+            ff_result = learned_ff_result
+        else:
+            if not holding.room_in_force:
+                self.fftrim_coord.hand_over_to_room_model()
+            ff_result = compute_room_ff(
+                source=source,
+                target_temp_ff=target_temp_ff,
+                ext_temp=ext_current_temp,
+            )
+        delta = holding.update(
+            source,
+            new_power=ff_result.u_ff_final,
+            learned_power=learned_ff_result.u_ff_final,
+            target_temp=target_temp_ff,
+            ext_temp=ext_current_temp,
+        )
+        if delta != 0.0:
+            moved = self.ctl.absorb_feedforward_step(ki=self.Ki, delta_ff=delta)
+            _LOGGER.info(
+                "%s - Feed-forward source %s: holding power step %+.4f moved into the integral (%+.4f applied)",
+                self._name, source.plain, delta, moved,
+            )
+        return ff_result
 
     def _near_band_gain_ratio(
         self,
@@ -2035,6 +2096,7 @@ class SmartPI:
             mode_changed = previous_mode is not None and str(hvac_mode) != str(previous_mode)
             if mode_changed:
                 self.ctl.reset()
+                self._ff_holding.reset()
                 self._ff_trim.clear_pending()
                 self._ff_trim.clear_last_transaction()
                 _LOGGER.info(

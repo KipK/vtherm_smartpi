@@ -4,6 +4,10 @@ Feed-Forward Orchestrator for Smart-PI Algorithm.
 Computes the full FF signal chain:
   u_ff1 -> u_ff2 -> u_ff_final -> u_ff3 -> u_ff_eff
 
+u_ff1 comes from the learned b / a (compute_ff), or from the published room
+model in heating with PWM heaters (compute_room_ff, see
+room_model/feedforward.py).
+
 Compatibility alias kept for the current codebase:
   u_ff_trim == u_ff2
 
@@ -23,6 +27,7 @@ from .ff_trim import FFTrim
 
 if TYPE_CHECKING:
     from .ab_estimator import ABEstimator
+    from .room_model.feedforward import HoldingSource
 
 
 @dataclass(frozen=True)
@@ -124,4 +129,35 @@ def compute_ff(
         ff_reason=ff_reason,
         warmup_scale=float(warmup_scale),
         trim_applied=ext_temp is not None,
+    )
+
+
+def compute_room_ff(
+    *,
+    source: HoldingSource,
+    target_temp_ff: float,
+    ext_temp: float | None,
+) -> FFResult:
+    """FF1 from a published room model: full weight, no FF2 trim.
+
+    The holding power of the source (static part, plus the wall extra power
+    when the walls are tracked) replaces the learned b / a branch. The trim is
+    not applied: the room model replaces the bias it learns.
+    """
+    if ext_temp is not None:
+        u_ff1 = source.power(target_temp_ff, ext_temp)
+        ff_reason = "ff_none"
+    else:
+        u_ff1 = 0.0
+        ff_reason = "ff_no_ext_temp"
+    return FFResult(
+        u_ff1=u_ff1,
+        u_ff2=0.0,
+        u_ff_final=u_ff1,
+        u_ff3=0.0,
+        u_ff_trim=0.0,
+        u_ff_eff=u_ff1,
+        ff_reason=ff_reason,
+        warmup_scale=1.0,
+        trim_applied=False,
     )

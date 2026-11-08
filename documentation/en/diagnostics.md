@@ -26,7 +26,7 @@ Debug mode records both `live` and `history`. The content is not duplicated
 inside `history`: the historical contract remains identical in both modes.
 Debug mode therefore changes retention, not publication.
 
-The `history` block contains these eleven series:
+The `history` block contains these eighteen series:
 
 | Path under `history` | Meaning |
 |---|---|
@@ -41,8 +41,17 @@ The `history` block contains these eleven series:
 | `power.ff_percent` | Feed-forward contribution |
 | `model.a` | Learned heating gain |
 | `model.b` | Learned heat-loss coefficient |
+| `feedforward.source` | Holding power source in force, as in `live.feedforward.source` |
+| `feedforward.wall_power_percent` | Wall part of the feed-forward, in % of full power (negative when the walls give heat back); `null` unless the source is the room model with its walls |
+| `room_model.a` | Heating response of the room model, in the units of `model.a`; `null` before a publication |
+| `room_model.b_eq` | Static loss of the room model, in the units of `model.b`; `null` before a publication |
+| `room_model.forecast_error_1h_c` | Root mean square error of the 1 h forecasts over the last 7 days (°C) |
+| `room_model.forecast_error_12h_c` | Same for the 12 h forecasts (°C) |
+| `deadtime.applied_s` | Heating dead time used by the regulation, in seconds (bootstrap or learned value) |
 
-The applied command does not measure delivered heat.
+The feed-forward, room model and dead-time series are always present and are
+`null` when the corresponding block is not computed. The applied command does
+not measure delivered heat.
 
 ## Live diagnostics
 
@@ -56,14 +65,14 @@ The `live` block is organized by responsibility:
 | `model` | A/B model, confidence, time constant and dead times |
 | `learning` | Learning stage, bootstrap progress, accepted updates and drift state |
 | `governance` | Thermal regime and model-update decision |
-| `feedforward` | FF3 status, dead-band source and canonical FFTrim diagnostics |
+| `feedforward` | Holding power source, FF3 status, dead-band source and canonical FFTrim diagnostics |
 | `setpoint` | Filtered setpoint, trajectory and boost summary |
 | `autocalib` | Automatic calibration supervisor state |
 | `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
 | `tar_learning` | Emitter delay learning |
-| `room_model` | Room model, in observation only |
+| `room_model` | Room model |
 
 `analysis` groups the advanced live values into `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` and, when
@@ -139,7 +148,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 
 ### Room model
 
-`room_model` describes the room model (see [Room model](./vtherm_smartpi.md#room-model)). It is computed in observation only: the regulation does not use it.
+`room_model` describes the room model (see [Room model](./vtherm_smartpi.md#room-model)). Once published, it gives the holding power of the feed-forward in heating, shown under `feedforward`.
 
 | Field | Meaning |
 |---|---|
@@ -160,6 +169,19 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `last_refusal_reason` | Why the last daily identification published nothing (for example `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature` or `the heating response differs too much from the one measured by the regulation`), `null` when it published |
 | `sensor_resolution_c` | Smallest step of the temperature sensor seen in the recorded history (°C) |
 | `last_error` | Last computation error, `null` when none |
+
+### Feed-forward
+
+`feedforward` starts with the source of the holding power (the structural
+feed-forward):
+
+| Field | Meaning |
+|---|---|
+| `source` | `learned model` (the A/B model, `model.b / model.a`), `room model (air and walls)` (published model with walls, tracking `ok`: static part plus the wall extra power), `room model (static part)` (published model with walls while the tracking is not `ok`: static part only) or `room model (simple)` (published model without walls) |
+| `wall_power_percent` | Wall extra power included in the holding power, in % of full power (negative when the walls give heat back); `null` unless `source` is `room model (air and walls)` |
+
+While a room model source is in force, `analysis.feedforward.ff2_frozen` is
+`true` with `ff2_freeze_reason` `room_model`, and `u_ff2` is `0`.
 
 FFTrim uses nested canonical blocks:
 

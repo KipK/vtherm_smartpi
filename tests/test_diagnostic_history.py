@@ -41,7 +41,48 @@ def test_history_contains_only_equinox_time_series() -> None:
             "ff_percent": 15.0,
         },
         "model": {"a": 0.05, "b": 0.001},
+        "feedforward": {"source": None, "wall_power_percent": None},
+        "room_model": {
+            "a": None,
+            "b_eq": None,
+            "forecast_error_1h_c": None,
+            "forecast_error_12h_c": None,
+        },
+        "deadtime": {"applied_s": None},
     }
+
+
+def test_history_carries_the_feedforward_room_model_and_deadtime_series() -> None:
+    """The room model, its feed-forward and the dead time in force are charted."""
+    live = _live_diagnostics()
+    live["feedforward"] = {"source": "room model (air and walls)", "wall_power_percent": 4.2, "ff3_status": "x"}
+    live["room_model"] = {
+        "status": "identified",
+        "a": 0.031,
+        "b_eq": 0.0012,
+        "forecast_error_c": {"1h": 0.02, "2h": 0.03, "6h": 0.05, "12h": 0.08},
+        "forecast_c": {"1h": 20.1},
+    }
+    live["tar_learning"] = {"applied_s": 310.0, "source": "refined"}
+
+    history = build_history_diagnostics(live)
+
+    assert history["feedforward"] == {"source": "room model (air and walls)", "wall_power_percent": 4.2}
+    assert history["room_model"] == {
+        "a": 0.031,
+        "b_eq": 0.0012,
+        "forecast_error_1h_c": 0.02,
+        "forecast_error_12h_c": 0.08,
+    }
+    assert history["deadtime"] == {"applied_s": 310.0}
+
+
+def test_history_series_are_null_before_any_forecast_check() -> None:
+    live = _live_diagnostics()
+    live["room_model"] = {"a": None, "b_eq": None, "forecast_error_c": {"1h": None, "12h": None}}
+    history = build_history_diagnostics(live)
+    assert history["room_model"]["forecast_error_1h_c"] is None
+    assert history["deadtime"] == {"applied_s": None}
 
 
 def test_attribute_envelope_keeps_live_and_history_separate() -> None:

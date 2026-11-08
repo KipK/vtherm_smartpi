@@ -1,8 +1,9 @@
 """Orchestration of the room model (event loop side, pure Python).
 
-The room model runs in observation only: nothing in the regulation reads it.
-The manager feeds the observer at each regulation tick and with each applied
-command, schedules the daily identification (jobs.py, run in an executor on
+Once published, the room model gives the regulation its feed-forward holding
+power in heating and the equilibrium of the braking prediction
+(feedforward.py). The manager feeds the observer at each regulation tick and
+with each applied command, schedules the daily identification (jobs.py, run in an executor on
 the history recorded by the T_ar learning), publishes the qualified
 parameters, and holds the persistence and the diagnostics.
 
@@ -79,7 +80,7 @@ def _measure_key(meas_id: Any) -> tuple[Any, float | None]:
 
 
 class RoomModelManager:
-    """Room model of one thermostat, in observation only."""
+    """Room model of one thermostat."""
 
     def __init__(self, name: str, time_zone: str | None, tar) -> None:
         self._name = name

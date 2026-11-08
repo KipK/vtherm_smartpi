@@ -26,7 +26,7 @@ Le mode debug enregistre `live` et `history`. Le contenu n'est pas dupliqué
 dans `history` : le contrat historique reste identique dans les deux modes. Le
 mode debug change donc la conservation, pas la publication.
 
-Le bloc `history` contient ces onze séries :
+Le bloc `history` contient ces dix-huit séries :
 
 | Chemin sous `history` | Signification |
 |---|---|
@@ -41,8 +41,17 @@ Le bloc `history` contient ces onze séries :
 | `power.ff_percent` | Contribution feed-forward |
 | `model.a` | Gain de chauffe appris |
 | `model.b` | Coefficient de déperdition appris |
+| `feedforward.source` | Source de la puissance de maintien en vigueur, comme dans `live.feedforward.source` |
+| `feedforward.wall_power_percent` | Part des murs du feed-forward, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` sauf si la source est le modèle de pièce avec murs |
+| `room_model.a` | Réponse de chauffe du modèle de pièce, dans les unités de `model.a` ; `null` avant une publication |
+| `room_model.b_eq` | Déperdition statique du modèle de pièce, dans les unités de `model.b` ; `null` avant une publication |
+| `room_model.forecast_error_1h_c` | Racine de l'erreur quadratique moyenne des prévisions à 1 h sur les 7 derniers jours (°C) |
+| `room_model.forecast_error_12h_c` | Idem pour les prévisions à 12 h (°C) |
+| `deadtime.applied_s` | Temps mort de chauffe utilisé par la régulation, en secondes (valeur du bootstrap ou valeur apprise) |
 
-La commande appliquée ne mesure pas la chaleur délivrée.
+Les séries feed-forward, modèle de pièce et temps mort sont toujours présentes
+et valent `null` lorsque le bloc correspondant n'est pas calculé. La commande
+appliquée ne mesure pas la chaleur délivrée.
 
 ## Diagnostics live
 
@@ -56,14 +65,14 @@ Le bloc `live` est organisé par responsabilité :
 | `model` | Modèle A/B, confiance, constante de temps et temps morts |
 | `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
-| `feedforward` | État FF3, source de bande morte et diagnostics FFTrim canoniques |
+| `feedforward` | Source de la puissance de maintien, état FF3, source de bande morte et diagnostics FFTrim canoniques |
 | `setpoint` | Consigne filtrée, trajectoire et résumé du boost |
 | `autocalib` | État du superviseur de calibration automatique |
 | `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
 | `tar_learning` | Apprentissage du retard de l'émetteur |
-| `room_model` | Modèle de pièce, en observation seulement |
+| `room_model` | Modèle de pièce |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
@@ -138,7 +147,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 
 ### Modèle de pièce
 
-`room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Il est calculé en observation seulement : la régulation ne l'utilise pas.
+`room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Une fois publié, il donne la puissance de maintien du feed-forward en chauffage, affichée sous `feedforward`.
 
 | Champ | Signification |
 |---|---|
@@ -159,6 +168,19 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `last_refusal_reason` | Raison pour laquelle la dernière identification quotidienne n'a rien publié (par exemple `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature` ou `the heating response differs too much from the one measured by the regulation`), `null` lorsqu'elle a publié |
 | `sensor_resolution_c` | Plus petit pas de la sonde de température observé dans l'historique enregistré (°C) |
 | `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |
+
+### Feed-forward
+
+`feedforward` commence par la source de la puissance de maintien (le
+feed-forward structurel) :
+
+| Champ | Signification |
+|---|---|
+| `source` | `learned model` (le modèle A/B, `model.b / model.a`), `room model (air and walls)` (modèle publié avec murs, suivi `ok` : partie statique plus la puissance supplémentaire des murs), `room model (static part)` (modèle publié avec murs alors que le suivi n'est pas `ok` : partie statique seule) ou `room model (simple)` (modèle publié sans murs) |
+| `wall_power_percent` | Puissance supplémentaire des murs incluse dans la puissance de maintien, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` sauf si `source` vaut `room model (air and walls)` |
+
+Tant qu'une source du modèle de pièce est en vigueur, `analysis.feedforward.ff2_frozen` vaut
+`true` avec `ff2_freeze_reason` `room_model`, et `u_ff2` vaut `0`.
 
 FFTrim utilise des blocs canoniques imbriqués :
 

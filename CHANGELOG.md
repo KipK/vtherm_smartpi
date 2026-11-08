@@ -4,13 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Room model in observation (heating, PWM heaters): SmartPI identifies each day
-  a model of the room with its air, walls and emitter, follows the room state
-  and publishes temperature forecasts and their errors in the `room_model`
-  diagnostics. It does not act on the regulation.
+- Room model (heating, PWM heaters): SmartPI identifies each day a model of
+  the room with its air, walls and emitter, follows the room state and
+  publishes temperature forecasts and their errors in the `room_model`
+  diagnostics.
+- Room model holding power: once the room model is published, it gives the
+  feed-forward holding power, with the extra power of cold walls after a
+  setback, so the morning rise no longer stalls below the setpoint. Switches
+  are bumpless; `feedforward.source` shows the model in use.
 - Room model: the wall state no longer drifts after an open window, power
   shedding is tracked instead of paused, and the identification checks the
   emitter time and the heating response `a` before publishing.
+- Diagnostics: the recorded history also keeps the feed-forward source and
+  its wall part, the room model's `a`, `b_eq` and 1 h / 12 h forecast errors,
+  and the dead time in force.
 - Emitter delay learning (heating, always on): SmartPI learns the heating
   response delay from the morning comfort steps and, over regulated nights,
   from a multi-day model of the room, and uses it in place of the bootstrap

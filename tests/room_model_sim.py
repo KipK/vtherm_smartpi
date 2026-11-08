@@ -158,3 +158,113 @@ def replay(sim: dict, feed, t_from: float, t_to: float, step: float = 60.0) -> N
         if ip == 0 or ie == 0:
             continue
         feed(t, "tick", (pub_v[ip - 1], pub_t[ip - 1], ext_v[ie - 1]))
+
+
+def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.0, ta0: float = 19.0,
+                t0: float = T0, b_online_ratio: float = 1.0, on_tick=None, restart_at: float | None = None) -> dict:
+    """Closed loop of SmartPI (room model on, learning paused) on the air-wall plant.
+
+    The online model is seeded with the true a and b = b_online_ratio x b_eq, with reliable
+    dead times. on_tick(algo, t) runs before each calculation (60 s ticks), for example to
+    publish the room model. The sensor publishes the quantised air temperature at each tick.
+    restart_at: at the first cycle start from this time, the SmartPI and room model states are
+    saved and restored into a new instance, as a restart of Home Assistant does (no downtime).
+    Returns per tick: time, setpoint, measured air, command, holding power, integral power, and
+    the restart information.
+    """
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from custom_components.vtherm_smartpi.algo import SmartPI
+    from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+
+    full = p["c"] > 0.0
+    alpha, beta, c, a = p["alpha"], p["beta"], p["c"], p["a"]
+    b_eq = alpha - c if full else alpha
+    gamma = c * beta if full else 0.0
+    k = 0.5 * (c + alpha) if full else 0.0
+    A = np.array([[-alpha, 1.0], [gamma, -beta]]) if full else np.array([[-alpha, 0.0], [0.0, -beta]])
+    B = np.array([[a, alpha, 0.0], [0.0, -gamma, -k]])
+    h = 10.0
+    Mx = np.zeros((5, 5))
+    Mx[:2, :2], Mx[:2, 2:] = A * h, B * h
+    E = expm(Mx)
+    phi, gam = E[:2, :2], E[:2, 2:]
+    lag = int(round(p["L"] / h))
+    e_tau = math.exp(-h / p["tau_e"]) if p["tau_e"] > 1.0 else 0.0
+    x = np.array([ta0, c * (ta0 - outdoor(t0)) if full else 0.0])
+    ue = 0.0
+    ubuf = [0.0] * (lag + 1)
+    clock = {"t": t0}
+    out = {"t": [], "sp": [], "ta": [], "u": [], "u_ff": [], "i_power": [], "source": []}
+    loop = asyncio.new_event_loop()
+    cycle_s = cycle_min * 60.0
+    with patch("time.time", lambda: clock["t"]), patch("time.monotonic", lambda: clock["t"] - 1.7e9):
+        def new_algo():
+            return SmartPI(hass=MagicMock(), cycle_min=cycle_min, minimal_activation_delay=0,
+                           minimal_deactivation_delay=0, name="RoomSim", use_ff3=True, tar_learning=True,
+                           room_model=True)
+
+        algo = new_algo()
+        est = algo.est
+        a_min, b_min = a * 60.0, b_eq * b_online_ratio * 60.0
+        for _ in range(40):
+            est.a_meas_hist.append(a_min)
+            est.b_meas_hist.append(b_min)
+        est.a, est.b = a_min, b_min
+        est.learn_ok_count_a = est.learn_ok_count_b = 40
+        est.learn_ok_count = 80
+        for i in range(10):
+            est._b_hat_hist.append(b_min * (1.0 + 0.01 * (i - 5)))
+        algo.dt_est.deadtime_heat_s = p["tau_e"] + p["L"]
+        algo.dt_est.deadtime_heat_reliable = True
+        algo.dt_est.deadtime_cool_s = 900.0
+        algo.dt_est.deadtime_cool_reliable = True
+        algo._output_initialized = True
+        algo.calibration_mgr.last_calibration_time = t0
+        algo.set_learning_enabled(False)
+        last_pub, pub_time = None, None
+        for _ in range(int(days * DAY / cycle_s)):
+            on_percent = 0.0
+            if restart_at is not None and clock["t"] >= restart_at and "restart" not in out:
+                saved, room_saved = algo.save_state(), algo.room_model.save_state()
+                out["restart"] = {"i": len(out["t"]), "state": saved, "integral": algo.integral}
+                algo = new_algo()
+                algo.load_state(saved)
+                algo.room_model.load_state(room_saved)
+            for kk in range(int(cycle_s // 60)):
+                t = clock["t"]
+                sp = setpoint(t)
+                te = round(outdoor(t) * 10.0) / 10.0
+                meas = round(round(x[0] / q) * q, 3)
+                if meas != last_pub:
+                    last_pub, pub_time = meas, t
+                if on_tick is not None:
+                    on_tick(algo, t)
+                algo.calculate(target_temp=sp, current_temp=meas, ext_current_temp=te, slope=None,
+                               hvac_mode=VThermHvacMode_HEAT, cycle_boundary=(kk == 0))
+                algo.observe_room_model(meas, te, VThermHvacMode_HEAT, measure_id=pub_time)
+                if kk == 0:
+                    on_percent = algo.on_percent
+                    algo._commit_applied_command(on_percent, VThermHvacMode_HEAT, None, cycle_start=True)
+                out["t"].append(t)
+                out["sp"].append(sp)
+                out["ta"].append(float(x[0]))
+                out["u"].append(algo.ctl.u_cmd)
+                out["u_ff"].append(algo.ctl.u_ff)
+                out["i_power"].append(algo.Ki * algo.integral)
+                out["source"].append(algo._ff_holding.source.kind)
+                for s in range(6):
+                    tt = clock["t"]
+                    u_now = 1.0 if (kk * 60 + s * 10) < on_percent * cycle_s else 0.0
+                    ubuf.append(u_now)
+                    u_del = ubuf.pop(0)
+                    ue_mean = u_del + (ue - u_del) * (p["tau_e"] / h) * (1.0 - e_tau) if e_tau else u_del
+                    ue = u_del + (ue - u_del) * e_tau
+                    te_a, te_b = outdoor(tt), outdoor(tt + h)
+                    x = phi @ x + gam @ np.array([ue_mean, 0.5 * (te_a + te_b), (te_b - te_a) / h])
+                    clock["t"] = tt + h
+            loop.run_until_complete(algo.on_cycle_completed(e_eff=on_percent, elapsed_ratio=1.0))
+    loop.close()
+    out["algo"] = algo
+    return out

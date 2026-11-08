@@ -373,6 +373,60 @@ $T_{ext}$ est la dernière température extérieure valide reçue par SmartPI. L
 
 - `u_ff2` : correction lente `FFTrim`, gelée tant que `ABConfidence` vaut `AB_DEGRADED` ou `AB_BAD`, ou tant que `warmup_scale` est inférieur à 1 (`ff2_freeze_reason` `ff_warmup`), et nulle tant qu'aucune température extérieure n'a été reçue.
 
+#### Puissance de maintien issue du modèle de pièce
+
+En HEAT, avec des chauffages pilotés par cycles PWM, un modèle de pièce publié remplace
+$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`). Avec $b_{eq}$ et $a$ du modèle
+publié, et $\delta_{wall}/a$ la puissance supplémentaire des murs de son suivi
+(`room_model.wall_extra_power_percent`, avec ses deux signes) :
+
+| Modèle de pièce | Source (`feedforward.source`) | $u_{ff1}$ |
+|---|---|---|
+| murs identifiés, suivi `ok` | `room model (air and walls)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}) + \frac{\delta_{wall}}{a}, 0, 1)$ |
+| murs identifiés, suivi non `ok` (en pause, en stabilisation, après une fenêtre, dérive, ...) | `room model (static part)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}), 0, 1)$ |
+| modèle simple | `room model (simple)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}), 0, 1)$ |
+| rien de publié, COOL, mode vanne | `learned model` | la loi apprise ci-dessus, inchangée |
+
+$b_{eq}/a$ est borné à 3, comme $k_{ff}$. Une source de modèle de pièce s'applique à
+plein poids (`warmup_scale = 1`) et n'utilise pas la perturbation non mesurée $d$ du
+suivi. La partie statique suit la consigne ; la partie murs suit l'air suivi. Avec l'air
+à la consigne, $u_{ff1} = (b_{air}(SP - T_{ext}) - w)/a$, avec $b_{air}$ le taux de perte
+totale de l'air et $w$ l'état des murs.
+
+**Transfert sans à-coup.** Une variation discrète de $u_{ff1}$ passe dans l'intégrale,
+de sorte que $u_{ff} + K_i \cdot I$ ne saute pas :
+
+$$ I \leftarrow clamp\left(I - \frac{\Delta u_{ff}}{K_i}, -\frac{2}{K_i}, \frac{2}{K_i}\right) $$
+
+Les variations discrètes sont un changement de source (y compris le terme des murs activé
+ou désactivé par le suivi, et le passage du poids du warm-up appris au plein poids) et une
+nouvelle publication quotidienne des paramètres. $\Delta u_{ff}$ est le nouveau FF1 + FF2
+moins l'ancien, tous deux à la consigne et à la température extérieure courantes ; la source
+de modèle de pièce sortante conserve le terme des murs du calcul précédent. L'évolution
+continue du terme des murs, de la consigne et de la température extérieure n'est pas
+transférée : c'est l'action du feed-forward. L'évolution propre de la source apprise
+(rampe de warm-up, nouveaux `a`/`b`) n'est jamais transférée non plus. Le transfert est
+appliqué dans le calcul, avant le PI, et peut traverser zéro ; il n'est limité que par les
+bornes de l'intégrale. La saturation et l'anti-windup ne changent pas : ils agissent sur la
+commande totale. Les transactions de trim FF de `FFTrimCoordinator` ne sont pas utilisées
+pour ce transfert : elles ne s'exécutent qu'à une frontière de cycle de deadband stricte et
+ramènent l'intégrale vers zéro, alors qu'un changement de source intervient à tout moment
+et dans les deux sens.
+
+**FF2.** Entrer dans une source de modèle de pièce remet le trim à zéro par le même
+transfert, abandonne ses propositions en attente et sa transaction, et redémarre ses
+fenêtres. Le trim reste à zéro et gelé (`ff2_freeze_reason` `room_model`) tant qu'une
+source de modèle de pièce est en vigueur : le modèle remplace le biais que le trim apprend,
+et le trim suivrait sinon le terme des murs. Lorsque la source apprise revient, les fenêtres
+du trim redémarrent et le trim réapprend à partir de zéro.
+
+**Redémarrage.** La source en vigueur est sauvegardée avec l'intégrale (`ff_source`). Au
+premier calcul après un redémarrage, une source différente (fichier de stockage du modèle de pièce perdu,
+suivi qui repart) est transférée comme tout changement de source ; la même source reprend
+sans transfert. Un état sauvegardé sans `ff_source` est pris pour la source apprise. Une
+réinitialisation de la mémoire du PI (changement de mode HEAT/COOL, pause prolongée,
+réinitialisation de l'apprentissage) oublie la source : la suivante démarre sans transfert.
+
 ### 4.3 FF3
 
 `ff3.py` ajoute une correction prédictive activée par défaut et désactivable par configuration :
@@ -449,6 +503,8 @@ T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
 L'entrée en freinage prédit la variation signée dans le sens de la demande active (`+1` en HEAT, `-1` en COOL) sur le reste du cycle, le temps mort passif et l'éventuelle puissance déjà prévue pour le cycle suivant. L'écart de freinage vaut cette variation prédite multipliée par `TRAJECTORY_BRAKE_GAIN = 1.20`.
+
+En HEAT, lorsqu'un modèle de pièce est publié (avec murs ou modèle simple) et que le chauffage n'est pas une vanne, le gain d'équilibre $a/b$ de cette prédiction est remplacé par le $a/b_{eq}$ du modèle de pièce : la chaleur engagée amène la pièce vers $T_{ext} + u \cdot a/b_{eq}$. Le facteur de relaxation $\alpha = e^{-b \cdot h}$ conserve le `b` appris, et les contrôles de disponibilité conservent le `a` et le `b` appris. Un `b/a` appris, biaisé à la baisse par les murs, surestimerait sinon la montée engagée et armerait le freinage trop tôt. Le jumeau thermique et FF3 conservent le modèle appris.
 
 Le bloc canonique `live.setpoint` publie le résumé :
 
@@ -661,11 +717,12 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `response_lag.py`      | `ResponseLagEstimator` : retard de réponse, portes de stabilisation et modèle de puissance délivrée |
 | `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
 | `gains.py`             | calcul et gel des gains                                  |
-| `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
+| `controller.py`        | PI discret, anti-windup, maintien, hystérésis, transferts d'intégrale |
 | `deadband.py`          | deadband et near-band                                    |
 | `setpoint.py`          | trajectoire analytique de la référence P                    |
 | `integral_guard.py`    | garde directionnelle de l'intégrale et maintien I:HOLD après reprise de fenêtre ou de délestage |
-| `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`, gain FF signé `b/a` et facteur de montée en charge |
+| `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`, gain FF signé `b/a`, facteur de montée en charge et FF1 du modèle de pièce |
+| `room_model/feedforward.py` | source de puissance de maintien issue du modèle de pièce publié, transfert sans à-coup de ses variations discrètes, gain statique pour la prédiction de freinage |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator` : décomposition de commande figée des requêtes du scheduler, routage des résultats des observateurs de trim, transactions bumpless trim/intégrale à la frontière de cycle, état de transfert |
 | `command_ownership.py` | identifiants de requête, snapshots figés et rattachement des reçus de commande appliquée du scheduler |
@@ -709,6 +766,7 @@ self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
 self._command_ownership = CommandOwnershipTracker()
 self.fftrim_coord = FFTrimCoordinator(self)
 self._ab_confidence = ABConfidence()
+self._ff_holding = HoldingTransfer()
 ```
 
 ### 5.4 Persistance actuelle
@@ -770,6 +828,7 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "ac_state": {...},
     "ff_v2_trim": {...},
     "ff_trim_delta": ...,
+    "ff_source": {...},  # source de puissance de maintien que complète l'intégrale
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap uniquement
 }
@@ -831,7 +890,7 @@ puissance précédente (`legacy_gap_fill`) reste utilisable.
 - `build_published_diagnostics()` : la fonction qui construit ce payload.
 
 `diagnostic_history.py` enveloppe ce payload dans `schema_version`, `live` et le
-bloc stable de onze séries `history`. Les entités normales excluent `live` du
+bloc stable de dix-huit séries `history`. Les entités normales excluent `live` du
 Recorder ; la sous-classe debug l'enregistre directement. Le mode debug ne fait que sélectionner la classe de capteur enregistrée ; il n'ajoute pas de second bloc de diagnostic.
 
 `analysis.learning.learn_ok_count` et `learn_skip_count` sont des compteurs
