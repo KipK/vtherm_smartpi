@@ -13,7 +13,7 @@ from datetime import timedelta
 
 from .algo import SmartPI
 from .state_store import SmartPIRoomModelStore, SmartPIStateStore, SmartPITarStore
-from .smartpi.room_model.const import RM_SAVE_DELAY_S
+from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING, RM_EXCLUDED_WINDOW, RM_SAVE_DELAY_S
 from .smartpi.tar_learning.const import TAR_SAVE_DELAY_S
 from .smartpi.tar_learning.deps import dependencies_importable
 from .smartpi.const import (
@@ -217,18 +217,22 @@ class SmartPIHandler:
                 _LOGGER.error("%s - Failed to load SmartPI room model data: %s", t, e)
 
     @staticmethod
+    def _window_open(t) -> bool:
+        window_manager = getattr(t, "window_manager", None)
+        return (
+            getattr(window_manager, "is_window_detected", None) is True
+            or t.hvac_off_reason == HVAC_OFF_REASON_WINDOW_DETECTION
+        )
+
+    @staticmethod
     def _tar_exclusion(t, algo) -> str | None:
         """Why the heater is not under SmartPI's command at this tick (None when it is)."""
         if t.vtherm_hvac_mode != VThermHvacMode_HEAT:
             return "hvac not heating"
-        window_manager = getattr(t, "window_manager", None)
-        if (
-            getattr(window_manager, "is_window_detected", None) is True
-            or t.hvac_off_reason == HVAC_OFF_REASON_WINDOW_DETECTION
-        ):
-            return "window open"
+        if SmartPIHandler._window_open(t):
+            return RM_EXCLUDED_WINDOW
         if t.is_overpowering_detected is True:
-            return "power shedding"
+            return RM_EXCLUDED_SHEDDING
         if algo.vt_safety_override:
             return "safety mode"
         on_percent = t.on_percent
@@ -237,6 +241,17 @@ class SmartPIHandler:
         if abs(on_percent - algo.on_percent) > 1e-6:
             return "command overridden"
         return None
+
+    @staticmethod
+    def _room_model_exclusion(t, algo) -> str | None:
+        """_tar_exclusion, except that an open window wins over the HVAC mode it forces.
+
+        VT turns the heater off (or to fan only) while a window is open: the room
+        model follows the air through the window instead of pausing.
+        """
+        if SmartPIHandler._window_open(t) and getattr(t, "requested_hvac_mode", None) == VThermHvacMode_HEAT:
+            return RM_EXCLUDED_WINDOW
+        return SmartPIHandler._tar_exclusion(t, algo)
 
     def _process_tar_learning(self, algo) -> None:
         """Start the due T_ar learning computations and persist its data."""
@@ -500,7 +515,7 @@ class SmartPIHandler:
                     t.current_temperature,
                     t.current_outdoor_temperature,
                     t.vtherm_hvac_mode,
-                    excluded=self._tar_exclusion(t, algo),
+                    excluded=self._room_model_exclusion(t, algo),
                     measure_id=getattr(t, "last_temperature_measure", None),
                 )
                 self._process_room_model(algo)

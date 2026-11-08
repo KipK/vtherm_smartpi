@@ -9,14 +9,25 @@ at the midpoint of its two levels. The disturbance d is a slow bounded random
 walk, so heat gains or losses that the model does not explain go to d instead
 of the wall state. The observer never learns parameters.
 
-The observer runs only while SmartPI is in control in heating. A pause
-(another HVAC mode, window open, power shedding, safety mode, command not
-SmartPI's) or a downtime up to RM_RESUME_MAX_S keeps the state and reopens its
-uncertainty; a longer one restarts the observer at the wall equilibrium.
+The observer runs only while SmartPI is in control in heating. Power shedding
+is not a pause: the heater is off at a known power, so the state goes on being
+corrected (the manager stops the command timeline). A pause (another HVAC
+mode, safety mode, command not SmartPI's) or a downtime up to RM_RESUME_MAX_S
+keeps the state and reopens its uncertainty; a longer one restarts the
+observer at the wall equilibrium.
+
+An open window changes the air balance, not the exchange between the air and
+the walls. While it is open the air state is held at the measured temperature
+after each sub-step, the wall state follows its own equation driven by that
+air, and the disturbance is held; nothing is corrected. When it closes the air
+is set to the measurement, its correlations with the wall and the disturbance
+are dropped and its uncertainty reopened; for RM_WINDOW_HOLD_S the wall state
+is not reported and the innovation checks start over afterwards.
 
 Health checks are separate from the estimation: mean and spread of the
 normalised innovations, air uncertainty, a disturbance held at its bound, an
-implausible wall state, and the settling time after a restart.
+implausible wall state, the settling time after a restart and the hold after
+an open window.
 """
 from __future__ import annotations
 
@@ -43,6 +54,7 @@ from .const import (
     RM_SETTLE_S,
     RM_STEP_S,
     RM_WALL_EXTRA_MAX,
+    RM_WINDOW_HOLD_S,
 )
 from .emitter import CommandTimeline, emitter_step
 from .model import Discrete, RoomParams
@@ -54,6 +66,7 @@ HEALTH_NO_MODEL = "no model"
 HEALTH_WAITING = "waiting"
 HEALTH_PAUSED = "paused"
 HEALTH_SETTLING = "settling"
+HEALTH_WINDOW = "after window"
 HEALTH_BIAS = "innovation bias"
 HEALTH_SPREAD = "innovation spread"
 HEALTH_UNCERTAIN = "uncertain"
@@ -88,7 +101,9 @@ class RoomObserver:
         self._meas_key: Any = None
         self._pending: tuple[float, float] | None = None
         self.paused_since: float | None = None
+        self.pause_window = False
         self.settle_until: float | None = None
+        self.window_hold_until: float | None = None
         self.innov_bias = 0.0
         self.innov_nis = 1.0
         self.innov_n = 0
@@ -153,14 +168,18 @@ class RoomObserver:
         self._pending = (meas_t if meas_t is not None else now, y)
 
     def observe(self, now: float, *, temp: float | None, meas_key: Any, meas_t: float | None,
-                ext: float | None, active: bool) -> None:
-        """One regulation tick: propagate to now and correct on a new value."""
+                ext: float | None, active: bool, window: bool = False) -> None:
+        """One regulation tick: propagate to now and correct on a new value.
+
+        window: SmartPI is out of control because a window is open (the air follows the measurement).
+        """
         if temp is not None:
             self._new_measurement(now, float(temp), meas_key, meas_t)
         if self.params is None:
             return
         if temp is None or ext is None:
-            active = False
+            active = window = False
+        window = window and not active
         if self.x is None or self.t is None:
             if active:
                 self.reinit(now, float(temp), float(ext))
@@ -171,32 +190,48 @@ class RoomObserver:
             if active:
                 self.reinit(now, float(temp), float(ext))
             else:
-                self._pause(now)
+                self._pause(now, window)
             return
+        window_end = False
         if not active:
-            self._pause(now)
+            self._pause(now, window)
         elif self.paused_since is not None:
             paused = now - self.paused_since
+            window_end = self.pause_window
             self.paused_since = None
+            self.pause_window = False
             if paused > RM_RESUME_MAX_S:
                 self.reinit(now, float(temp), float(ext))
                 return
-            self._reopen()
+            if not window_end:
+                self._reopen()
         te_now = float(ext) if ext is not None else self.te
-        while self.t + RM_STEP_S <= now + 1e-6:
-            self._step(te_now, active)
+        if window or window_end:
+            y = float(temp)
+            while self.t + RM_STEP_S <= now + 1e-6:
+                self._step_window(te_now, y)
+            if window_end:
+                self._window_resume(y)
+        else:
+            while self.t + RM_STEP_S <= now + 1e-6:
+                self._step(te_now, active)
+                self._apply_pending(active)
             self._apply_pending(active)
-        self._apply_pending(active)
         if self._resumed:
             self._resumed = False
             self._reopen()
+        if self.window_hold_until is not None and self.t >= self.window_hold_until:
+            self.window_hold_until = None
+            self._reset_innovations()
         if active and self.health() == HEALTH_OK:
             self.score.maybe_start(self.t, self.x, self.y_last)
 
-    def _pause(self, now: float) -> None:
+    def _pause(self, now: float, window: bool = False) -> None:
         if self.paused_since is None:
             self.paused_since = now
             self.score.drop_pending()
+        if window:
+            self.pause_window = True
         self._pending = None
 
     def _apply_pending(self, active: bool) -> None:
@@ -218,8 +253,10 @@ class RoomObserver:
         self.t = t
         self.te = te
         self.paused_since = None
+        self.pause_window = False
         self.settle_until = t + RM_SETTLE_S
-        self.innov_bias, self.innov_nis, self.innov_n = 0.0, 1.0, 0
+        self.window_hold_until = None
+        self._reset_innovations()
         self.d_sat_s = 0.0
         self.restarts += 1
         self._resumed = False
@@ -232,7 +269,44 @@ class RoomObserver:
         for i in (0, 2):
             if self.P[i][i] < self._p0[i][i]:
                 self.P[i][i] = self._p0[i][i]
+        self._reset_innovations()
+
+    def _reset_innovations(self) -> None:
         self.innov_bias, self.innov_nis, self.innov_n = 0.0, 1.0, 0
+
+    def _window_resume(self, y: float) -> None:
+        """End of an open window: air at the measurement, its correlations dropped, uncertainty reopened.
+
+        The wall state is kept; it is not reported during the hold that follows.
+        """
+        self.x = [y, self.x[1], self.x[2]]
+        P = self.P
+        for i in (1, 2):
+            P[0][i] = P[i][0] = 0.0
+        self._reopen()
+        self.window_hold_until = self.t + RM_WINDOW_HOLD_S
+        self._pending = None
+        self._fc_cache = None
+        self.score.drop_pending()
+
+    def _step_window(self, te_now: float, y: float) -> None:
+        """One sub-step with a window open: air held at the measured temperature y, the wall state driven
+        by that air through its own equation, the disturbance held. The emitter follows the applied command."""
+        p = self.params
+        t1 = self.t + RM_STEP_S
+        v_cmd = self.timeline.mean(self.t - p.L, t1 - p.L)
+        _, self.ue_x = emitter_step(self.ue_x, v_cmd, RM_STEP_S, p.tau_e)
+        te0 = self.te if self.te is not None else te_now
+        e = math.exp(-p.beta * RM_STEP_S)
+        drive = p.gamma * (y - 0.5 * (te0 + te_now)) - p.k_te * (te_now - te0) / RM_STEP_S
+        w = e * self.x[1] + (1.0 - e) / p.beta * drive
+        self.x = [y, w, self.x[2]]
+        P = self.P
+        pwd = e * P[1][2]
+        self.P = [[self.r, 0.0, 0.0], [0.0, e * e * P[1][1] + self._disc.qd[1][1], pwd], [0.0, pwd, P[2][2]]]
+        self.t = t1
+        self.te = te_now
+        self._fc_cache = None
 
     def _step(self, te_now: float, tracking: bool) -> None:
         p, dsc = self.params, self._disc
@@ -297,6 +371,8 @@ class RoomObserver:
             return HEALTH_WAITING
         if self.paused_since is not None:
             return HEALTH_PAUSED
+        if self.window_hold_until is not None:
+            return HEALTH_WINDOW
         if self.settling:
             return HEALTH_SETTLING
         if self.innov_n >= RM_INNOV_MIN_COUNT:
@@ -389,7 +465,8 @@ class RoomObserver:
     def to_dict(self) -> dict[str, Any]:
         return {
             "t": self.t, "x": self.x, "P": self.P, "te": self.te, "ue_x": self.ue_x, "y_last": self.y_last,
-            "paused_since": self.paused_since, "settle_until": self.settle_until, "restarts": self.restarts,
+            "paused_since": self.paused_since, "pause_window": self.pause_window, "settle_until": self.settle_until,
+            "window_hold_until": self.window_hold_until, "restarts": self.restarts,
             "timeline": self.timeline.to_dict(), "score": self.score.to_dict(), "nights": self.nights,
         }
 
@@ -416,6 +493,9 @@ class RoomObserver:
                     ps, su = data.get("paused_since"), data.get("settle_until")
                     self.paused_since = None if ps is None else float(ps)
                     self.settle_until = None if su is None else float(su)
+                    self.pause_window = bool(data.get("pause_window"))
+                    wh = data.get("window_hold_until")
+                    self.window_hold_until = None if wh is None else float(wh)
                     self._resumed = True
                     self.timeline.stop(self.t)
         except (TypeError, ValueError, IndexError):

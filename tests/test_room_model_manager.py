@@ -275,3 +275,27 @@ async def test_handler_feeds_saves_and_loads_the_room_model() -> None:
     with patch.object(algo.room_model, "load_state") as load:
         await handler.async_added_to_hass()
     load.assert_called_once_with(state)
+
+
+def test_room_model_exclusion_names_the_window_that_turns_the_heater_off() -> None:
+    from types import SimpleNamespace
+
+    from custom_components.vtherm_smartpi.handler import HVAC_OFF_REASON_WINDOW_DETECTION, SmartPIHandler
+    from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_OFF
+
+    algo = SimpleNamespace(vt_safety_override=False, on_percent=0.0)
+    base = {"vtherm_hvac_mode": VThermHvacMode_OFF, "requested_hvac_mode": VThermHvacMode_HEAT,
+            "window_manager": SimpleNamespace(is_window_detected=True),
+            "hvac_off_reason": HVAC_OFF_REASON_WINDOW_DETECTION, "is_overpowering_detected": False,
+            "on_percent": 0.0}
+    t = SimpleNamespace(**base)
+    # The T_ar learning keeps its reason; the room model is told it is the window
+    assert SmartPIHandler._tar_exclusion(t, algo) == "hvac not heating"
+    assert SmartPIHandler._room_model_exclusion(t, algo) == "window open"
+    # A heater turned off by the user, window open or not, is not a window period
+    t = SimpleNamespace(**dict(base, requested_hvac_mode=VThermHvacMode_OFF, hvac_off_reason="manual"))
+    assert SmartPIHandler._room_model_exclusion(t, algo) == "hvac not heating"
+    t = SimpleNamespace(**dict(base, vtherm_hvac_mode=VThermHvacMode_HEAT, hvac_off_reason=None,
+                               window_manager=SimpleNamespace(is_window_detected=False),
+                               is_overpowering_detected=True))
+    assert SmartPIHandler._room_model_exclusion(t, algo) == "power shedding"

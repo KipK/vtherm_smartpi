@@ -144,7 +144,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | Field | Meaning |
 |---|---|
 | `status` | `learning`, `identified` (model with walls), `simple model` (model without walls), or `not identified: ` followed by the reason (for example `not identified: too little heating during the nights`) |
-| `tracking` | State of the room tracking: `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` or `wall state implausible` |
+| `tracking` | State of the room tracking: `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `recovering after an open window` (3 hours after a window closes), `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` or `wall state implausible` |
 | `walls` | `identified`, or why the walls are not in the model: `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model`; `null` before any result |
 | `a` | Heating response at full power, in the units of `model.a` (°C per minute) |
 | `b_eq` | Static loss, in the units of `model.b` (per minute): the loss that sets the holding power |
@@ -157,7 +157,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `wall_extra_power_percent` | Extra power the walls currently absorb beyond their steady share, in % of full power (negative when they give heat back); `null` without identified walls, without a precise sensor or while the tracking is not `ok` |
 | `identified_day` | Day of the values in use, `null` before a publication |
 | `last_identification_day` | Day of the last daily identification |
-| `last_refusal_reason` | Why the last daily identification published nothing (for example `waiting for a second series of nights to confirm`), `null` when it published |
+| `last_refusal_reason` | Why the last daily identification published nothing (for example `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature` or `the heating response differs too much from the one measured by the regulation`), `null` when it published |
 | `sensor_resolution_c` | Smallest step of the temperature sensor seen in the recorded history (°C) |
 | `last_error` | Last computation error, `null` when none |
 

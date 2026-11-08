@@ -116,6 +116,12 @@ class CommandTimeline:
         return tl
 
 
+def split_first_moment(first_moment_s: float, te_pub: float | None) -> tuple[float, float]:
+    """(tau_e, L) of an emitter first moment: the refined first-order part when known, capped, the delay the rest."""
+    tau = first_moment_s if te_pub is None else min(float(te_pub), first_moment_s)
+    return tau, first_moment_s - tau
+
+
 def emitter_step(x: float, v: float, h: float, tau_e: float) -> tuple[float, float]:
     """First-order emitter over one step with the input v held: (bin mean of the output, output at the end)."""
     if tau_e < 1.0:

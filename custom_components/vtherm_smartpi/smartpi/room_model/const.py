@@ -16,6 +16,10 @@ DAY = 86400.0
 # ---------------------------------------------------------------------------
 # Propagation sub-step over the real elapsed time.
 RM_STEP_S = 60.0
+# Reasons of the regulation for not being in control that the observer treats
+# apart from a plain pause.
+RM_EXCLUDED_WINDOW = "window open"
+RM_EXCLUDED_SHEDDING = "power shedding"
 # Continuous process noise: air 0.05 C per sqrt(h); wall state 0.02 C of wall
 # temperature per sqrt(h) (scaled by the coupling); disturbance random walk of
 # 0.3 x the heating need of 1 C indoor-outdoor difference per sqrt(h).
@@ -38,6 +42,9 @@ RM_R_PRECISE = 0.04 ** 2 / 12.0 + 0.01 ** 2 / 12.0
 RM_RESUME_MAX_S = 3.0 * H
 # The observer is settling during this time after a restart at equilibrium.
 RM_SETTLE_S = 3.0 * H
+# After an open window the wall state is not shown and the innovation checks
+# start over during this time.
+RM_WINDOW_HOLD_S = 3.0 * H
 # Health checks
 RM_INNOV_EMA = 0.05          # weight of a new correction in the innovation averages
 RM_INNOV_BIAS_MAX = 2.0      # |mean normalised innovation|
@@ -85,7 +92,14 @@ RM_SEARCH_STARTS = 2
 RM_A_RANGE = (2e-5, 1e-2)
 RM_BEQ_RANGE = (1.0 / (3000.0 * H), 1.0 / (3.0 * H))
 RM_ALPHA_MAX = 1.0 / (0.25 * H)
-RM_BETA_RANGE = (1.0 / (2000.0 * H), 1.0 / (1.0 * H))
+RM_BETA_RANGE = (1.0 / (2000.0 * H), 1.0 / (3.0 * H))
+# Emitter refinement: the full model is fitted with tau_e at these multiples of
+# the emitter first moment in force and the lowest cost is kept; an optimum at
+# either end of the grid is refused.
+RM_EMITTER_GRID = (0.5, 0.71, 1.0, 1.41, 2.0)
+# A structure whose heating response a lies beyond this factor of the online
+# estimate (either way) is refused: it lumps the walls into the air.
+RM_A_ONLINE_RATIO_MAX = 2.0
 # Wall identified: the wall carries at least this share of the air loss
 RM_WALL_SHARE_MIN = 0.1
 # The full model must beat the reduced one on the held-out data by this factor

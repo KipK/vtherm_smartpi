@@ -9,6 +9,12 @@ parameters, and holds the persistence and the diagnostics.
 Emitter: the first moment of the emitter response is the HEAT dead time in
 force (learned T_ar or bootstrap); its first-order part tau_e is the refined
 T_ar value when published (else the whole first moment), the delay L the rest.
+The identification refines that first moment within a bounded grid.
+
+Power shedding keeps the observer running: the heater is off at a known power.
+From the first tick of a shedding period the command timeline is held at zero
+until SmartPI is back in control, so the rest of an interrupted cycle is not
+counted as heating.
 """
 from __future__ import annotations
 
@@ -22,7 +28,15 @@ from ..tar_learning.clock import LocalClock
 from ..tar_learning.const import ID_WIN_DAYS, ID_WINDOW_END_H
 from ..tar_learning.manager import STATUS_UNAVAILABLE
 from . import gates, public
-from .const import RM_HORIZON_LABELS, RM_MAX_RECORDS, RM_MAX_WINDOWS, RM_PUB_LAST
+from .const import (
+    RM_EXCLUDED_SHEDDING,
+    RM_EXCLUDED_WINDOW,
+    RM_HORIZON_LABELS,
+    RM_MAX_RECORDS,
+    RM_MAX_WINDOWS,
+    RM_PUB_LAST,
+)
+from .emitter import split_first_moment
 from .model import RoomParams
 from .observer import HEALTH_NO_MODEL, HEALTH_OK, HEALTH_PAUSED, HEALTH_WAITING, RoomObserver
 
@@ -76,6 +90,7 @@ class RoomModelManager:
         self.dirty = False
         self._a_per_min: float | None = None
         self._emitter: tuple[float, float] | None = None
+        self._shedding = False
         self._reset_results()
 
     def _reset_results(self) -> None:
@@ -118,21 +133,32 @@ class RoomModelManager:
                 excluded: str | None, a_per_min: float | None, first_moment_s: float | None) -> None:
         """Record one regulation tick.
 
-        excluded: why SmartPI is not in control of the heater, None when it is.
+        excluded: why SmartPI is not in control of the heater, None when it is. An open window is
+        followed with the measured air; power shedding is tracked with the heater off; any other
+        reason pauses the observer.
         first_moment_s: HEAT dead time in force, the first moment of the emitter response.
         """
         self._a_per_min = a_per_min if a_per_min and a_per_min > 0.0 else None
         self._emitter = self._emitter_split(first_moment_s)
         key, meas_t = _measure_key(measure_id)
-        active = hvac_mode == VThermHvacMode_HEAT and not excluded
-        self.observer.observe(now, temp=temp, meas_key=key, meas_t=meas_t, ext=ext, active=active)
+        heating = hvac_mode == VThermHvacMode_HEAT
+        shedding = heating and excluded == RM_EXCLUDED_SHEDDING
+        if shedding and not self._shedding:
+            self.observer.timeline.stop(now)
+        self._shedding = shedding
+        active = heating and (not excluded or shedding)
+        self.observer.observe(now, temp=temp, meas_key=key, meas_t=meas_t, ext=ext, active=active,
+                              window=excluded == RM_EXCLUDED_WINDOW)
         self.dirty = True
 
     def on_applied(self, now: float, power: float, cycle_start: bool, cycle_min: float, hvac_mode,
                    valve: bool = False) -> None:
-        """Record an applied command: a PWM cycle (power x cycle on) or a valve level."""
+        """Record an applied command: a PWM cycle (power x cycle on) or a valve level.
+
+        During power shedding the heater stays off whatever the command.
+        """
         tl = self.observer.timeline
-        if hvac_mode != VThermHvacMode_HEAT:
+        if hvac_mode != VThermHvacMode_HEAT or self._shedding:
             tl.stop(now)
         elif valve:
             tl.applied_level(now, power)
@@ -140,13 +166,14 @@ class RoomModelManager:
             tl.applied_cycle(now, power, max(float(cycle_min) * 60.0, 60.0), cycle_start)
         tl.prune(now)
 
+    def _te_pub(self) -> float | None:
+        te_pub = getattr(self._tar, "te_pub", None) if self._tar is not None else None
+        return float(te_pub["value"]) if te_pub and te_pub.get("value") is not None else None
+
     def _emitter_split(self, first_moment_s: float | None) -> tuple[float, float] | None:
         if first_moment_s is None or first_moment_s < 0.0:
             return None
-        te_pub = getattr(self._tar, "te_pub", None) if self._tar is not None else None
-        tau = float(te_pub["value"]) if te_pub and te_pub.get("value") is not None else float(first_moment_s)
-        tau = min(tau, float(first_moment_s))
-        return tau, float(first_moment_s) - tau
+        return split_first_moment(float(first_moment_s), self._te_pub())
 
     # ------------------------------------------------------------------
     # Daily identification
@@ -162,6 +189,7 @@ class RoomModelManager:
         snap["sp"] = [list(x) for x in tar.history.setpoints]
         snap["day"] = day
         snap["tau_e"], snap["L"] = self._emitter if self._emitter else (None, None)
+        snap["te_pub"] = self._te_pub()
         snap["a_per_min"] = self._a_per_min
         snap["excluded_nights"] = self.observer.disturbed_nights()
         snap["prev"] = self.windows.get(str(day - ID_WIN_DAYS))

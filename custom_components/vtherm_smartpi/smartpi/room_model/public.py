@@ -30,6 +30,8 @@ _REASONS = {
     gates.WHY_DISAGREE: "two successive series of nights disagree",
     gates.WHY_HELDOUT: "the model does not predict the following nights well enough",
     gates.WHY_FAILED: "computation failed",
+    gates.WHY_EMITTER_EDGE: "the heating response delay does not match the measured temperature",
+    gates.WHY_A_ONLINE: "the heating response differs too much from the one measured by the regulation",
     REASON_VALVE: "valve heaters are not supported yet",
     REASON_DEPENDENCIES: "numerical libraries unavailable",
 }
@@ -50,6 +52,7 @@ _TRACKING = {
     observer.HEALTH_WAITING: "waiting for measurements",
     observer.HEALTH_PAUSED: "paused (SmartPI not heating or not in control)",
     observer.HEALTH_SETTLING: "settling after a restart",
+    observer.HEALTH_WINDOW: "recovering after an open window",
     observer.HEALTH_BIAS: "measurements drift away from the model",
     observer.HEALTH_SPREAD: "measurements inconsistent with the model",
     observer.HEALTH_UNCERTAIN: "temperature estimate uncertain",

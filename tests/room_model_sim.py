@@ -2,7 +2,8 @@
 
 The plant is the air-wall model with a first-order emitter and a pure delay,
 heated by PWM cycles of a simple proportional rule around a day/night
-setpoint, under a sinusoidal outdoor temperature. The sensor publishes on each
+setpoint, under a sinusoidal outdoor temperature. An open window (optional)
+stops the heater and adds an air loss to the outside. The sensor publishes on each
 change of its quantised value (and a heartbeat). The output is the recorded
 history in the form of the T_ar learning history.
 """
@@ -35,8 +36,11 @@ def outdoor(t: float) -> float:
 
 
 def simulate(p: dict, days: float, *, q: float = 0.01, noise: float = 0.0, seed: int = 1, gain=None,
-             cycle_s: float = 600.0, ta0: float = 19.0, t0: float = T0) -> dict:
-    """Closed loop on 10 s steps; returns the history lists and the true trajectories (60 s)."""
+             cycle_s: float = 600.0, ta0: float = 19.0, t0: float = T0, window=None) -> dict:
+    """Closed loop on 10 s steps; returns the history lists and the true trajectories (60 s).
+
+    window: (start, end, extra air loss rate per second): heater off and extra loss over [start, end).
+    """
     rng = np.random.default_rng(seed)
     full = p["c"] > 0.0
     alpha, beta, c, a = p["alpha"], p["beta"], p["c"], p["a"]
@@ -49,6 +53,13 @@ def simulate(p: dict, days: float, *, q: float = 0.01, noise: float = 0.0, seed:
     Mx[:2, :2], Mx[:2, 2:] = A * h, B * h
     E = expm(Mx)
     phi, gam = E[:2, :2], E[:2, 2:]
+    phi_w, gam_w = phi, gam
+    if window is not None:
+        Mw = Mx.copy()
+        Mw[0, 0] -= window[2] * h
+        Mw[0, 3] += window[2] * h
+        Ew = expm(Mw)
+        phi_w, gam_w = Ew[:2, :2], Ew[:2, 2:]
     n = int(days * DAY / h)
     lag = int(round(p["L"] / h))
     e_tau = math.exp(-h / p["tau_e"]) if p["tau_e"] > 1.0 else 0.0
@@ -66,22 +77,23 @@ def simulate(p: dict, days: float, *, q: float = 0.01, noise: float = 0.0, seed:
     for i in range(n):
         t = t0 + i * h
         sp = setpoint(t)
+        in_win = window is not None and window[0] <= t < window[1]
         if not sp_ev or sp_ev[-1][1] != sp:
             sp_ev.append((t, sp))
         if i % int(cycle_s / h) == 0:
             meas = last_pub if last_pub is not None else x[0]
             te_now = outdoor(t)
             ff = (alpha - c) / a * (sp - te_now)
-            duty = min(1.0, max(0.0, ff + 0.8 * (sp - meas)))
+            duty = 0.0 if in_win else min(1.0, max(0.0, ff + 0.8 * (sp - meas)))
             cyc_start = t
             cycles.append((t, duty))
         t_off = cyc_start + duty * cycle_s
-        u_now = min(1.0, max(0.0, (t_off - t) / h))
+        u_now = 0.0 if in_win else min(1.0, max(0.0, (t_off - t) / h))
         if u_now > 0 and not heater:
             on.append(t)
             heater = True
-        if heater and t_off < t + h - 1e-9:
-            off.append(max(t, t_off))
+        if heater and (in_win or t_off < t + h - 1e-9):
+            off.append(t if in_win else max(t, t_off))
             heater = False
         ubuf.append(u_now)
         u_del = ubuf.pop(0)
@@ -90,7 +102,7 @@ def simulate(p: dict, days: float, *, q: float = 0.01, noise: float = 0.0, seed:
         te_a, te_b = outdoor(t), outdoor(t + h)
         dist = gain(t) if gain is not None else 0.0
         v = np.array([ue_mean, 0.5 * (te_a + te_b), (te_b - te_a) / h, dist])
-        x = phi @ x + gam @ v
+        x = (phi_w @ x + gam_w @ v) if in_win else (phi @ x + gam @ v)
         t1 = t + h
         val = round((x[0] + rng.uniform(-noise, noise)) / q) * q
         val = round(val, 3)

@@ -8,6 +8,9 @@ All notable changes to this project will be documented in this file.
   a model of the room with its air, walls and emitter, follows the room state
   and publishes temperature forecasts and their errors in the `room_model`
   diagnostics. It does not act on the regulation.
+- Room model: the wall state no longer drifts after an open window, power
+  shedding is tracked instead of paused, and the identification checks the
+  emitter time and the heating response `a` before publishing.
 - Emitter delay learning (heating, always on): SmartPI learns the heating
   response delay from the morning comfort steps and, over regulated nights,
   from a multi-day model of the room, and uses it in place of the bootstrap

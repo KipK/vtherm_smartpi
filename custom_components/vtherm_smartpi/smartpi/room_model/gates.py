@@ -10,9 +10,14 @@ frozen, initial states re-estimated).
 The full model (air and walls) is chosen when the sensor is precise, the wall
 carries a real share of the air loss in both windows and the full model beats
 the reduced one on the held-out window; otherwise the reduced model is used if
-it passes. The candidate is the geometric mean of the two windows; the
-published value is the median of the last RM_PUB_LAST candidates of the same
-structure.
+it passes. A structure whose heating response a lies beyond a factor
+RM_A_ONLINE_RATIO_MAX of the online estimate is refused: it lumps the walls
+into the air.
+
+Candidates are combined in the identifiable coordinates (a, b_eq / a, c /
+alpha, beta): the candidate is the geometric mean of the two windows in those
+coordinates, and the published value is their median over the last
+RM_PUB_LAST candidates of the same structure.
 """
 from __future__ import annotations
 
@@ -20,6 +25,7 @@ import math
 import statistics
 
 from .const import (
+    RM_A_ONLINE_RATIO_MAX,
     RM_AGREE_TOL,
     RM_FULL_HELDOUT_GAIN,
     RM_PUB_LAST,
@@ -52,6 +58,8 @@ WHY_NO_PREVIOUS = "no previous"
 WHY_DISAGREE = "disagree"
 WHY_HELDOUT = "heldout"
 WHY_FAILED = "failed"
+WHY_EMITTER_EDGE = "emitter edge"
+WHY_A_ONLINE = "a online"
 
 WALL_COARSE = "coarse sensor"
 WALL_SMALL = "no wall share"
@@ -118,21 +126,56 @@ def _value(p: dict, k: str) -> float | None:
     return p.get(k)
 
 
-def _gm(x: float, y: float) -> float:
-    return math.sqrt(x * y)
+def a_consistent(a: float | None, a_online: float | None) -> bool:
+    """The heating response lies within RM_A_ONLINE_RATIO_MAX of the online estimate (no estimate: no check)."""
+    if a_online is None or a_online <= 0.0:
+        return True
+    if a is None or a <= 0.0:
+        return False
+    return abs(math.log(a / a_online)) <= math.log(RM_A_ONLINE_RATIO_MAX)
 
 
-def combine(p: dict, q: dict) -> dict:
-    """Geometric mean of two parameter sets of the same structure."""
-    out = dict(q)
-    for k in ("a", "alpha", "beta", "c"):
-        if p[k] > 0.0 and q[k] > 0.0:
-            out[k] = _gm(p[k], q[k])
+def _coords(p: dict) -> tuple[float, float, float, float] | None:
+    """Identifiable coordinates of a parameter set: (a, b_eq / a, c / alpha, beta)."""
+    full = p.get("struct") == STRUCT_FULL
+    b_eq = _value(p, "b_eq")
+    if p["a"] <= 0.0 or p["alpha"] <= 0.0 or b_eq <= 0.0 or p["beta"] <= 0.0 or (full and p["c"] <= 0.0):
+        return None
+    return p["a"], b_eq / p["a"], (p["c"] / p["alpha"] if full else 0.0), p["beta"]
+
+
+def _from_coords(base: dict, a: float, r: float, g: float, beta: float) -> dict:
+    out = dict(base, a=a, beta=beta)
+    b_eq = r * a
+    if base.get("struct") == STRUCT_FULL:
+        out["alpha"] = b_eq / (1.0 - g)
+        out["c"] = g * out["alpha"]
+    else:
+        out["alpha"] = b_eq
     return out
 
 
-def decide(cur: dict, prev: dict | None, held: dict, precise: bool) -> dict:
-    """Decision of a day: {"struct", "candidate", "wall"} or {"why", "wall"}."""
+def _gm(values: list[float]) -> float:
+    return math.exp(sum(math.log(v) for v in values) / len(values))
+
+
+def combine(p: dict, q: dict) -> dict:
+    """Geometric mean of two parameter sets of the same structure, in the identifiable coordinates."""
+    cp, cq = _coords(p), _coords(q)
+    if cp is None or cq is None:
+        return dict(q)
+    full = q.get("struct") == STRUCT_FULL
+    m = [(_gm([x, y]) if (i != 2 or full) else 0.0) for i, (x, y) in enumerate(zip(cp, cq))]
+    if m[2] >= 1.0:
+        return dict(q)
+    return _from_coords(q, *m)
+
+
+def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: float | None = None) -> dict:
+    """Decision of a day: {"struct", "candidate", "wall"} or {"why", "wall"}.
+
+    a_online: heating response of the online estimate (per second), None when unknown.
+    """
     if cur.get("why"):
         return {"why": cur["why"], "wall": None}
     sensor = "precise" if precise else "coarse"
@@ -149,6 +192,8 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool) -> dict:
     elif min(r["params"]["c"] / r["params"]["alpha"] for r in ([full, p_full] if p_full.get("ok") else [full])) \
             < RM_WALL_SHARE_MIN:
         wall, full_why = WALL_SMALL, None
+    elif not a_consistent(full["params"]["a"], a_online):
+        wall, full_why = WALL_NOT_CONFIRMED, WHY_A_ONLINE
     elif not p_full.get("ok"):
         wall, full_why = WALL_NOT_CONFIRMED, WHY_NO_PREVIOUS
     elif not agree(full["params"], p_full["params"], ("a", "b_eq", "alpha", "c")):
@@ -158,23 +203,30 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool) -> dict:
     elif (held.get("reduced") and held["reduced"].get("rms") is not None
           and held["full"]["rms"] > RM_FULL_HELDOUT_GAIN * held["reduced"]["rms"]):
         wall, full_why = WALL_NOT_BETTER, None
+    elif not a_consistent((cand := combine(p_full["params"], full["params"]))["a"], a_online):
+        wall, full_why = WALL_NOT_CONFIRMED, WHY_A_ONLINE
     else:
-        return {"struct": STRUCT_FULL, "candidate": combine(p_full["params"], full["params"]), "wall": None}
+        return {"struct": STRUCT_FULL, "candidate": cand, "wall": None}
     if not red.get("ok"):
         why = full_why or red.get("why") or WHY_FIT
+    elif not a_consistent(red["params"]["a"], a_online):
+        why = WHY_A_ONLINE
     elif prev is None or prev.get("why") or not p_red.get("ok"):
         why = WHY_NO_PREVIOUS
     elif not agree(red["params"], p_red["params"], ("a", "b_eq")):
         why = WHY_DISAGREE
     elif not residuals_ok(held.get("reduced"), sensor, held_out=True, q=q):
         why = WHY_HELDOUT
+    elif not a_consistent((cand := combine(p_red["params"], red["params"]))["a"], a_online):
+        why = WHY_A_ONLINE
     else:
-        return {"struct": STRUCT_REDUCED, "candidate": combine(p_red["params"], red["params"]), "wall": wall}
+        return {"struct": STRUCT_REDUCED, "candidate": cand, "wall": wall}
     return {"why": why, "wall": wall}
 
 
 def published(candidates: list[dict]) -> dict | None:
-    """Median of the last candidates of the latest structure (a change of structure starts over)."""
+    """Median of the last candidates of the latest structure in the identifiable coordinates (a change of
+    structure starts over)."""
     if not candidates:
         return None
     struct = candidates[-1]["struct"]
@@ -184,9 +236,10 @@ def published(candidates: list[dict]) -> dict | None:
             break
         same.append(c)
     last = same[:RM_PUB_LAST]
-    out = dict(last[0])
-    for k in ("a", "alpha", "beta", "c"):
-        out[k] = statistics.median(c[k] for c in last)
-    if struct == STRUCT_FULL and out["c"] >= out["alpha"]:
+    coords = [_coords(c) for c in last]
+    if any(c is None for c in coords):
         return dict(last[0])
-    return out
+    med = [statistics.median(c[i] for c in coords) for i in range(4)]
+    if med[2] >= 1.0:
+        return dict(last[0])
+    return _from_coords(last[0], *med)

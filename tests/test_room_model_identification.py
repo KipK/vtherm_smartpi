@@ -7,7 +7,7 @@ import time
 import pytest
 
 import room_model_sim as rsim
-from custom_components.vtherm_smartpi.smartpi.room_model import gates, jobs
+from custom_components.vtherm_smartpi.smartpi.room_model import gates, jobs, public
 from custom_components.vtherm_smartpi.smartpi.room_model.energy_balance import heater_timeline, static_gain
 from custom_components.vtherm_smartpi.smartpi.room_model.periods import fit_periods
 from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
@@ -61,7 +61,7 @@ def test_full_model_identified_on_a_mass_room(mass_data) -> None:
     assert gates.residuals_ok(second["held"]["full"], "precise", held_out=True, q=0.01)
     # The reduced model cannot follow a mass room
     assert second["reduced"]["ok"] is False
-    assert worst < 10.0
+    assert worst < 30.0  # five extra full fits refine the emitter
 
 
 def test_reduced_model_on_a_room_without_mass(no_mass_data) -> None:
@@ -211,3 +211,139 @@ def test_fit_periods_are_the_valid_nights() -> None:
     gap2 = (clock.at(D0 - 1, 18.5), clock.at(D0, 7.5))
     per = fit_periods(clock, D0, first, last, [gap2])
     assert D0 - 1 not in [n for _, _, n in per]
+
+
+# ---------------------------------------------------------------------------
+# Heating response against the online estimate
+# ---------------------------------------------------------------------------
+def test_a_lumped_simple_model_is_refused() -> None:
+    # A simple model with the walls lumped into the air: right static ratio, a 14 times too small
+    a_online = 7.5e-4
+    lumped = dict(_rec("reduced", a=a_online / 14.0, alpha=1.0e-6), ok=True)
+    lumped_prev = dict(_rec("reduced", a=a_online / 14.5, alpha=1.04e-6), ok=True)
+    cur = {"q": 0.01, "full": _rec("full", c=1e-6), "reduced": lumped}
+    prev = {"q": 0.01, "full": _rec("full", c=1e-6), "reduced": lumped_prev}
+    held = {"reduced": _GOOD}
+    # Without the online estimate the windows agree and the simple model would be published
+    assert gates.decide(cur, prev, held, True)["struct"] == "reduced"
+    dec = gates.decide(cur, prev, held, True, a_online=a_online)
+    assert dec == {"why": gates.WHY_A_ONLINE, "wall": gates.WALL_SMALL}
+    # Refused already on the first window, before waiting for a second one
+    assert gates.decide(cur, None, {}, True, a_online=a_online)["why"] == gates.WHY_A_ONLINE
+    # Within a factor 2 of the online estimate: published
+    near = dict(cur, reduced=dict(_rec("reduced", a=a_online / 1.8, alpha=4e-5), ok=True))
+    near_prev = dict(prev, reduced=dict(_rec("reduced", a=a_online / 1.75, alpha=4.1e-5), ok=True))
+    assert gates.decide(near, near_prev, held, True, a_online=a_online)["struct"] == "reduced"
+    assert public.reason(gates.WHY_A_ONLINE) == (
+        "the heating response differs too much from the one measured by the regulation")
+
+
+def test_a_lumped_wall_model_falls_back_to_the_simple_model() -> None:
+    cur = {"q": 0.01, "full": _rec("full", a=3e-4), "reduced": _rec("reduced", alpha=4e-5)}
+    prev = {"q": 0.01, "full": _rec("full", a=3.1e-4), "reduced": _rec("reduced", alpha=4.1e-5)}
+    held = {"full": _GOOD, "reduced": dict(_GOOD, rms=0.05)}
+    assert gates.decide(cur, prev, held, True)["struct"] == "full"
+    dec = gates.decide(cur, prev, held, True, a_online=1e-3)
+    assert dec["struct"] == "reduced" and dec["wall"] == gates.WALL_NOT_CONFIRMED
+    cur_bad = dict(cur, reduced=_rec("reduced", alpha=4e-5, ok=False))
+    assert gates.decide(cur_bad, prev, held, True, a_online=1e-3) == {"why": gates.WHY_A_ONLINE,
+                                                                         "wall": gates.WALL_NOT_CONFIRMED}
+
+
+# ---------------------------------------------------------------------------
+# Emitter refinement
+# ---------------------------------------------------------------------------
+LAG_ONLY = dict(rsim.MASS, tau_e=600.0, L=0.0)
+
+
+@pytest.fixture(scope="module")
+def lag_data():
+    return rsim.simulate(LAG_ONLY, 4.5)
+
+
+def _job(data: dict, plant: dict, first_moment: float, day: int = 4, prev=None) -> dict:
+    return jobs.identify_job(rsim.snapshot(data, D0 + day, prev=prev, tau_e=first_moment, L=0.0,
+                                           a_per_min=plant["a"] * 60.0))
+
+
+def test_emitter_grid_finds_the_true_time_constant(lag_data) -> None:
+    rec = _job(lag_data, LAG_ONLY, 600.0 / 1.41)
+    assert rec["emitter"]["mult"] == 1.41
+    assert rec["emitter"]["tau_e"] == pytest.approx(600.0, abs=1.0) and rec["emitter"]["L"] == 0.0
+    assert rec["full"]["ok"] and rec["full"]["params"]["tau_e"] == pytest.approx(600.0, abs=1.0)
+    costs = rec["emitter"]["costs"]
+    assert min(costs) == costs[3] and costs[2] > 2.0 * costs[3]
+
+
+def test_emitter_optimum_at_the_edge_is_refused(lag_data) -> None:
+    rec = _job(lag_data, LAG_ONLY, 600.0 / 4.0)
+    assert rec["emitter"]["mult"] == 2.0
+    assert rec["decision"] == {"why": gates.WHY_EMITTER_EDGE, "wall": None}
+    assert "full" not in rec and "reduced" not in rec
+    assert public.reason(gates.WHY_EMITTER_EDGE) == (
+        "the heating response delay does not match the measured temperature")
+
+
+def test_emitter_split_keeps_the_refined_lag() -> None:
+    from custom_components.vtherm_smartpi.smartpi.room_model.emitter import split_first_moment
+
+    assert jobs._te_pub({}, 600.0, 120.0) == 600.0
+    assert jobs._te_pub({}, 720.0, 0.0) is None
+    assert jobs._te_pub({"te_pub": 900.0}, 720.0, 0.0) == 900.0
+    assert split_first_moment(720.0 * 1.41, 600.0) == pytest.approx((600.0, 720.0 * 1.41 - 600.0))
+    assert split_first_moment(720.0 * 0.5, 600.0) == (360.0, 0.0)
+    assert split_first_moment(720.0 * 2.0, None) == (1440.0, 0.0)
+
+
+def test_wall_rate_above_the_cap_is_refused() -> None:
+    from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
+
+    fit = {"a": 1e-3, "alpha": 1e-4, "beta": 1.0 / (2.0 * H), "c": 5e-5, "check": dict(_GOOD, rms=0.01)}
+    assert gates.fit_record(fit, "full", "precise", 600.0, 0.0, 0.01)["why"] == gates.WHY_RANGE
+    ok = gates.fit_record(dict(fit, beta=1.0 / (4.0 * H)), "full", "precise", 600.0, 0.0, 0.01)
+    assert ok["ok"] is True
+    assert not RoomParams("full", 1e-3, 1e-4, 1.0 / (2.0 * H), 5e-5, 600.0, 0.0).plausible()
+
+
+def test_room_without_mass_and_a_slow_emitter_gets_no_walls() -> None:
+    # True emitter 3600 s, first moment in force 720 s: the grid stops at 1440 s
+    plant = dict(rsim.NO_MASS, tau_e=3600.0, L=0.0)
+    data = rsim.simulate(plant, 7.5)
+    first = _job(data, plant, 720.0, day=4)
+    second = _job(data, plant, 720.0, day=7, prev=_slim(first))
+    for rec in (first, second):
+        assert rec["emitter"]["mult"] == 2.0
+        assert rec["decision"]["why"] == gates.WHY_EMITTER_EDGE
+        assert rec["decision"].get("struct") is None
+
+
+# ---------------------------------------------------------------------------
+# Combination in the identifiable coordinates
+# ---------------------------------------------------------------------------
+def test_combine_and_median_in_identifiable_coordinates() -> None:
+    base = {"struct": "full", "tau_e": 600.0, "L": 0.0}
+    # Same static ratio b_eq / a = 0.04 on a ridge of (alpha, c)
+    p = dict(base, a=1e-3, alpha=1.0e-4, beta=4e-6, c=6.0e-5)
+    q = dict(base, a=1e-3, alpha=1.5e-4, beta=9e-6, c=1.1e-4)
+    out = gates.combine(p, q)
+    assert (out["alpha"] - out["c"]) / out["a"] == pytest.approx(0.04, rel=1e-12)
+    assert out["c"] / out["alpha"] == pytest.approx((0.6 * 1.1 / 1.5) ** 0.5, rel=1e-12)
+    assert out["beta"] == pytest.approx(6e-6, rel=1e-12)
+    assert out["a"] == pytest.approx(1e-3, rel=1e-12)
+    # The geometric mean of alpha and c taken apart would give b_eq / a = 0.0412 (+3 %)
+    old = ((1.0e-4 * 1.5e-4) ** 0.5 - (6.0e-5 * 1.1e-4) ** 0.5) / 1e-3
+    assert old == pytest.approx(0.04124, abs=1e-5)
+    # Reduced model: a and b_eq / a
+    r = gates.combine(dict(base, struct="reduced", a=1e-3, alpha=4e-5, beta=1 / 3600, c=0.0),
+                      dict(base, struct="reduced", a=4e-3, alpha=4e-5, beta=1 / 3600, c=0.0))
+    assert r["a"] == pytest.approx(2e-3) and r["alpha"] == pytest.approx(4e-5) and r["c"] == 0.0
+    # Published: median of each coordinate over the last candidates
+    cands = [dict(p, a=1.0e-3), dict(q, a=1.2e-3, alpha=1.2 * q["alpha"], c=1.2 * q["c"]),
+             dict(p, a=1.1e-3, alpha=1.1 * 1.2e-4, c=1.1 * 0.7e-4, beta=5e-6)]
+    pub = gates.published(cands)
+    ratios = sorted((c["alpha"] - c["c"]) / c["a"] for c in cands)
+    shares = sorted(c["c"] / c["alpha"] for c in cands)
+    assert pub["a"] == pytest.approx(1.1e-3)
+    assert (pub["alpha"] - pub["c"]) / pub["a"] == pytest.approx(ratios[1], rel=1e-12)
+    assert pub["c"] / pub["alpha"] == pytest.approx(shares[1], rel=1e-12)
+    assert pub["beta"] == pytest.approx(5e-6)

@@ -143,7 +143,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | Champ | Signification |
 |---|---|
 | `status` | `learning`, `identified` (modèle avec murs), `simple model` (modèle sans murs), ou `not identified: ` suivi de la raison, en anglais (par exemple `not identified: too little heating during the nights`) |
-| `tracking` | État du suivi de la pièce : `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` ou `wall state implausible` |
+| `tracking` | État du suivi de la pièce : `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `recovering after an open window` (3 heures après la fermeture de la fenêtre), `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` ou `wall state implausible` |
 | `walls` | `identified`, ou la raison pour laquelle les murs ne sont pas dans le modèle : `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model` ; `null` avant tout résultat |
 | `a` | Réponse de chauffe à pleine puissance, dans les unités de `model.a` (°C par minute) |
 | `b_eq` | Déperdition statique, dans les unités de `model.b` (par minute) : la perte qui fixe la puissance de maintien |
@@ -156,7 +156,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `wall_extra_power_percent` | Puissance supplémentaire que les murs absorbent actuellement au-delà de leur part en régime établi, en % de la pleine puissance (négative lorsqu'ils restituent de la chaleur) ; `null` sans murs identifiés, sans sonde précise ou tant que le suivi n'est pas `ok` |
 | `identified_day` | Jour des valeurs en usage, `null` avant une publication |
 | `last_identification_day` | Jour de la dernière identification quotidienne |
-| `last_refusal_reason` | Raison pour laquelle la dernière identification quotidienne n'a rien publié (par exemple `waiting for a second series of nights to confirm`), `null` lorsqu'elle a publié |
+| `last_refusal_reason` | Raison pour laquelle la dernière identification quotidienne n'a rien publié (par exemple `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature` ou `the heating response differs too much from the one measured by the regulation`), `null` lorsqu'elle a publié |
 | `sensor_resolution_c` | Plus petit pas de la sonde de température observé dans l'historique enregistré (°C) |
 | `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |
 
