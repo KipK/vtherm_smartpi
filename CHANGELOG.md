@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
   value within 0.5 to 2 times that value. The bootstrap value is kept. The gains
   use half of the learned value, as an apparent dead time. Requires `numpy` and
   `scipy`. PWM heaters only: in valve mode nothing is learned or applied.
+
+## [0.6.2]
+
 - Regulation: a room no longer stays below the setpoint for good after a
   setpoint increase or a power-shedding, window or OFF resume. When the
   proportional and feed-forward action settle short of the setpoint, the
