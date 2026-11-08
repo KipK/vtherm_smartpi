@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6.2]
 
 - Regulation: a room no longer stays below the setpoint for good after a
   setpoint increase or a power-shedding, window or OFF resume. When the
