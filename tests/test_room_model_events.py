@@ -116,7 +116,7 @@ def test_wall_part_fades_back_in_over_30_minutes_after_a_window(window_data) -> 
     seen = []
 
     def on_tick(m, t, mode):
-        m.eb_ratio = (HEAVY["alpha"] - HEAVY["c"]) / HEAVY["a"]
+        m.eb_slope = (HEAVY["alpha"] - HEAVY["c"]) / HEAVY["a"]
         src = select_source(m, VThermHvacMode_HEAT, False)
         tr.update(src, now=t, learned_power=0.3, target_temp=20.0, ext_temp=rsim.outdoor(t), heat=True)
         seen.append((t, src.kind, src.wall, tr.wall_applied))

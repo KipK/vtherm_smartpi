@@ -1,27 +1,33 @@
 """Holding power of the feed-forward from the published room model (pure Python).
 
-In heating with PWM heaters, a published room model with a qualified
-energy-balance ratio r in force (manager.py) replaces the learned b / a in the
-holding power FF1:
+In heating with PWM heaters, a published room model with a qualified static
+model of the energy balance in force (manager.py: slope s, constant free gain
+g) replaces the learned b / a in the holding power FF1, with the static part
+u_s = s (T_sp - T_ext) - g:
 
 - walls identified and tracking ok ("walls"):
-  u = r (T_sp - T_ext) + delta_wall / a, the wall extra power of the tracking
-  in both signs;
-- walls identified, tracking not ok ("static"): u = r (T_sp - T_ext);
-- simple model ("simple"): u = r (T_sp - T_ext).
+  u = u_s + delta_wall / a, the wall extra power of the tracking in both
+  signs;
+- walls identified, tracking not ok ("static"): u = u_s;
+- simple model ("simple"): u = u_s.
 
-The static gain is the energy-balance ratio, never the fitted b_eq / a: in a
-room with heavy walls the fitted b_eq = alpha - c is a small difference of
-two terms that depend on the emitter time, while the multi-day balance does
-not. The fit gives the wall dynamics (delta_wall / a). The same ratio is the
-equilibrium of the braking prediction.
+The static part is the energy balance, never the fitted b_eq / a: in a room
+with heavy walls the fitted b_eq = alpha - c is a small difference of two
+terms that depend on the emitter time, while the multi-day balance does not.
+The constant gain g is part of it: the balance of the days is u = s D - g
+with D the indoor-outdoor difference, and a holding power s (T_sp - T_ext)
+without g would leave the integral to carry g for good (heat from a warmer
+neighbour, steady occupants). The fit gives the wall dynamics (delta_wall /
+a). The same static model is the equilibrium of the braking prediction.
 
 The holding power is clamped to [0, 1] and applies at full weight (no warmup
 ramp); the unmeasured disturbance d is not used. The learned holding power
 stays in use ("learned") without a published model, while a published model
-waits for its first qualified energy-balance ratio (the wall term does not act
-either), in cooling and with a valve. The energy-balance ratio alone, without
-a published model, is never used: without the wall term it gives the wrong
+waits for its first qualified static model (the wall term does not act
+either), while the published b_eq / a disagrees with the slope in force by
+more than the publication tolerance (a static model that came into force
+after the publication), in cooling and with a valve. The energy balance alone, without a
+published model, is never used: without the wall term it gives the wrong
 holding power in rooms with heavy walls.
 
 The holding power has two parts, handled differently at a discontinuity:
@@ -30,14 +36,14 @@ The holding power has two parts, handled differently at a discontinuity:
   discrete changes are moved into the integral so that the total command
   does not jump: I <- I - dU / Ki, within the integral limits. They are a
   change between the learned source and a room model source, a change of
-  model structure, a new publication of the parameters and a new
-  energy-balance ratio in force. Only the step of
+  model structure, a new publication of the parameters and a new static
+  model of the energy balance in force. Only the step of
   the static part is moved, evaluated with the wall part applied at this
   cycle.
 - Wall part. It is never moved into the integral. When the wall term in
   force changes discretely (switched on, switched off by the tracking or by a
-  change of source, new wall parameters; not a new energy-balance ratio
-  alone), the applied wall part goes
+  change of source, new wall parameters; not a new static model alone), the
+  applied wall part goes
   linearly over RM_WALL_FADE_S from the value applied last to its target:
   the live wall term of a healthy tracking, or 0 when it is off. A fade-out
   never reads the tracking again. In heating, a fade-out goes on over the
@@ -57,6 +63,7 @@ from typing import Any
 from ...hvac_mode import VThermHvacMode_HEAT
 from ..const import clamp
 from .const import RM_WALL_EXTRA_MAX, RM_WALL_FADE_S
+from .gates import eb_agrees
 from .model import RoomParams
 from .observer import HEALTH_OK
 
@@ -82,7 +89,9 @@ FF_GAIN_MAX = 3.0
 class HoldingSource:
     """Source of the holding power for one cycle.
 
-    gain: static gain in force, the energy-balance ratio (0 for the learned source).
+    gain: slope in force of the energy balance (0 for the learned source).
+    free_gain: constant free gain in force of the energy balance, a share of full power (0 for the learned
+        source).
     wall: live wall extra power delta_wall / a of the tracking (fraction of
         full power), the target of the applied wall part; None without the
         wall term.
@@ -93,6 +102,7 @@ class HoldingSource:
     gain: float = 0.0
     wall: float | None = None
     params: RoomParams | None = None
+    free_gain: float = 0.0
 
     @property
     def room(self) -> bool:
@@ -103,10 +113,10 @@ class HoldingSource:
         return _PLAIN[self.kind]
 
     def static(self, target_temp: float, ext_temp: float | None) -> float:
-        """Static part gain (T_sp - T_ext), unclamped; 0 without outdoor temperature."""
+        """Static part gain (T_sp - T_ext) - free_gain, unclamped; 0 without outdoor temperature."""
         if ext_temp is None:
             return 0.0
-        return self.gain * (target_temp - ext_temp)
+        return self.gain * (target_temp - ext_temp) - self.free_gain
 
     def power(self, target_temp: float, ext_temp: float | None, wall: float | None = None) -> float:
         """Room model holding power, 0 without outdoor temperature.
@@ -120,7 +130,7 @@ class HoldingSource:
         return clamp(self.static(target_temp, ext_temp) + wall, 0.0, 1.0)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"kind": self.kind, "gain": self.gain, "wall": self.wall,
+        return {"kind": self.kind, "gain": self.gain, "free_gain": self.free_gain, "wall": self.wall,
                 "params": self.params.to_dict() if self.params is not None else None}
 
     @classmethod
@@ -132,46 +142,60 @@ class HoldingSource:
             return LEARNED
         try:
             gain = float(data["gain"])
+            free_gain = float(data.get("free_gain") or 0.0)
             wall = data.get("wall")
             wall = None if wall is None else float(wall)
         except (KeyError, TypeError, ValueError):
             return None
         params = RoomParams.from_dict(data.get("params"))
-        if params is None or (kind == SOURCE_WALLS) != (wall is not None):
+        if params is None or (kind == SOURCE_WALLS) != (wall is not None) or not math.isfinite(free_gain):
             return None
-        return cls(kind, gain, wall, params)
+        return cls(kind, gain, wall, params, free_gain)
 
 
 LEARNED = HoldingSource(SOURCE_LEARNED)
 
 
-def static_gain(room_model, hvac_mode, valve: bool) -> float | None:
-    """Static gain in force: the qualified energy-balance ratio once a room model is published, in heating with
-    PWM heaters; None otherwise (no publication, no qualified ratio yet, cooling, valve)."""
+def static_model(room_model, hvac_mode, valve: bool) -> tuple[float, float] | None:
+    """Static model in force (slope, constant free gain) of the qualified energy balance once a room model is
+    published and agrees with it, in heating with PWM heaters; None otherwise (no publication, no qualified
+    balance yet, a publication that disagrees with it, cooling, valve)."""
     if room_model is None or valve or hvac_mode != VThermHvacMode_HEAT:
         return None
     p = room_model.params
     if p is None or p.a <= 0.0 or p.b_eq <= 0.0:
         return None
-    r = room_model.eb_ratio
-    if r is None or not r > 0.0:
+    s, g = room_model.eb_slope, room_model.eb_gain
+    if s is None or not s > 0.0:
         return None
-    return clamp(r, 0.0, FF_GAIN_MAX)
+    if not eb_agrees(p.to_dict(), s):
+        # A static model that came into force after the publication and disagrees with it: the walls of the
+        # model do not explain the measured heat balance, the learned holding power stays in use
+        return None
+    g = 0.0 if g is None or not math.isfinite(g) else float(g)
+    return clamp(s, 0.0, FF_GAIN_MAX), g
+
+
+def static_gain(room_model, hvac_mode, valve: bool) -> float | None:
+    """Slope of the static model in force (static_model), None without one."""
+    m = static_model(room_model, hvac_mode, valve)
+    return None if m is None else m[0]
 
 
 def select_source(room_model, hvac_mode, valve: bool) -> HoldingSource:
     """Holding power source for this cycle."""
-    gain = static_gain(room_model, hvac_mode, valve)
-    if gain is None:
+    m = static_model(room_model, hvac_mode, valve)
+    if m is None:
         return LEARNED
+    gain, free = m
     p = room_model.params
     if not p.full:
-        return HoldingSource(SOURCE_SIMPLE, gain, None, p)
+        return HoldingSource(SOURCE_SIMPLE, gain, None, p, free)
     obs = room_model.observer
     wall = obs.wall_extra() if obs.health() == HEALTH_OK else None
     if wall is None:
-        return HoldingSource(SOURCE_STATIC, gain, None, p)
-    return HoldingSource(SOURCE_WALLS, gain, wall, p)
+        return HoldingSource(SOURCE_STATIC, gain, None, p, free)
+    return HoldingSource(SOURCE_WALLS, gain, wall, p, free)
 
 
 def _finite(value: Any) -> float | None:
@@ -230,10 +254,11 @@ class HoldingTransfer:
         return old.room and old.params != new.params
 
     def discrete_change(self, new: HoldingSource) -> bool:
-        """A change of source, of published parameters or of the static gain in force (never the learned
+        """A change of source, of published parameters or of the static model in force (never the learned
         source's own evolution)."""
         old = self.ref
-        return self._law_change(new) or (old is not None and old.room and old.gain != new.gain)
+        return self._law_change(new) or (old is not None and old.room
+                                         and (old.gain != new.gain or old.free_gain != new.free_gain))
 
     def _blend(self, new: HoldingSource, now: float, heat: bool) -> None:
         """Move the applied wall part towards the wall term of the new source."""

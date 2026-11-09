@@ -7,11 +7,12 @@ with each applied command, schedules the daily identification (jobs.py, run in a
 the history recorded by the T_ar learning), publishes the qualified
 parameters, and holds the persistence and the diagnostics.
 
-Energy balance: each daily job also computes the energy-balance ratio b_eq / a
-of the whole days before it (energy_balance.py). A qualified ratio comes into
-force; a refused day keeps the ratio in force and records why. The ratio in
-force is the static gain of the feed-forward once a model is published, and
-the reference that the fits must agree with to be published.
+Energy balance: each daily job also computes the static model of the whole
+days before it (energy_balance.py): the slope b_eq / a and the constant free
+gain. A qualified model comes into force; a refused day keeps the model in
+force and records why. The model in force gives the static part of the
+feed-forward once a room model is published, and its slope is the reference
+that the fits must agree with to be published.
 
 Emitter: the first moment of the emitter response is the HEAT dead time in
 force (learned T_ar or bootstrap); its first-order part tau_e is the refined
@@ -111,9 +112,12 @@ class RoomModelManager:
         self.published_day: int | None = None
         self.wall_code: str | None = None
         self.last_error: str | None = None
-        # Energy-balance ratio in force (b_eq / a units) and the day it was computed, None before a first
-        # qualified ratio; why the last computation gave no new value, None when it qualified.
-        self.eb_ratio: float | None = None
+        # Static model in force from the energy balance: slope (b_eq / a units), constant free gain (share of
+        # full power), number of days and the day it was computed; None before a first qualified value. Why
+        # the last computation gave no new value, None when it qualified.
+        self.eb_slope: float | None = None
+        self.eb_gain: float | None = None
+        self.eb_days: int | None = None
         self.eb_day: int | None = None
         self.eb_reason: str | None = None
 
@@ -206,7 +210,8 @@ class RoomModelManager:
         snap["a_per_min"] = self._a_per_min
         snap["excluded_nights"] = self.observer.disturbed_nights()
         snap["prev"] = self.windows.get(str(day - ID_WIN_DAYS))
-        snap["eb"] = self.eb_ratio
+        snap["eb"] = self.eb_slope
+        snap["eb_gain"] = self.eb_gain
         return snap
 
     async def async_run(self, hass, now: float | None = None) -> None:
@@ -236,18 +241,19 @@ class RoomModelManager:
             self._running = False
 
     def apply_energy_balance(self, day: int, eb: dict | None) -> None:
-        """Take the energy balance of a day: a qualified ratio comes into force, a refused one keeps the ratio
-        in force (eb None: the computation failed)."""
+        """Take the energy balance of a day: a qualified static model comes into force, a refused one keeps the
+        model in force (eb None: the computation failed)."""
         if not eb:
             self.eb_reason = gates.WHY_FAILED
             return
-        value = eb.get("value")
         try:
-            value = None if value is None else float(value)
+            value = None if eb.get("value") is None else float(eb["value"])
+            gain = float(eb.get("gain") or 0.0)
+            days = None if eb.get("days") is None else int(eb["days"])
         except (TypeError, ValueError):
             value = None
-        if value is not None and math.isfinite(value) and value > 0.0:
-            self.eb_ratio, self.eb_day, self.eb_reason = value, int(day), None
+        if value is not None and math.isfinite(value) and value > 0.0 and math.isfinite(gain):
+            self.eb_slope, self.eb_gain, self.eb_days, self.eb_day, self.eb_reason = value, gain, days, int(day), None
             return
         self.eb_reason = eb.get("reason") or gates.WHY_FAILED
 
@@ -260,7 +266,8 @@ class RoomModelManager:
         dec = rec.get("decision") or {}
         eb = rec.get("eb") or {}
         self.records.append({"day": day, "why": dec.get("why"), "struct": dec.get("struct"), "wall": dec.get("wall"),
-                             "eb": {"ratio": eb.get("ratio"), "reason": eb.get("reason")},
+                             "eb": {"slope": eb.get("slope"), "gain": eb.get("gain"), "days": eb.get("days"),
+                                    "reason": eb.get("reason")},
                              "held": rec.get("held"), "excluded_nights": rec.get("excluded_nights")})
         del self.records[:-RM_MAX_RECORDS]
         if dec.get("candidate") is None:
@@ -309,7 +316,9 @@ class RoomModelManager:
             "identified_day": _date(self.published_day) if p else None,
             "last_identification_day": _date(last["day"]) if last else None,
             "last_refusal_reason": public.reason(last_why),
-            "energy_balance_ratio": _r(self.eb_ratio, 6),
+            "energy_balance_loss_per_c": _r(self.eb_slope, 6),
+            "energy_balance_free_gain_percent": None if self.eb_gain is None else round(100.0 * self.eb_gain, 1),
+            "energy_balance_days": self.eb_days,
             "energy_balance_day": _date(self.eb_day),
             "energy_balance_refusal_reason": public.energy_balance_reason(self.eb_reason),
             "sensor_resolution_c": _r(self.q, 3),
@@ -331,25 +340,27 @@ class RoomModelManager:
             "candidates": self.candidates,
             "records": self.records,
             "observer": self.observer.to_dict(),
-            "energy_balance": {"ratio": self.eb_ratio, "day": self.eb_day, "reason": self.eb_reason},
+            "energy_balance": {"slope": self.eb_slope, "gain": self.eb_gain, "days": self.eb_days,
+                               "day": self.eb_day, "reason": self.eb_reason},
         }
 
     def _load_energy_balance(self, data: Any) -> None:
-        """Restore the energy-balance ratio in force; an invalid one is dropped (a state without it has none)."""
-        self.eb_ratio = self.eb_day = self.eb_reason = None
+        """Restore the static model in force; an invalid one is dropped (a state without it has none)."""
+        self.eb_slope = self.eb_gain = self.eb_days = self.eb_day = self.eb_reason = None
         if not isinstance(data, dict):
             return
         reason = data.get("reason")
         self.eb_reason = reason if isinstance(reason, str) else None
         try:
-            ratio, day = data.get("ratio"), data.get("day")
-            if ratio is None or day is None:
+            slope, gain, day = data.get("slope"), data.get("gain"), data.get("day")
+            if slope is None or day is None:
                 return
-            ratio, day = float(ratio), int(day)
+            slope, gain, day = float(slope), float(gain or 0.0), int(day)
+            days = None if data.get("days") is None else int(data["days"])
         except (TypeError, ValueError):
             return
-        if math.isfinite(ratio) and ratio > 0.0:
-            self.eb_ratio, self.eb_day = ratio, day
+        if math.isfinite(slope) and slope > 0.0 and math.isfinite(gain):
+            self.eb_slope, self.eb_gain, self.eb_days, self.eb_day = slope, gain, days, day
 
     def load_state(self, state: dict[str, Any] | None) -> None:
         if not isinstance(state, dict) or state.get("version") != STATE_VERSION:

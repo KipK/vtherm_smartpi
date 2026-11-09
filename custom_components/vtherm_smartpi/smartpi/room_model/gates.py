@@ -19,12 +19,15 @@ alpha, beta): the candidate is the geometric mean of the two windows in those
 coordinates, and the published value is their median over the last
 RM_PUB_LAST candidates of the same structure.
 
-The static gain in force comes from the energy balance, not from the fits; a
-fit gives the wall dynamics. Its own static gain b_eq / a is the difference of
-two terms (alpha - c over a) that are sensitive to the emitter time, so it is
-checked against the energy-balance ratio in force: a candidate that differs
-from it by more than RM_EB_AGREE_TOL is refused, its dynamics do not explain
-the measured heat balance. Without a qualified ratio there is no such check.
+The static model in force comes from the energy balance, not from the fits;
+a fit gives the wall dynamics. Its own static gain b_eq / a is the difference
+of two terms (alpha - c over a) that are sensitive to the emitter time, so it
+is checked against the energy-balance slope in force: a candidate that
+differs from it by more than RM_EB_AGREE_TOL is refused, its dynamics do not
+explain the measured heat balance. Both carry a constant free gain (the
+intercept of the balance, the constant heat input of a fit window), so the
+gain does not bias the comparison. Without a qualified slope there is no such
+check.
 """
 from __future__ import annotations
 
@@ -105,7 +108,8 @@ def fit_record(fit: dict | None, struct: str, sensor: str, tau_e: float, L: floa
         return {"ok": False, "why": WHY_FIT}
     params = RoomParams(struct, fit["a"], fit["alpha"], fit["beta"] if struct == STRUCT_FULL else 1.0 / 3600.0,
                         fit["c"], tau_e, L)
-    rec = {"params": params.to_dict(), "b_eq": params.b_eq, "check": slim_check(fit.get("check"))}
+    rec = {"params": params.to_dict(), "b_eq": params.b_eq, "gain": fit.get("gain"),
+           "check": slim_check(fit.get("check"))}
     if not params.plausible() or fit.get("beta_at_bound"):
         rec.update(ok=False, why=WHY_RANGE)
     elif not residuals_ok(fit.get("check"), sensor, q=q):
@@ -145,7 +149,7 @@ def a_consistent(a: float | None, a_online: float | None) -> bool:
 
 
 def eb_agrees(p: dict, eb: float | None) -> bool:
-    """The static gain b_eq / a of a parameter set agrees with the energy-balance ratio in force (none: no
+    """The static gain b_eq / a of a parameter set agrees with the energy-balance slope in force (none: no
     check)."""
     if eb is None or eb <= 0.0:
         return True
@@ -196,7 +200,7 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: fl
     """Decision of a day: {"struct", "candidate", "wall"} or {"why", "wall"}.
 
     a_online: heating response of the online estimate (per second), None when unknown.
-    eb: energy-balance ratio in force (b_eq / a units), None before a first qualified ratio.
+    eb: energy-balance slope in force (b_eq / a units), None before a first qualified value.
     """
     if cur.get("why"):
         return {"why": cur["why"], "wall": None}

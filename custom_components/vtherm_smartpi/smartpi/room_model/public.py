@@ -41,13 +41,14 @@ _REASONS = {
 # Why the daily heat balance gave no new value
 _EB_REASONS = {
     eb.REASON_HISTORY: "not enough recorded days yet",
-    eb.REASON_EXCLUDED: "too much missing or invalid data",
     eb.REASON_NO_A: "heating response not known yet",
+    eb.REASON_DAYS: "too few usable days (missing data or no heating)",
     eb.REASON_DELTA: "indoor-outdoor temperature difference too small",
     eb.REASON_DUTY: "too little heating",
-    eb.REASON_DAY_DUTY: "too little heating on one of the days",
-    eb.REASON_DAY_SPREAD: "the heating need differs too much from one day to the next",
-    eb.REASON_SPREAD: "the heat balance changes too much with the hours it covers",
+    eb.REASON_GAIN: "free heat gains detected; the outdoor temperature has not varied enough yet to separate them "
+                    "from the losses",
+    eb.REASON_SCATTER: "the heating need varies too much from one day to the next",
+    eb.REASON_DRIFT: "the heating need is still drifting from day to day (walls storing or releasing heat)",
     eb.REASON_RANGE: "value out of the plausible range",
     gates.WHY_FAILED: "computation failed",
 }

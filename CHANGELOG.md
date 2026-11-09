@@ -8,24 +8,31 @@ All notable changes to this project will be documented in this file.
   the room with its air, walls and emitter, follows the room state and
   publishes temperature forecasts and their errors in the `room_model`
   diagnostics.
-- Room model heat balance: each day SmartPI computes the heat balance of the
-  3 previous days (power needed per degree of indoor-outdoor difference) and
-  keeps it only when those days are usable. `room_model.energy_balance_ratio`
-  shows the value in force, `energy_balance_refusal_reason` why the last day
-  gave none.
+- Room model heat balance: each day SmartPI fits a straight line through the
+  heat balances of the whole days it keeps (up to 7): the power needed per
+  degree of indoor-outdoor difference, and a constant free heat gain (a warmer
+  room next door, steady occupants). It keeps them only when the days
+  determine them within 5 % and do not drift. `room_model.energy_balance_loss_per_c`,
+  `energy_balance_free_gain_percent` and `energy_balance_days` show the values
+  in force, `energy_balance_refusal_reason` why the last day gave none.
 - Room model holding power: once the room model is published and a heat
   balance is in force, they give the feed-forward holding power: the static
   loss from the heat balance, plus the extra power of cold walls after a
   setback from the model, so the morning rise no longer stalls below the
-  setpoint. Changes of the static loss are bumpless through the integral; the
+  setpoint. The static loss includes the free gain, so the integral does not
+  carry it. The room model acts only while its own static loss agrees with
+  the heat balance in force within 5 %. Changes of the static loss are bumpless through the integral; the
   wall extra power is never moved into the integral and moves over 30 minutes
   when it starts, stops or changes. `feedforward.source` shows the model in
   use and `feedforward.wall_power_percent` the wall power applied.
 - Room model: the wall state no longer drifts after an open window, and the
   wall extra power comes back over 30 minutes after it closes; power shedding
-  is tracked instead of paused. The identification checks the emitter time,
-  the heating response `a` and, before publishing, that the model's static
-  loss agrees with the heat balance within 5 %.
+  is tracked instead of paused. The identification searches the emitter time
+  on a fixed scale from 1 minute to 1 hour and refuses a day only when the
+  best value is at an end of the scale and clearly so; it checks the heating
+  response `a`, tests runs of the error on hourly means, takes the free gain
+  of the heat balance as a known input and, before publishing, checks that
+  the model's static loss agrees with the heat balance within 5 %.
 - Diagnostics: the recorded history also keeps the feed-forward source and
   its wall part, the room model's `a`, `b_eq` and 1 h / 12 h forecast errors,
   and the dead time in force.

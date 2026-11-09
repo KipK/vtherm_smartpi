@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import math
 import time
 
+import numpy as np
 import pytest
 
 import room_model_sim as rsim
 from custom_components.vtherm_smartpi.smartpi.room_model import gates, jobs, public
 from custom_components.vtherm_smartpi.smartpi.room_model import energy_balance
-from custom_components.vtherm_smartpi.smartpi.room_model.energy_balance import heater_timeline, static_gain
+from custom_components.vtherm_smartpi.smartpi.room_model import identification
+from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_EMITTER_CHI2, RM_EMITTER_GRID_S
+from custom_components.vtherm_smartpi.smartpi.room_model.energy_balance import heater_timeline
 from custom_components.vtherm_smartpi.smartpi.room_model.periods import fit_periods
 from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
 
 D0 = rsim.day_of(rsim.T0)
 H = 3600.0
+DAY = 86400.0
 
 
 def _slim(rec: dict) -> dict:
@@ -50,13 +55,15 @@ def test_full_model_identified_on_a_mass_room(mass_data) -> None:
     p = rsim.MASS
     first, second, worst = _two_windows(mass_data, p)
     assert first["decision"] == {"why": gates.WHY_NO_PREVIOUS, "wall": gates.WALL_NOT_CONFIRMED}
-    # The energy balance of the 3 whole days before the day (and 22 h more for its shifted windows) qualifies;
-    # the candidate agrees with it
-    assert first["eb"]["reason"] is None and second["eb"]["reason"] is None
-    assert second["eb"]["value"] == pytest.approx((p["alpha"] - p["c"]) / p["a"], rel=0.03)
+    # The energy balance of the whole days before the day: the walls still release the heat of the start of the
+    # simulation (wall time 80 h), the heating need drifts by several % from day to day, and the balance is
+    # refused; its slope (the outdoor temperature repeats every day: the slope alone) is a few % high
+    for rec in (first, second):
+        assert rec["eb"]["reason"] == energy_balance.REASON_DRIFT and rec["eb"]["value"] is None
+    assert second["eb"]["slope"] == pytest.approx((p["alpha"] - p["c"]) / p["a"], rel=0.06)
     early = jobs.identify_job(rsim.snapshot(mass_data, D0 + 3, tau_e=p["tau_e"], L=p["L"],
                                             a_per_min=p["a"] * 60.0))
-    assert early["eb"] == {"value": None, "reason": "history", "ratio": None}
+    assert early["eb"]["reason"] == "history" and early["eb"]["value"] is None
     dec = second["decision"]
     assert dec["struct"] == "full"
     c = dec["candidate"]
@@ -64,11 +71,12 @@ def test_full_model_identified_on_a_mass_room(mass_data) -> None:
         assert c[k] == pytest.approx(p[k], rel=0.03)
     assert c["alpha"] - c["c"] == pytest.approx(p["alpha"] - p["c"], rel=0.05)
     assert c["beta"] == pytest.approx(p["beta"], rel=0.2)
-    assert c["tau_e"] == p["tau_e"] and c["L"] == p["L"]
+    # The emitter search finds the first moment of the plant (600 s lag + 120 s delay) on its fixed grid
+    assert c["tau_e"] + c["L"] == pytest.approx(p["tau_e"] + p["L"], rel=0.08)
     assert gates.residuals_ok(second["held"]["full"], "precise", held_out=True, q=0.01)
     # The reduced model cannot follow a mass room
     assert second["reduced"]["ok"] is False
-    assert worst < 30.0  # five extra full fits refine the emitter
+    assert worst < 120.0  # up to 23 extra full fits search the emitter
 
 
 def test_reduced_model_on_a_room_without_mass(no_mass_data) -> None:
@@ -79,7 +87,9 @@ def test_reduced_model_on_a_room_without_mass(no_mass_data) -> None:
     assert dec["wall"] == gates.WALL_SMALL
     assert dec["candidate"]["a"] == pytest.approx(p["a"], rel=0.02)
     assert dec["candidate"]["alpha"] == pytest.approx(p["alpha"], rel=0.02)
-    assert second["full"]["ok"] is False
+    # A full fit, if it passes its checks, finds no wall share
+    full = second["full"]
+    assert not full["ok"] or full["params"]["c"] / full["params"]["alpha"] < 0.1
 
 
 def test_coarse_sensor_gives_no_wall() -> None:
@@ -139,6 +149,43 @@ def test_residual_checks() -> None:
     assert not gates.residuals_ok(None, "precise")
 
 
+def test_runs_test_is_taken_on_hourly_means() -> None:
+    """Ripple shorter than an hour makes long runs of 10 min residuals but not of their hourly means; a slow
+    structured misfit makes long runs of both."""
+    rng = np.random.default_rng(3)
+    n = 6 * 14
+    segs_fast, segs_slow = [], []
+    for _ in range(3):
+        e = rng.normal(0.0, 0.02, n + 3)
+        segs_fast.append(np.convolve(e, np.ones(4) / 4.0, mode="valid")[:n])  # correlated over 30 min
+        k = np.arange(n)
+        segs_slow.append(0.03 * np.sin(2.0 * np.pi * k / 112.0) + rng.normal(0.0, 0.005, n))  # 19 h wave
+    lag = 6
+    zeros = [np.zeros(n)] * 3
+    fast = identification.residual_checks(segs_fast, zeros, zeros, zeros, lag)
+    slow = identification.residual_checks(segs_slow, zeros, zeros, zeros, lag)
+    assert fast["runs_z_10min"] < -3.5 and fast["runs_z"] > -3.5 and fast["runs_blocks"] == 3 * 14
+    assert slow["runs_z"] < -3.5
+    # Too few hourly means: no runs test
+    one = identification.residual_checks([segs_fast[0][:48]], [zeros[0][:48]], [zeros[0][:48]], [zeros[0][:48]],
+                                         lag)
+    assert one["runs_blocks"] == 8 and one["runs_z"] is None
+
+
+def test_effective_count_of_correlated_residuals() -> None:
+    rng = np.random.default_rng(5)
+    white = [rng.normal(0.0, 1.0, 400) for _ in range(3)]
+    assert identification.effective_count(white) == pytest.approx(1200, rel=0.15)
+    ar = []
+    for w in white:
+        x = np.zeros_like(w)
+        for i in range(1, len(w)):
+            x[i] = 0.8 * x[i - 1] + w[i]
+        ar.append(x)
+    # AR(1) with rho 0.8: integrated time (1 + rho) / (1 - rho) = 9
+    assert identification.effective_count(ar) == pytest.approx(1200 / 9.0, rel=0.35)
+
+
 def _rec(struct, a=1e-3, alpha=1e-4, beta=5e-6, c=6e-5, ok=True):
     params = {"struct": struct, "a": a, "alpha": alpha, "beta": beta, "c": c if struct == "full" else 0.0,
               "tau_e": 600.0, "L": 60.0}
@@ -191,17 +238,104 @@ def _signals(data: dict) -> dict:
             "invalid": []}
 
 
-def test_energy_balance(no_mass_data) -> None:
+def _points(slope: float, gain: float, deltas, noise=(), valid=1.0) -> list[dict]:
+    noise = list(noise) + [0.0] * (len(deltas) - len(noise))
+    return [{"day": D0 + i, "valid": valid, "duty": slope * d - gain + e, "delta_c": d, "u": slope * d - gain + e}
+            for i, (d, e) in enumerate(zip(deltas, noise))]
+
+
+def test_energy_balance_regression_and_its_qualification() -> None:
+    """u = s D - g by weighted least squares; the slope with its gain when it is determined, else the slope alone
+    when the days show no gain, else a refusal."""
+    noise = (0.002, -0.003, 0.001, 0.0025, -0.002, 0.0)
+    wide = (8.0, 14.0, 11.0, 17.0, 9.5, 15.0)
+    # Enough spread of the indoor-outdoor difference: slope and gain, within their uncertainty
+    rec = energy_balance.qualify(_points(0.03, 0.08, wide, noise), 0.05)
+    assert rec["reason"] is None and rec["form"] == energy_balance.FORM_GAIN and rec["n"] == 6
+    assert rec["slope"] == pytest.approx(0.03, rel=0.05) and rec["gain"] == pytest.approx(0.08, abs=0.02)
+    assert rec["fit"]["half_width"] <= energy_balance.EB_MAX_REL_HALF_WIDTH
+    # A negative gain (heat lost to a colder neighbour) is a gain too
+    rec = energy_balance.qualify(_points(0.03, -0.05, wide, noise), 0.05)
+    assert rec["reason"] is None and rec["gain"] == pytest.approx(-0.05, abs=0.02)
+    # Little spread, no gain: the slope alone (the ratio of the means)
+    flat = (12.0, 12.1, 11.9, 12.05, 11.95, 12.0)
+    rec = energy_balance.qualify(_points(0.03, 0.0, flat, noise), 0.05)
+    assert rec["reason"] is None and rec["form"] == energy_balance.FORM_SLOPE and rec["gain"] == 0.0
+    assert rec["slope"] == pytest.approx(0.03, rel=0.02)
+    # Moderate spread and a large gain: the gain is seen, the slope is not determined well enough
+    scatter = (0.01, -0.012, 0.008, -0.01, 0.012, -0.008)
+    mid = (9.0, 12.0, 8.5, 12.5, 10.0, 11.5)
+    rec = energy_balance.qualify(_points(0.04, 0.15, mid, scatter), 0.05)
+    assert rec["reason"] == energy_balance.REASON_GAIN and rec["slope"] is not None
+    # Enough spread, no gain seen, but the line is not determined: refused, no ratio of the means as a fallback
+    rec = energy_balance.qualify(_points(0.03, 0.0, mid, (0.03, -0.03, 0.02, -0.025, 0.03, -0.02)), 0.05)
+    assert rec["reason"] == energy_balance.REASON_SCATTER and rec["form"] == energy_balance.FORM_GAIN
+    # Below 1 C of spread the gain cannot be seen: the slope alone, the ratio of the means
+    narrow = (10.0, 11.5, 9.0, 12.0, 10.5, 11.0)
+    assert energy_balance.fit(_points(0.04, 0.15, narrow))["sd_delta_c"] < energy_balance.EB_MIN_SPREAD_C
+    rec = energy_balance.qualify(_points(0.04, 0.15, narrow, scatter), 0.05)
+    assert rec["reason"] is None and rec["form"] == energy_balance.FORM_SLOPE
+    assert rec["slope"] == pytest.approx(0.04 - 0.15 / 10.67, rel=0.03)
+    # No gain seen but too much scatter from day to day
+    rec = energy_balance.qualify(_points(0.03, 0.0, flat, (0.03, -0.03, 0.02, -0.025, 0.03, -0.02)), 0.05)
+    assert rec["reason"] == energy_balance.REASON_SCATTER
+    # Fewer than four usable days: the days with missing data or without heating do not count
+    pts = _points(0.03, 0.0, flat, noise)
+    pts[0]["valid"] = 0.7
+    pts[1]["duty"] = 0.01
+    pts[2]["delta_c"] = -1.0
+    assert energy_balance.qualify(pts, 0.05)["reason"] == energy_balance.REASON_DAYS
+    assert energy_balance.qualify(pts[:3], 0.05)["reason"] == energy_balance.REASON_HISTORY
+    assert energy_balance.qualify(_points(0.03, 0.0, flat), None)["reason"] == energy_balance.REASON_NO_A
+    # Too little heating on average, too small a difference, out of range
+    assert energy_balance.qualify(_points(0.003, 0.0, flat), 0.05)["reason"] == energy_balance.REASON_DUTY
+    assert energy_balance.qualify(_points(0.03, 0.0, (5.0,) * 6), 0.05)["reason"] == energy_balance.REASON_DELTA
+    big = [dict(p, u=4.0 * p["delta_c"], duty=0.9) for p in _points(0.03, 0.0, flat)]
+    assert energy_balance.qualify(big, 0.05)["reason"] == energy_balance.REASON_RANGE
+    # On a tiny spread the intercept is a long extrapolation: never read as a gain, the slope alone qualifies
+    tiny = (12.0, 12.002, 11.998, 12.001, 11.999, 12.0)
+    rec = energy_balance.qualify(_points(0.03, 0.0, tiny, (0.0003, -0.0002, 0.0001, 0.0002, -0.0003, 0.0)), 0.05)
+    assert rec["reason"] is None and rec["form"] == energy_balance.FORM_SLOPE
+
+
+def test_energy_balance_weights_the_days_by_their_valid_share() -> None:
+    pts = _points(0.03, 0.05, (8.0, 14.0, 11.0, 17.0, 9.5, 15.0))
+    pts[3] = dict(pts[3], valid=0.8, u=pts[3]["u"] + 0.05)
+    lighter = energy_balance.fit(pts)
+    pts[3]["valid"] = 1.0
+    even = energy_balance.fit(pts)
+    assert abs(lighter["slope"] - 0.03) < abs(even["slope"] - 0.03)
+
+
+def test_energy_balance_on_a_simulated_room(no_mass_data) -> None:
     p = rsim.NO_MASS
     clock = LocalClock("UTC")
-    end = clock.at(D0 + 6, 8.0)
-    rec = static_gain(_signals(no_mass_data), end, p["a"] * 60.0)
-    assert rec["reason"] is None
-    assert rec["value"] == pytest.approx(p["alpha"] / p["a"], rel=0.03)
-    assert static_gain(_signals(no_mass_data), clock.at(D0 + 2, 8.0), p["a"] * 60.0)["reason"] == "history"
-    assert static_gain(_signals(no_mass_data), end, None)["reason"] is not None
-    cold = dict(no_mass_data, on=[], off=[])
-    assert static_gain(_signals(cold), end, p["a"] * 60.0)["reason"] in ("duty", "delta")
+    sig = _signals(no_mass_data)
+    rec = energy_balance.regression(sig, clock, D0 + 7, p["a"] * 60.0)
+    assert rec["reason"] is None and rec["form"] == energy_balance.FORM_SLOPE
+    assert [q["day"] for q in rec["points"]] == list(range(D0, D0 + 7))
+    assert rec["slope"] == pytest.approx(p["alpha"] / p["a"], rel=0.03)
+    assert energy_balance.regression(sig, clock, D0 + 3, p["a"] * 60.0)["reason"] == "history"
+    assert energy_balance.regression(sig, clock, D0 + 7, None)["reason"] == "no a"
+    cold = _signals(dict(no_mass_data, on=[], off=[]))
+    assert energy_balance.regression(cold, clock, D0 + 7, p["a"] * 60.0)["reason"] == "days"
+
+
+def test_energy_balance_separates_a_constant_gain_from_the_losses(monkeypatch) -> None:
+    """Outdoor temperature changing from day to day and a constant free gain of 6 % of full power: the
+    regression gives the true static loss and the gain."""
+    base = rsim.outdoor
+    monkeypatch.setattr(rsim, "outdoor",
+                        lambda t: base(t) + 4.0 * math.sin(2.0 * math.pi * (t - rsim.T0) / (5.3 * DAY)))
+    p = rsim.NO_MASS
+    g = 0.06
+    data = rsim.simulate(p, 8.5, gain=lambda t: g * p["a"])
+    rec = energy_balance.regression(_signals(data), LocalClock("UTC"), D0 + 8, p["a"] * 60.0)
+    assert rec["reason"] is None and rec["form"] == energy_balance.FORM_GAIN
+    assert rec["slope"] == pytest.approx(p["alpha"] / p["a"], rel=0.05)
+    assert rec["gain"] == pytest.approx(g, abs=0.015)
+    # The ratio of the means is off by g / mean difference
+    assert rec["fit"]["slope_only"] < 0.9 * p["alpha"] / p["a"]
 
 
 def test_daily_energy_balance_covers_the_whole_days_before_the_day(no_mass_data) -> None:
@@ -209,12 +343,12 @@ def test_daily_energy_balance_covers_the_whole_days_before_the_day(no_mass_data)
     clock = LocalClock("UTC")
     snap = rsim.snapshot(no_mass_data, D0 + 6, a_per_min=p["a"] * 60.0)
     rec = energy_balance.daily(snap, clock, D0 + 6)
-    ref = static_gain(_signals(no_mass_data), clock.at(D0 + 6, 0.0), p["a"] * 60.0)
-    assert rec == {"value": ref["value"], "reason": None, "ratio": ref["value"]}
-    assert rec["value"] == pytest.approx(p["alpha"] / p["a"], rel=0.03)
-    # A refused day gives the computed ratio and the reason, no value
+    ref = energy_balance.regression(_signals(no_mass_data), clock, D0 + 6, p["a"] * 60.0)
+    assert rec == {"value": ref["slope"], "gain": 0.0, "reason": None, "slope": ref["slope"],
+                   "form": energy_balance.FORM_SLOPE, "days": 6}
+    # A refused day gives the reason, no value
     rec = energy_balance.daily(dict(snap, on=[], off=[]), clock, D0 + 6)
-    assert rec["value"] is None and rec["reason"] == "duty" and rec["ratio"] is not None
+    assert rec["value"] is None and rec["gain"] is None and rec["reason"] == "days"
     # The job computes it first, whatever the outcome of the fits
     job = jobs.identify_job(dict(snap, tau_e=None, L=None))
     assert job["decision"]["why"] == gates.WHY_EMITTER
@@ -228,7 +362,7 @@ def test_job_checks_the_candidate_against_the_energy_balance_in_force(mass_data)
     snap = rsim.snapshot(mass_data, D0 + 7, prev=_slim(first), tau_e=p["tau_e"], L=p["L"],
                          a_per_min=p["a"] * 60.0)
     assert jobs.eb_in_force(second, snap) == second["eb"]["value"]
-    refused = dict(second, eb={"value": None, "reason": "spread", "ratio": 0.04})
+    refused = dict(second, eb={"value": None, "gain": None, "reason": "scatter", "slope": 0.04})
     assert jobs.eb_in_force(refused, dict(snap, eb=0.021)) == 0.021
     assert jobs.eb_in_force(refused, snap) is None
     gain = gates._coords(second["decision"]["candidate"])[1]
@@ -302,27 +436,77 @@ def lag_data():
     return rsim.simulate(LAG_ONLY, 4.5)
 
 
-def _job(data: dict, plant: dict, first_moment: float, day: int = 4, prev=None) -> dict:
-    return jobs.identify_job(rsim.snapshot(data, D0 + day, prev=prev, tau_e=first_moment, L=0.0,
-                                           a_per_min=plant["a"] * 60.0))
+def _job(data: dict, plant: dict, first_moment: float, day: int = 4, prev=None, **kw) -> dict:
+    return jobs.identify_job(dict(rsim.snapshot(data, D0 + day, prev=prev, tau_e=first_moment, L=0.0,
+                                                a_per_min=plant["a"] * 60.0), **kw))
 
 
 def test_emitter_grid_finds_the_true_time_constant(lag_data) -> None:
-    rec = _job(lag_data, LAG_ONLY, 600.0 / 1.41)
-    assert rec["emitter"]["mult"] == 1.41
-    assert rec["emitter"]["tau_e"] == pytest.approx(600.0, abs=1.0) and rec["emitter"]["L"] == 0.0
-    assert rec["full"]["ok"] and rec["full"]["params"]["tau_e"] == pytest.approx(600.0, abs=1.0)
-    costs = rec["emitter"]["costs"]
-    assert min(costs) == costs[3] and costs[2] > 2.0 * costs[3]
+    rec = _job(lag_data, LAG_ONLY, 150.0)
+    em = rec["emitter"]
+    assert em["source"] == "grid" and em["flat"] is False and em["significance"] > RM_EMITTER_CHI2
+    assert em["first_moment"] == pytest.approx(600.0, rel=0.1) and em["L"] == 0.0
+    assert rec["full"]["ok"] and rec["full"]["params"]["tau_e"] == pytest.approx(em["tau_e"], abs=0.1)
+    costs = em["costs"]
+    assert len(costs) == len(RM_EMITTER_GRID_S) == 13
+    assert RM_EMITTER_GRID_S[0] == 60.0 and RM_EMITTER_GRID_S[-1] == 3600.0
+    assert min(costs) in (costs[6], costs[7])
 
 
-def test_emitter_optimum_at_the_edge_is_refused(lag_data) -> None:
-    rec = _job(lag_data, LAG_ONLY, 600.0 / 4.0)
-    assert rec["emitter"]["mult"] == 2.0
+def test_emitter_grid_does_not_depend_on_the_dead_time_in_force(lag_data) -> None:
+    a = _job(lag_data, LAG_ONLY, 150.0)["emitter"]
+    b = _job(lag_data, LAG_ONLY, 1400.0)["emitter"]
+    assert a["costs"] == b["costs"] and a["first_moment"] == b["first_moment"]
+
+
+def test_emitter_optimum_at_the_edge_with_a_marked_profile_is_refused() -> None:
+    plant = dict(rsim.NO_MASS, tau_e=9000.0, L=0.0)
+    data = rsim.simulate(plant, 4.5)
+    rec = _job(data, plant, 720.0)
+    assert rec["emitter"]["first_moment"] == 3600.0 and rec["emitter"]["significance"] > RM_EMITTER_CHI2
     assert rec["decision"] == {"why": gates.WHY_EMITTER_EDGE, "wall": None}
     assert "full" not in rec and "reduced" not in rec
     assert public.reason(gates.WHY_EMITTER_EDGE) == (
         "the heating response delay does not match the measured temperature")
+
+
+def _fake_profile(monkeypatch, costs, n_eff: float) -> list:
+    """jobs._full_fit replaced by a cost profile (a function of the first moment)."""
+    calls = []
+
+    def fake(snap, periods, fm, te_pub, gain):
+        calls.append(fm)
+        return fm, 0.0, f"data@{fm:.1f}", {"cost": costs(fm), "check": {"n_eff": n_eff}}
+
+    monkeypatch.setattr(jobs, "_full_fit", fake)
+    return calls
+
+
+def test_emitter_profile_significance_against_the_residual_variance(monkeypatch) -> None:
+    """The rise of the cost profile is judged in units of the residual variance per effective independent
+    residual (chi-square, one degree of freedom, 95 %)."""
+    grid = RM_EMITTER_GRID_S
+    # Optimum at the low edge, 4 % rise at the far end: with 40 effective residuals 1.6 < 3.84, not significant.
+    # Not refused; without a refined T_ar value the grid optimum is used, with one the emitter in force.
+    calls = _fake_profile(monkeypatch, lambda fm: 1.0 + 0.04 * (fm - 60.0) / 3540.0, 40.0)
+    em = jobs.refine_emitter({}, [], "in force", 300.0, 0.0)
+    assert em["edge"] is False and em["flat"] is True and em["significance"] == pytest.approx(1.6)
+    assert em["source"] == "grid" and em["first_moment"] == 60.0 and em["data"] == "data@60.0"
+    assert calls == list(grid)
+    em = jobs.refine_emitter({"te_pub": 280.0}, [], "in force", 280.0, 20.0)
+    assert em["flat"] is True and em["source"] == "in force"
+    assert (em["tau_e"], em["L"], em["data"]) == (280.0, 20.0, "in force")
+    # The same rise with 200 effective residuals is significant: an edge optimum is refused
+    _fake_profile(monkeypatch, lambda fm: 1.0 + 0.04 * (fm - 60.0) / 3540.0, 200.0)
+    em = jobs.refine_emitter({}, [], "in force", 300.0, 0.0)
+    assert em["edge"] is True and em["flat"] is False and em["significance"] == pytest.approx(8.0)
+    _fake_profile(monkeypatch, lambda fm: 1.0 + 0.04 * (3600.0 - fm) / 3540.0, 200.0)
+    assert jobs.refine_emitter({}, [], "in force", 300.0, 0.0)["edge"] is True
+    # An interior optimum is refined between its grid neighbours (at most 10 more fits) and never refused
+    calls = _fake_profile(monkeypatch, lambda fm: 1.0 + 0.5 * math.log(fm / 400.0) ** 2, 50.0)
+    em = jobs.refine_emitter({}, [], "in force", 300.0, 0.0)
+    assert em["edge"] is False and em["flat"] is False and em["source"] == "grid"
+    assert len(grid) < len(calls) <= len(grid) + 10 and em["first_moment"] == pytest.approx(400.0, rel=0.01)
 
 
 def test_emitter_split_keeps_the_refined_lag() -> None:
@@ -347,15 +531,46 @@ def test_wall_rate_above_the_cap_is_refused() -> None:
 
 
 def test_room_without_mass_and_a_slow_emitter_gets_no_walls() -> None:
-    # True emitter 3600 s, first moment in force 720 s: the grid stops at 1440 s
+    # True emitter 3600 s, the end of the grid: no window publishes walls for a room without mass
     plant = dict(rsim.NO_MASS, tau_e=3600.0, L=0.0)
     data = rsim.simulate(plant, 7.5)
     first = _job(data, plant, 720.0, day=4)
     second = _job(data, plant, 720.0, day=7, prev=_slim(first))
     for rec in (first, second):
-        assert rec["emitter"]["mult"] == 2.0
-        assert rec["decision"]["why"] == gates.WHY_EMITTER_EDGE
-        assert rec["decision"].get("struct") is None
+        assert rec["decision"].get("struct") != "full"
+        assert rec["emitter"]["first_moment"] >= 1800.0
+
+
+def test_fit_with_the_free_gain_in_force_matches_the_energy_balance() -> None:
+    """A constant free gain of 8 % of full power: the fits that take the gain of the static model in force
+    find the true b_eq / a and agree with the slope; without it the gain reads as a lower loss and the
+    candidate is refused against the same slope."""
+    p = rsim.NO_MASS
+    g = 0.08
+    data = rsim.simulate(p, 7.5, gain=lambda t: g * p["a"])
+    slope = p["alpha"] / p["a"]
+
+    def two(gain):
+        prev = None
+        for d in (4, 7):
+            snap = dict(rsim.snapshot(data, D0 + d, prev=prev, tau_e=p["tau_e"], L=p["L"], a_per_min=None),
+                        eb=slope, eb_gain=gain)
+            rec = jobs.identify_job(snap)
+            prev = _slim(rec)
+        return rec
+
+    with_gain = two(g)
+    assert with_gain["gain"] == g
+    assert with_gain["reduced"]["b_eq"] / with_gain["reduced"]["params"]["a"] == pytest.approx(slope, rel=0.03)
+    assert with_gain["decision"]["struct"] == "reduced"
+    without = two(0.0)
+    assert without["reduced"]["b_eq"] / without["reduced"]["params"]["a"] < 0.9 * slope
+    assert without["decision"].get("struct") is None
+    assert without["decision"]["why"] in (gates.WHY_EB, gates.WHY_RESIDUALS)
+    # The gain in force: the job's own qualified one, else the earlier one, 0 without one
+    assert jobs.eb_gain_in_force({"eb": {"value": 0.03, "gain": 0.05}}, {"eb": 0.02, "eb_gain": 0.1}) == 0.05
+    assert jobs.eb_gain_in_force({"eb": {"value": None, "gain": None}}, {"eb": 0.02, "eb_gain": 0.1}) == 0.1
+    assert jobs.eb_gain_in_force({"eb": {"value": None}}, {"eb": None, "eb_gain": 0.1}) == 0.0
 
 
 # ---------------------------------------------------------------------------

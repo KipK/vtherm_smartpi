@@ -443,56 +443,112 @@ This is combined with:
 #### Holding power from the room model
 
 In HEAT with heaters driven by PWM cycles, a published room model replaces
-$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`) once an energy-balance
-ratio $r_{EB}$ is in force (`room_model.energy_balance_ratio`). With
-$\delta_{wall}/a$ the wall extra power of the tracking
-(`room_model.wall_extra_power_percent`, both signs):
+$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`) once a static model of
+the energy balance is in force: the slope $s_{EB}$
+(`room_model.energy_balance_loss_per_c`) and the constant free gain $g_{EB}$
+(`room_model.energy_balance_free_gain_percent` / 100), with the static part
+$u_s = s_{EB}(SP - T_{ext}) - g_{EB}$. With $\delta_{wall}/a$ the wall extra
+power of the tracking (`room_model.wall_extra_power_percent`, both signs):
 
 | Room model | Source (`feedforward.source`) | $u_{ff1}$ |
 |---|---|---|
-| walls identified, tracking `ok` | `room model (air and walls)` | $clamp(r_{EB}(SP - T_{ext}) + \frac{\delta_{wall}}{a}, 0, 1)$ |
-| walls identified, tracking not `ok` (paused, settling, drift, ...) | `room model (static part)` | $clamp(r_{EB}(SP - T_{ext}), 0, 1)$ |
-| simple model | `room model (simple)` | $clamp(r_{EB}(SP - T_{ext}), 0, 1)$ |
-| published, no $r_{EB}$ in force yet | `learned model` | the learned law above, unchanged, no wall part |
+| walls identified, tracking `ok` | `room model (air and walls)` | $clamp(u_s + \frac{\delta_{wall}}{a}, 0, 1)$ |
+| walls identified, tracking not `ok` (paused, settling, drift, ...) | `room model (static part)` | $clamp(u_s, 0, 1)$ |
+| simple model | `room model (simple)` | $clamp(u_s, 0, 1)$ |
+| published, no static model in force yet, or one whose $s_{EB}$ differs from the published $b_{eq}/a$ by more than 5 % | `learned model` | the learned law above, unchanged, no wall part |
 | nothing published, COOL, valve mode | `learned model` | the learned law above, unchanged |
 
-The static gain is $r_{EB}$, never the fitted $b_{eq}/a$. With heavy walls the
-fitted $b_{eq} = b_{air} - b_{wall}$ is a small difference of two larger terms,
-and it moves with the emitter response time used by the fit (by a fraction of a
-percent per second of emitter time); the multi-day energy balance does not
-depend on it. The fit gives the wall dynamics, $\delta_{wall}/a$. $r_{EB}$
-alone, without a published model, is never used: without the wall part it
-gives the wrong holding power in heavy rooms, low after a setback and high
-when the walls give heat back.
+The static part comes from the energy balance, never from the fitted
+$b_{eq}/a$. With heavy walls the fitted $b_{eq} = b_{air} - b_{wall}$ is a
+small difference of two larger terms, and it moves with the emitter response
+time used by the fit (by a fraction of a percent per second of emitter time);
+the multi-day energy balance does not depend on it. The fit gives the wall
+dynamics, $\delta_{wall}/a$. The static model alone, without a published
+model, is never used: without the wall part it gives the wrong holding power
+in heavy rooms, low after a setback and high when the walls give heat back.
+The free gain is part of the static part: without it the integral would carry
+$g_{EB}$ for good.
 
 **Energy balance.** The room model job computes, once a day after 08:00 with
-the identification, over the 3 whole local days ending at the last local
-midnight (10 min bins of the T_ar history, invalid intervals excluded):
+the identification, the balance of each whole local day of the T_ar history
+before the day (at most 7; 10 min bins, invalid intervals excluded):
 
-$$ r_{EB} = \frac{\sum u \, \Delta t - \Delta T_{in} / a}{\sum (T_{in} - T_{ext}) \, \Delta t} $$
+$$ u_d = \frac{\sum u \, \Delta t - \Delta T_{in} / a}{\sum \Delta t}, \qquad D_d = \overline{T_{in} - T_{ext}} $$
 
-with $u$ the applied heat-equivalent power, $\Delta T_{in}$ the change of the
-indoor temperature over each valid segment (air storage removed with the online
-`a`). The same balance is computed over the 12 windows shifted by 0, 2, ...,
-22 h and over each of the 3 days. The value is refused when the mean
-$T_{in} - T_{ext}$ is below 6 °C, the mean duty below 0.05 or the duty of a day
-below 0.02, the excluded share above 20 %, the spread of the shifted windows
-(lowest and highest dropped, over the median) above 3 %, the spread of the 3
-per-day ratios $\overline{u}/\overline{(T_{in} - T_{ext})}$ (max − min over
-median) above 5 %, or the value outside $]0, 3]$. A refused day keeps the
-previous qualified value (`room_model.energy_balance_refusal_reason` says
-why); the ratio in force and its day are saved with the room model.
+with $u$ the applied heat-equivalent power and $\Delta T_{in}$ the change of
+the indoor temperature over each valid segment (air storage removed with the
+online `a`). A day is used when at most 20 % of it is invalid, its mean duty
+is at least 0.02 and $D_d > 0$. Weighted least squares (weight: the valid
+share of the day) fit
 
-**Agreement with the energy balance.** A candidate of the daily identification
-(model with walls or simple model) is published only if its own $b_{eq}/a$
-agrees with the $r_{EB}$ in force within 5 % ($|\ln(\frac{b_{eq}/a}{r_{EB}})| \le \ln 1.05$);
+$$ u_d = s_{EB} \, D_d - g_{EB} + e_d $$
+
+and the slope alone $u_d = s_0 D_d$. Whole days keep the wall storage of a
+setpoint or outdoor change a small share of each point. The verdict uses
+Student quantiles $t_{0.975}$ on the residual scatter; each standard error is at
+least its jackknife value (one day left out at a time), so that an estimate
+resting on a single day far from the others is not kept:
+
+- at least 4 usable days, a mean duty of at least 0.05 and a mean $D$ of at
+  least 6 °C;
+- the form with the gain needs a weighted standard deviation of $D_d$ of at
+  least 1 °C (below that, the day-to-day differences of $D$ come from the
+  regulation itself and the slope would read them as a loss), a 95 %
+  half-width $t_{0.975, n-2} \, \sigma_s / s_{EB} \le 5$ % (the slope is the
+  reference of a 5 % agreement), $0 < s_{EB} \le 3$, and a gain that leaves a
+  need in $]0, 1]$ on every day used with $|g_{EB}| \le s_{EB} \overline{D}$;
+- with that spread, a form with the gain not determined is refused
+  (`free heat gains detected; ...` when $g$ is significant and plausible,
+  else `the heating need varies too much ...`): the ratio of the means would
+  carry what the line does not explain;
+- with less spread, the slope alone ($g_{EB} = 0$) with
+  $t_{0.975, n-1} \, \sigma_{s_0} / s_0 \le 5$ %; a gain that the days cannot
+  show stays in $s_0 = s_{EB} - g/\overline{D}$, right at the usual $D$ only;
+- the qualified form must not drift: a linear trend of $u_d$ with the day,
+  fitted with the model, is refused when it is significant (95 %) and moves
+  the need by more than 2.5 % of its mean across the days (wall storage after
+  a change; half the tolerance, since the storage left after the days is not
+  in the trend).
+
+A refused day keeps the previous qualified model
+(`room_model.energy_balance_refusal_reason` says why); the model in force,
+its day and its number of days are saved with the room model.
+
+**Agreement with the energy balance.** Every fit of the daily identification
+takes the free gain in force as a known heat input, $a(u_e + g_{EB})$; the
+gain is not fitted per window: over the nights $T_{in} - T_{ext}$ varies too
+little to separate a constant input from the static loss. A candidate (model
+with walls or simple model) is published only if its own $b_{eq}/a$ agrees
+with $s_{EB}$ within 5 % ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$);
 otherwise the day publishes nothing (`the model's heat loss disagrees with
-the measured heat balance`). The ratio in force is the one computed by the
-same job when it qualifies, else the previous one. Without a qualified ratio
-there is no such check, but the room model gives no holding power either. The
-fit itself does not use the energy balance.
+the measured heat balance`). The model in force is the one computed by the
+same job when it qualifies, else the previous one. Without a qualified model
+there is no such check, but the room model gives no holding power either.
 
-$r_{EB}$ is bounded to 3, like $k_{ff}$. A room model source applies at full
+**Emitter search.** The emitter first moment of the fits is searched on a
+fixed grid, independent of the dead time in force: 13 values log-spaced from
+60 s (the fit step) to 3600 s (a third of the shortest wall time $1/\beta$ of
+3 h, so that the emitter and the walls stay separable), split into the
+refined T_ar lag and a delay like the dead time in force. The lowest cost
+$J$ is refined by a bounded Brent search in $\log \tau$ between its two grid
+neighbours (to 1 %, at most 10 more fits). The profile is significant when
+$\max (J - J_{min}) / J_{min} \cdot N_{eff} > \chi^2_{1, 0.95} = 3.84$, with
+$N_{eff}$ the number of residuals of the best fit over their integrated
+autocorrelation time ($1 + 2\sum \rho_k$ up to the first non-positive
+$\rho_k$). An optimum at either end of the grid with a significant profile
+is refused (`the heating response delay does not match the measured
+temperature`). A profile that is not significant does not determine the
+emitter: the fits use the emitter in force when the T_ar learning has
+published a refined value, else the grid optimum, and the agreement with the
+energy balance judges the static loss.
+
+**Residual checks.** The runs test of the fit residuals (10 min grid inside
+the fit periods) counts the sign changes of their hourly means, when there are
+at least 10; the other checks (bias, spread, autocorrelation at 1 h,
+correlation with the emitter output, the setpoint and the outdoor temperature)
+are unchanged.
+
+$s_{EB}$ is bounded to 3, like $k_{ff}$. A room model source applies at full
 weight (`warmup_scale = 1`) and does not use the unmeasured disturbance $d$ of
 the tracking. The static part follows the setpoint; the wall part follows the
 tracked air. With the air at the setpoint, $u_{ff1} = (b_{air}(SP - T_{ext}) - w)/a$,
@@ -507,7 +563,7 @@ The discrete changes of the static part are a change between the learned
 source and a room model source (including the change of weight from the
 learned warmup to full weight), a change of model structure (simple model and
 model with walls), a new daily publication of the parameters and a new
-$r_{EB}$ in force. $\Delta u_{ff}$
+static model ($s_{EB}$ or $g_{EB}$) in force. $\Delta u_{ff}$
 is the new static part minus the outgoing one (the learned FF1 + FF2 for the
 learned source), both at the current setpoint and outdoor temperature and both
 with the wall part applied at this calculation, inside the $[0, 1]$ clamp.
@@ -525,8 +581,8 @@ zero, while a change of source happens at any time and in either direction.
 **Wall part blend.** The wall part is never moved into the integral. When the
 wall term in force changes discretely (switched on when the tracking becomes
 `ok`, switched off when it is not `ok` any more or when the learned source takes
-over, a publication that changes the wall parameters; a new $r_{EB}$ alone
-does not start a blend), the applied wall part
+over, a publication that changes the wall parameters; a new static model
+alone does not start a blend), the applied wall part
 goes linearly over `RM_WALL_FADE_S` = 30 min from the value applied last to its
 target. The target is the live $\delta_{wall}/a$ of a tracking `ok`, or 0 when
 the wall term is off; a fade-out never reads the tracking again. A new
@@ -647,11 +703,12 @@ $$
 
 The braking entry predicts the signed change in the active demand direction (`+1` for HEAT, `-1` for COOL) over the remaining cycle, the passive dead time and any queued next-cycle power. The braking gap is that predicted change multiplied by `TRAJECTORY_BRAKE_GAIN = 1.20`.
 
-In HEAT, when a room model is published (walls or simple model) with an
-energy-balance ratio $r_{EB}$ in force and the heater is not a valve, the
-equilibrium gain $a/b$ of that prediction is replaced by $1/r_{EB}$, the
-static gain of the holding power: the committed power drives the room toward
-$T_{ext} + u / r_{EB}$. The relaxation factor $\alpha = e^{-b \cdot h}$
+In HEAT, when a room model is published (walls or simple model) with a static
+model of the energy balance in force and the heater is not a valve, the
+equilibrium of that prediction is the one of the holding power: the
+committed power drives the room toward $T_{ext} + (u + g_{EB}) / s_{EB}$
+(the equilibrium gain $a/b$ is replaced by $1/s_{EB}$ and the free gain is
+added to the power). The relaxation factor $\alpha = e^{-b \cdot h}$
 keeps the learned `b`, and the readiness checks keep the learned `a` and `b`.
 A learned `b/a` biased low by the walls otherwise overstates the committed
 rise and arms the braking too early. The thermal twin and FF3 keep the learned
@@ -862,7 +919,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `setpoint.py`          | analytical setpoint trajectory for the P reference          |
 | `integral_guard.py`    | directional integral guard and the I:HOLD after a window or power-shedding resume |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration, signed FF gain `b/a` and warmup scale, room model FF1 |
-| `room_model/feedforward.py` | holding power source from the published room model and the energy-balance ratio in force, bumpless transfer of the discrete changes of its static part, blend of its wall part, static gain for the braking prediction |
+| `room_model/feedforward.py` | holding power source from the published room model and the static model of the energy balance in force, bumpless transfer of the discrete changes of its static part, blend of its wall part, static gain for the braking prediction |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator`: frozen control decomposition of scheduler requests, routing of trim observer results, bumpless trim/integral transactions at the cycle boundary, transfer state |
 | `command_ownership.py` | request identifiers, frozen snapshots and binding of the scheduler applied-command receipts |

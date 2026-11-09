@@ -376,55 +376,105 @@ $T_{ext}$ est la dernière température extérieure valide reçue par SmartPI. L
 #### Puissance de maintien issue du modèle de pièce
 
 En HEAT, avec des chauffages pilotés par cycles PWM, un modèle de pièce publié remplace
-$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`) dès qu'un rapport de bilan énergétique
-$r_{EB}$ est en vigueur (`room_model.energy_balance_ratio`). Avec $\delta_{wall}/a$ la
+$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`) dès qu'un modèle statique du bilan
+énergétique est en vigueur : la pente $s_{EB}$ (`room_model.energy_balance_loss_per_c`) et
+l'apport gratuit constant $g_{EB}$ (`room_model.energy_balance_free_gain_percent` / 100), avec
+la partie statique $u_s = s_{EB}(SP - T_{ext}) - g_{EB}$. Avec $\delta_{wall}/a$ la
 puissance supplémentaire des murs du suivi (`room_model.wall_extra_power_percent`, avec ses
 deux signes) :
 
 | Modèle de pièce | Source (`feedforward.source`) | $u_{ff1}$ |
 |---|---|---|
-| murs identifiés, suivi `ok` | `room model (air and walls)` | $clamp(r_{EB}(SP - T_{ext}) + \frac{\delta_{wall}}{a}, 0, 1)$ |
-| murs identifiés, suivi non `ok` (en pause, en stabilisation, dérive, ...) | `room model (static part)` | $clamp(r_{EB}(SP - T_{ext}), 0, 1)$ |
-| modèle simple | `room model (simple)` | $clamp(r_{EB}(SP - T_{ext}), 0, 1)$ |
-| publié, pas encore de $r_{EB}$ en vigueur | `learned model` | la loi apprise ci-dessus, inchangée, sans part des murs |
+| murs identifiés, suivi `ok` | `room model (air and walls)` | $clamp(u_s + \frac{\delta_{wall}}{a}, 0, 1)$ |
+| murs identifiés, suivi non `ok` (en pause, en stabilisation, dérive, ...) | `room model (static part)` | $clamp(u_s, 0, 1)$ |
+| modèle simple | `room model (simple)` | $clamp(u_s, 0, 1)$ |
+| publié, pas encore de modèle statique en vigueur, ou un modèle dont $s_{EB}$ s'écarte de plus de 5 % du $b_{eq}/a$ publié | `learned model` | la loi apprise ci-dessus, inchangée, sans part des murs |
 | rien de publié, COOL, mode vanne | `learned model` | la loi apprise ci-dessus, inchangée |
 
-Le gain statique est $r_{EB}$, jamais le $b_{eq}/a$ ajusté. Avec des murs lourds, le
-$b_{eq} = b_{air} - b_{wall}$ ajusté est une petite différence de deux termes plus grands, et
-il se déplace avec le temps de réponse de l'émetteur utilisé par l'ajustement (d'une fraction
-de pourcent par seconde de temps d'émetteur) ; le bilan énergétique sur plusieurs jours n'en
-dépend pas. L'ajustement donne la dynamique des murs, $\delta_{wall}/a$. $r_{EB}$ seul, sans
-modèle publié, n'est jamais utilisé : sans la part des murs, il donne une mauvaise puissance de
-maintien dans les pièces lourdes, basse après un abaissement de consigne et haute lorsque les
-murs restituent de la chaleur.
+La partie statique vient du bilan énergétique, jamais du $b_{eq}/a$ ajusté. Avec des murs
+lourds, le $b_{eq} = b_{air} - b_{wall}$ ajusté est une petite différence de deux termes plus
+grands, et il se déplace avec le temps de réponse de l'émetteur utilisé par l'ajustement (d'une
+fraction de pourcent par seconde de temps d'émetteur) ; le bilan énergétique sur plusieurs
+jours n'en dépend pas. L'ajustement donne la dynamique des murs, $\delta_{wall}/a$. Le modèle
+statique seul, sans modèle publié, n'est jamais utilisé : sans la part des murs, il donne une
+mauvaise puissance de maintien dans les pièces lourdes, basse après un abaissement de consigne
+et haute lorsque les murs restituent de la chaleur. L'apport gratuit fait partie de la partie
+statique : sans lui, l'intégrale porterait $g_{EB}$ pour toujours.
 
 **Bilan énergétique.** La tâche du modèle de pièce calcule, une fois par jour après 08:00 avec
-l'identification, sur les 3 journées locales entières se terminant à la dernière minuit locale
-(intervalles de 10 min de l'historique de T_ar, intervalles invalides exclus) :
+l'identification, le bilan de chaque journée locale entière de l'historique de T_ar qui précède
+le jour (7 au plus ; intervalles de 10 min, intervalles invalides exclus) :
 
-$$ r_{EB} = \frac{\sum u \, \Delta t - \Delta T_{in} / a}{\sum (T_{in} - T_{ext}) \, \Delta t} $$
+$$ u_d = \frac{\sum u \, \Delta t - \Delta T_{in} / a}{\sum \Delta t}, \qquad D_d = \overline{T_{in} - T_{ext}} $$
 
-avec $u$ la puissance appliquée équivalente en chaleur, $\Delta T_{in}$ la variation de la
-température intérieure sur chaque segment valide (stockage d'air retiré avec le $a$ en ligne).
-Le même bilan est calculé sur les 12 fenêtres décalées de 0, 2, ..., 22 h et sur chacun des 3
-jours. La valeur est refusée lorsque la moyenne de $T_{in} - T_{ext}$ est inférieure à 6 °C, la
-moyenne du taux de chauffe inférieure à 0,05 ou celui d'un jour inférieur à 0,02, la part exclue
-supérieure à 20 %, la dispersion des fenêtres décalées (minimum et maximum écartés, rapportée à
-la médiane) supérieure à 3 %, la dispersion des 3 rapports journaliers
-$\overline{u}/\overline{(T_{in} - T_{ext})}$ (max − min rapporté à la médiane) supérieure à 5 %,
-ou la valeur hors de $]0, 3]$. Un jour refusé garde la valeur qualifiée précédente
-(`room_model.energy_balance_refusal_reason` indique pourquoi) ; le rapport en vigueur et son
-jour sont sauvegardés avec le modèle de pièce.
+avec $u$ la puissance appliquée équivalente en chaleur et $\Delta T_{in}$ la variation de
+la température intérieure sur chaque segment valide (stockage d'air retiré avec le `a` en
+ligne). Une journée est retenue lorsque au plus 20 % de ses intervalles sont invalides, que son
+taux de chauffe moyen est d'au moins 0,02 et que $D_d > 0$. Les moindres carrés pondérés (poids :
+la part valide du jour) ajustent
 
-**Accord avec le bilan énergétique.** Un candidat de l'identification quotidienne (modèle avec
-murs ou modèle simple) n'est publié que si son propre $b_{eq}/a$ concorde avec le $r_{EB}$ en
-vigueur à 5 % près ($|\ln(\frac{b_{eq}/a}{r_{EB}})| \le \ln 1.05$) ; sinon le jour ne publie
-rien (`the model's heat loss disagrees with the measured heat balance`). Le rapport en vigueur
-est celui calculé par la même tâche lorsqu'il est qualifié, sinon le précédent. Sans rapport
+$$ u_d = s_{EB} \, D_d - g_{EB} + e_d $$
+
+et la pente seule $u_d = s_0 D_d$. Les jours entiers laissent subsister dans chaque point une
+petite part du stockage des murs lié à un changement de consigne ou de température extérieure.
+Le verdict utilise les quantiles de Student $t_{0.975}$ sur la dispersion des résidus ; chaque écart-type
+est au moins sa valeur par jackknife (un jour retiré à la fois), pour qu'une estimation qui repose
+sur un seul jour éloigné des autres ne soit pas retenue :
+
+- au moins 4 jours exploitables, un taux de chauffe moyen d'au moins 0,05 et une moyenne de
+  $D$ d'au moins 6 °C ;
+- la forme avec apport gratuit exige un écart-type pondéré de $D_d$ d'au moins 1 °C (en
+  dessous, les écarts de $D$ d'un jour à l'autre viennent de la régulation elle-même, et la
+  pente les lirait comme une perte), une demi-largeur à 95 % $t_{0.975, n-2} \, \sigma_s / s_{EB}
+  \le 5$ % (la pente est la référence d'un accord à 5 %), $0 < s_{EB} \le 3$, et un apport qui
+  laisse un besoin dans $]0, 1]$ sur chaque jour retenu avec $|g_{EB}| \le s_{EB} \overline{D}$ ;
+- avec cette dispersion, une forme avec apport non déterminée est refusée (`free heat gains
+  detected; ...` lorsque $g$ est significatif et plausible, sinon `the heating need varies too
+  much ...`) : le rapport des moyennes porterait ce que la droite n'explique pas ;
+- avec moins de dispersion, la pente seule ($g_{EB} = 0$) avec
+  $t_{0.975, n-1} \, \sigma_{s_0} / s_0 \le 5$ % ; un apport que les jours ne peuvent pas montrer
+  reste dans $s_0 = s_{EB} - g/\overline{D}$, juste au $D$ habituel seulement ;
+- la forme qualifiée ne doit pas dériver : une tendance linéaire de $u_d$ avec le jour, ajustée
+  avec le modèle, est refusée lorsqu'elle est significative (95 %) et déplace le besoin de plus
+  de 2,5 % de sa moyenne sur l'ensemble des jours (stockage des murs après un changement ; la moitié
+  de la tolérance, car le stockage restant après les jours n'est pas dans la tendance).
+
+Un jour refusé garde le modèle qualifié précédent (`room_model.energy_balance_refusal_reason`
+indique pourquoi) ; le modèle en vigueur, son jour et son nombre de jours sont sauvegardés avec
+le modèle de pièce.
+
+**Recherche de l'émetteur.** Le temps de réponse de l'émetteur (son premier moment) des
+ajustements est recherché sur une grille fixe, indépendante du temps mort en vigueur : 13
+valeurs réparties en logarithme entre 60 s (le pas de l'ajustement) et 3600 s (un tiers du plus
+court temps caractéristique des murs $1/\beta$, soit 3 h, afin que l'émetteur et les murs restent
+séparables), découpées en la constante de temps T_ar affinée et un retard pur, comme le temps mort
+en vigueur. Le coût $J$ le plus bas est affiné par une recherche de Brent bornée en $\log \tau$ entre
+ses deux voisins de grille (à 1 % près, 10 ajustements au plus de plus). Le profil est significatif
+lorsque $\max (J - J_{min}) / J_{min} \cdot N_{eff} > \chi^2_{1, 0.95} = 3.84$, avec $N_{eff}$ le
+nombre de résidus du meilleur ajustement sur leur temps d'autocorrélation intégré ($1 + 2\sum \rho_k$
+jusqu'au premier $\rho_k$ non positif). Un optimum à l'une des extrémités de la grille, avec un
+profil significatif, est refusé (`the heating response delay does not match the measured
+temperature`). Un profil non significatif ne détermine pas l'émetteur : les ajustements utilisent
+l'émetteur en vigueur lorsque l'apprentissage du retard T_ar a publié une valeur affinée, sinon
+l'optimum de la grille, et l'accord avec le bilan énergétique juge la perte statique.
+
+**Contrôles des résidus.** Le test de série des résidus de l'ajustement (grille de 10 min dans
+les périodes ajustées) compte les changements de signe de leurs moyennes horaires, lorsqu'il y en
+a au moins 10 ; les autres contrôles (biais, dispersion, autocorrélation à 1 h, corrélation avec
+la sortie de l'émetteur, la consigne et la température extérieure) restent les mêmes.
+
+**Accord avec le bilan énergétique.** Chaque ajustement de l'identification quotidienne prend
+l'apport gratuit en vigueur comme une entrée de chaleur connue, $a(u_e + g_{EB})$ ; l'apport
+n'est pas ajusté fenêtre par fenêtre : sur les nuits, $T_{in} - T_{ext}$ varie trop peu pour
+séparer une entrée constante de la perte statique. Un candidat de l'identification quotidienne
+(modèle avec murs ou modèle simple) n'est publié que si son propre $b_{eq}/a$ concorde avec
+$s_{EB}$ à 5 % près ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$) ; sinon le jour ne publie
+rien (`the model's heat loss disagrees with the measured heat balance`). Le modèle en vigueur
+est celui calculé par la même tâche lorsqu'il est qualifié, sinon le précédent. Sans modèle
 qualifié, il n'y a pas de tel contrôle, mais le modèle de pièce ne donne pas non plus de
-puissance de maintien. L'ajustement lui-même n'utilise pas le bilan énergétique.
+puissance de maintien.
 
-$r_{EB}$ est borné à 3, comme $k_{ff}$. Une source de modèle de pièce s'applique à
+$s_{EB}$ est borné à 3, comme $k_{ff}$. Une source de modèle de pièce s'applique à
 plein poids (`warmup_scale = 1`) et n'utilise pas la perturbation non mesurée $d$ du
 suivi. La partie statique suit la consigne ; la partie murs suit l'air suivi. Avec l'air
 à la consigne, $u_{ff1} = (b_{air}(SP - T_{ext}) - w)/a$, avec $b_{air}$ le taux de perte
@@ -437,8 +487,8 @@ $$ I \leftarrow clamp\left(I - \frac{\Delta u_{ff}}{K_i}, -\frac{2}{K_i}, \frac{
 
 Les variations discrètes de la part statique sont un changement entre la source apprise et une source de modèle de pièce
 (y compris le passage du poids du warm-up appris au plein poids), un changement de structure du modèle (modèle simple et
-modèle avec murs), une nouvelle publication quotidienne des paramètres et un nouveau
-$r_{EB}$ en vigueur. $\Delta u_{ff}$ est la nouvelle part statique
+modèle avec murs), une nouvelle publication quotidienne des paramètres et un nouveau modèle
+statique ($s_{EB}$ ou $g_{EB}$) en vigueur. $\Delta u_{ff}$ est la nouvelle part statique
 moins l'ancienne (le FF1 + FF2 appris pour la source apprise), tous deux à la consigne et à la température extérieure
 courantes, et tous deux avec la part des murs appliquée à ce calcul, dans la borne $[0, 1]$. Le passage entre
 `room model (air and walls)` et `room model (static part)` ne change pas la part statique : rien n'est transféré.
@@ -451,7 +501,7 @@ changement de source intervient à tout moment et dans les deux sens.
 
 **Fondu de la part des murs.** La part des murs n'est jamais déplacée dans l'intégrale. Lorsque le terme des murs en
 vigueur change de façon discrète (activé lorsque le suivi devient `ok`, désactivé lorsqu'il n'est plus `ok` ou lorsque la
-source apprise reprend la main, une publication qui change les paramètres des murs ; un nouveau $r_{EB}$ seul ne démarre pas de fondu), la part des murs appliquée passe
+source apprise reprend la main, une publication qui change les paramètres des murs ; un nouveau modèle statique seul ne démarre pas de fondu), la part des murs appliquée passe
 linéairement sur `RM_WALL_FADE_S` = 30 min de la valeur appliquée en dernier à sa cible. La cible est le
 $\delta_{wall}/a$ courant d'un suivi `ok`, ou 0 lorsque le terme des murs est désactivé ; un fondu de sortie ne relit
 jamais le suivi. Une nouvelle discontinuité pendant un fondu en démarre un nouveau à partir de la valeur appliquée à cet
@@ -557,7 +607,7 @@ $$
 
 L'entrée en freinage prédit la variation signée dans le sens de la demande active (`+1` en HEAT, `-1` en COOL) sur le reste du cycle, le temps mort passif et l'éventuelle puissance déjà prévue pour le cycle suivant. L'écart de freinage vaut cette variation prédite multipliée par `TRAJECTORY_BRAKE_GAIN = 1.20`.
 
-En HEAT, lorsqu'un modèle de pièce est publié (avec murs ou modèle simple) avec un rapport de bilan énergétique $r_{EB}$ en vigueur et que le chauffage n'est pas une vanne, le gain d'équilibre $a/b$ de cette prédiction est remplacé par $1/r_{EB}$, le gain statique de la puissance de maintien : la chaleur engagée amène la pièce vers $T_{ext} + u / r_{EB}$. Le facteur de relaxation $\alpha = e^{-b \cdot h}$ conserve le `b` appris, et les contrôles de disponibilité conservent le `a` et le `b` appris. Un `b/a` appris, biaisé à la baisse par les murs, surestimerait sinon la montée engagée et armerait le freinage trop tôt. Le jumeau thermique et FF3 conservent le modèle appris.
+En HEAT, lorsqu'un modèle de pièce est publié (avec murs ou modèle simple) avec un modèle statique du bilan énergétique en vigueur et que le chauffage n'est pas une vanne, l'équilibre de cette prédiction est celui de la puissance de maintien : la chaleur engagée amène la pièce vers $T_{ext} + (u + g_{EB}) / s_{EB}$ (le gain d'équilibre $a/b$ est remplacé par $1/s_{EB}$ et l'apport gratuit s'ajoute à la puissance). Le facteur de relaxation $\alpha = e^{-b \cdot h}$ conserve le `b` appris, et les contrôles de disponibilité conservent le `a` et le `b` appris. Un `b/a` appris, biaisé à la baisse par les murs, surestimerait sinon la montée engagée et armerait le freinage trop tôt. Le jumeau thermique et FF3 conservent le modèle appris.
 
 Le bloc canonique `live.setpoint` publie le résumé :
 
@@ -775,7 +825,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `setpoint.py`          | trajectoire analytique de la référence P                    |
 | `integral_guard.py`    | garde directionnelle de l'intégrale et maintien I:HOLD après reprise de fenêtre ou de délestage |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`, gain FF signé `b/a`, facteur de montée en charge et FF1 du modèle de pièce |
-| `room_model/feedforward.py` | source de puissance de maintien issue du modèle de pièce publié et du rapport de bilan énergétique en vigueur, transfert sans à-coup des variations discrètes de sa part statique, fondu de sa part des murs, gain statique pour la prédiction de freinage |
+| `room_model/feedforward.py` | source de puissance de maintien issue du modèle de pièce publié et du modèle statique du bilan énergétique en vigueur, transfert sans à-coup des variations discrètes de sa part statique, fondu de sa part des murs, gain statique pour la prédiction de freinage |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator` : décomposition de commande figée des requêtes du scheduler, routage des résultats des observateurs de trim, transactions bumpless trim/intégrale à la frontière de cycle, état de transfert |
 | `command_ownership.py` | identifiants de requête, snapshots figés et rattachement des reçus de commande appliquée du scheduler |

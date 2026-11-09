@@ -72,8 +72,8 @@ def _publish(algo: SmartPI, params: RoomParams, *, healthy: bool = True, wall_of
     wall wall_offset_c (C of wall temperature) off equilibrium."""
     room = algo.room_model
     room.params = params
-    room.eb_ratio = _eb(params) if eb == "default" else eb
-    room.eb_day = 739600 if room.eb_ratio is not None else None
+    room.eb_slope = _eb(params) if eb == "default" else eb
+    room.eb_day = 739600 if room.eb_slope is not None else None
     room.q = 0.01
     room.observer.configure(params, 0.01)
     if healthy:
@@ -403,8 +403,9 @@ def test_publication_keeps_the_static_part_and_blends_the_wall_part() -> None:
     _select(algo, T0 + 600.0)
     _select(algo, T0 + 600.0 + RM_WALL_FADE_S)
     old_wall = algo._ff_holding.wall_applied
-    new = RoomParams("full", FULL.a * 1.1, FULL.alpha, FULL.beta * 0.8, FULL.c * 0.97, FULL.tau_e, FULL.L)
-    assert abs(new.b_eq / new.a - FULL.b_eq / FULL.a) > 0.001
+    # A new b_eq / a still within 5 % of the slope in force
+    new = RoomParams("full", FULL.a * 1.03, FULL.alpha, FULL.beta * 0.8, FULL.c * 0.97, FULL.tau_e, FULL.L)
+    assert abs(new.b_eq / new.a - FULL.b_eq / FULL.a) > 0.0005
     algo.room_model.params = new
     algo.room_model.observer.configure(new, 0.01)
     assert algo.room_model.observer.health() == HEALTH_OK
@@ -433,7 +434,7 @@ def test_new_energy_balance_ratio_moves_the_static_step_only() -> None:
     assert not algo._ff_holding.fading
     before = _select(algo, T0 + 660.0 + RM_WALL_FADE_S).u_ff_final + algo.Ki * algo.ctl.integral
     new_ratio = 0.95 * _eb(FULL)
-    algo.room_model.eb_ratio = new_ratio
+    algo.room_model.eb_slope = new_ratio
     t = T0 + 720.0 + RM_WALL_FADE_S
     r = _select(algo, t)
     step = (new_ratio - _eb(FULL)) * (T_SP - T_EXT)
@@ -451,15 +452,25 @@ def test_new_energy_balance_ratio_moves_the_static_step_only() -> None:
 def test_static_part_is_the_energy_balance_never_the_fit() -> None:
     algo = _algo()
     for params in (FULL, SIMPLE):
-        for ratio in (0.9 * params.b_eq / params.a, 1.2 * params.b_eq / params.a):
+        for ratio in (0.96 * params.b_eq / params.a, 1.045 * params.b_eq / params.a):
+            for gain in (0.0, 0.08, -0.03):
+                _publish(algo, params, eb=ratio)
+                algo.room_model.eb_gain = gain
+                src = select_source(algo.room_model, HEAT, False)
+                assert src.gain == ratio and src.free_gain == gain
+                assert static_gain(algo.room_model, HEAT, False) == ratio
+                wall = src.wall if src.wall is not None else 0.0
+                assert src.power(T_SP, T_EXT) == pytest.approx(ratio * (T_SP - T_EXT) - gain + wall)
+        # A slope in force that disagrees with the published b_eq / a by more than 5 % (it came into force after
+        # the publication): the learned holding power stays in use
+        for ratio in (0.94 * params.b_eq / params.a, 1.06 * params.b_eq / params.a):
             _publish(algo, params, eb=ratio)
-            src = select_source(algo.room_model, HEAT, False)
-            assert src.gain == ratio
-            assert static_gain(algo.room_model, HEAT, False) == ratio
-            wall = src.wall if src.wall is not None else 0.0
-            assert src.power(T_SP, T_EXT) == pytest.approx(ratio * (T_SP - T_EXT) + wall)
+            assert select_source(algo.room_model, HEAT, False) is LEARNED
+            assert static_gain(algo.room_model, HEAT, False) is None
     # Clamped like the learned gain
-    _publish(algo, SIMPLE, eb=5.0)
+    steep = RoomParams.reduced(2.0e-5, 1.0 / (3.0 * H), 600.0, 120.0)
+    _publish(algo, steep, eb=steep.b_eq / steep.a)
+    assert steep.b_eq / steep.a > 3.0
     assert static_gain(algo.room_model, HEAT, False) == 3.0
     assert select_source(algo.room_model, HEAT, False).power(T_SP, T_EXT) == 1.0
 
@@ -483,7 +494,7 @@ def test_published_model_without_energy_balance_keeps_the_learned_holding_power(
     ff = algo.get_published_diagnostics()["feedforward"]
     assert ff["source"] == "learned model" and ff["wall_power_percent"] is None
     # The ratio qualifies: the room model takes over through the transfer
-    algo.room_model.eb_ratio = _eb(FULL)
+    algo.room_model.eb_slope = _eb(FULL)
     _select(algo, T0 + 600.0)
     assert algo._ff_holding.source.kind == SOURCE_WALLS
 
@@ -493,13 +504,13 @@ def _select_learned(algo: SmartPI, learned, now: float):
 
 
 def test_braking_equilibrium_is_the_energy_balance(monkeypatch) -> None:
-    """The braking prediction of the setpoint trajectory gets the energy-balance ratio in force."""
+    """The braking prediction of the setpoint trajectory gets the static model in force (slope and free gain)."""
     algo = _algo()
     seen = []
     real = algo.sp_mgr.filter_setpoint
 
     def spy(**kw):
-        seen.append(kw.get("equilibrium_gain"))
+        seen.append((kw.get("equilibrium_gain"), kw.get("equilibrium_free_gain")))
         return real(**kw)
 
     monkeypatch.setattr(algo.sp_mgr, "filter_setpoint", spy)
@@ -513,11 +524,12 @@ def test_braking_equilibrium_is_the_energy_balance(monkeypatch) -> None:
 
     assert algo.phase == SmartPIPhase.STABLE
     run()
-    assert run() is None
-    _publish(algo, FULL, eb=0.9 * FULL.b_eq / FULL.a)
-    assert run() == 0.9 * FULL.b_eq / FULL.a
+    assert run() == (None, 0.0)
+    _publish(algo, FULL, eb=0.97 * FULL.b_eq / FULL.a)
+    algo.room_model.eb_gain = 0.05
+    assert run() == (0.97 * FULL.b_eq / FULL.a, 0.05)
     _publish(algo, FULL, eb=None)
-    assert run() is None
+    assert run() == (None, 0.0)
 
 
 def test_restart_during_a_fade_goes_on_with_the_applied_wall_part() -> None:
@@ -705,8 +717,9 @@ def test_invalid_saved_source_is_ignored() -> None:
 def test_closed_loop_heavy_room_switch_is_bumpless_and_mornings_reach_the_setpoint(caplog) -> None:
     """Heavy room (walls 65 % of the air loss, wall time constant 80 h), precise sensor, learned b / a 35 % low.
 
-    Eight days of recorded history before the run let the energy balance of the 3 days before the first day
-    qualify. The true model is published at 14:00 on the first day: static part (the energy balance) at once
+    Twelve days of recorded history before the run let the energy balance of the whole days before the first
+    day qualify (the walls have settled from the start of the recorded history). The true model is published
+    at 14:00 on the first day: static part (the energy balance) at once
     (tracking settling), walls 3 h later. Bounds:
     - each switch moves FF + I by less than 0.01 while the holding power itself steps by more than 0.03
       (what moves is the integral of one tick);
@@ -731,7 +744,7 @@ def test_closed_loop_heavy_room_switch_is_bumpless_and_mornings_reach_the_setpoi
             done["v"] = True
 
     days = 4
-    out = rsim.run_smartpi(p, days, b_online_ratio=0.65, on_tick=publish, history_days=8.0)
+    out = rsim.run_smartpi(p, days, b_online_ratio=0.65, on_tick=publish, history_days=12.0)
     # The energy balance qualifies within 2 % of the true b_eq / a and gives the static part
     true_gain = (p["alpha"] - p["c"]) / p["a"]
     assert done["eb"]["reason"] is None
@@ -794,7 +807,7 @@ def test_closed_loop_restart_keeps_the_room_model_source(caplog) -> None:
             done["v"] = True
 
     out = rsim.run_smartpi(p, 1.5, b_online_ratio=0.65, on_tick=publish, restart_at=rsim.T0 + rsim.DAY + 7 * H,
-                           history_days=8.0)
+                           history_days=12.0)
     i = out["restart"]["i"]
     assert out["restart"]["state"]["ff_source"]["kind"] == SOURCE_WALLS
     assert out["source"][i - 1] == out["source"][i] == SOURCE_WALLS
@@ -802,3 +815,18 @@ def test_closed_loop_restart_keeps_the_room_model_source(caplog) -> None:
     assert abs(out["u_ff"][i] - out["u_ff"][i - 1]) < 0.005
     assert abs(out["i_power"][i] - out["i_power"][i - 1]) < 0.005
     assert abs(out["u"][i] - out["u"][i - 1]) < 0.01
+
+
+def test_braking_prediction_adds_the_free_gain_to_the_committed_power() -> None:
+    """With the room model equilibrium, the committed power drives the room toward T_ext + (u + g) / s."""
+    algo = _algo()
+    kw = dict(current_temp=19.0, ext_current_temp=5.0, hvac_mode=HEAT, a=0.02, b=0.0005, horizon_min=30.0,
+              next_horizon_min=10.0, equilibrium_gain=0.03)
+    pred = algo.sp_mgr._compute_predicted_signed_change
+    with_gain = pred(u_ref=0.6, next_u_ref=0.5, equilibrium_free_gain=0.1, **kw)
+    assert with_gain == pytest.approx(pred(u_ref=0.7, next_u_ref=0.6, **kw))
+    assert with_gain > pred(u_ref=0.6, next_u_ref=0.5, **kw) > 0.0
+    # Without the room model equilibrium the free gain is not used
+    plain = dict(kw, equilibrium_gain=None)
+    assert pred(u_ref=0.6, next_u_ref=0.5, equilibrium_free_gain=0.1, **plain) == pred(u_ref=0.6, next_u_ref=0.5,
+                                                                                         **plain)

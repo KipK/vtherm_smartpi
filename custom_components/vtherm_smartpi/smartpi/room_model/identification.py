@@ -16,13 +16,27 @@ Full model, nonlinear parameters (alpha, beta, g = c / alpha):
     dw/dt = g alpha beta (Ta - Text) - beta w - k dText/dt, k = (c + alpha) / 2.
 Reduced model, nonlinear parameter b_eq: dTa/dt = a u_e - b_eq (Ta - Text).
 
+The heat input is a (u_e + g), with g the constant free gain of the static
+model in force (energy_balance.py, a share of full power: heat from a warmer
+neighbour, steady occupants), taken as known: without it such a gain would be
+read as a lower static loss, and the fit's b_eq / a could not match the
+energy-balance slope. The gain is not fitted per window: over the nights the
+indoor-outdoor difference varies too little to separate a constant input from
+the static loss, and a fitted one trades against b_eq freely.
+
 The fit is ordinary least squares on the measurements alone: its static
-gain b_eq / a is then an independent check of the energy-balance ratio
+gain b_eq / a is then an independent check of the energy-balance slope
 (gates.py).
 
 Residual checks are computed on a 10 min grid inside the periods: bias, root
 mean square, runs test, autocorrelation at 10 min and 1 h, and correlation with
-the emitter output, the setpoint and the outdoor temperature.
+the emitter output, the setpoint and the outdoor temperature. The runs test
+counts the sign changes of the hourly means of the residuals: the model serves
+hours ahead (wall term, forecasts from 1 h), and ripple shorter than an hour
+(sensor response, emitter and cycle shape) makes long runs of 10 min samples
+without any error at the scale of the model. The effective number of
+independent residuals (the count over the integrated autocorrelation time) is
+reported for the emitter search (jobs.py).
 """
 from __future__ import annotations
 
@@ -43,6 +57,8 @@ from .const import (
     RM_EVENT_WEIGHT_CAP_S,
     RM_FIT_STEP_S,
     RM_G_GRID,
+    RM_RES_RUNS_BLOCK_S,
+    RM_RES_RUNS_MIN_BLOCKS,
     RM_SEARCH_STARTS,
     RM_TAU_AIR_GRID_H,
     RM_TAU_WALL_GRID_H,
@@ -190,13 +206,15 @@ def _ss_columns(phi, gam, inputs, imp):
 class Problem:
     """Weighted least squares of one window for the full or the reduced model."""
 
-    def __init__(self, data: WindowData, full: bool) -> None:
-        self.data, self.full = data, full
+    def __init__(self, data: WindowData, full: bool, gain: float = 0.0) -> None:
+        """gain: constant free gain (share of full power) of the heat input a (u_e + gain), taken as known."""
+        self.data, self.full, self.gain = data, full, gain
         self.inputs = []
         self.imp = []
         for s in data.segments:
             i0, N = s["i0"], s["N"]
-            self.inputs.append(tuple(np.append(x[i0:i0 + N], 0.0) for x in (data.ue, data.te_bin, data.dte_bin)))
+            self.inputs.append(tuple(np.append(x[i0:i0 + N], 0.0) for x in (data.ue, data.te_bin, data.dte_bin,
+                                                                            np.ones(len(data.ue)))))
             imp = np.zeros(N + 1)
             imp[0] = 1.0
             self.imp.append(imp)
@@ -221,21 +239,24 @@ class Problem:
         return True
 
     def columns(self, q: dict) -> list[list[np.ndarray]]:
-        """Per segment, full-length response columns: Yu, Yte (with its coefficients), Ydte, Y0, Yw."""
+        """Per segment, full-length response columns: Yu, Yte (with its coefficients), Ydte, Yg (a unit constant
+        input entering like u_e), Y0, Yw."""
         out = []
         if self.full:
             phi, gam = _disc2(q["alpha"], q["beta"], q["gamma"], STEP)
+            gam = np.c_[gam, gam[:, 0]]
             for inp, imp in zip(self.inputs, self.imp):
                 out.append(_ss_columns(phi, gam, inp, imp))
         else:
             b = q["alpha"]
             e = math.exp(-b * STEP)
             gu = (1.0 - e) / b
-            for (ue, te, _dte), steps in zip(self.inputs, self._steps):
+            for (ue, te, _dte, one), steps in zip(self.inputs, self._steps):
                 yu = lfilter([0.0, gu], [1.0, -e], ue)
                 yt = lfilter([0.0, gu * b], [1.0, -e], te)
+                yo = lfilter([0.0, gu], [1.0, -e], one)
                 zero = np.zeros(len(steps))
-                out.append([yu, yt, zero, e ** steps, zero])
+                out.append([yu, yt, zero, yo, e ** steps, zero])
         return out
 
     def solve(self, x, a_fixed: float | None = None, detail: bool = False):
@@ -249,15 +270,17 @@ class Problem:
         glob = 0 if a_fixed is not None else 1
         ncol = glob + per * nseg
         rows, rhs, wts = [], [], []
-        for si, (yu, yt, yd, y0, yw) in enumerate(cols):
+        for si, (yu, yt, yd, yo, y0, yw) in enumerate(cols):
             s = self.data.segments[si]
             k = s["k"]
             M = np.zeros((len(k), ncol))
             off = yt[k] + k_te * yd[k]
+            # heat input a (u_e + g) with the known gain g
+            yuk = yu[k] + self.gain * yo[k]
             if a_fixed is None:
-                M[:, 0] = yu[k]
+                M[:, 0] = yuk
             else:
-                off = off + a_fixed * yu[k]
+                off = off + a_fixed * yuk
             base = glob + per * si
             M[:, base] = y0[k]
             if self.full:
@@ -277,7 +300,7 @@ class Problem:
         cost = float(res @ res)
         if not detail:
             return cost, th
-        out = dict(q, a=float(a_val), k_te=k_te, cost=cost, x=[float(v) for v in x])
+        out = dict(q, a=float(a_val), k_te=k_te, cost=cost, x=[float(v) for v in x], gain=self.gain)
         init = []
         for si in range(nseg):
             base = glob + per * si
@@ -289,9 +312,9 @@ class Problem:
     def _check_residuals(self, cols, a, k_te, init) -> dict:
         res, U, S, T = [], [], [], []
         d = self.data
-        for (yu, yt, yd, y0, yw), s, (ta0, w0) in zip(cols, d.segments, init):
+        for (yu, yt, yd, yo, y0, yw), s, (ta0, w0) in zip(cols, d.segments, init):
             kc = s["kc"]
-            model = a * yu[kc] + yt[kc] + k_te * yd[kc] + ta0 * y0[kc] + w0 * yw[kc]
+            model = a * (yu[kc] + self.gain * yo[kc]) + yt[kc] + k_te * yd[kc] + ta0 * y0[kc] + w0 * yw[kc]
             res.append(s["yc"] - model)
             idx = s["i0"] + kc
             U.append(d.ue[np.clip(idx - 1, 0, len(d.ue) - 1)])
@@ -361,10 +384,10 @@ def fit(pb: Problem, warm: dict | None = None) -> dict | None:
     return out
 
 
-def held_out(data: WindowData, params: dict) -> dict | None:
+def held_out(data: WindowData, params: dict, gain: float = 0.0) -> dict | None:
     """Residual checks of earlier parameters on this window: parameters frozen, initial states re-estimated."""
     full = params.get("struct") == "full"
-    pb = Problem(data, full)
+    pb = Problem(data, full, gain)
     if full:
         x = [math.log(params["alpha"]), math.log(params["beta"]), _logit(params["c"] / params["alpha"])]
     else:
@@ -383,13 +406,13 @@ def residual_checks(res_list, u_list, sp_list, te_list, lag_1h: int) -> dict:
         return {"n": int(len(r))}
     out = {"n": int(len(r)), "mean": float(np.mean(r)), "median": float(np.median(r)),
            "rms": float(np.sqrt(np.mean(r ** 2)))}
-    s = np.sign(r)
-    s = s[s != 0]
-    n1, n2 = int(np.sum(s > 0)), int(np.sum(s < 0))
-    runs = 1 + int(np.sum(s[1:] != s[:-1])) if len(s) else 0
-    mu = 2.0 * n1 * n2 / max(1, n1 + n2) + 1.0
-    var = (mu - 1.0) * (mu - 2.0) / max(1, n1 + n2 - 1)
-    out["runs_z"] = float((runs - mu) / math.sqrt(var)) if var > 0 else None
+    out["runs_z_10min"] = runs_z(r)
+    block = max(1, int(round(RM_RES_RUNS_BLOCK_S / RM_CHECK_STEP_S)))
+    means = [x[: (len(x) // block) * block].reshape(-1, block).mean(axis=1) for x in res_list if len(x) >= block]
+    means = np.concatenate(means) if means else np.zeros(0)
+    out["runs_blocks"] = int(len(means))
+    out["runs_z"] = runs_z(means) if len(means) >= RM_RES_RUNS_MIN_BLOCKS else None
+    out["n_eff"] = effective_count(res_list)
 
     def ac(lag):
         num = den = 0.0
@@ -407,3 +430,32 @@ def residual_checks(res_list, u_list, sp_list, te_list, lag_1h: int) -> dict:
         out[f"corr_{nm}"] = (float(np.corrcoef(r, x)[0, 1])
                              if np.std(x) > 1e-9 and np.std(r) > 1e-12 else None)
     return out
+
+
+def runs_z(r: np.ndarray) -> float | None:
+    """Wald-Wolfowitz runs test of the signs of a sequence (z score, negative for long runs)."""
+    s = np.sign(np.asarray(r, dtype=float))
+    s = s[s != 0]
+    n1, n2 = int(np.sum(s > 0)), int(np.sum(s < 0))
+    runs = 1 + int(np.sum(s[1:] != s[:-1])) if len(s) else 0
+    mu = 2.0 * n1 * n2 / max(1, n1 + n2) + 1.0
+    var = (mu - 1.0) * (mu - 2.0) / max(1, n1 + n2 - 1)
+    return float((runs - mu) / math.sqrt(var)) if var > 0 else None
+
+
+def effective_count(res_list) -> float:
+    """Effective number of independent residuals: their count over the integrated autocorrelation time
+    1 + 2 sum(rho_k), the sum taken over the lags before the pooled autocorrelation first drops to zero."""
+    xs = [np.asarray(x, dtype=float) - np.mean(x) for x in res_list if len(x) > 1]
+    n = sum(len(x) for x in xs)
+    den = sum(float(np.sum(x * x)) for x in xs)
+    if n == 0 or den <= 0.0:
+        return float(n)
+    tau = 1.0
+    for lag in range(1, max(len(x) for x in xs)):
+        num = sum(float(np.sum(x[lag:] * x[:-lag])) for x in xs if len(x) > lag)
+        rho = num / den
+        if rho <= 0.0:
+            break
+        tau += 2.0 * rho
+    return n / tau

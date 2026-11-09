@@ -132,7 +132,7 @@ from .smartpi.integral_guard import (
 )
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.tar_learning.manager import TarLearningManager
-from .smartpi.room_model.feedforward import HoldingTransfer, select_source, static_gain
+from .smartpi.room_model.feedforward import HoldingTransfer, select_source, static_model
 from .smartpi.room_model.manager import RoomModelManager
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
 from .smartpi.timestamp_utils import (
@@ -1770,13 +1770,15 @@ class SmartPI:
 
         if self.phase == SmartPIPhase.STABLE and not resumed_from_off and not startup_first_run:
             stop_deadtime_s, stop_deadtime_reliable = self.dt_est.passive_deadtime(hvac_mode)
+            room_static = static_model(self.room_model, hvac_mode, self._valve_mode_enabled)
             target_temp_filt = self.sp_mgr.filter_setpoint(
                 target_temp=target_temp,
                 current_temp=current_temp,
                 hvac_mode=hvac_mode,
                 a=self.est.a,
                 b=self.est.b,
-                equilibrium_gain=static_gain(self.room_model, hvac_mode, self._valve_mode_enabled),
+                equilibrium_gain=None if room_static is None else room_static[0],
+                equilibrium_free_gain=0.0 if room_static is None else room_static[1],
                 ext_current_temp=ext_current_temp,
                 u_ref=self._committed_on_percent,
                 stop_deadtime_s=stop_deadtime_s,

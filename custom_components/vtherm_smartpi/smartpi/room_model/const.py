@@ -95,14 +95,28 @@ RM_A_RANGE = (2e-5, 1e-2)
 RM_BEQ_RANGE = (1.0 / (3000.0 * H), 1.0 / (3.0 * H))
 RM_ALPHA_MAX = 1.0 / (0.25 * H)
 RM_BETA_RANGE = (1.0 / (2000.0 * H), 1.0 / (3.0 * H))
-# Emitter refinement: the full model is fitted with tau_e at these multiples of
-# the emitter first moment in force and the lowest cost is kept; an optimum at
-# either end of the grid is refused.
-RM_EMITTER_GRID = (0.5, 0.71, 1.0, 1.41, 2.0)
+# Emitter search: the full model is fitted with the emitter first moment on a
+# fixed grid, log-spaced (ratio 60^(1/12), about 1.41) from 60 s, the fit step
+# (a faster emitter is not resolved), to 1 h, a third of the shortest wall time
+# 1 / RM_BETA_RANGE[1] (a slower one would be confused with the walls). The
+# lowest cost is refined by a bounded search in log time between its grid
+# neighbours, to 1 % of the time (in heavy rooms the static loss b_eq moves by a
+# fraction of a percent per second of emitter time).
+RM_EMITTER_GRID_S = tuple(round(60.0 * 60.0 ** (k / 12.0), 1) for k in range(13))
+RM_EMITTER_XATOL = 0.01
+RM_EMITTER_REFINE_MAX = 10
+# The cost profile is significant when its rise above the minimum, in units of
+# the residual variance per effective independent residual, exceeds the 95 %
+# quantile of a chi-square with one degree of freedom: (J - J_min) / J_min x
+# N_eff > RM_EMITTER_CHI2. An optimum at an end of the grid with a
+# significant profile is refused (the emitter lies outside); a profile that
+# is not significant leaves the emitter undetermined, and the refined T_ar
+# value is used when published.
+RM_EMITTER_CHI2 = 3.841
 # A structure whose heating response a lies beyond this factor of the online
 # estimate (either way) is refused: it lumps the walls into the air.
 RM_A_ONLINE_RATIO_MAX = 2.0
-# A structure whose static gain b_eq / a differs from the energy-balance ratio
+# A structure whose static gain b_eq / a differs from the energy-balance slope
 # in force by more than this (|ln ratio|) is refused: its wall dynamics do not
 # explain the measured heat balance.
 RM_EB_AGREE_TOL = math.log(1.05)
@@ -121,6 +135,9 @@ RM_RES_HELDOUT_RMS_MAX = {"precise": 0.12, "coarse": 0.15}
 RM_RES_STRUCT_FLOOR_C = 0.015
 RM_RES_STRUCT_FLOOR_Q = 0.5
 RM_RES_RUNS_Z_MIN = -3.5
+# The runs test is taken on hourly means of the residuals, when there are enough of them
+RM_RES_RUNS_BLOCK_S = 1.0 * H
+RM_RES_RUNS_MIN_BLOCKS = 10
 RM_RES_AC_1H_MAX = 0.4
 RM_RES_CORR_MAX = 0.3
 

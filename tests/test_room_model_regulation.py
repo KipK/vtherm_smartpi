@@ -49,7 +49,7 @@ def _running(holder: dict, publish: bool = True):
             algo.room_model.q = 0.1
             algo.room_model.observer.configure(params, 0.1)
             # Energy-balance ratio in force, 3 % above the fitted b_eq / a: the static part uses it
-            algo.room_model.eb_ratio = EB_RATIO
+            algo.room_model.eb_slope = EB_RATIO
             algo.room_model.eb_day = rsim.day_of(sim.WALL0) - 1
         holder["algo"] = algo
 
