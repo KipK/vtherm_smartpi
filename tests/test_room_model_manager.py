@@ -9,6 +9,7 @@ import pytest
 
 import room_model_sim as rsim
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.smartpi.room_model import energy_balance as eb_mod
 from custom_components.vtherm_smartpi.smartpi.room_model import gates, public
 from custom_components.vtherm_smartpi.smartpi.room_model import manager as manager_mod
 from custom_components.vtherm_smartpi.smartpi.room_model import observer as observer_mod
@@ -24,6 +25,7 @@ DIAG_KEYS = {
     "status", "tracking", "walls", "a", "b_eq", "b_air", "b_wall", "forecast_c", "forecast_error_c",
     "forecast_checks", "unchanged_temperature_error_c", "wall_extra_power_percent", "identified_day",
     "last_identification_day", "last_refusal_reason", "sensor_resolution_c", "last_error",
+    "energy_balance_ratio", "energy_balance_day", "energy_balance_refusal_reason",
 }
 
 
@@ -70,7 +72,11 @@ def _drive(m: RoomModelManager, data: dict, plant: dict, t_from: float, t_to: fl
 @pytest.fixture(scope="module")
 def mass_manager():
     data = rsim.simulate(rsim.MASS, DAYS)
-    m = RoomModelManager("room", "UTC", _tar(data))
+    tar = _tar(data)
+    # The refined first-order part of the emitter is known (600 s of the 720 s first moment): the fitted
+    # static gain is sensitive to the emitter shape and must agree with the energy balance within 5 %.
+    tar.te_pub = {"value": rsim.MASS["tau_e"]}
+    m = RoomModelManager("room", "UTC", tar)
     _drive(m, data, rsim.MASS, rsim.T0 + 600.0, rsim.T0 + DAYS * 86400.0)
     return m, data
 
@@ -80,7 +86,14 @@ def test_end_to_end_identification_and_observation(mass_manager) -> None:
     outcomes = [(r["day"] - D0, r["why"], r["struct"]) for r in m.records]
     assert outcomes[0] == (0, gates.WHY_HISTORY, None)
     assert (3, gates.WHY_NO_PREVIOUS, None) in outcomes
-    assert all(s == "full" for d, _, s in outcomes if d >= 5)
+    # The energy balance needs 3 whole days and the 22 h before them: it qualifies from the fifth day on.
+    # Measured: its ratio goes from +3.8 % to +1.3 % of the true b_eq / a while the walls settle, the fits
+    # stay 2-3 % below it; the fifth day's candidate is 5.2 % off and refused, the later ones are published.
+    eb = [(r["day"] - D0, r["eb"]["reason"]) for r in m.records]
+    assert all(why == "history" for d, why in eb if d < 4)
+    assert all(why is None for d, why in eb if d >= 4)
+    assert all(why in (None, gates.WHY_EB) for d, why, _ in outcomes if d == 5)
+    assert all(s == "full" for d, _, s in outcomes if d >= 6)
     diag = m.diagnostics()
     assert set(diag) == DIAG_KEYS
     assert diag["status"] == "identified"
@@ -99,6 +112,10 @@ def test_end_to_end_identification_and_observation(mass_manager) -> None:
     assert diag["identified_day"] == diag["last_identification_day"]
     assert diag["last_refusal_reason"] is None
     assert diag["sensor_resolution_c"] == 0.01
+    p_true = (p["alpha"] - p["c"]) / p["a"]
+    assert diag["energy_balance_ratio"] == pytest.approx(p_true, rel=0.03)
+    assert diag["energy_balance_day"] == diag["last_identification_day"]
+    assert diag["energy_balance_refusal_reason"] is None
     json.dumps(diag)
 
 
@@ -116,6 +133,50 @@ def test_diagnostics_hold_plain_values_only(mass_manager) -> None:
     assert public.status(None, gates.WHY_HEAT, True) == "not identified: too little heating during the nights"
     assert public.status(None, gates.WHY_NO_PREVIOUS, True) == "learning"
     assert public.status("reduced", None, True) == "simple model"
+    eb_codes = {v for k, v in vars(eb_mod).items() if k.startswith("REASON_")}
+    for code in eb_codes | {gates.WHY_FAILED}:
+        assert public.energy_balance_reason(code) not in eb_codes | codes
+    assert public.energy_balance_reason(None) is None
+    assert public.reason(gates.WHY_EB) == "the model's heat loss disagrees with the measured heat balance"
+
+
+def test_energy_balance_in_force_keeps_the_last_qualified_ratio() -> None:
+    m = RoomModelManager("x", "UTC", None)
+    diag = m.diagnostics()
+    assert (diag["energy_balance_ratio"], diag["energy_balance_day"], diag["energy_balance_refusal_reason"]) == \
+        (None, None, None)
+    # A refusal before any qualified ratio: no ratio, the plain reason
+    m.apply_energy_balance(D0, {"value": None, "reason": "history", "ratio": None})
+    assert m.eb_ratio is None
+    assert m.diagnostics()["energy_balance_refusal_reason"] == "not enough recorded days yet"
+    # A qualified ratio comes into force with its day
+    m.apply_energy_balance(D0 + 1, {"value": 0.0321234567, "reason": None, "ratio": 0.0321234567})
+    diag = m.diagnostics()
+    assert diag["energy_balance_ratio"] == 0.032123
+    assert diag["energy_balance_day"] == "2026-01-06"
+    assert diag["energy_balance_refusal_reason"] is None
+    # A refused day keeps the ratio in force and says why; so does a failed computation
+    m.apply_energy_balance(D0 + 2, {"value": None, "reason": "day spread", "ratio": 0.04})
+    assert (m.eb_ratio, m.eb_day) == (0.0321234567, D0 + 1)
+    assert m.diagnostics()["energy_balance_refusal_reason"] == \
+        "the heating need differs too much from one day to the next"
+    m.apply_energy_balance(D0 + 3, None)
+    assert (m.eb_ratio, m.eb_day) == (0.0321234567, D0 + 1)
+    assert m.diagnostics()["energy_balance_refusal_reason"] == "computation failed"
+    # Persistence
+    state = json.loads(json.dumps(m.save_state()))
+    m2 = RoomModelManager("x", "UTC", None)
+    m2.load_state(state)
+    assert (m2.eb_ratio, m2.eb_day, m2.eb_reason) == (m.eb_ratio, m.eb_day, m.eb_reason)
+    # A state saved without it, or with an invalid ratio, has none
+    for bad in (None, {"ratio": "x", "day": D0}, {"ratio": -0.01, "day": D0}, {"ratio": float("nan"), "day": D0},
+                {"ratio": 0.03, "day": None}):
+        m3 = RoomModelManager("x", "UTC", None)
+        m3.load_state(dict(state, energy_balance=bad))
+        assert m3.eb_ratio is None and m3.eb_day is None
+    # A reset forgets it
+    m2.reset()
+    assert (m2.eb_ratio, m2.eb_day, m2.eb_reason) == (None, None, None)
 
 
 def test_persistence_round_trip(mass_manager) -> None:
@@ -127,8 +188,10 @@ def test_persistence_round_trip(mass_manager) -> None:
     assert m2.observer.x == m.observer.x
     assert m2.records == m.records and m2.windows == m.windows
     d1, d2 = m.diagnostics(), m2.diagnostics()
-    for k in ("status", "a", "b_eq", "b_air", "b_wall", "forecast_error_c", "identified_day", "walls"):
+    for k in ("status", "a", "b_eq", "b_air", "b_wall", "forecast_error_c", "identified_day", "walls",
+              "energy_balance_ratio", "energy_balance_day", "energy_balance_refusal_reason"):
         assert d1[k] == d2[k]
+    assert (m2.eb_ratio, m2.eb_day, m2.eb_reason) == (m.eb_ratio, m.eb_day, m.eb_reason)
     # After a short downtime the observer resumes its state
     t_end = rsim.T0 + DAYS * 86400.0
     t_back = m.observer.t + 900.0
@@ -208,6 +271,8 @@ async def test_failed_computation_and_missing_packages(monkeypatch) -> None:
     diag = m.diagnostics()
     assert diag["status"] == "not identified: computation failed"
     assert diag["last_error"] == "bad fit"
+    assert diag["energy_balance_ratio"] is None
+    assert diag["energy_balance_refusal_reason"] == "computation failed"
     # Once a day only
     await m.async_run(_SyncHass(), now=now + 3600.0)
     assert len(m.records) == 1

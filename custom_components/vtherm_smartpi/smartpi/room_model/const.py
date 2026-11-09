@@ -42,9 +42,6 @@ RM_R_PRECISE = 0.04 ** 2 / 12.0 + 0.01 ** 2 / 12.0
 RM_RESUME_MAX_S = 3.0 * H
 # The observer is settling during this time after a restart at equilibrium.
 RM_SETTLE_S = 3.0 * H
-# After an open window the wall state is not shown and the innovation checks
-# start over during this time.
-RM_WINDOW_HOLD_S = 3.0 * H
 # Health checks
 RM_INNOV_EMA = 0.05          # weight of a new correction in the innovation averages
 RM_INNOV_BIAS_MAX = 2.0      # |mean normalised innovation|
@@ -70,6 +67,14 @@ RM_NIGHT_D_DEV_C_H = 0.08
 RM_NIGHTS_KEEP = 14
 
 # ---------------------------------------------------------------------------
+# Feed-forward
+# ---------------------------------------------------------------------------
+# A change of the wall term in force (switched on, switched off, new wall
+# parameters) is blended linearly over this time from the wall part applied
+# last; it is never moved into the integral.
+RM_WALL_FADE_S = 0.5 * H
+
+# ---------------------------------------------------------------------------
 # Identification
 # ---------------------------------------------------------------------------
 RM_FIT_STEP_S = 60.0
@@ -80,9 +85,6 @@ RM_MIN_HEAT_S = 3600.0       # full-power equivalent heating over the fit period
 RM_MIN_DELTA_C = 3.0         # mean indoor-outdoor difference over the fit periods
 RM_EVENT_WEIGHT_CAP_S = 1800.0
 RM_CHECK_STEP_S = 600.0      # residual checks on a 10 min grid
-# Soft prior on the static gain b_eq / a from the energy balance
-RM_PRIOR_SIG_Y = 0.02
-RM_PRIOR_SIG_R = 0.05
 # Search domain (per second)
 RM_TAU_AIR_GRID_H = (0.5, 1.2, 3.0, 7.0, 16.0, 40.0, 100.0, 250.0)
 RM_TAU_WALL_GRID_H = (2.0, 6.0, 20.0, 60.0, 200.0, 600.0)
@@ -100,6 +102,10 @@ RM_EMITTER_GRID = (0.5, 0.71, 1.0, 1.41, 2.0)
 # A structure whose heating response a lies beyond this factor of the online
 # estimate (either way) is refused: it lumps the walls into the air.
 RM_A_ONLINE_RATIO_MAX = 2.0
+# A structure whose static gain b_eq / a differs from the energy-balance ratio
+# in force by more than this (|ln ratio|) is refused: its wall dynamics do not
+# explain the measured heat balance.
+RM_EB_AGREE_TOL = math.log(1.05)
 # Wall identified: the wall carries at least this share of the air loss
 RM_WALL_SHARE_MIN = 0.1
 # The full model must beat the reduced one on the held-out data by this factor

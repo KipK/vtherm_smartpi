@@ -7,6 +7,12 @@ with each applied command, schedules the daily identification (jobs.py, run in a
 the history recorded by the T_ar learning), publishes the qualified
 parameters, and holds the persistence and the diagnostics.
 
+Energy balance: each daily job also computes the energy-balance ratio b_eq / a
+of the whole days before it (energy_balance.py). A qualified ratio comes into
+force; a refused day keeps the ratio in force and records why. The ratio in
+force is the static gain of the feed-forward once a model is published, and
+the reference that the fits must agree with to be published.
+
 Emitter: the first moment of the emitter response is the HEAT dead time in
 force (learned T_ar or bootstrap); its first-order part tau_e is the refined
 T_ar value when published (else the whole first moment), the delay L the rest.
@@ -21,6 +27,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import math
 import time
 from typing import Any
 
@@ -104,6 +111,11 @@ class RoomModelManager:
         self.published_day: int | None = None
         self.wall_code: str | None = None
         self.last_error: str | None = None
+        # Energy-balance ratio in force (b_eq / a units) and the day it was computed, None before a first
+        # qualified ratio; why the last computation gave no new value, None when it qualified.
+        self.eb_ratio: float | None = None
+        self.eb_day: int | None = None
+        self.eb_reason: str | None = None
 
     def reset(self) -> None:
         """Forget the identified parameters and the observer state."""
@@ -194,6 +206,7 @@ class RoomModelManager:
         snap["a_per_min"] = self._a_per_min
         snap["excluded_nights"] = self.observer.disturbed_nights()
         snap["prev"] = self.windows.get(str(day - ID_WIN_DAYS))
+        snap["eb"] = self.eb_ratio
         return snap
 
     async def async_run(self, hass, now: float | None = None) -> None:
@@ -222,15 +235,33 @@ class RoomModelManager:
         finally:
             self._running = False
 
+    def apply_energy_balance(self, day: int, eb: dict | None) -> None:
+        """Take the energy balance of a day: a qualified ratio comes into force, a refused one keeps the ratio
+        in force (eb None: the computation failed)."""
+        if not eb:
+            self.eb_reason = gates.WHY_FAILED
+            return
+        value = eb.get("value")
+        try:
+            value = None if value is None else float(value)
+        except (TypeError, ValueError):
+            value = None
+        if value is not None and math.isfinite(value) and value > 0.0:
+            self.eb_ratio, self.eb_day, self.eb_reason = value, int(day), None
+            return
+        self.eb_reason = eb.get("reason") or gates.WHY_FAILED
+
     def _apply(self, rec: dict) -> None:
         day = int(rec["day"])
+        self.apply_energy_balance(day, rec.get("eb"))
         self.windows[str(day)] = {k: rec.get(k) for k in ("day", "why", "q", "precise", "full", "reduced")}
         for k in sorted(self.windows, key=int)[:-RM_MAX_WINDOWS]:
             del self.windows[k]
         dec = rec.get("decision") or {}
+        eb = rec.get("eb") or {}
         self.records.append({"day": day, "why": dec.get("why"), "struct": dec.get("struct"), "wall": dec.get("wall"),
-                             "prior": (rec.get("prior") or {}).get("value"), "held": rec.get("held"),
-                             "excluded_nights": rec.get("excluded_nights")})
+                             "eb": {"ratio": eb.get("ratio"), "reason": eb.get("reason")},
+                             "held": rec.get("held"), "excluded_nights": rec.get("excluded_nights")})
         del self.records[:-RM_MAX_RECORDS]
         if dec.get("candidate") is None:
             if self.params is None:
@@ -278,6 +309,9 @@ class RoomModelManager:
             "identified_day": _date(self.published_day) if p else None,
             "last_identification_day": _date(last["day"]) if last else None,
             "last_refusal_reason": public.reason(last_why),
+            "energy_balance_ratio": _r(self.eb_ratio, 6),
+            "energy_balance_day": _date(self.eb_day),
+            "energy_balance_refusal_reason": public.energy_balance_reason(self.eb_reason),
             "sensor_resolution_c": _r(self.q, 3),
             "last_error": self.last_error,
         }
@@ -297,7 +331,25 @@ class RoomModelManager:
             "candidates": self.candidates,
             "records": self.records,
             "observer": self.observer.to_dict(),
+            "energy_balance": {"ratio": self.eb_ratio, "day": self.eb_day, "reason": self.eb_reason},
         }
+
+    def _load_energy_balance(self, data: Any) -> None:
+        """Restore the energy-balance ratio in force; an invalid one is dropped (a state without it has none)."""
+        self.eb_ratio = self.eb_day = self.eb_reason = None
+        if not isinstance(data, dict):
+            return
+        reason = data.get("reason")
+        self.eb_reason = reason if isinstance(reason, str) else None
+        try:
+            ratio, day = data.get("ratio"), data.get("day")
+            if ratio is None or day is None:
+                return
+            ratio, day = float(ratio), int(day)
+        except (TypeError, ValueError):
+            return
+        if math.isfinite(ratio) and ratio > 0.0:
+            self.eb_ratio, self.eb_day = ratio, day
 
     def load_state(self, state: dict[str, Any] | None) -> None:
         if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
@@ -312,6 +364,7 @@ class RoomModelManager:
             self.windows = {str(k): dict(v) for k, v in (state.get("windows") or {}).items()}
             self.candidates = [dict(c) for c in state.get("candidates") or []]
             self.records = [dict(r) for r in state.get("records") or []]
+            self._load_energy_balance(state.get("energy_balance"))
             self.observer = RoomObserver(self._clock)
             self.observer.configure(self.params, self.q)
             self.observer.load(state.get("observer"))

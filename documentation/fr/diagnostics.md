@@ -42,7 +42,7 @@ Le bloc `history` contient ces dix-huit séries :
 | `model.a` | Gain de chauffe appris |
 | `model.b` | Coefficient de déperdition appris |
 | `feedforward.source` | Source de la puissance de maintien en vigueur, comme dans `live.feedforward.source` |
-| `feedforward.wall_power_percent` | Part des murs du feed-forward, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` sauf si la source est le modèle de pièce avec murs |
+| `feedforward.wall_power_percent` | Part des murs du feed-forward appliquée, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` lorsqu'aucune part des murs n'est appliquée |
 | `room_model.a` | Réponse de chauffe du modèle de pièce, dans les unités de `model.a` ; `null` avant une publication |
 | `room_model.b_eq` | Déperdition statique du modèle de pièce, dans les unités de `model.b` ; `null` avant une publication |
 | `room_model.forecast_error_1h_c` | Racine de l'erreur quadratique moyenne des prévisions à 1 h sur les 7 derniers jours (°C) |
@@ -147,15 +147,15 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 
 ### Modèle de pièce
 
-`room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Une fois publié, il donne la puissance de maintien du feed-forward en chauffage, affichée sous `feedforward`.
+`room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Une fois publié, et une fois un bilan thermique en vigueur, il donne la puissance de maintien du feed-forward en chauffage, affichée sous `feedforward`.
 
 | Champ | Signification |
 |---|---|
 | `status` | `learning`, `identified` (modèle avec murs), `simple model` (modèle sans murs), ou `not identified: ` suivi de la raison, en anglais (par exemple `not identified: too little heating during the nights`) |
-| `tracking` | État du suivi de la pièce : `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `recovering after an open window` (3 heures après la fermeture de la fenêtre), `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` ou `wall state implausible` |
+| `tracking` | État du suivi de la pièce : `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` ou `wall state implausible` |
 | `walls` | `identified`, ou la raison pour laquelle les murs ne sont pas dans le modèle : `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model` ; `null` avant tout résultat |
 | `a` | Réponse de chauffe à pleine puissance, dans les unités de `model.a` (°C par minute) |
-| `b_eq` | Déperdition statique, dans les unités de `model.b` (par minute) : la perte qui fixe la puissance de maintien |
+| `b_eq` | Déperdition statique du modèle, dans les unités de `model.b` (par minute). La puissance de maintien ne l'utilise pas : sa partie statique vient de `energy_balance_ratio`, auquel `b_eq / a` doit correspondre à 5 % près pour qu'il y ait une publication |
 | `b_air` | Taux de perte totale de l'air, vers l'extérieur et vers les murs (par minute) ; `null` pour le modèle simple |
 | `b_wall` | Part en régime établi de cette perte qui passe par les murs (par minute), avec `b_eq` = `b_air` − `b_wall` ; `null` pour le modèle simple |
 | `forecast_c` | Température prévue de la pièce à `1h`, `2h`, `6h` et `12h` si la puissance de chauffe actuelle était maintenue (°C) ; `null` tant que le suivi ne tourne pas |
@@ -165,7 +165,10 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `wall_extra_power_percent` | Puissance supplémentaire que les murs absorbent actuellement au-delà de leur part en régime établi, en % de la pleine puissance (négative lorsqu'ils restituent de la chaleur) ; `null` sans murs identifiés, sans sonde précise ou tant que le suivi n'est pas `ok` |
 | `identified_day` | Jour des valeurs en usage, `null` avant une publication |
 | `last_identification_day` | Jour de la dernière identification quotidienne |
-| `last_refusal_reason` | Raison pour laquelle la dernière identification quotidienne n'a rien publié (par exemple `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature` ou `the heating response differs too much from the one measured by the regulation`), `null` lorsqu'elle a publié |
+| `last_refusal_reason` | Raison pour laquelle la dernière identification quotidienne n'a rien publié (par exemple `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation` ou `the model's heat loss disagrees with the measured heat balance`), `null` lorsqu'elle a publié |
+| `energy_balance_ratio` | Rapport du bilan thermique en vigueur, calculé chaque jour sur les 3 journées entières qui précèdent le jour : la puissance nécessaire par °C d'écart intérieur-extérieur, dans les unités de `model.b / model.a`. Une fois le modèle publié, c'est la partie statique de la puissance de maintien, `energy_balance_ratio` × (consigne − température extérieure). Un jour dont le bilan thermique est refusé garde la valeur précédente ; `null` avant une première valeur acceptée |
+| `energy_balance_day` | Jour où la valeur en vigueur a été calculée, `null` avant une première valeur acceptée |
+| `energy_balance_refusal_reason` | Raison pour laquelle le dernier bilan thermique quotidien n'a donné aucune nouvelle valeur (`not enough recorded days yet`, `too much missing or invalid data`, `heating response not known yet`, `indoor-outdoor temperature difference too small`, `too little heating`, `too little heating on one of the days`, `the heating need differs too much from one day to the next`, `the heat balance changes too much with the hours it covers`, `value out of the plausible range` ou `computation failed`), `null` lorsqu'il en a donné une |
 | `sensor_resolution_c` | Plus petit pas de la sonde de température observé dans l'historique enregistré (°C) |
 | `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |
 
@@ -176,8 +179,8 @@ feed-forward structurel) :
 
 | Champ | Signification |
 |---|---|
-| `source` | `learned model` (le modèle A/B, `model.b / model.a`), `room model (air and walls)` (modèle publié avec murs, suivi `ok` : partie statique plus la puissance supplémentaire des murs), `room model (static part)` (modèle publié avec murs alors que le suivi n'est pas `ok` : partie statique seule) ou `room model (simple)` (modèle publié sans murs) |
-| `wall_power_percent` | Puissance supplémentaire des murs incluse dans la puissance de maintien, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` sauf si `source` vaut `room model (air and walls)` |
+| `source` | `learned model` (le modèle A/B, `model.b / model.a`), `room model (air and walls)` (modèle publié avec murs, suivi `ok` : partie statique plus la puissance supplémentaire des murs), `room model (static part)` (modèle publié avec murs alors que le suivi n'est pas `ok` : partie statique seule) ou `room model (simple)` (modèle publié sans murs). La partie statique d'une source de modèle de pièce vaut `room_model.energy_balance_ratio` × (consigne − température extérieure) ; tant qu'aucun bilan thermique n'est en vigueur, la source reste `learned model` |
+| `wall_power_percent` | Puissance supplémentaire des murs appliquée dans la puissance de maintien, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur). Lorsque le terme des murs démarre, s'arrête ou change avec une nouvelle publication, la valeur appliquée passe en 30 minutes de sa dernière valeur à la nouvelle ; elle peut donc différer de `room_model.wall_extra_power_percent` et rester non nulle pendant 30 minutes après que `source` a quitté `room model (air and walls)` ; `null` lorsqu'aucune part des murs n'est appliquée |
 
 Tant qu'une source du modèle de pièce est en vigueur, `analysis.feedforward.ff2_frozen` vaut
 `true` avec `ff2_freeze_reason` `room_model`, et `u_ff2` vaut `0`.

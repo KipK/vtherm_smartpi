@@ -5,6 +5,7 @@ values that a user can read without knowing the methods.
 """
 from __future__ import annotations
 
+from . import energy_balance as eb
 from . import gates, observer
 from .const import STRUCT_FULL
 
@@ -32,8 +33,23 @@ _REASONS = {
     gates.WHY_FAILED: "computation failed",
     gates.WHY_EMITTER_EDGE: "the heating response delay does not match the measured temperature",
     gates.WHY_A_ONLINE: "the heating response differs too much from the one measured by the regulation",
+    gates.WHY_EB: "the model's heat loss disagrees with the measured heat balance",
     REASON_VALVE: "valve heaters are not supported yet",
     REASON_DEPENDENCIES: "numerical libraries unavailable",
+}
+
+# Why the daily heat balance gave no new value
+_EB_REASONS = {
+    eb.REASON_HISTORY: "not enough recorded days yet",
+    eb.REASON_EXCLUDED: "too much missing or invalid data",
+    eb.REASON_NO_A: "heating response not known yet",
+    eb.REASON_DELTA: "indoor-outdoor temperature difference too small",
+    eb.REASON_DUTY: "too little heating",
+    eb.REASON_DAY_DUTY: "too little heating on one of the days",
+    eb.REASON_DAY_SPREAD: "the heating need differs too much from one day to the next",
+    eb.REASON_SPREAD: "the heat balance changes too much with the hours it covers",
+    eb.REASON_RANGE: "value out of the plausible range",
+    gates.WHY_FAILED: "computation failed",
 }
 
 # Learning outcomes that are only a matter of time
@@ -52,7 +68,6 @@ _TRACKING = {
     observer.HEALTH_WAITING: "waiting for measurements",
     observer.HEALTH_PAUSED: "paused (SmartPI not heating or not in control)",
     observer.HEALTH_SETTLING: "settling after a restart",
-    observer.HEALTH_WINDOW: "recovering after an open window",
     observer.HEALTH_BIAS: "measurements drift away from the model",
     observer.HEALTH_SPREAD: "measurements inconsistent with the model",
     observer.HEALTH_UNCERTAIN: "temperature estimate uncertain",
@@ -66,6 +81,13 @@ def reason(code: str | None) -> str | None:
     if code is None:
         return None
     return _REASONS.get(code, code)
+
+
+def energy_balance_reason(code: str | None) -> str | None:
+    """Plain reason why the daily heat balance gave no new value; an unknown code is shown as is."""
+    if code is None:
+        return None
+    return _EB_REASONS.get(code, code)
 
 
 def status(struct: str | None, last_why: str | None, attempted: bool) -> str:

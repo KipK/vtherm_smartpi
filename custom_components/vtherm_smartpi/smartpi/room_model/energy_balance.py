@@ -1,6 +1,9 @@
 """Static gain b_eq / a from a multi-day energy balance (pure Python).
 
-Used only as a soft prior of the room model identification. Over a window of
+Computed once a day by the room model job over the EB_WINDOW_DAYS whole local
+days ending at the last local midnight. A qualified ratio is the static gain
+of the room model feed-forward and the reference its fits must agree with; a
+refused day keeps the previous qualified ratio (manager.py). Over a window of
 whole days, the room's energy balance in the units of the model reads
 
     a * mean(u) = b_eq * mean(Ta - Text) + dTa / H + (wall storage) - mean(gains)
@@ -50,6 +53,29 @@ REASON_DAY_DUTY = "day duty"
 REASON_DAY_SPREAD = "day spread"
 REASON_SPREAD = "spread"
 REASON_RANGE = "range"
+
+
+def signals(snap: dict) -> dict:
+    """Recorded signals of a job snapshot in the form of the energy balance."""
+    if snap.get("pw") is not None:
+        heat_t, heat_v, init = list(snap["pw"][0]), list(snap["pw"][1]), 0.0
+    else:
+        heat_t, heat_v, init = heater_timeline(snap["on"], snap["off"])
+    return {"heat_t": heat_t, "heat_v": heat_v, "heat_init": init, "temp_t": snap["pub_t"], "temp_v": snap["pub_v"],
+            "ext_t": snap["ext_t"], "ext_v": snap["ext_v"], "first_t": snap["first_t"], "last_t": snap["last_t"],
+            "invalid": [tuple(g) for g in snap["gaps"]]}
+
+
+def daily(snap: dict, clock, day: int) -> dict[str, Any]:
+    """Energy balance of the EB_WINDOW_DAYS whole local days before `day` (ending at its local midnight).
+
+    Returns {"value", "reason", "ratio"}: value is the qualified ratio (None when refused), reason the refusal
+    code (None when it qualifies), ratio the computed ratio whatever the verdict.
+    """
+    rec = static_gain(signals(snap), clock.at(day, 0.0), snap.get("a_per_min"))
+    reason = rec.get("reason")
+    ratio = rec.get("value")
+    return {"value": ratio if reason is None else None, "reason": reason, "ratio": ratio}
 
 
 def heater_timeline(on: list, off: list) -> tuple[list, list, float]:

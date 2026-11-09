@@ -376,42 +376,92 @@ $T_{ext}$ est la dernière température extérieure valide reçue par SmartPI. L
 #### Puissance de maintien issue du modèle de pièce
 
 En HEAT, avec des chauffages pilotés par cycles PWM, un modèle de pièce publié remplace
-$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`). Avec $b_{eq}$ et $a$ du modèle
-publié, et $\delta_{wall}/a$ la puissance supplémentaire des murs de son suivi
-(`room_model.wall_extra_power_percent`, avec ses deux signes) :
+$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`) dès qu'un rapport de bilan énergétique
+$r_{EB}$ est en vigueur (`room_model.energy_balance_ratio`). Avec $\delta_{wall}/a$ la
+puissance supplémentaire des murs du suivi (`room_model.wall_extra_power_percent`, avec ses
+deux signes) :
 
 | Modèle de pièce | Source (`feedforward.source`) | $u_{ff1}$ |
 |---|---|---|
-| murs identifiés, suivi `ok` | `room model (air and walls)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}) + \frac{\delta_{wall}}{a}, 0, 1)$ |
-| murs identifiés, suivi non `ok` (en pause, en stabilisation, après une fenêtre, dérive, ...) | `room model (static part)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}), 0, 1)$ |
-| modèle simple | `room model (simple)` | $clamp(\frac{b_{eq}}{a}(SP - T_{ext}), 0, 1)$ |
+| murs identifiés, suivi `ok` | `room model (air and walls)` | $clamp(r_{EB}(SP - T_{ext}) + \frac{\delta_{wall}}{a}, 0, 1)$ |
+| murs identifiés, suivi non `ok` (en pause, en stabilisation, dérive, ...) | `room model (static part)` | $clamp(r_{EB}(SP - T_{ext}), 0, 1)$ |
+| modèle simple | `room model (simple)` | $clamp(r_{EB}(SP - T_{ext}), 0, 1)$ |
+| publié, pas encore de $r_{EB}$ en vigueur | `learned model` | la loi apprise ci-dessus, inchangée, sans part des murs |
 | rien de publié, COOL, mode vanne | `learned model` | la loi apprise ci-dessus, inchangée |
 
-$b_{eq}/a$ est borné à 3, comme $k_{ff}$. Une source de modèle de pièce s'applique à
+Le gain statique est $r_{EB}$, jamais le $b_{eq}/a$ ajusté. Avec des murs lourds, le
+$b_{eq} = b_{air} - b_{wall}$ ajusté est une petite différence de deux termes plus grands, et
+il se déplace avec le temps de réponse de l'émetteur utilisé par l'ajustement (d'une fraction
+de pourcent par seconde de temps d'émetteur) ; le bilan énergétique sur plusieurs jours n'en
+dépend pas. L'ajustement donne la dynamique des murs, $\delta_{wall}/a$. $r_{EB}$ seul, sans
+modèle publié, n'est jamais utilisé : sans la part des murs, il donne une mauvaise puissance de
+maintien dans les pièces lourdes, basse après un abaissement de consigne et haute lorsque les
+murs restituent de la chaleur.
+
+**Bilan énergétique.** La tâche du modèle de pièce calcule, une fois par jour après 08:00 avec
+l'identification, sur les 3 journées locales entières se terminant à la dernière minuit locale
+(intervalles de 10 min de l'historique de T_ar, intervalles invalides exclus) :
+
+$$ r_{EB} = \frac{\sum u \, \Delta t - \Delta T_{in} / a}{\sum (T_{in} - T_{ext}) \, \Delta t} $$
+
+avec $u$ la puissance appliquée équivalente en chaleur, $\Delta T_{in}$ la variation de la
+température intérieure sur chaque segment valide (stockage d'air retiré avec le $a$ en ligne).
+Le même bilan est calculé sur les 12 fenêtres décalées de 0, 2, ..., 22 h et sur chacun des 3
+jours. La valeur est refusée lorsque la moyenne de $T_{in} - T_{ext}$ est inférieure à 6 °C, la
+moyenne du taux de chauffe inférieure à 0,05 ou celui d'un jour inférieur à 0,02, la part exclue
+supérieure à 20 %, la dispersion des fenêtres décalées (minimum et maximum écartés, rapportée à
+la médiane) supérieure à 3 %, la dispersion des 3 rapports journaliers
+$\overline{u}/\overline{(T_{in} - T_{ext})}$ (max − min rapporté à la médiane) supérieure à 5 %,
+ou la valeur hors de $]0, 3]$. Un jour refusé garde la valeur qualifiée précédente
+(`room_model.energy_balance_refusal_reason` indique pourquoi) ; le rapport en vigueur et son
+jour sont sauvegardés avec le modèle de pièce.
+
+**Accord avec le bilan énergétique.** Un candidat de l'identification quotidienne (modèle avec
+murs ou modèle simple) n'est publié que si son propre $b_{eq}/a$ concorde avec le $r_{EB}$ en
+vigueur à 5 % près ($|\ln(\frac{b_{eq}/a}{r_{EB}})| \le \ln 1.05$) ; sinon le jour ne publie
+rien (`the model's heat loss disagrees with the measured heat balance`). Le rapport en vigueur
+est celui calculé par la même tâche lorsqu'il est qualifié, sinon le précédent. Sans rapport
+qualifié, il n'y a pas de tel contrôle, mais le modèle de pièce ne donne pas non plus de
+puissance de maintien. L'ajustement lui-même n'utilise pas le bilan énergétique.
+
+$r_{EB}$ est borné à 3, comme $k_{ff}$. Une source de modèle de pièce s'applique à
 plein poids (`warmup_scale = 1`) et n'utilise pas la perturbation non mesurée $d$ du
 suivi. La partie statique suit la consigne ; la partie murs suit l'air suivi. Avec l'air
 à la consigne, $u_{ff1} = (b_{air}(SP - T_{ext}) - w)/a$, avec $b_{air}$ le taux de perte
 totale de l'air et $w$ l'état des murs.
 
-**Transfert sans à-coup.** Une variation discrète de $u_{ff1}$ passe dans l'intégrale,
+**Transfert sans à-coup de la part statique.** Une variation discrète de la part statique passe dans l'intégrale,
 de sorte que $u_{ff} + K_i \cdot I$ ne saute pas :
 
 $$ I \leftarrow clamp\left(I - \frac{\Delta u_{ff}}{K_i}, -\frac{2}{K_i}, \frac{2}{K_i}\right) $$
 
-Les variations discrètes sont un changement de source (y compris le terme des murs activé
-ou désactivé par le suivi, et le passage du poids du warm-up appris au plein poids) et une
-nouvelle publication quotidienne des paramètres. $\Delta u_{ff}$ est le nouveau FF1 + FF2
-moins l'ancien, tous deux à la consigne et à la température extérieure courantes ; la source
-de modèle de pièce sortante conserve le terme des murs du calcul précédent. L'évolution
-continue du terme des murs, de la consigne et de la température extérieure n'est pas
-transférée : c'est l'action du feed-forward. L'évolution propre de la source apprise
-(rampe de warm-up, nouveaux `a`/`b`) n'est jamais transférée non plus. Le transfert est
-appliqué dans le calcul, avant le PI, et peut traverser zéro ; il n'est limité que par les
-bornes de l'intégrale. La saturation et l'anti-windup ne changent pas : ils agissent sur la
-commande totale. Les transactions de trim FF de `FFTrimCoordinator` ne sont pas utilisées
-pour ce transfert : elles ne s'exécutent qu'à une frontière de cycle de deadband stricte et
-ramènent l'intégrale vers zéro, alors qu'un changement de source intervient à tout moment
-et dans les deux sens.
+Les variations discrètes de la part statique sont un changement entre la source apprise et une source de modèle de pièce
+(y compris le passage du poids du warm-up appris au plein poids), un changement de structure du modèle (modèle simple et
+modèle avec murs), une nouvelle publication quotidienne des paramètres et un nouveau
+$r_{EB}$ en vigueur. $\Delta u_{ff}$ est la nouvelle part statique
+moins l'ancienne (le FF1 + FF2 appris pour la source apprise), tous deux à la consigne et à la température extérieure
+courantes, et tous deux avec la part des murs appliquée à ce calcul, dans la borne $[0, 1]$. Le passage entre
+`room model (air and walls)` et `room model (static part)` ne change pas la part statique : rien n'est transféré.
+L'évolution continue de la consigne et de la température extérieure n'est pas transférée : c'est l'action du
+feed-forward. L'évolution propre de la source apprise (rampe de warm-up, nouveaux `a`/`b`) n'est jamais transférée non
+plus. Le transfert est appliqué dans le calcul, avant le PI, et peut traverser zéro ; il n'est limité que par les bornes
+de l'intégrale. La saturation et l'anti-windup ne changent pas : ils agissent sur la commande totale. Les transactions de trim FF de `FFTrimCoordinator` ne sont pas utilisées pour ce transfert :
+elles ne s'exécutent qu'à une frontière de cycle de deadband stricte et ramènent l'intégrale vers zéro, alors qu'un
+changement de source intervient à tout moment et dans les deux sens.
+
+**Fondu de la part des murs.** La part des murs n'est jamais déplacée dans l'intégrale. Lorsque le terme des murs en
+vigueur change de façon discrète (activé lorsque le suivi devient `ok`, désactivé lorsqu'il n'est plus `ok` ou lorsque la
+source apprise reprend la main, une publication qui change les paramètres des murs ; un nouveau $r_{EB}$ seul ne démarre pas de fondu), la part des murs appliquée passe
+linéairement sur `RM_WALL_FADE_S` = 30 min de la valeur appliquée en dernier à sa cible. La cible est le
+$\delta_{wall}/a$ courant d'un suivi `ok`, ou 0 lorsque le terme des murs est désactivé ; un fondu de sortie ne relit
+jamais le suivi. Une nouvelle discontinuité pendant un fondu en démarre un nouveau à partir de la valeur appliquée à cet
+instant, de sorte qu'un suivi qui alterne entre `ok` et non `ok` ne déplace pas l'intégrale et ne fait pas sauter la commande.
+Lorsque la source apprise reprend la main en chauffage, un fondu de sortie se poursuit sur la puissance de maintien
+apprise ; hors chauffage, la part des murs est abandonnée. Hors fondu, la part des murs appliquée suit le
+$\delta_{wall}/a$ courant. La puissance de maintien reste bornée à $[0, 1]$, et `feedforward.wall_power_percent` affiche la
+part des murs appliquée.
+
+**Fenêtre ouverte.** Il n'y a aucun maintien après une fenêtre. Pendant qu'elle est ouverte, le suivi cale l'air sur la mesure et y entraîne les murs ; la source est `room model (static part)` et la part des murs sort en fondu. À la reprise, l'air est recalé sur la mesure, ses corrélations avec les murs et la perturbation sont abandonnées et les statistiques d'innovation repartent ; le suivi est de nouveau `ok` aussitôt et la part des murs revient en fondu sur `RM_WALL_FADE_S`. Une fenêtre ouverte élève l'échange réel air-murs au-dessus de celui du modèle, si bien que les murs suivis tendent à être plus chauds que les murs réels et que la part des murs est sous-estimée. Une sonde proche de la fenêtre peut biaiser dans l'autre sens ; la borne sur le terme des murs et les contrôles d'innovation couvrent ce cas.
 
 **FF2.** Entrer dans une source de modèle de pièce remet le trim à zéro par le même
 transfert, abandonne ses propositions en attente et sa transaction, et redémarre ses
@@ -420,12 +470,15 @@ source de modèle de pièce est en vigueur : le modèle remplace le biais que le
 et le trim suivrait sinon le terme des murs. Lorsque la source apprise revient, les fenêtres
 du trim redémarrent et le trim réapprend à partir de zéro.
 
-**Redémarrage.** La source en vigueur est sauvegardée avec l'intégrale (`ff_source`). Au
-premier calcul après un redémarrage, une source différente (fichier de stockage du modèle de pièce perdu,
-suivi qui repart) est transférée comme tout changement de source ; la même source reprend
-sans transfert. Un état sauvegardé sans `ff_source` est pris pour la source apprise. Une
-réinitialisation de la mémoire du PI (changement de mode HEAT/COOL, pause prolongée,
-réinitialisation de l'apprentissage) oublie la source : la suivante démarre sans transfert.
+**Redémarrage.** La source en vigueur est sauvegardée avec l'intégrale (`ff_source`), et le fondu de la part des murs
+avec elle (`ff_wall` : la part des murs appliquée, la valeur d'où part un fondu et son instant de départ sur l'horloge
+réelle). Au premier calcul après un redémarrage, une source différente (fichier de stockage du modèle de pièce perdu,
+suivi qui repart) est transférée comme tout changement de source et démarre un fondu des murs à partir de la valeur
+appliquée restaurée ; la même source reprend sans transfert, et un fondu en cours se poursuit là où l'horloge réelle le
+place. Un état sauvegardé sans `ff_source` est pris pour la source apprise ; un état sans `ff_wall` valide applique
+entièrement le terme des murs de sa source sauvegardée. Une réinitialisation de la mémoire du PI (changement de mode
+HEAT/COOL, pause prolongée, réinitialisation de l'apprentissage) oublie la source et la part des murs appliquée : la source
+suivante démarre sans transfert et sa part des murs se fond à partir de 0.
 
 ### 4.3 FF3
 
@@ -504,7 +557,7 @@ $$
 
 L'entrée en freinage prédit la variation signée dans le sens de la demande active (`+1` en HEAT, `-1` en COOL) sur le reste du cycle, le temps mort passif et l'éventuelle puissance déjà prévue pour le cycle suivant. L'écart de freinage vaut cette variation prédite multipliée par `TRAJECTORY_BRAKE_GAIN = 1.20`.
 
-En HEAT, lorsqu'un modèle de pièce est publié (avec murs ou modèle simple) et que le chauffage n'est pas une vanne, le gain d'équilibre $a/b$ de cette prédiction est remplacé par le $a/b_{eq}$ du modèle de pièce : la chaleur engagée amène la pièce vers $T_{ext} + u \cdot a/b_{eq}$. Le facteur de relaxation $\alpha = e^{-b \cdot h}$ conserve le `b` appris, et les contrôles de disponibilité conservent le `a` et le `b` appris. Un `b/a` appris, biaisé à la baisse par les murs, surestimerait sinon la montée engagée et armerait le freinage trop tôt. Le jumeau thermique et FF3 conservent le modèle appris.
+En HEAT, lorsqu'un modèle de pièce est publié (avec murs ou modèle simple) avec un rapport de bilan énergétique $r_{EB}$ en vigueur et que le chauffage n'est pas une vanne, le gain d'équilibre $a/b$ de cette prédiction est remplacé par $1/r_{EB}$, le gain statique de la puissance de maintien : la chaleur engagée amène la pièce vers $T_{ext} + u / r_{EB}$. Le facteur de relaxation $\alpha = e^{-b \cdot h}$ conserve le `b` appris, et les contrôles de disponibilité conservent le `a` et le `b` appris. Un `b/a` appris, biaisé à la baisse par les murs, surestimerait sinon la montée engagée et armerait le freinage trop tôt. Le jumeau thermique et FF3 conservent le modèle appris.
 
 Le bloc canonique `live.setpoint` publie le résumé :
 
@@ -722,7 +775,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `setpoint.py`          | trajectoire analytique de la référence P                    |
 | `integral_guard.py`    | garde directionnelle de l'intégrale et maintien I:HOLD après reprise de fenêtre ou de délestage |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`, gain FF signé `b/a`, facteur de montée en charge et FF1 du modèle de pièce |
-| `room_model/feedforward.py` | source de puissance de maintien issue du modèle de pièce publié, transfert sans à-coup de ses variations discrètes, gain statique pour la prédiction de freinage |
+| `room_model/feedforward.py` | source de puissance de maintien issue du modèle de pièce publié et du rapport de bilan énergétique en vigueur, transfert sans à-coup des variations discrètes de sa part statique, fondu de sa part des murs, gain statique pour la prédiction de freinage |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator` : décomposition de commande figée des requêtes du scheduler, routage des résultats des observateurs de trim, transactions bumpless trim/intégrale à la frontière de cycle, état de transfert |
 | `command_ownership.py` | identifiants de requête, snapshots figés et rattachement des reçus de commande appliquée du scheduler |
@@ -829,6 +882,7 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "ff_v2_trim": {...},
     "ff_trim_delta": ...,
     "ff_source": {...},  # source de puissance de maintien que complète l'intégrale
+    "ff_wall": {...},  # part des murs appliquée et son fondu
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap uniquement
 }

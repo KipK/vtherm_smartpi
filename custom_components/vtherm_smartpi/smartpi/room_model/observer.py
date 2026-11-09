@@ -21,13 +21,13 @@ the walls. While it is open the air state is held at the measured temperature
 after each sub-step, the wall state follows its own equation driven by that
 air, and the disturbance is held; nothing is corrected. When it closes the air
 is set to the measurement, its correlations with the wall and the disturbance
-are dropped and its uncertainty reopened; for RM_WINDOW_HOLD_S the wall state
-is not reported and the innovation checks start over afterwards.
+are dropped, its uncertainty reopened and the innovation checks start over.
+The wall state is reported again at once; the feed-forward blends its wall
+part back in (feedforward.py).
 
 Health checks are separate from the estimation: mean and spread of the
 normalised innovations, air uncertainty, a disturbance held at its bound, an
-implausible wall state, the settling time after a restart and the hold after
-an open window.
+implausible wall state and the settling time after a restart.
 """
 from __future__ import annotations
 
@@ -54,7 +54,6 @@ from .const import (
     RM_SETTLE_S,
     RM_STEP_S,
     RM_WALL_EXTRA_MAX,
-    RM_WINDOW_HOLD_S,
 )
 from .emitter import CommandTimeline, emitter_step
 from .model import Discrete, RoomParams
@@ -66,7 +65,6 @@ HEALTH_NO_MODEL = "no model"
 HEALTH_WAITING = "waiting"
 HEALTH_PAUSED = "paused"
 HEALTH_SETTLING = "settling"
-HEALTH_WINDOW = "after window"
 HEALTH_BIAS = "innovation bias"
 HEALTH_SPREAD = "innovation spread"
 HEALTH_UNCERTAIN = "uncertain"
@@ -103,7 +101,6 @@ class RoomObserver:
         self.paused_since: float | None = None
         self.pause_window = False
         self.settle_until: float | None = None
-        self.window_hold_until: float | None = None
         self.innov_bias = 0.0
         self.innov_nis = 1.0
         self.innov_n = 0
@@ -220,9 +217,6 @@ class RoomObserver:
         if self._resumed:
             self._resumed = False
             self._reopen()
-        if self.window_hold_until is not None and self.t >= self.window_hold_until:
-            self.window_hold_until = None
-            self._reset_innovations()
         if active and self.health() == HEALTH_OK:
             self.score.maybe_start(self.t, self.x, self.y_last)
 
@@ -255,7 +249,6 @@ class RoomObserver:
         self.paused_since = None
         self.pause_window = False
         self.settle_until = t + RM_SETTLE_S
-        self.window_hold_until = None
         self._reset_innovations()
         self.d_sat_s = 0.0
         self.restarts += 1
@@ -275,16 +268,21 @@ class RoomObserver:
         self.innov_bias, self.innov_nis, self.innov_n = 0.0, 1.0, 0
 
     def _window_resume(self, y: float) -> None:
-        """End of an open window: air at the measurement, its correlations dropped, uncertainty reopened.
+        """End of an open window: air at the measurement, its correlations dropped, uncertainty reopened and
+        the innovation statistics restarted. The wall state is kept and reported at once.
 
-        The wall state is kept; it is not reported during the hold that follows.
+        No hold follows. An open window raises the real exchange between the air and the walls above the
+        model's, so the real walls cool more than the tracked ones: the tracked walls tend to be warmer than
+        the real ones and the wall term errs low, towards less power. A sensor placed near the window can
+        bias it the other way (air read colder than the room, walls driven too cold); the bound on the wall
+        term and the innovation checks cover that case. The feed-forward brings the wall part back in
+        progressively (feedforward.py).
         """
         self.x = [y, self.x[1], self.x[2]]
         P = self.P
         for i in (1, 2):
             P[0][i] = P[i][0] = 0.0
         self._reopen()
-        self.window_hold_until = self.t + RM_WINDOW_HOLD_S
         self._pending = None
         self._fc_cache = None
         self.score.drop_pending()
@@ -371,8 +369,6 @@ class RoomObserver:
             return HEALTH_WAITING
         if self.paused_since is not None:
             return HEALTH_PAUSED
-        if self.window_hold_until is not None:
-            return HEALTH_WINDOW
         if self.settling:
             return HEALTH_SETTLING
         if self.innov_n >= RM_INNOV_MIN_COUNT:
@@ -466,7 +462,7 @@ class RoomObserver:
         return {
             "t": self.t, "x": self.x, "P": self.P, "te": self.te, "ue_x": self.ue_x, "y_last": self.y_last,
             "paused_since": self.paused_since, "pause_window": self.pause_window, "settle_until": self.settle_until,
-            "window_hold_until": self.window_hold_until, "restarts": self.restarts,
+            "restarts": self.restarts,
             "timeline": self.timeline.to_dict(), "score": self.score.to_dict(), "nights": self.nights,
         }
 
@@ -494,8 +490,6 @@ class RoomObserver:
                     self.paused_since = None if ps is None else float(ps)
                     self.settle_until = None if su is None else float(su)
                     self.pause_window = bool(data.get("pause_window"))
-                    wh = data.get("window_hold_until")
-                    self.window_hold_until = None if wh is None else float(wh)
                     self._resumed = True
                     self.timeline.stop(self.t)
         except (TypeError, ValueError, IndexError):

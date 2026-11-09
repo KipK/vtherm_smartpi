@@ -160,13 +160,40 @@ def replay(sim: dict, feed, t_from: float, t_to: float, step: float = 60.0) -> N
         feed(t, "tick", (pub_v[ip - 1], pub_t[ip - 1], ext_v[ie - 1]))
 
 
+def prefill_history(history, p: dict, days: float, t_end: float, **kw) -> None:
+    """Recorded T_ar history of `days` days of the plant under the simulator's own rule, ending at t_end."""
+    data = simulate(p, days, t0=t_end - days * DAY, **kw)
+    history.temp_t, history.temp_v = list(data["pub_t"]), list(data["pub_v"])
+    history.ext_t, history.ext_v = list(data["ext_t"]), list(data["ext_v"])
+    history.on, history.off = list(data["on"]), list(data["off"])
+    history.setpoints = [tuple(x) for x in data["sp"]]
+    history.first_t, history.last_t = data["first_t"], data["last_t"]
+
+
+def apply_energy_balance(algo, t: float) -> dict:
+    """Energy balance of the whole days before t on the recorded T_ar history, applied to the room model as the
+    daily job does; returns the computation."""
+    from custom_components.vtherm_smartpi.smartpi.room_model import energy_balance
+    from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
+
+    snap = algo.tar_learning.signals_snapshot(t)
+    snap["a_per_min"] = algo.est.a
+    day = day_of(t)
+    rec = energy_balance.daily(snap, LocalClock("UTC"), day)
+    algo.room_model.apply_energy_balance(day, rec)
+    return rec
+
+
 def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.0, ta0: float = 19.0,
-                t0: float = T0, b_online_ratio: float = 1.0, on_tick=None, restart_at: float | None = None) -> dict:
+                t0: float = T0, b_online_ratio: float = 1.0, on_tick=None, restart_at: float | None = None,
+                history_days: float = 0.0) -> dict:
     """Closed loop of SmartPI (room model on, learning paused) on the air-wall plant.
 
     The online model is seeded with the true a and b = b_online_ratio x b_eq, with reliable
     dead times. on_tick(algo, t) runs before each calculation (60 s ticks), for example to
     publish the room model. The sensor publishes the quantised air temperature at each tick.
+    history_days: days of T_ar history recorded before t0 (prefill_history), so that the energy
+    balance of the days before t0 can qualify (apply_energy_balance).
     restart_at: at the first cycle start from this time, the SmartPI and room model states are
     saved and restored into a new instance, as a restart of Home Assistant does (no downtime).
     Returns per tick: time, setpoint, measured air, command, holding power, integral power, and
@@ -206,6 +233,8 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
                            room_model=True)
 
         algo = new_algo()
+        if history_days > 0.0:
+            prefill_history(algo.tar_learning.history, p, history_days, t0, q=q)
         est = algo.est
         a_min, b_min = a * 60.0, b_eq * b_online_ratio * 60.0
         for _ in range(40):

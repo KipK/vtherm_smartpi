@@ -3,8 +3,14 @@
 The job takes a snapshot of plain Python data and returns plain Python data,
 so it never touches the event loop state.
 
-Emitter refinement: the full model is fitted (without the energy-balance
-prior) with the emitter first moment in force scaled by each multiple of
+Energy balance: the job first computes the energy-balance ratio of the whole
+days before the day (energy_balance.py), whatever the outcome of the fits. The
+ratio in force for the decision is that ratio when it qualifies, else the one
+in force before the job (snap["eb"], None before a first qualified ratio); a
+candidate must agree with it (gates.py).
+
+Emitter refinement: the full model is fitted with the emitter first moment in
+force scaled by each multiple of
 RM_EMITTER_GRID, split into tau_e and L like the manager does; the lowest cost
 sets the emitter of the day's fits. An optimum at either end of the grid means
 the true emitter lies outside it, and the day is refused.
@@ -17,7 +23,7 @@ import numpy as np
 
 from ..tar_learning.clock import LocalClock
 from ..tar_learning.identification import q_obs
-from . import gates, identification
+from . import energy_balance, gates, identification
 from .const import (
     RM_EMITTER_GRID,
     RM_MIN_DELTA_C,
@@ -28,20 +34,8 @@ from .const import (
     STRUCT_REDUCED,
 )
 from .emitter import split_first_moment
-from .energy_balance import heater_timeline, static_gain
 from .observer import is_precise
 from .periods import fit_periods, window_bounds
-
-
-def _signals(snap: dict) -> dict:
-    """Recorded signals in the form of the energy balance."""
-    if snap.get("pw") is not None:
-        heat_t, heat_v, init = list(snap["pw"][0]), list(snap["pw"][1]), 0.0
-    else:
-        heat_t, heat_v, init = heater_timeline(snap["on"], snap["off"])
-    return {"heat_t": heat_t, "heat_v": heat_v, "heat_init": init, "temp_t": snap["pub_t"], "temp_v": snap["pub_v"],
-            "ext_t": snap["ext_t"], "ext_v": snap["ext_v"], "first_t": snap["first_t"], "last_t": snap["last_t"],
-            "invalid": [tuple(g) for g in snap["gaps"]]}
 
 
 # Below this first moment (s) every multiple gives no emitter lag: nothing to refine.
@@ -72,7 +66,7 @@ def refine_emitter(snap: dict, periods: list, data: identification.WindowData, t
         te, lag = split_first_moment(fm * m, te_pub)
         same = abs(te - tau_e) < 1e-6 and abs(lag - L) < 1e-6
         d = data if same else identification.WindowData(snap, periods, te, lag)
-        f = identification.fit(identification.Problem(d, True, None)) if d.segments else None
+        f = identification.fit(identification.Problem(d, True)) if d.segments else None
         cost = None if f is None else f["cost"]
         costs.append(None if cost is None else round(cost, 6))
         if cost is not None and (best is None or cost < best[0]):
@@ -90,7 +84,7 @@ def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
     clock = LocalClock(snap.get("tz"))
     day = int(snap["day"])
     t0, t1 = window_bounds(clock, day)
-    rec: dict[str, Any] = {"day": day}
+    rec: dict[str, Any] = {"day": day, "eb": energy_balance.daily(snap, clock, day)}
     first_t, last_t = snap.get("first_t"), snap.get("last_t")
     if first_t is None or last_t is None or first_t > t0 + 0.5 * (t1 - t0) or last_t < t1:
         rec["why"] = gates.WHY_HISTORY
@@ -134,16 +128,13 @@ def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
         rec["why"] = gates.WHY_EMITTER_EDGE
         return _done(rec, snap)
     tau_e, L, data = em["tau_e"], em["L"], em["data"]
-    eb = static_gain(_signals(snap), t1, snap.get("a_per_min"))
-    prior_r = eb["value"] if eb.get("reason") is None else None
-    rec["prior"] = {"value": prior_r, "reason": eb.get("reason")}
     sensor = "precise" if precise else "coarse"
-    red = identification.fit(identification.Problem(data, False, prior_r))
+    red = identification.fit(identification.Problem(data, False))
     rec["reduced"] = gates.fit_record(red, STRUCT_REDUCED, sensor, float(tau_e), float(L), q)
     prev = snap.get("prev")
     if precise:
         warm = ((prev or {}).get("full") or {}).get("params")
-        full = identification.fit(identification.Problem(data, True, prior_r), warm=warm)
+        full = identification.fit(identification.Problem(data, True), warm=warm)
         rec["full"] = gates.fit_record(full, STRUCT_FULL, sensor, float(tau_e), float(L), q)
     held: dict[str, Any] = {}
     for struct in ("full", "reduced"):
@@ -154,9 +145,18 @@ def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
     return _done(rec, snap)
 
 
+def eb_in_force(rec: dict, snap: dict) -> float | None:
+    """Energy-balance ratio in force for the decision: the job's own when it qualifies, else the earlier one."""
+    fresh = (rec.get("eb") or {}).get("value")
+    if fresh is not None:
+        return float(fresh)
+    prev = snap.get("eb")
+    return None if prev is None else float(prev)
+
+
 def _done(rec: dict, snap: dict) -> dict:
     a_per_min = snap.get("a_per_min")
     a_online = float(a_per_min) / 60.0 if a_per_min else None
     rec["decision"] = gates.decide(rec, snap.get("prev"), rec.get("held") or {}, bool(rec.get("precise")),
-                                   a_online=a_online)
+                                   a_online=a_online, eb=eb_in_force(rec, snap))
     return rec

@@ -446,12 +446,11 @@ def _build_fftrim(algo: SmartPI) -> Dict[str, Any]:
 def _build_feedforward(algo: SmartPI, twin_diag: Dict[str, Any]) -> Dict[str, Any]:
     """Return the holding power source, the FF3 and twin status, the deadband power path and the FF trim."""
     twin_status = twin_diag.get("status", "unavailable")
-    source = algo._ff_holding.source
+    holding = algo._ff_holding
+    wall = holding.wall_shown
     return {
-        "source": source.plain,
-        "wall_power_percent": (
-            round(100.0 * source.wall, 1) if source.wall is not None else None
-        ),
+        "source": holding.source.plain,
+        "wall_power_percent": round(100.0 * wall, 1) if wall is not None else None,
         "ff3_status": _build_ff3_status(algo),
         "ff3_twin_usable": (
             twin_status == "ok"

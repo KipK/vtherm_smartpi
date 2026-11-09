@@ -1,4 +1,4 @@
-"""Room model identification: fits on synthetic rooms, publication rules, energy-balance prior, fit periods."""
+"""Room model identification: fits on synthetic rooms, publication rules, energy balance, fit periods."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pytest
 
 import room_model_sim as rsim
 from custom_components.vtherm_smartpi.smartpi.room_model import gates, jobs, public
+from custom_components.vtherm_smartpi.smartpi.room_model import energy_balance
 from custom_components.vtherm_smartpi.smartpi.room_model.energy_balance import heater_timeline, static_gain
 from custom_components.vtherm_smartpi.smartpi.room_model.periods import fit_periods
 from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
@@ -49,7 +50,13 @@ def test_full_model_identified_on_a_mass_room(mass_data) -> None:
     p = rsim.MASS
     first, second, worst = _two_windows(mass_data, p)
     assert first["decision"] == {"why": gates.WHY_NO_PREVIOUS, "wall": gates.WALL_NOT_CONFIRMED}
-    assert first["prior"]["reason"] is None  # the energy balance qualifies and is used as prior
+    # The energy balance of the 3 whole days before the day (and 22 h more for its shifted windows) qualifies;
+    # the candidate agrees with it
+    assert first["eb"]["reason"] is None and second["eb"]["reason"] is None
+    assert second["eb"]["value"] == pytest.approx((p["alpha"] - p["c"]) / p["a"], rel=0.03)
+    early = jobs.identify_job(rsim.snapshot(mass_data, D0 + 3, tau_e=p["tau_e"], L=p["L"],
+                                            a_per_min=p["a"] * 60.0))
+    assert early["eb"] == {"value": None, "reason": "history", "ratio": None}
     dec = second["decision"]
     assert dec["struct"] == "full"
     c = dec["candidate"]
@@ -175,7 +182,7 @@ def test_published_is_the_median_of_the_last_candidates() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Energy balance prior and fit periods
+# Energy balance and fit periods
 # ---------------------------------------------------------------------------
 def _signals(data: dict) -> dict:
     ht, hv, init = heater_timeline(data["on"], data["off"])
@@ -184,7 +191,7 @@ def _signals(data: dict) -> dict:
             "invalid": []}
 
 
-def test_energy_balance_prior(no_mass_data) -> None:
+def test_energy_balance(no_mass_data) -> None:
     p = rsim.NO_MASS
     clock = LocalClock("UTC")
     end = clock.at(D0 + 6, 8.0)
@@ -195,6 +202,40 @@ def test_energy_balance_prior(no_mass_data) -> None:
     assert static_gain(_signals(no_mass_data), end, None)["reason"] is not None
     cold = dict(no_mass_data, on=[], off=[])
     assert static_gain(_signals(cold), end, p["a"] * 60.0)["reason"] in ("duty", "delta")
+
+
+def test_daily_energy_balance_covers_the_whole_days_before_the_day(no_mass_data) -> None:
+    p = rsim.NO_MASS
+    clock = LocalClock("UTC")
+    snap = rsim.snapshot(no_mass_data, D0 + 6, a_per_min=p["a"] * 60.0)
+    rec = energy_balance.daily(snap, clock, D0 + 6)
+    ref = static_gain(_signals(no_mass_data), clock.at(D0 + 6, 0.0), p["a"] * 60.0)
+    assert rec == {"value": ref["value"], "reason": None, "ratio": ref["value"]}
+    assert rec["value"] == pytest.approx(p["alpha"] / p["a"], rel=0.03)
+    # A refused day gives the computed ratio and the reason, no value
+    rec = energy_balance.daily(dict(snap, on=[], off=[]), clock, D0 + 6)
+    assert rec["value"] is None and rec["reason"] == "duty" and rec["ratio"] is not None
+    # The job computes it first, whatever the outcome of the fits
+    job = jobs.identify_job(dict(snap, tau_e=None, L=None))
+    assert job["decision"]["why"] == gates.WHY_EMITTER
+    assert job["eb"] == energy_balance.daily(snap, clock, D0 + 6)
+
+
+def test_job_checks_the_candidate_against_the_energy_balance_in_force(mass_data) -> None:
+    """The ratio in force for the decision is the job's own when it qualifies, else the earlier one."""
+    p = rsim.MASS
+    first, second, _ = _two_windows(mass_data, p)
+    snap = rsim.snapshot(mass_data, D0 + 7, prev=_slim(first), tau_e=p["tau_e"], L=p["L"],
+                         a_per_min=p["a"] * 60.0)
+    assert jobs.eb_in_force(second, snap) == second["eb"]["value"]
+    refused = dict(second, eb={"value": None, "reason": "spread", "ratio": 0.04})
+    assert jobs.eb_in_force(refused, dict(snap, eb=0.021)) == 0.021
+    assert jobs.eb_in_force(refused, snap) is None
+    gain = gates._coords(second["decision"]["candidate"])[1]
+    far = jobs._done(dict(refused), dict(snap, eb=gain * 1.10))
+    assert far["decision"] == {"why": gates.WHY_EB, "wall": gates.WALL_NOT_CONFIRMED}
+    near = jobs._done(dict(refused), dict(snap, eb=gain * 1.03))
+    assert near["decision"]["struct"] == "full"
 
 
 def test_fit_periods_are_the_valid_nights() -> None:
@@ -347,3 +388,29 @@ def test_combine_and_median_in_identifiable_coordinates() -> None:
     assert (pub["alpha"] - pub["c"]) / pub["a"] == pytest.approx(ratios[1], rel=1e-12)
     assert pub["c"] / pub["alpha"] == pytest.approx(shares[1], rel=1e-12)
     assert pub["beta"] == pytest.approx(5e-6)
+
+
+def test_candidate_must_agree_with_the_energy_balance() -> None:
+    cur = {"q": 0.01, "full": _rec("full"), "reduced": _rec("reduced", alpha=4e-5, ok=False)}
+    prev = {"q": 0.01, "full": _rec("full", a=1.05e-3), "reduced": _rec("reduced", alpha=4e-5, ok=False)}
+    held = {"full": _GOOD}
+    dec = gates.decide(cur, prev, held, precise=True)
+    assert dec["struct"] == "full"
+    gain = gates._coords(dec["candidate"])[1]
+    # No qualified ratio, or one within 5 %: unchanged
+    assert gates.decide(cur, prev, held, True, eb=None) == dec
+    for f in (1.03, 1 / 1.03, 1.049, 1 / 1.049):
+        assert gates.decide(cur, prev, held, True, eb=gain * f) == dec
+    # 10 % off either way: refused with the plain reason
+    for f in (1.10, 1 / 1.10, 1.051):
+        assert gates.decide(cur, prev, held, True, eb=gain * f) == {"why": gates.WHY_EB,
+                                                                     "wall": gates.WALL_NOT_CONFIRMED}
+    assert public.reason(gates.WHY_EB) == "the model's heat loss disagrees with the measured heat balance"
+    # The simple model is checked the same way
+    cur2 = dict(cur, full=_rec("full", ok=False), reduced=_rec("reduced", alpha=4e-5))
+    prev2 = dict(prev, reduced=_rec("reduced", alpha=4.2e-5))
+    dec2 = gates.decide(cur2, prev2, {"reduced": _GOOD}, True)
+    assert dec2["struct"] == "reduced"
+    g2 = gates._coords(dec2["candidate"])[1]
+    assert gates.decide(cur2, prev2, {"reduced": _GOOD}, True, eb=g2 * 1.03) == dec2
+    assert gates.decide(cur2, prev2, {"reduced": _GOOD}, True, eb=g2 * 1.10)["why"] == gates.WHY_EB

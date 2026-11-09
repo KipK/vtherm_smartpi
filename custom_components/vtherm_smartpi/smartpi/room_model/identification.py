@@ -16,8 +16,9 @@ Full model, nonlinear parameters (alpha, beta, g = c / alpha):
     dw/dt = g alpha beta (Ta - Text) - beta w - k dText/dt, k = (c + alpha) / 2.
 Reduced model, nonlinear parameter b_eq: dTa/dt = a u_e - b_eq (Ta - Text).
 
-A soft prior on the static gain b_eq / a (energy balance), when qualified,
-adds one row to the least squares. The fit is ordinary least squares.
+The fit is ordinary least squares on the measurements alone: its static
+gain b_eq / a is then an independent check of the energy-balance ratio
+(gates.py).
 
 Residual checks are computed on a 10 min grid inside the periods: bias, root
 mean square, runs test, autocorrelation at 10 min and 1 h, and correlation with
@@ -42,8 +43,6 @@ from .const import (
     RM_EVENT_WEIGHT_CAP_S,
     RM_FIT_STEP_S,
     RM_G_GRID,
-    RM_PRIOR_SIG_R,
-    RM_PRIOR_SIG_Y,
     RM_SEARCH_STARTS,
     RM_TAU_AIR_GRID_H,
     RM_TAU_WALL_GRID_H,
@@ -191,8 +190,8 @@ def _ss_columns(phi, gam, inputs, imp):
 class Problem:
     """Weighted least squares of one window for the full or the reduced model."""
 
-    def __init__(self, data: WindowData, full: bool, prior_r: float | None = None) -> None:
-        self.data, self.full, self.prior_r = data, full, prior_r
+    def __init__(self, data: WindowData, full: bool) -> None:
+        self.data, self.full = data, full
         self.inputs = []
         self.imp = []
         for s in data.segments:
@@ -270,21 +269,12 @@ class Problem:
         r = np.concatenate(rhs)
         sw = np.sqrt(np.concatenate(wts))
         AA, rr = A * sw[:, None], r * sw
-        prior_row = None
-        if self.prior_r and a_fixed is None and q["b_eq"] > 0.0:
-            a_pr = q["b_eq"] / self.prior_r
-            sc = RM_PRIOR_SIG_Y / (RM_PRIOR_SIG_R * a_pr)
-            prior_row = (np.eye(1, ncol, 0)[0] * sc, sc * a_pr)
-            AA = np.vstack([AA, prior_row[0]])
-            rr = np.r_[rr, prior_row[1]]
         th, *_ = np.linalg.lstsq(AA, rr, rcond=None)
         a_val = a_fixed if a_fixed is not None else float(th[0])
         if a_val <= 0.0 or q["b_eq"] <= 0.0:
             return math.inf, None
         res = (r - A @ th) * sw
         cost = float(res @ res)
-        if prior_row is not None:
-            cost += float((prior_row[0] @ th - prior_row[1]) ** 2)
         if not detail:
             return cost, th
         out = dict(q, a=float(a_val), k_te=k_te, cost=cost, x=[float(v) for v in x])

@@ -10,7 +10,13 @@ import pytest
 import room_model_sim as rsim
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT, VThermHvacMode_OFF
 from custom_components.vtherm_smartpi.smartpi.room_model import observer as observer_mod
-from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_WINDOW_HOLD_S
+from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_WALL_FADE_S
+from custom_components.vtherm_smartpi.smartpi.room_model.feedforward import (
+    SOURCE_STATIC,
+    SOURCE_WALLS,
+    HoldingTransfer,
+    select_source,
+)
 from custom_components.vtherm_smartpi.smartpi.room_model.manager import RoomModelManager
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 
@@ -45,8 +51,11 @@ def _wall_error(m: RoomModelManager, p: dict, truth, t: float) -> float:
     return m.observer.wall_extra() - true
 
 
-def _run_window(data: dict, reason: str, t_from: float, w_end: float, t_to: float):
-    """Feed the manager like the regulation; reason is the exclusion given while the window is open."""
+def _run_window(data: dict, reason: str, t_from: float, w_end: float, t_to: float, on_tick=None):
+    """Feed the manager like the regulation; reason is the exclusion given while the window is open.
+
+    on_tick(m, t, mode) runs after each observation.
+    """
     m = _manager(HEAVY)
     log = []
 
@@ -59,6 +68,8 @@ def _run_window(data: dict, reason: str, t_from: float, w_end: float, t_to: floa
         y, yt, te = pl
         m.observe(t, hvac_mode=mode, temp=y, measure_id=yt, ext=te, excluded=reason if win else None,
                   a_per_min=HEAVY["a"] * 60.0, first_moment_s=HEAVY["tau_e"])
+        if on_tick is not None:
+            on_tick(m, t, mode)
         if m.observer.x is not None:
             diag = m.diagnostics()
             log.append((t, _wall_error(m, HEAVY, data["truth"], t), diag["tracking"],
@@ -85,19 +96,44 @@ def test_wall_state_survives_an_open_window(window_data) -> None:
     # truth as it was before (measured 0.0011 after, 0.0010 before, in fraction of full power).
     assert after <= 2.0 * before
     assert after < 0.003
-    # Health: paused while open, then recovering for RM_WINDOW_HOLD_S with no wall term shown, then ok
+    # Health: paused while open, then ok at once with the wall term shown (no hold)
     during = {s for t, _, s, *_ in log if W0 + 60.0 <= t < W1}
     assert during == {"paused (SmartPI not heating or not in control)"}
-    hold = [(t, s, wx) for t, _, s, wx, _ in log if W1 <= t < W1 + RM_WINDOW_HOLD_S - 60.0]
-    assert {s for _, s, _ in hold} == {"recovering after an open window"}
-    assert all(wx is None for *_, wx in hold)
-    later = [(s, wx, n) for t, _, s, wx, n in log if W1 + RM_WINDOW_HOLD_S + 60.0 <= t < W1 + 6 * H]
+    later = [(s, wx, n) for t, _, s, wx, n in log if W1 <= t < W1 + 6 * H]
     assert {s for s, *_ in later} == {"ok"}
     assert all(isinstance(wx, float) for _, wx, _ in later)
-    # The innovation statistics start over at the end of the hold
-    n_end = [n for t, *_, n in log if W1 + RM_WINDOW_HOLD_S - 120.0 <= t < W1 + RM_WINDOW_HOLD_S + 120.0]
-    assert min(n_end) <= 1 < max(n_end)
+    # The innovation statistics start over at the resume
+    n_before = [n for t, *_, n in log if W0 - 120.0 <= t < W0]
+    n_resume = [n for t, *_, n in log if W1 <= t < W1 + 120.0]
+    assert min(n_before) > 20 and min(n_resume) <= 1
     assert m.observer.restarts == 1
+
+
+def test_wall_part_fades_back_in_over_30_minutes_after_a_window(window_data) -> None:
+    """The holding power drops its wall part while the window is open and blends it back in over
+    RM_WALL_FADE_S from the resume, following the live wall term of the tracking."""
+    tr = HoldingTransfer()
+    seen = []
+
+    def on_tick(m, t, mode):
+        m.eb_ratio = (HEAVY["alpha"] - HEAVY["c"]) / HEAVY["a"]
+        src = select_source(m, VThermHvacMode_HEAT, False)
+        tr.update(src, now=t, learned_power=0.3, target_temp=20.0, ext_temp=rsim.outdoor(t), heat=True)
+        seen.append((t, src.kind, src.wall, tr.wall_applied))
+
+    _run_window(window_data, "window open", W0 - 6 * H, W1, W1 + 2 * H, on_tick=on_tick)
+    # Open: static part only, the wall part fades out over RM_WALL_FADE_S and stays at zero
+    assert {k for t, k, *_ in seen if W0 + 60.0 <= t < W1} == {SOURCE_STATIC}
+    assert all(w == 0.0 for t, *_, w in seen if W0 + RM_WALL_FADE_S + 60.0 <= t < W1)
+    # Resumed: the walls at once, their part from 0 to the live wall term over RM_WALL_FADE_S
+    after = [(t, k, live, w) for t, k, live, w in seen if t >= W1]
+    assert {k for _, k, *_ in after} == {SOURCE_WALLS}
+    t_res = after[0][0]
+    assert t_res < W1 + 120.0 and after[0][3] == 0.0
+    for t, _, live, w in after:
+        frac = min((t - t_res) / RM_WALL_FADE_S, 1.0)
+        assert w == pytest.approx(frac * live, abs=1e-12)
+    assert after[-1][3] == after[-1][2] and abs(after[-1][2]) > 0.01
 
 
 def test_a_plain_pause_lets_the_window_leak_into_the_walls(window_data) -> None:
@@ -117,17 +153,16 @@ def test_long_window_restarts_at_the_wall_equilibrium(window_data) -> None:
     m, log = _run_window(window_data, "window open", W0 - 4 * H, W0 + 3.5 * H, W0 + 3.5 * H + 600.0)
     assert m.observer.restarts == 2
     assert log[-1][2] == "settling after a restart"
-    assert m.observer.window_hold_until is None
 
 
 def test_window_state_is_saved_and_restored(window_data) -> None:
-    m, _ = _run_window(window_data, "window open", W0 - 4 * H, W1, W1 + H)
-    assert m.observer.health() == observer_mod.HEALTH_WINDOW
+    m, _ = _run_window(window_data, "window open", W0 - 4 * H, W1, W1 - H)
+    assert m.observer.health() == observer_mod.HEALTH_PAUSED and m.observer.pause_window
     m2 = RoomModelManager("room", "UTC", None)
     state = json.loads(json.dumps(m.save_state()))
     m2.load_state(state)
-    assert m2.observer.window_hold_until == m.observer.window_hold_until
-    assert m2.observer.health() == observer_mod.HEALTH_WINDOW
+    assert m2.observer.pause_window and m2.observer.paused_since == m.observer.paused_since
+    assert m2.observer.health() == observer_mod.HEALTH_PAUSED
 
 
 # ---------------------------------------------------------------------------

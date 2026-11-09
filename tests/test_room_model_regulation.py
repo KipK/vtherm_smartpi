@@ -19,6 +19,7 @@ from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 
 REFERENCE = json.loads((Path(__file__).parent / "fixtures" / "tar_learning" / "regulation_reference.json").read_text())
 REPO = Path(__file__).resolve().parent.parent
+EB_RATIO = 1.03 * sim.B_TRUE / sim.A_TRUE
 
 
 def _sha(rows) -> str:
@@ -47,13 +48,17 @@ def _running(holder: dict, publish: bool = True):
             algo.room_model.published_day = rsim.day_of(sim.WALL0) - 1
             algo.room_model.q = 0.1
             algo.room_model.observer.configure(params, 0.1)
+            # Energy-balance ratio in force, 3 % above the fitted b_eq / a: the static part uses it
+            algo.room_model.eb_ratio = EB_RATIO
+            algo.room_model.eb_day = rsim.day_of(sim.WALL0) - 1
         holder["algo"] = algo
 
     return prepare
 
 
 def test_published_room_model_gives_the_holding_power() -> None:
-    """A published simple model replaces the learned holding power (full weight, no trim).
+    """A published simple model replaces the learned holding power (full weight, no trim) with the
+    energy-balance ratio in force as static gain, never its own b_eq / a.
 
     The run differs from the reference from the first cycle on: the learned holding power
     ramps up over its warmup cycles, the room model's does not. Observer, forecasts, scoring,
@@ -77,8 +82,8 @@ def test_published_room_model_gives_the_holding_power() -> None:
     assert diag["wall_extra_power_percent"] is None
     assert published["feedforward"]["source"] == "room model (simple)"
     assert published["feedforward"]["wall_power_percent"] is None
-    # Holding power at full weight from the first cycle: b_eq / a (T_sp - T_ext), no trim
-    gain = sim.B_TRUE / sim.A_TRUE
+    # Holding power at full weight from the first cycle: EB ratio (T_sp - T_ext), no trim
+    gain = EB_RATIO
     for row in rows[:60]:
         t = sim.WALL0 + row[0]
         assert row[7] == pytest.approx(gain * (sim._setpoint(t) - sim.T_EXT), abs=1e-12)

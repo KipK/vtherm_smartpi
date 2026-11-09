@@ -18,7 +18,7 @@ Chain:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
@@ -137,15 +137,17 @@ def compute_room_ff(
     source: HoldingSource,
     target_temp_ff: float,
     ext_temp: float | None,
+    wall: float | None = None,
 ) -> FFResult:
     """FF1 from a published room model: full weight, no FF2 trim.
 
-    The holding power of the source (static part, plus the wall extra power
-    when the walls are tracked) replaces the learned b / a branch. The trim is
-    not applied: the room model replaces the bias it learns.
+    The holding power of the source (static part, plus the wall part applied
+    at this cycle: wall, or the source's live wall term when None) replaces
+    the learned b / a branch. The trim is not applied: the room model
+    replaces the bias it learns.
     """
     if ext_temp is not None:
-        u_ff1 = source.power(target_temp_ff, ext_temp)
+        u_ff1 = source.power(target_temp_ff, ext_temp, wall)
         ff_reason = "ff_none"
     else:
         u_ff1 = 0.0
@@ -160,4 +162,17 @@ def compute_room_ff(
         ff_reason=ff_reason,
         warmup_scale=1.0,
         trim_applied=False,
+    )
+
+
+def add_wall_part(result: FFResult, wall: float, ext_temp: float | None) -> FFResult:
+    """Learned FF1 + FF2 with a room model wall part still fading out on top (unchanged without one)."""
+    if wall == 0.0 or ext_temp is None:
+        return result
+    u_ff_final = clamp(result.u_ff_final + wall, 0.0, 1.0)
+    return replace(
+        result,
+        u_ff1=result.u_ff1 + wall,
+        u_ff_final=u_ff_final,
+        u_ff_eff=clamp(u_ff_final + result.u_ff3, 0.0, 1.0),
     )

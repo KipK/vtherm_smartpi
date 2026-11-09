@@ -103,6 +103,7 @@ from .smartpi.calibration import CalibrationManager
 from .smartpi.gains import GainScheduler
 from .smartpi.feedforward import (
     FFResult,
+    add_wall_part,
     compute_ff,
     compute_ff_gain,
     compute_ff_warmup_scale,
@@ -1358,6 +1359,7 @@ class SmartPI:
             "ff_trim_delta": self.fftrim_coord.last_ff_trim_delta,
             # Holding power source the restored integral complements
             "ff_source": self._ff_holding.save(),
+            "ff_wall": self._ff_holding.save_wall(),
             "tint_filter_state": self.tint_filter.save_state(),
         }
         hysteresis = self._hysteresis_output_context()
@@ -1483,7 +1485,7 @@ class SmartPI:
         self.fftrim_coord.last_ff_trim_delta = float(state.get("ff_trim_delta", 0.0))
         # The restored integral complements this holding power source: a different
         # source at the first cycle is transferred like any change of source.
-        self._ff_holding.load(state.get("ff_source"))
+        self._ff_holding.load(state.get("ff_source"), state.get("ff_wall"))
         self.tint_filter.load_state(state.get("tint_filter_state", {}))
         # Freeze trim learning briefly after reboot.
         self.fftrim_coord.freeze_after_reboot()
@@ -1988,40 +1990,47 @@ class SmartPI:
         target_temp_ff: float,
         ext_current_temp: float | None,
         hvac_mode: VThermHvacMode,
+        now: float | None = None,
     ) -> FFResult:
         """Return the FF1 + FF2 result of the holding power source in force.
 
-        A published room model replaces the learned branch in heating with PWM
-        heaters. A discrete change of the holding power (source, published
-        parameters, wall term on or off) is moved into the integral, so that
+        A published room model with a qualified energy-balance ratio replaces
+        the learned branch in heating with PWM heaters. A discrete change of the
+        static part (source, model structure, published parameters, new
+        energy-balance ratio) is moved into the integral, so that
         the command does not jump; entering a room model source hands the FF2
-        trim over through the same transfer.
+        trim over through the same transfer. The wall part is never moved: it
+        is blended over a fixed time when it is switched on or off or its
+        parameters change (room_model/feedforward.py).
         """
         source = select_source(self.room_model, hvac_mode, self._valve_mode_enabled)
         holding = self._ff_holding
         if not source.room:
             if holding.room_in_force:
                 self.fftrim_coord.hand_back_from_room_model()
-            ff_result = learned_ff_result
-        else:
-            if not holding.room_in_force:
-                self.fftrim_coord.hand_over_to_room_model()
+        elif not holding.room_in_force:
+            self.fftrim_coord.hand_over_to_room_model()
+        delta = holding.update(
+            source,
+            now=time.time() if now is None else now,
+            learned_power=learned_ff_result.u_ff_final,
+            target_temp=target_temp_ff,
+            ext_temp=ext_current_temp,
+            heat=hvac_mode == VThermHvacMode_HEAT,
+        )
+        if source.room:
             ff_result = compute_room_ff(
                 source=source,
                 target_temp_ff=target_temp_ff,
                 ext_temp=ext_current_temp,
+                wall=holding.wall_applied,
             )
-        delta = holding.update(
-            source,
-            new_power=ff_result.u_ff_final,
-            learned_power=learned_ff_result.u_ff_final,
-            target_temp=target_temp_ff,
-            ext_temp=ext_current_temp,
-        )
+        else:
+            ff_result = add_wall_part(learned_ff_result, holding.wall_applied, ext_current_temp)
         if delta != 0.0:
             moved = self.ctl.absorb_feedforward_step(ki=self.Ki, delta_ff=delta)
             _LOGGER.info(
-                "%s - Feed-forward source %s: holding power step %+.4f moved into the integral (%+.4f applied)",
+                "%s - Feed-forward source %s: static holding power step %+.4f moved into the integral (%+.4f applied)",
                 self._name, source.plain, delta, moved,
             )
         return ff_result

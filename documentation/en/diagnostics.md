@@ -42,7 +42,7 @@ The `history` block contains these eighteen series:
 | `model.a` | Learned heating gain |
 | `model.b` | Learned heat-loss coefficient |
 | `feedforward.source` | Holding power source in force, as in `live.feedforward.source` |
-| `feedforward.wall_power_percent` | Wall part of the feed-forward, in % of full power (negative when the walls give heat back); `null` unless the source is the room model with its walls |
+| `feedforward.wall_power_percent` | Wall part of the feed-forward applied, in % of full power (negative when the walls give heat back); `null` when no wall part is applied |
 | `room_model.a` | Heating response of the room model, in the units of `model.a`; `null` before a publication |
 | `room_model.b_eq` | Static loss of the room model, in the units of `model.b`; `null` before a publication |
 | `room_model.forecast_error_1h_c` | Root mean square error of the 1 h forecasts over the last 7 days (°C) |
@@ -148,15 +148,15 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 
 ### Room model
 
-`room_model` describes the room model (see [Room model](./vtherm_smartpi.md#room-model)). Once published, it gives the holding power of the feed-forward in heating, shown under `feedforward`.
+`room_model` describes the room model (see [Room model](./vtherm_smartpi.md#room-model)). Once published, and once a heat balance is in force, it gives the holding power of the feed-forward in heating, shown under `feedforward`.
 
 | Field | Meaning |
 |---|---|
 | `status` | `learning`, `identified` (model with walls), `simple model` (model without walls), or `not identified: ` followed by the reason (for example `not identified: too little heating during the nights`) |
-| `tracking` | State of the room tracking: `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `recovering after an open window` (3 hours after a window closes), `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` or `wall state implausible` |
+| `tracking` | State of the room tracking: `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` or `wall state implausible` |
 | `walls` | `identified`, or why the walls are not in the model: `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model`; `null` before any result |
 | `a` | Heating response at full power, in the units of `model.a` (°C per minute) |
-| `b_eq` | Static loss, in the units of `model.b` (per minute): the loss that sets the holding power |
+| `b_eq` | Static loss of the model, in the units of `model.b` (per minute). The holding power does not use it: its static part comes from `energy_balance_ratio`, which `b_eq / a` must agree with within 5 % for a publication |
 | `b_air` | Total loss rate of the air, to the outside and to the walls (per minute); `null` for the simple model |
 | `b_wall` | Steady share of that loss that goes through the walls (per minute), with `b_eq` = `b_air` − `b_wall`; `null` for the simple model |
 | `forecast_c` | Forecast room temperature in `1h`, `2h`, `6h` and `12h` if the current heating power were kept (°C); `null` while the tracking is not running |
@@ -166,7 +166,10 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `wall_extra_power_percent` | Extra power the walls currently absorb beyond their steady share, in % of full power (negative when they give heat back); `null` without identified walls, without a precise sensor or while the tracking is not `ok` |
 | `identified_day` | Day of the values in use, `null` before a publication |
 | `last_identification_day` | Day of the last daily identification |
-| `last_refusal_reason` | Why the last daily identification published nothing (for example `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature` or `the heating response differs too much from the one measured by the regulation`), `null` when it published |
+| `last_refusal_reason` | Why the last daily identification published nothing (for example `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation` or `the model's heat loss disagrees with the measured heat balance`), `null` when it published |
+| `energy_balance_ratio` | Heat balance ratio in force, computed once a day over the 3 whole days before the day: the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. Once a model is published it is the static part of the holding power, `energy_balance_ratio` × (setpoint − outdoor temperature). A day whose heat balance is refused keeps the previous value; `null` before a first accepted value |
+| `energy_balance_day` | Day the value in force was computed, `null` before a first accepted value |
+| `energy_balance_refusal_reason` | Why the last daily heat balance gave no new value (`not enough recorded days yet`, `too much missing or invalid data`, `heating response not known yet`, `indoor-outdoor temperature difference too small`, `too little heating`, `too little heating on one of the days`, `the heating need differs too much from one day to the next`, `the heat balance changes too much with the hours it covers`, `value out of the plausible range` or `computation failed`), `null` when it gave one |
 | `sensor_resolution_c` | Smallest step of the temperature sensor seen in the recorded history (°C) |
 | `last_error` | Last computation error, `null` when none |
 
@@ -177,8 +180,8 @@ feed-forward):
 
 | Field | Meaning |
 |---|---|
-| `source` | `learned model` (the A/B model, `model.b / model.a`), `room model (air and walls)` (published model with walls, tracking `ok`: static part plus the wall extra power), `room model (static part)` (published model with walls while the tracking is not `ok`: static part only) or `room model (simple)` (published model without walls) |
-| `wall_power_percent` | Wall extra power included in the holding power, in % of full power (negative when the walls give heat back); `null` unless `source` is `room model (air and walls)` |
+| `source` | `learned model` (the A/B model, `model.b / model.a`), `room model (air and walls)` (published model with walls, tracking `ok`: static part plus the wall extra power), `room model (static part)` (published model with walls while the tracking is not `ok`: static part only) or `room model (simple)` (published model without walls). The static part of a room model source is `room_model.energy_balance_ratio` × (setpoint − outdoor temperature); while no heat balance is in force, the source stays `learned model` |
+| `wall_power_percent` | Wall extra power applied in the holding power, in % of full power (negative when the walls give heat back). When the wall term starts, stops or changes with a new publication, the applied value moves over 30 minutes from its last value to the new one, so it can differ from `room_model.wall_extra_power_percent` and stay non-zero for 30 minutes after `source` leaves `room model (air and walls)`; `null` when no wall part is applied |
 
 While a room model source is in force, `analysis.feedforward.ff2_frozen` is
 `true` with `ff2_freeze_reason` `room_model`, and `u_ff2` is `0`.

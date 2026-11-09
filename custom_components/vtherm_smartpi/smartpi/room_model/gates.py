@@ -18,6 +18,13 @@ Candidates are combined in the identifiable coordinates (a, b_eq / a, c /
 alpha, beta): the candidate is the geometric mean of the two windows in those
 coordinates, and the published value is their median over the last
 RM_PUB_LAST candidates of the same structure.
+
+The static gain in force comes from the energy balance, not from the fits; a
+fit gives the wall dynamics. Its own static gain b_eq / a is the difference of
+two terms (alpha - c over a) that are sensitive to the emitter time, so it is
+checked against the energy-balance ratio in force: a candidate that differs
+from it by more than RM_EB_AGREE_TOL is refused, its dynamics do not explain
+the measured heat balance. Without a qualified ratio there is no such check.
 """
 from __future__ import annotations
 
@@ -27,6 +34,7 @@ import statistics
 from .const import (
     RM_A_ONLINE_RATIO_MAX,
     RM_AGREE_TOL,
+    RM_EB_AGREE_TOL,
     RM_FULL_HELDOUT_GAIN,
     RM_PUB_LAST,
     RM_RES_AC_1H_MAX,
@@ -60,6 +68,7 @@ WHY_HELDOUT = "heldout"
 WHY_FAILED = "failed"
 WHY_EMITTER_EDGE = "emitter edge"
 WHY_A_ONLINE = "a online"
+WHY_EB = "energy balance"
 
 WALL_COARSE = "coarse sensor"
 WALL_SMALL = "no wall share"
@@ -135,6 +144,17 @@ def a_consistent(a: float | None, a_online: float | None) -> bool:
     return abs(math.log(a / a_online)) <= math.log(RM_A_ONLINE_RATIO_MAX)
 
 
+def eb_agrees(p: dict, eb: float | None) -> bool:
+    """The static gain b_eq / a of a parameter set agrees with the energy-balance ratio in force (none: no
+    check)."""
+    if eb is None or eb <= 0.0:
+        return True
+    c = _coords(p)
+    if c is None:
+        return False
+    return abs(math.log(c[1] / eb)) <= RM_EB_AGREE_TOL
+
+
 def _coords(p: dict) -> tuple[float, float, float, float] | None:
     """Identifiable coordinates of a parameter set: (a, b_eq / a, c / alpha, beta)."""
     full = p.get("struct") == STRUCT_FULL
@@ -171,10 +191,12 @@ def combine(p: dict, q: dict) -> dict:
     return _from_coords(q, *m)
 
 
-def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: float | None = None) -> dict:
+def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: float | None = None,
+           eb: float | None = None) -> dict:
     """Decision of a day: {"struct", "candidate", "wall"} or {"why", "wall"}.
 
     a_online: heating response of the online estimate (per second), None when unknown.
+    eb: energy-balance ratio in force (b_eq / a units), None before a first qualified ratio.
     """
     if cur.get("why"):
         return {"why": cur["why"], "wall": None}
@@ -205,6 +227,8 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: fl
         wall, full_why = WALL_NOT_BETTER, None
     elif not a_consistent((cand := combine(p_full["params"], full["params"]))["a"], a_online):
         wall, full_why = WALL_NOT_CONFIRMED, WHY_A_ONLINE
+    elif not eb_agrees(cand, eb):
+        wall, full_why = WALL_NOT_CONFIRMED, WHY_EB
     else:
         return {"struct": STRUCT_FULL, "candidate": cand, "wall": None}
     if not red.get("ok"):
@@ -219,6 +243,8 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: fl
         why = WHY_HELDOUT
     elif not a_consistent((cand := combine(p_red["params"], red["params"]))["a"], a_online):
         why = WHY_A_ONLINE
+    elif not eb_agrees(cand, eb):
+        why = WHY_EB
     else:
         return {"struct": STRUCT_REDUCED, "candidate": cand, "wall": wall}
     return {"why": why, "wall": wall}

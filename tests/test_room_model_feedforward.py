@@ -26,6 +26,7 @@ from custom_components.vtherm_smartpi.smartpi.room_model.feedforward import (
     select_source,
     static_gain,
 )
+from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_WALL_FADE_S
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 from custom_components.vtherm_smartpi.smartpi.room_model.observer import HEALTH_OK, HEALTH_SETTLING
 from custom_components.vtherm_smartpi.smartpi.setpoint import SmartPISetpointManager
@@ -36,6 +37,14 @@ FULL = RoomParams("full", 0.0012, 1.0 / (2.5 * H), 1.0 / (80.0 * H), 0.65 / (2.5
 SIMPLE = RoomParams.reduced(0.0012, 1.0 / (30.0 * H), 600.0, 120.0)
 T_EXT = 4.0
 T_SP = 20.0
+T0 = 1.0e9
+HEAT = VThermHvacMode_HEAT
+
+
+def _eb(params: RoomParams) -> float:
+    """Energy-balance ratio in force for a published model: 4 % above the fitted b_eq / a, so that a holding
+    power built on the fit would show."""
+    return 1.04 * params.b_eq / params.a
 
 
 def _algo() -> SmartPI:
@@ -57,10 +66,14 @@ def _algo() -> SmartPI:
     return algo
 
 
-def _publish(algo: SmartPI, params: RoomParams, *, healthy: bool = True, wall_offset_c: float = -1.0) -> None:
-    """Publish params; healthy: tracking ok with the wall wall_offset_c (C of wall temperature) off equilibrium."""
+def _publish(algo: SmartPI, params: RoomParams, *, healthy: bool = True, wall_offset_c: float = -1.0,
+             eb: float | None | str = "default") -> None:
+    """Publish params with an energy-balance ratio in force (default _eb(params)); healthy: tracking ok with the
+    wall wall_offset_c (C of wall temperature) off equilibrium."""
     room = algo.room_model
     room.params = params
+    room.eb_ratio = _eb(params) if eb == "default" else eb
+    room.eb_day = 739600 if room.eb_ratio is not None else None
     room.q = 0.01
     room.observer.configure(params, 0.01)
     if healthy:
@@ -91,9 +104,9 @@ def test_simple_model_gives_the_static_part() -> None:
     _publish(algo, SIMPLE)
     src = select_source(algo.room_model, VThermHvacMode_HEAT, False)
     assert src.kind == SOURCE_SIMPLE
-    assert src.gain == pytest.approx(SIMPLE.b_eq / SIMPLE.a)
+    assert src.gain == _eb(SIMPLE)
     assert src.wall is None
-    assert src.power(T_SP, T_EXT) == pytest.approx(SIMPLE.b_eq / SIMPLE.a * (T_SP - T_EXT))
+    assert src.power(T_SP, T_EXT) == pytest.approx(_eb(SIMPLE) * (T_SP - T_EXT))
 
 
 def test_walls_with_healthy_tracking_add_the_wall_extra_power() -> None:
@@ -105,7 +118,7 @@ def test_walls_with_healthy_tracking_add_the_wall_extra_power() -> None:
     assert src.kind == SOURCE_WALLS
     assert src.wall == pytest.approx(obs.wall_extra())
     assert src.wall > 0.0  # cold walls: extra power
-    static = FULL.b_eq / FULL.a * (T_SP - T_EXT)
+    static = _eb(FULL) * (T_SP - T_EXT)
     assert src.power(T_SP, T_EXT) == pytest.approx(static + src.wall)
     # Both signs: warm walls give heat back
     _publish(algo, FULL, wall_offset_c=0.5)
@@ -147,41 +160,93 @@ def test_holding_power_is_clamped() -> None:
 # ---------------------------------------------------------------------------
 # Discrete changes and the transfer
 # ---------------------------------------------------------------------------
-def test_only_discrete_changes_are_transferred() -> None:
+def _upd(tr, src, now, learned=0.5, sp=T_SP, ext=T_EXT, heat=True):
+    return tr.update(src, now=now, learned_power=learned, target_temp=sp, ext_temp=ext, heat=heat)
+
+
+def test_only_static_changes_are_transferred_and_the_wall_part_blends() -> None:
     tr = HoldingTransfer()
     walls = HoldingSource(SOURCE_WALLS, 0.03, 0.10, FULL)
-    # First source: nothing to compare with
-    assert tr.update(LEARNED, new_power=0.3, learned_power=0.3, target_temp=T_SP, ext_temp=T_EXT) == 0.0
-    # The learned holding power's own evolution is never transferred
-    assert tr.update(LEARNED, new_power=0.5, learned_power=0.5, target_temp=T_SP, ext_temp=T_EXT) == 0.0
-    # Change of source: new minus the learned power of this cycle
-    p = walls.power(T_SP, T_EXT)
-    assert tr.update(walls, new_power=p, learned_power=0.5, target_temp=T_SP, ext_temp=T_EXT) == pytest.approx(p - 0.5)
-    # Continuous evolution of the wall term, of the setpoint and of the outdoor temperature: no transfer
+    # First source: nothing to compare with; the learned holding power's own evolution is never transferred
+    assert _upd(tr, LEARNED, 0.0, learned=0.3) == 0.0
+    assert _upd(tr, LEARNED, 60.0, learned=0.5) == 0.0
+    assert tr.wall_shown is None
+    # Change of source: only the static part steps, the wall part starts from 0
+    t0 = 120.0
+    assert _upd(tr, walls, t0) == pytest.approx(0.03 * (T_SP - T_EXT) - 0.5)
+    assert tr.wall_applied == 0.0 and tr.fading
+    # Linear blend to the live wall term over RM_WALL_FADE_S, nothing transferred
+    assert _upd(tr, walls, t0 + 0.5 * RM_WALL_FADE_S) == 0.0
+    assert tr.wall_applied == pytest.approx(0.05)
+    assert _upd(tr, walls, t0 + RM_WALL_FADE_S) == 0.0
+    assert tr.wall_applied == pytest.approx(0.10) and not tr.fading
+    # Continuous evolution of the wall term, of the setpoint and of the outdoor temperature: followed, no transfer
     walls2 = HoldingSource(SOURCE_WALLS, 0.03, 0.07, FULL)
-    assert tr.update(walls2, new_power=walls2.power(21.0, 2.0), learned_power=0.5, target_temp=21.0,
-                     ext_temp=2.0) == 0.0
-    # The tracking drops the wall term: its last value is transferred
+    t1 = t0 + 2 * RM_WALL_FADE_S
+    assert _upd(tr, walls2, t1, sp=21.0, ext=2.0) == 0.0
+    assert tr.wall_applied == pytest.approx(0.07)
+    # The tracking drops the wall term: linear fade-out from the value applied last, no transfer
     static = HoldingSource(SOURCE_STATIC, 0.03, None, FULL)
-    assert tr.update(static, new_power=static.power(21.0, 2.0), learned_power=0.5, target_temp=21.0,
-                     ext_temp=2.0) == pytest.approx(-0.07)
-    # ... and back on
-    assert tr.update(walls2, new_power=walls2.power(21.0, 2.0), learned_power=0.5, target_temp=21.0,
-                     ext_temp=2.0) == pytest.approx(0.07)
-    # New daily publication: new parameters against the old ones at the same inputs
+    assert _upd(tr, static, t1 + 60.0, sp=21.0, ext=2.0) == 0.0
+    assert tr.wall_applied == pytest.approx(0.07)
+    assert tr.wall_shown == tr.wall_applied
+    assert _upd(tr, static, t1 + 60.0 + 0.5 * RM_WALL_FADE_S, sp=21.0, ext=2.0) == 0.0
+    assert tr.wall_applied == pytest.approx(0.035)
+    # ... and back on during the fade-out: blend from the value applied last to the live term
+    back_from = tr.wall_applied
+    t2 = t1 + 60.0 + 0.5 * RM_WALL_FADE_S + 60.0
+    assert _upd(tr, walls2, t2, sp=21.0, ext=2.0) == 0.0
+    assert tr.wall_applied == pytest.approx(back_from)
+    assert _upd(tr, walls2, t2 + 60.0, sp=21.0, ext=2.0) == 0.0
+    assert tr.wall_applied == pytest.approx(back_from + (0.07 - back_from) * 60.0 / RM_WALL_FADE_S)
+    # New daily publication: the static step only, at the wall part applied at this cycle; the wall part blends
     new_params = RoomParams("full", 0.0013, FULL.alpha, FULL.beta, FULL.c, 600.0, 120.0)
     walls3 = HoldingSource(SOURCE_WALLS, 0.028, 0.065, new_params)
-    d = tr.update(walls3, new_power=walls3.power(21.0, 2.0), learned_power=0.5, target_temp=21.0, ext_temp=2.0)
-    assert d == pytest.approx(walls3.power(21.0, 2.0) - walls2.power(21.0, 2.0))
-    # Same parameters published again: nothing
+    w_before = tr.wall_applied
+    t3 = t2 + 180.0
+    d = _upd(tr, walls3, t3, sp=21.0, ext=2.0)
+    assert d == pytest.approx((0.028 - 0.03) * 19.0)
+    w_pub = tr.wall_applied
+    assert w_pub == pytest.approx(w_before)  # restarted from the value applied last, at elapsed 0
+    assert _upd(tr, walls3, t3 + RM_WALL_FADE_S, sp=21.0, ext=2.0) == 0.0
+    assert tr.wall_applied == pytest.approx(0.065)
+    # Same parameters published again: nothing, no new blend
     walls4 = HoldingSource(SOURCE_WALLS, 0.028, 0.065, RoomParams.from_dict(new_params.to_dict()))
-    assert tr.update(walls4, new_power=0.0, learned_power=0.5, target_temp=21.0, ext_temp=2.0) == 0.0
-    # Back to the learned source
-    assert tr.update(LEARNED, new_power=0.4, learned_power=0.4, target_temp=21.0,
-                     ext_temp=2.0) == pytest.approx(0.4 - walls4.power(21.0, 2.0))
-    # A reset (PI memory purged) forgets the source
+    assert _upd(tr, walls4, t3 + RM_WALL_FADE_S + 60.0, sp=21.0, ext=2.0) == 0.0
+    assert not tr.fading
+    # Back to the learned source in heating: the static step is transferred, the wall part fades out on top
+    t4 = t3 + RM_WALL_FADE_S + 120.0
+    d = _upd(tr, LEARNED, t4, learned=0.4, sp=21.0, ext=2.0)
+    assert d == pytest.approx(0.4 - 0.028 * 19.0)
+    assert tr.wall_applied == pytest.approx(0.065) and tr.fading
+    assert _upd(tr, LEARNED, t4 + RM_WALL_FADE_S, learned=0.4, sp=21.0, ext=2.0) == 0.0
+    assert tr.wall_applied == 0.0 and tr.wall_shown is None
+    # A reset (PI memory purged) forgets the source and the wall part
     tr.reset()
-    assert tr.update(walls, new_power=0.9, learned_power=0.4, target_temp=T_SP, ext_temp=T_EXT) == 0.0
+    assert _upd(tr, walls, t4, learned=0.4) == 0.0
+    assert tr.wall_applied == 0.0 and tr.fading
+
+
+def test_wall_part_is_dropped_on_the_learned_source_outside_heating() -> None:
+    tr = HoldingTransfer()
+    walls = HoldingSource(SOURCE_WALLS, 0.03, 0.10, FULL)
+    _upd(tr, walls, 0.0)
+    _upd(tr, walls, RM_WALL_FADE_S)
+    assert tr.wall_applied == pytest.approx(0.10)
+    _upd(tr, LEARNED, RM_WALL_FADE_S + 60.0, heat=False)
+    assert tr.wall_applied == 0.0 and not tr.fading
+
+
+def test_wall_blend_restarts_when_the_clock_goes_back() -> None:
+    tr = HoldingTransfer()
+    walls = HoldingSource(SOURCE_WALLS, 0.03, 0.10, FULL)
+    _upd(tr, walls, 1000.0)
+    _upd(tr, walls, 1000.0 + 0.5 * RM_WALL_FADE_S)
+    w = tr.wall_applied
+    _upd(tr, walls, 0.0)
+    assert tr.wall_applied == pytest.approx(w)
+    _upd(tr, walls, RM_WALL_FADE_S)
+    assert tr.wall_applied == pytest.approx(0.10)
 
 
 def test_integral_absorbs_a_step_within_its_limits() -> None:
@@ -211,7 +276,8 @@ def test_switch_to_the_room_model_is_bumpless_and_hands_the_trim_over() -> None:
     # Full weight, no trim
     src = algo._ff_holding.source
     assert src.kind == SOURCE_WALLS
-    assert (result.u_ff1, result.u_ff2, result.warmup_scale) == (src.power(T_SP, T_EXT), 0.0, 1.0)
+    # The wall part starts from 0 and blends in
+    assert (result.u_ff1, result.u_ff2, result.warmup_scale) == (src.power(T_SP, T_EXT, 0.0), 0.0, 1.0)
     assert abs(result.u_ff_final - learned.u_ff_final) > 0.1
     # FF + I unchanged: the step, trim included, went into the integral
     assert result.u_ff_final + algo.Ki * algo.ctl.integral == pytest.approx(before, abs=1e-12)
@@ -240,6 +306,269 @@ def test_transfer_is_bounded_by_the_integral_limits() -> None:
     algo.room_model.reset()
     algo._select_holding_power(_learned(algo), T_SP, T_EXT, VThermHvacMode_HEAT)
     assert algo.ctl.integral == pytest.approx(i_max)
+
+
+# ---------------------------------------------------------------------------
+# Wall part blend
+# ---------------------------------------------------------------------------
+STATIC_POWER = _eb(FULL) * (T_SP - T_EXT)
+
+
+def _set_tracking(algo: SmartPI, ok: bool) -> None:
+    """Tracking ok (walls) or settling (static part only)."""
+    algo.room_model.observer.settle_until = None if ok else 2e9
+
+
+def _on_static(integral: float = 10.0) -> SmartPI:
+    """A published full model on its static part (tracking settling), the static step already transferred."""
+    algo = _algo()
+    _publish(algo, FULL)
+    _set_tracking(algo, False)
+    algo._select_holding_power(_learned(algo), T_SP, T_EXT, HEAT, now=T0)
+    assert algo._ff_holding.source.kind == SOURCE_STATIC
+    algo.ctl.integral = integral
+    return algo
+
+
+def _select(algo: SmartPI, now: float):
+    return algo._select_holding_power(_learned(algo), T_SP, T_EXT, HEAT, now=now)
+
+
+def test_static_to_walls_raises_the_command_by_the_wall_term_without_touching_the_integral() -> None:
+    algo = _on_static()
+    _set_tracking(algo, True)
+    wall = algo.room_model.observer.wall_extra()
+    assert wall > 0.02
+    t1 = T0 + 600.0
+    seq = []
+    for k in range(41):
+        seq.append(_select(algo, t1 + 60.0 * k).u_ff_final)
+        assert algo._ff_holding.source.kind == SOURCE_WALLS
+        assert algo.ctl.integral == 10.0
+        if k == 15:
+            ff = algo.get_published_diagnostics()["feedforward"]
+            assert ff["wall_power_percent"] == round(100.0 * 0.5 * wall, 1)
+    assert seq[0] == pytest.approx(STATIC_POWER)
+    assert seq[15] == pytest.approx(STATIC_POWER + 0.5 * wall)
+    assert seq[30] == pytest.approx(STATIC_POWER + wall)
+    assert seq[40] == pytest.approx(STATIC_POWER + wall)
+    steps = [b - a for a, b in zip(seq, seq[1:31])]
+    assert all(st == pytest.approx(wall / 30.0) for st in steps)
+
+
+def test_walls_to_static_fades_the_wall_term_out_without_transfer() -> None:
+    algo = _on_static()
+    _set_tracking(algo, True)
+    _select(algo, T0 + 600.0)
+    _select(algo, T0 + 600.0 + RM_WALL_FADE_S)
+    wall = algo._ff_holding.wall_applied
+    assert wall == pytest.approx(algo.room_model.observer.wall_extra())
+    t2 = T0 + 600.0 + 2 * RM_WALL_FADE_S
+    _set_tracking(algo, False)
+    obs = algo.room_model.observer
+    seq = []
+    for k in range(31):
+        if k == 10:
+            # A fresh wall state of the unhealthy tracking is not used
+            obs.x[1] -= FULL.k_te * 2.0
+        seq.append(_select(algo, t2 + 60.0 * k).u_ff_final)
+        assert algo._ff_holding.source.kind == SOURCE_STATIC
+        assert algo.ctl.integral == 10.0
+    for k, u in enumerate(seq):
+        assert u == pytest.approx(STATIC_POWER + wall * (1.0 - k / 30.0))
+    assert algo.get_published_diagnostics()["feedforward"]["wall_power_percent"] is None
+
+
+def test_rapid_toggling_accumulates_nothing_in_the_integral() -> None:
+    algo = _on_static()
+    wall = None
+    for k in range(240):
+        _set_tracking(algo, k % 3 != 0)
+        r = _select(algo, T0 + 60.0 * (k + 1))
+        wall = algo.room_model.observer.wall_extra()
+        assert algo.ctl.integral == 10.0
+        assert STATIC_POWER - 1e-12 <= r.u_ff_final <= STATIC_POWER + wall + 1e-12
+    # Back to steady walls: the full wall term within the fade time
+    _set_tracking(algo, True)
+    r = _select(algo, T0 + 60.0 * 241 + RM_WALL_FADE_S)
+    assert r.u_ff_final == pytest.approx(STATIC_POWER + wall)
+    assert algo.ctl.integral == 10.0
+
+
+def test_publication_keeps_the_static_part_and_blends_the_wall_part() -> None:
+    """A new publication changes the fitted b_eq / a and the walls: the static part stays the energy balance
+    (nothing moved into the integral), the wall part blends to the new wall term."""
+    algo = _on_static()
+    _set_tracking(algo, True)
+    _select(algo, T0 + 600.0)
+    _select(algo, T0 + 600.0 + RM_WALL_FADE_S)
+    old_wall = algo._ff_holding.wall_applied
+    new = RoomParams("full", FULL.a * 1.1, FULL.alpha, FULL.beta * 0.8, FULL.c * 0.97, FULL.tau_e, FULL.L)
+    assert abs(new.b_eq / new.a - FULL.b_eq / FULL.a) > 0.001
+    algo.room_model.params = new
+    algo.room_model.observer.configure(new, 0.01)
+    assert algo.room_model.observer.health() == HEALTH_OK
+    new_wall = algo.room_model.observer.wall_extra()
+    assert abs(new_wall - old_wall) > 0.005
+    t3 = T0 + 600.0 + 2 * RM_WALL_FADE_S
+    r = _select(algo, t3)
+    assert algo._ff_holding.source.gain == _eb(FULL)
+    assert algo.ctl.integral == 10.0
+    assert r.u_ff_final == pytest.approx(STATIC_POWER + old_wall)
+    r = _select(algo, t3 + 0.5 * RM_WALL_FADE_S)
+    assert r.u_ff_final == pytest.approx(STATIC_POWER + 0.5 * (old_wall + new_wall))
+    r = _select(algo, t3 + RM_WALL_FADE_S)
+    assert r.u_ff_final == pytest.approx(STATIC_POWER + new_wall)
+    assert algo.ctl.integral == 10.0
+
+
+def test_new_energy_balance_ratio_moves_the_static_step_only() -> None:
+    """A new qualified energy-balance ratio is a discrete change of the static part: its step goes into the
+    integral, the wall part goes on following the tracking without a new blend."""
+    algo = _on_static()
+    _set_tracking(algo, True)
+    _select(algo, T0 + 600.0)
+    _select(algo, T0 + 600.0 + RM_WALL_FADE_S)
+    wall = algo._ff_holding.wall_applied
+    assert not algo._ff_holding.fading
+    before = _select(algo, T0 + 660.0 + RM_WALL_FADE_S).u_ff_final + algo.Ki * algo.ctl.integral
+    new_ratio = 0.95 * _eb(FULL)
+    algo.room_model.eb_ratio = new_ratio
+    t = T0 + 720.0 + RM_WALL_FADE_S
+    r = _select(algo, t)
+    step = (new_ratio - _eb(FULL)) * (T_SP - T_EXT)
+    assert algo._ff_holding.last_delta == pytest.approx(step)
+    assert algo.ctl.integral == pytest.approx(10.0 - step / algo.Ki)
+    assert r.u_ff_final == pytest.approx(new_ratio * (T_SP - T_EXT) + wall)
+    assert r.u_ff_final + algo.Ki * algo.ctl.integral == pytest.approx(before, abs=1e-12)
+    assert not algo._ff_holding.fading
+    # Same ratio again: nothing more
+    integral = algo.ctl.integral
+    _select(algo, t + 60.0)
+    assert algo.ctl.integral == integral and algo._ff_holding.last_delta == 0.0
+
+
+def test_static_part_is_the_energy_balance_never_the_fit() -> None:
+    algo = _algo()
+    for params in (FULL, SIMPLE):
+        for ratio in (0.9 * params.b_eq / params.a, 1.2 * params.b_eq / params.a):
+            _publish(algo, params, eb=ratio)
+            src = select_source(algo.room_model, HEAT, False)
+            assert src.gain == ratio
+            assert static_gain(algo.room_model, HEAT, False) == ratio
+            wall = src.wall if src.wall is not None else 0.0
+            assert src.power(T_SP, T_EXT) == pytest.approx(ratio * (T_SP - T_EXT) + wall)
+    # Clamped like the learned gain
+    _publish(algo, SIMPLE, eb=5.0)
+    assert static_gain(algo.room_model, HEAT, False) == 3.0
+    assert select_source(algo.room_model, HEAT, False).power(T_SP, T_EXT) == 1.0
+
+
+def test_published_model_without_energy_balance_keeps_the_learned_holding_power() -> None:
+    """Published walls but no qualified energy-balance ratio yet: learned holding power, no wall term, no
+    transfer, no trim hand-over."""
+    algo = _algo()
+    algo._ff_trim.u_ff_trim = 0.03
+    algo.ctl.integral = 10.0
+    _publish(algo, FULL, eb=None)
+    assert algo.room_model.observer.health() == HEALTH_OK
+    assert algo.room_model.observer.wall_extra() > 0.02
+    assert select_source(algo.room_model, HEAT, False) is LEARNED
+    assert static_gain(algo.room_model, HEAT, False) is None
+    for k in range(3):
+        learned = _learned(algo)
+        assert _select_learned(algo, learned, T0 + 60.0 * k) is learned
+    assert algo.ctl.integral == 10.0
+    assert algo._ff_trim.u_ff_trim == 0.03
+    ff = algo.get_published_diagnostics()["feedforward"]
+    assert ff["source"] == "learned model" and ff["wall_power_percent"] is None
+    # The ratio qualifies: the room model takes over through the transfer
+    algo.room_model.eb_ratio = _eb(FULL)
+    _select(algo, T0 + 600.0)
+    assert algo._ff_holding.source.kind == SOURCE_WALLS
+
+
+def _select_learned(algo: SmartPI, learned, now: float):
+    return algo._select_holding_power(learned, T_SP, T_EXT, HEAT, now=now)
+
+
+def test_braking_equilibrium_is_the_energy_balance(monkeypatch) -> None:
+    """The braking prediction of the setpoint trajectory gets the energy-balance ratio in force."""
+    algo = _algo()
+    seen = []
+    real = algo.sp_mgr.filter_setpoint
+
+    def spy(**kw):
+        seen.append(kw.get("equilibrium_gain"))
+        return real(**kw)
+
+    monkeypatch.setattr(algo.sp_mgr, "filter_setpoint", spy)
+    from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
+
+    def run():
+        seen.clear()
+        algo.calculate(target_temp=T_SP, current_temp=19.5, ext_current_temp=T_EXT, slope=None, hvac_mode=HEAT,
+                       cycle_boundary=True)
+        return seen[-1] if seen else "not called"
+
+    assert algo.phase == SmartPIPhase.STABLE
+    run()
+    assert run() is None
+    _publish(algo, FULL, eb=0.9 * FULL.b_eq / FULL.a)
+    assert run() == 0.9 * FULL.b_eq / FULL.a
+    _publish(algo, FULL, eb=None)
+    assert run() is None
+
+
+def test_restart_during_a_fade_goes_on_with_the_applied_wall_part() -> None:
+    algo = _on_static()
+    _set_tracking(algo, True)
+    wall = algo.room_model.observer.wall_extra()
+    t1 = T0 + 600.0
+    _select(algo, t1)
+    mid = t1 + 0.4 * RM_WALL_FADE_S
+    r_mid = _select(algo, mid)
+    assert r_mid.u_ff_final == pytest.approx(STATIC_POWER + 0.4 * wall)
+    state, room_state = algo.save_state(), algo.room_model.save_state()
+    assert state["ff_wall"]["start"] == t1
+
+    restored = _algo()
+    restored.load_state(state)
+    restored.room_model.load_state(room_state)
+    assert restored._ff_holding.wall_applied == pytest.approx(0.4 * wall)
+    assert restored.get_published_diagnostics()["feedforward"]["wall_power_percent"] == round(40.0 * wall, 1)
+    # The same instant gives the same holding power, then the blend goes on on the wall clock
+    assert _select(restored, mid).u_ff_final == pytest.approx(r_mid.u_ff_final)
+    assert _select(restored, t1 + 0.7 * RM_WALL_FADE_S).u_ff_final == pytest.approx(STATIC_POWER + 0.7 * wall)
+    assert _select(restored, t1 + RM_WALL_FADE_S).u_ff_final == pytest.approx(STATIC_POWER + wall)
+    assert restored.ctl.integral == 10.0
+    # Restarting on the static part (tracking not ok): the fade-out starts from the restored applied value
+    again = _algo()
+    again.load_state(state)
+    again.room_model.load_state(room_state)
+    _set_tracking(again, False)
+    assert _select(again, mid + 60.0).u_ff_final == pytest.approx(STATIC_POWER + 0.4 * wall)
+    assert _select(again, mid + 60.0 + 0.5 * RM_WALL_FADE_S).u_ff_final == pytest.approx(STATIC_POWER + 0.2 * wall)
+    assert again.ctl.integral == 10.0
+
+
+def test_state_without_the_wall_blend_applies_the_saved_wall_term() -> None:
+    algo = _on_static()
+    _set_tracking(algo, True)
+    _select(algo, T0 + 600.0)
+    _select(algo, T0 + 600.0 + RM_WALL_FADE_S)
+    state, room_state = algo.save_state(), algo.room_model.save_state()
+    state.pop("ff_wall")
+    restored = _algo()
+    restored.load_state(state)
+    restored.room_model.load_state(room_state)
+    assert restored._ff_holding.wall_applied == pytest.approx(state["ff_source"]["wall"])
+    assert not restored._ff_holding.fading
+    for bad in ({"applied": "x", "from": 0.0, "start": None}, {"applied": 5.0, "from": 0.0, "start": None},
+                {"applied": 0.01, "from": 0.0, "start": "y"}, ["no"]):
+        restored._ff_holding.load(state["ff_source"], bad)
+        assert restored._ff_holding.wall_applied == pytest.approx(state["ff_source"]["wall"])
+        assert not restored._ff_holding.fading
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +626,7 @@ def test_low_learned_ratio_no_longer_arms_braking_with_the_room_model() -> None:
 def test_diagnostics_show_the_source_in_plain_words(source, plain, percent) -> None:
     algo = _algo()
     algo._ff_holding.ref = source
+    algo._ff_holding.wall_applied = source.wall or 0.0
     ff = algo.get_published_diagnostics()["feedforward"]
     assert ff["source"] == plain
     assert ff["wall_power_percent"] == percent
@@ -305,7 +635,8 @@ def test_diagnostics_show_the_source_in_plain_words(source, plain, percent) -> N
 def test_source_persists_and_restarts_without_transfer() -> None:
     algo = _algo()
     _publish(algo, FULL)
-    algo._select_holding_power(_learned(algo), T_SP, T_EXT, VThermHvacMode_HEAT)
+    algo._select_holding_power(_learned(algo), T_SP, T_EXT, VThermHvacMode_HEAT, now=T0)
+    algo._select_holding_power(_learned(algo), T_SP, T_EXT, VThermHvacMode_HEAT, now=T0 + RM_WALL_FADE_S)
     algo.ctl.integral = 12.0
     ref = algo._ff_holding.ref
     state = algo.save_state()
@@ -321,7 +652,7 @@ def test_source_persists_and_restarts_without_transfer() -> None:
     restored._tau_reliable = True
     k_ff = restored.est.b / restored.est.a
     learned = compute_ff(k_ff=k_ff, target_temp_ff=T_SP, ext_temp=T_EXT, warmup_scale=0.0, trim=restored._ff_trim)
-    result = restored._select_holding_power(learned, T_SP, T_EXT, VThermHvacMode_HEAT)
+    result = restored._select_holding_power(learned, T_SP, T_EXT, VThermHvacMode_HEAT, now=T0 + 2 * RM_WALL_FADE_S)
     assert result.u_ff_final == pytest.approx(ref.power(T_SP, T_EXT))
     assert restored.ctl.integral == 12.0
     assert restored._ff_holding.last_delta == 0.0
@@ -374,8 +705,9 @@ def test_invalid_saved_source_is_ignored() -> None:
 def test_closed_loop_heavy_room_switch_is_bumpless_and_mornings_reach_the_setpoint(caplog) -> None:
     """Heavy room (walls 65 % of the air loss, wall time constant 80 h), precise sensor, learned b / a 35 % low.
 
-    The true model is published at 14:00 on the first day: static part at once (tracking settling),
-    walls 3 h later. Bounds:
+    Eight days of recorded history before the run let the energy balance of the 3 days before the first day
+    qualify. The true model is published at 14:00 on the first day: static part (the energy balance) at once
+    (tracking settling), walls 3 h later. Bounds:
     - each switch moves FF + I by less than 0.01 while the holding power itself steps by more than 0.03
       (what moves is the integral of one tick);
     - with the walls in force, every morning rise (17 -> 20 C at 06:00) reaches 19.9 C within 3 h, against
@@ -391,6 +723,7 @@ def test_closed_loop_heavy_room_switch_is_bumpless_and_mornings_reach_the_setpoi
 
     def publish(algo, t):
         if not done["v"] and t >= pub_t:
+            done["eb"] = rsim.apply_energy_balance(algo, t)
             params = RoomParams("full", p["a"], p["alpha"], p["beta"], p["c"], p["tau_e"], p["L"])
             algo.room_model.params = params
             algo.room_model.q = 0.01
@@ -398,7 +731,12 @@ def test_closed_loop_heavy_room_switch_is_bumpless_and_mornings_reach_the_setpoi
             done["v"] = True
 
     days = 4
-    out = rsim.run_smartpi(p, days, b_online_ratio=0.65, on_tick=publish)
+    out = rsim.run_smartpi(p, days, b_online_ratio=0.65, on_tick=publish, history_days=8.0)
+    # The energy balance qualifies within 2 % of the true b_eq / a and gives the static part
+    true_gain = (p["alpha"] - p["c"]) / p["a"]
+    assert done["eb"]["reason"] is None
+    assert done["eb"]["value"] == pytest.approx(true_gain, rel=0.02)
+    assert out["algo"]._ff_holding.source.gain == done["eb"]["value"]
     ref = rsim.run_smartpi(p, days, b_online_ratio=0.65)
     t = np.array(out["t"])
     src = out["source"]
@@ -407,9 +745,16 @@ def test_closed_loop_heavy_room_switch_is_bumpless_and_mornings_reach_the_setpoi
     for i in switches:
         step = out["u_ff"][i] - out["u_ff"][i - 1]
         total = (out["u_ff"][i] + out["i_power"][i]) - (out["u_ff"][i - 1] + out["i_power"][i - 1])
-        assert abs(step) > 0.03
         assert abs(total) < 0.01
         assert abs(out["u"][i] - out["u"][i - 1]) < 0.01
+    # Static step moved into the integral; the wall term blends in over RM_WALL_FADE_S, the integral keeps
+    # its own evolution (one tick of PI action)
+    i_static, i_walls = switches
+    assert abs(out["u_ff"][i_static] - out["u_ff"][i_static - 1]) > 0.03
+    assert abs(out["u_ff"][i_walls] - out["u_ff"][i_walls - 1]) < 0.005
+    assert abs(out["i_power"][i_walls] - out["i_power"][i_walls - 1]) < 0.005
+    j = i_walls + int(RM_WALL_FADE_S // 60)
+    assert out["u_ff"][j] - out["u_ff"][i_walls] > 0.03
 
     def mornings(run):
         ta, sp, tt = np.array(run["ta"]), np.array(run["sp"]), np.array(run["t"])
@@ -441,13 +786,15 @@ def test_closed_loop_restart_keeps_the_room_model_source(caplog) -> None:
 
     def publish(algo, t):
         if not done["v"] and t >= rsim.T0 + 14 * H:
+            assert rsim.apply_energy_balance(algo, t)["reason"] is None
             params = RoomParams("full", p["a"], p["alpha"], p["beta"], p["c"], p["tau_e"], p["L"])
             algo.room_model.params = params
             algo.room_model.q = 0.01
             algo.room_model.observer.configure(params, 0.01)
             done["v"] = True
 
-    out = rsim.run_smartpi(p, 1.5, b_online_ratio=0.65, on_tick=publish, restart_at=rsim.T0 + rsim.DAY + 7 * H)
+    out = rsim.run_smartpi(p, 1.5, b_online_ratio=0.65, on_tick=publish, restart_at=rsim.T0 + rsim.DAY + 7 * H,
+                           history_days=8.0)
     i = out["restart"]["i"]
     assert out["restart"]["state"]["ff_source"]["kind"] == SOURCE_WALLS
     assert out["source"][i - 1] == out["source"][i] == SOURCE_WALLS
