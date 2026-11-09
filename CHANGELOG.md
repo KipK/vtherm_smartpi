@@ -43,6 +43,18 @@ All notable changes to this project will be documented in this file.
   use half of the learned value, as an apparent dead time. Requires `numpy` and
   `scipy`. PWM heaters only: in valve mode nothing is learned or applied.
 
+## [0.6.3]
+
+- Regulation: the heating dead time no longer shrinks in a room that is
+  already warming when the heater starts, for example when people get up. The
+  rise was measured from the start level, so the room's own warming was taken
+  for the heater's response, and the dead time and then the gains drifted
+  (shorter dead time, stronger gains). The response is now measured against the
+  course the temperature followed before the start. When that course is too
+  steep or too irregular to tell the heating apart, the measurement is dropped
+  and the previous dead time is kept. A room that is flat or cooling before the
+  start is measured as before.
+
 ## [0.6.2]
 
 - Regulation: a room no longer stays below the setpoint for good after a
