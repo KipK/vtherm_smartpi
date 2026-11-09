@@ -302,6 +302,34 @@ L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`,
 
 Le retard est appris sur des épisodes à puissance constante, que fournit le bootstrap par hystérésis. En régulation PWM, le rapport cyclique change d'un cycle à l'autre : une installation déjà sortie du bootstrap en fournit donc rarement.
 
+### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur
+
+L'apprentissage du retard de l'émetteur (`smartpi/tar_learning/`) sélectionne ses données avec `smartpi/quiet_periods/`, un module Python pur partagé par les méthodes qui ont besoin d'une pièce à l'abri des apports solaires. Aucune heure locale n'intervient dans la sélection ; les temps sont des secondes epoch et des intervalles semi-ouverts `[start, end)`.
+
+**Obscurité.** La position provient de la configuration de Home Assistant (`hass.config.latitude`, `hass.config.longitude`), injectée par le handler et validée par le manager : nombres finis dans [-90, 90] et [-180, 180] (zéro est valide). L'élévation géométrique du centre du soleil est calculée avec le paquet `astral` livré avec Home Assistant. L'obscurité correspond à un centre situé sous `-0.833 - 0.5 = -1.333` degrés : -0,833 degré est le lever et le coucher du soleil standard (le bord supérieur sur l'horizon apparent, 34' de réfraction plus 16' de rayon), et 0,5 degré couvre l'étalement habituel de la réfraction près de l'horizon. L'élévation est échantillonnée toutes les 600 s sur une grille alignée sur l'epoch ; un échantillon ne compte comme sombre qu'à 0,05 degré sous le seuil (l'élévation s'écarte d'une corde d'au plus 0,014 degré sur un pas de 600 s près de l'horizon), chaque franchissement est affiné par dichotomie à 1 s, puis chaque borne est repoussée de 120 s vers l'intérieur pour la précision de l'algorithme solaire. L'obscurité se termine donc quelques minutes avant le lever du soleil et commence quelques minutes après le coucher, jamais plus tard que le lever. Une obscurité de plus de 24 h (nuit polaire) est découpée en blocs de 24 h ancrés sur son début réel ; un jour polaire n'a pas d'obscurité. Sans position valide (ou sans `astral`), il n'y a ni obscurité ni période : les méthodes restent silencieuses et `quiet_periods.reason` en donne la raison.
+
+**Périodes.** Un plateau est un intervalle maximal à consigne constante. Une séquence de baisse de consigne va de la baisse à la hausse suivante (les baisses suivantes restent dans la séquence). Une obscurité contient au plus un épisode : la plus longue partie d'une séquence de baisse de consigne située dans l'obscurité, ou toute l'obscurité lorsque la consigne ne change pas à l'intérieur (consigne maintenue). L'épisode se termine à la hausse qui achève la séquence, ou à la fin de l'obscurité. Ses composantes calmes sont ses morceaux de plateau intersectés avec les plages valides de l'historique (`TarHistory.valid_spans` : tout sauf les intervalles invalides) ; un redémarrage ponté ne laisse aucun intervalle invalide et ne les coupe pas. La composante retenue est la plus longue (au moins 1 h, la plus ancienne en cas d'égalité).
+
+**Début régulé.** Pour une composante, le premier démarrage du chauffage à partir du début de son plateau avec la température intérieure à moins de 0,3 °C de la consigne ; lorsqu'il précède la composante, le début de la composante si les données entre les deux sont valides. Un démarrage du chauffage dans les 60 s suivant un redémarrage ne compte pas. Aucun lorsque la pièce ne régule jamais à cet endroit.
+
+**Intervalle d'identification.** La composante retenue, prolongée après la hausse qui termine l'épisode tant qu'il fait encore nuit, que la nouvelle consigne reste constante et que les données sont valides, pendant 2 h au plus (l'horizon de réponse de l'ajustement d'une montée de confort). La réponse à la hausse est la principale excitation de l'émetteur : sans elle, la constante de temps de l'émetteur d'une pièce régulée est mal déterminée. La nuit régulée et la montée de confort s'arrêtent toujours à la hausse.
+
+**Clés.** Un épisode est fermé dès que sa fin est antérieure ou égale à la dernière observation, établi dès que son intervalle d'identification est connu lui aussi, et complet lorsque l'historique le couvre depuis son début. Sa clé est `q<version>:<origine>:<début de la composante retenue>` à 0,1 s près, l'origine étant le début de l'épisode. Le manager reconstruit le catalogue au plus toutes les 10 minutes et conserve les épisodes établis et complets (60 au plus) avec leurs composantes : le catalogue conservé n'avance que vers l'avant, si bien qu'une clé ne change jamais lorsque l'historique est élagué, et une période retrouvée reçoit la même clé.
+
+**Usages.**
+
+| Règle | Données |
+|---|---|
+| Montée de confort | une hausse d'au moins 1 °C après une consigne basse maintenue 2 h (dans l'historique), hors des 300 s suivant un redémarrage ; évaluée lorsqu'elle termine un épisode et que la composante qui se termine à la hausse couvre les 2 h qui la précèdent |
+| Fenêtre d'ajustement d'une montée | chaque fenêtre de réponse se termine à la fin de l'obscurité ; les règles d'excitation (`exc_window_T`, énergie, hausse, période du capteur) jugent la fenêtre tronquée ; moins de 600 s restantes ne donnent aucun ajustement. Une fenêtre `Wsp` coupée par l'obscurité doit aussi passer `exc_window_T` pour la plus grande de la valeur ajustée, de la valeur affinée en vigueur, de la valeur rapide publiée et de deux fois le temps mort du bootstrap (le premier moment d'un émetteur du premier ordre vaut environ deux fois le retard apparent que mesure le bootstrap) ; sans aucune d'elles, la montée est refusée |
+| Indicateur de nuit | périodes passives intersectées avec les composantes calmes de l'épisode de la montée, sur la grille de 600 s du segment |
+| G1 / GT4 | plus longue plage sans démarrage du chauffage dans `[début régulé, t_ref)` ; l'absence de début régulé, ou une partie régulée de moins de 4 h, est un observable inconnu et laisse la montée non confirmée |
+| Nuit régulée | `[début régulé, fin de l'épisode)` de la composante retenue, d'au moins 4 h, valide jusqu'à sa fin ; puis les règles existantes sur les demi-heures, la température, la pente de puissance et le résidu |
+| Fenêtre d'identification | les intervalles d'identification de trois épisodes établis consécutifs (tranches entièrement comprises dans celles-ci), l'état des murs commençant 10 h avant le premier ; comparée à la fenêtre des trois épisodes précédents, sans recouvrement |
+| Classe de la pièce, valeur rapide | une entrée de nuit et une valeur confirmée par clé, remplacées avant le calcul de la classe de la pièce ou de la publication |
+
+Les évaluations portent leur instant de décision (fin de leur dernier épisode) ; la classe, les paramètres des murs et `τe` en vigueur à une montée sont ceux décidés avant elle. La date locale des diagnostics (`day`) ne sert qu'à l'affichage.
+
 ---
 
 ## 4. Contrôle Smart-PI
@@ -850,6 +878,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `guards.py`            | `guard_cut` et `guard_kick`                              |
 | `thermal_twin_1r1c.py` | jumeau thermique et diagnostics prédictifs               |
 | `restart_bridge.py`    | décision unique de pontage ou non d'un redémarrage, consultée par chaque composant, et contexte du dernier calcul |
+| `quiet_periods/`       | obscurité d'après la position de la maison (`astral`), plateaux, séquences de baisse de consigne, épisodes, clés et début régulé des périodes calmes |
 | `diagnostics.py`       | payload canonique des diagnostics live                  |
 | `diagnostic_history.py` | enveloppe versionnée et séries Recorder stables         |
 | `tint_filter.py`       | filtrage adaptatif de la température intérieure          |
@@ -955,6 +984,8 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
 La boucle de régulation planifie au plus une écriture différée de ce payload par fenêtre de cinq minutes ; Home Assistant vide une écriture en attente à l'arrêt. Les services et la suppression de l'entité écrivent immédiatement un snapshot.
 
 Les timestamps d'événements passés (historiques de température, début de calibration, période passive et épisode du retard de réponse) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
+
+L'apprentissage du retard de l'émetteur conserve son propre stockage (version d'état 2) : historique, montées de confort en attente, catalogue des périodes calmes avec leurs clés, entrées de nuit, décisions sur les parties régulées, fenêtres, évaluations, valeurs confirmées par période, publications et la position de la maison avec laquelle les preuves ont été trouvées. Un stockage de version 1 ne conserve que son historique et ses hausses en attente : ses nuits, fenêtres, évaluations, confirmations et valeurs publiées avaient été sélectionnées par heures locales sans contrôle solaire et sont abandonnées, puis retrouvées à partir de l'historique. Un changement de position de la maison oublie les preuves des périodes. Une version plus récente est ignorée.
 
 #### Redémarrages
 

@@ -1,30 +1,53 @@
 """Orchestration of the T_ar learning (event loop side, pure Python).
 
-The manager records the room signals (history.py), detects the morning comfort
-steps, schedules the computations (jobs.py, run in an executor), keeps their
-results and gives the regulation the HEAT active dead time to use
-(policy.applied_value). It never modifies the bootstrap/calibration dead time.
+The manager records the room signals (history.py), keeps the catalogue of the
+quiet periods of that history (quiet_periods: no sun, constant setpoint, valid
+data), detects the comfort steps, schedules the computations (jobs.py, run in
+an executor), keeps their results and gives the regulation the HEAT active
+dead time to use (policy.applied_value). It never modifies the
+bootstrap/calibration dead time.
+
+The catalogue holds the closed and complete quiet periods with their keys and
+origins, so a period keeps its key when the history is pruned. Every piece of
+evidence (night of the room class, regulated night, identification window,
+confirmed fast value) is keyed by its period: a period counts once. Without the
+position of the home no period is found and the methods stay silent.
 """
 from __future__ import annotations
 
+import bisect
 import logging
+import math
 import time
 from typing import Any
 
 from ...hvac_mode import VThermHvacMode_HEAT
+from ..quiet_periods import (
+    WHY_NO_POSITION,
+    Position,
+    astral_available,
+    build_episodes,
+    dark_intervals,
+    episode_of_rise,
+    local_iso,
+    quiet_intervals,
+    regulated_span,
+    step_component,
+    summary,
+    validate_position,
+)
+from ..quiet_periods.const import BASELINE_HOLD_S
 from . import gates, public
 from .clock import LocalClock
 from .const import (
-    ID_WIN_DAYS,
-    ID_WINDOW_END_H,
+    ID_WIN_PERIODS,
     MORNING_EVAL_DELAY_S,
     PUB_LAST,
     R_SPAN_S,
     SOURCE_BOOTSTRAP,
-    STEP_FROM_H,
     STEP_MERGE_S,
     STEP_MIN_RISE_C,
-    STEP_TO_H,
+    STEP_RESTART_GUARD_S,
     TAR_FAST_GATE,
     TAR_GAIN_DEADTIME_FACTOR,
     TAR_MAX_EVALUATIONS,
@@ -43,9 +66,15 @@ STATUS_ACTIVE = "active"
 STATUS_UNAVAILABLE = "dependencies_unavailable"
 STATUS_UNSUPPORTED = "valve_mode_not_supported"
 
-STATE_VERSION = 1
-_WINDOW_DELAY_S = 600.0
+# 2: quiet periods (keys by period, catalogue of periods, position of the evidence)
+STATE_VERSION = 2
 _PRUNE_EVERY_S = 3600.0
+# The catalogue of the quiet periods is rebuilt at most this often
+_CATALOGUE_EVERY_S = 600.0
+# A position closer than this (degrees) to the one of the evidence is the same home
+_POSITION_TOL_DEG = 1e-3
+# Shortest response left before sunrise for a comfort step
+_RESPONSE_MIN_S = 600.0
 
 
 def _run_job(kind: str, snap: dict) -> dict:
@@ -68,12 +97,18 @@ def _per_min(x: float | None) -> float | None:
     return None if x is None else round(float(x) * 60.0, 6)
 
 
+def _moved(a: Position, b: Position) -> bool:
+    return (abs(a.latitude - b.latitude) > _POSITION_TOL_DEG
+            or abs(a.longitude - b.longitude) > _POSITION_TOL_DEG)
+
+
 class TarLearningManager:
     """T_ar learning of one thermostat."""
 
     def __init__(self, name: str, time_zone: str | None, gate: str = TAR_FAST_GATE) -> None:
         self._name = name
         self._tz = time_zone
+        # Local dates of the diagnostics only: no selection uses the local time
         self._clock = LocalClock(time_zone)
         self.gate = gate
         self.status = STATUS_CHECKING
@@ -83,22 +118,65 @@ class TarLearningManager:
         self._running = False
         self._last_prune = 0.0
         self.dirty = False
+        # Position of the home (None: unknown, no quiet period) and the one the evidence was found with
+        self.position: Position | None = None
+        self._evidence_position: Position | None = None
+        # Last reliable bootstrap HEAT dead time seen (reference of the steps cut by sunrise)
+        self.bootstrap_heat_s: float | None = None
+        # Results of a computation started before a reset or a change of position are dropped
+        self._generation = 0
         self._reset_results()
 
     def _reset_results(self) -> None:
         self.pending: list[dict] = []
+        # Closed and complete quiet periods (oldest first), keyed by "id"
+        self.episodes: list[dict] = []
+        # Night indicator of each evaluated step, one per period ("night_id")
         self.nights: list[dict] = []
         self.mornings: list[dict] = []
+        # Identification windows and regulated-night decisions, keyed by period
         self.windows: dict[str, dict] = {}
         self.rnights: dict[str, dict] = {}
         self.evals: list[dict] = []
-        self.fast_values: list[float] = []
+        # Confirmed fast values [period key, T], one per period
+        self.fast_values: list[list] = []
+        self.fast_ids: list[str] = []
         self.fast_count = 0
         self.fast_pub: dict | None = None
         self.te_pub: dict | None = None
         self.refined_cls = "unknown"
         self.refined_wall: dict | None = None
         self.last_error: str | None = None
+        self._open: list[dict] = []
+        self._cat_t: float | None = None
+        self._generation += 1
+
+    def _forget_periods(self) -> None:
+        """Forget the evidence found with the quiet periods; the history and the pending steps stay."""
+        pending, mornings = self.pending, self.mornings
+        self._reset_results()
+        self.pending, self.mornings = pending, mornings
+        self._evidence_position = None
+        self.dirty = True
+
+    def set_position(self, latitude, longitude) -> None:
+        """Position of the home (Home Assistant configuration); a value that is not valid means unknown."""
+        pos = validate_position(latitude, longitude)
+        if pos is not None and not astral_available():
+            _LOGGER.warning("%s - T_ar learning: the solar position is unavailable (astral)", self._name)
+            pos = None
+        if pos is None and self.position is None and latitude is not None:
+            _LOGGER.debug("%s - T_ar learning: home position unknown, no quiet period", self._name)
+        self.position = pos
+        self._check_position()
+        self._cat_t = None
+
+    def _check_position(self) -> None:
+        ev = self._evidence_position
+        if self.position is not None and ev is not None and _moved(ev, self.position):
+            _LOGGER.info("%s - T_ar learning: the home position changed, the learned periods are forgotten",
+                         self._name)
+            self._forget_periods()
 
     # ------------------------------------------------------------------
     # Status
@@ -129,6 +207,7 @@ class TarLearningManager:
         """Forget the history and every learned value."""
         self.history = TarHistory()
         self._reset_results()
+        self._evidence_position = None
         self.dirty = True
 
     # ------------------------------------------------------------------
@@ -210,13 +289,23 @@ class TarLearningManager:
         """Apply the restart decision (restart_bridge.py) before the first observation after it."""
         self.history.resolve_restart(bridged, t_resume)
 
+    def _after_restart(self, t: float) -> bool:
+        """t lies within the restoration delay after the first observation following a restart."""
+        return any(0.0 <= t - r[1] <= STEP_RESTART_GUARD_S for r in self.history.restarts)
+
     def _on_setpoint_change(self, t: float, old: float, new: float) -> None:
+        """A rise of at least STEP_MIN_RISE_C after a low setpoint held for the baseline is a comfort step."""
         if new - old < STEP_MIN_RISE_C:
             return
-        if not STEP_FROM_H <= self._clock.tod_h(t) < STEP_TO_H:
+        t = round(float(t), 1)
+        if self._after_restart(t):
             return
         if self.pending and t - self.pending[-1]["t_sp"] <= STEP_MERGE_S:
             self.pending[-1]["sp_to"] = max(self.pending[-1]["sp_to"], new)
+            return
+        sps = self.history.setpoints
+        i = bisect.bisect_left([x[0] for x in sps], t - 0.05) - 1
+        if i < 0 or abs(sps[i][1] - old) > 1e-6 or t - sps[i][0] < BASELINE_HOLD_S:
             return
         self.pending.append({"t_sp": t, "eco": old, "sp_to": new})
 
@@ -224,6 +313,8 @@ class TarLearningManager:
     # Value used by the regulation
     # ------------------------------------------------------------------
     def applied(self, bootstrap_s: float | None, bootstrap_reliable: bool) -> AppliedValue:
+        if bootstrap_reliable and bootstrap_s is not None and math.isfinite(bootstrap_s) and bootstrap_s > 0.0:
+            self.bootstrap_heat_s = float(bootstrap_s)
         if not self.active:
             return AppliedValue(bootstrap_s, SOURCE_BOOTSTRAP, None, None, False)
         return applied_value(
@@ -279,40 +370,118 @@ class TarLearningManager:
                 break
         return b
 
+    # ------------------------------------------------------------------
+    # Quiet periods
+    # ------------------------------------------------------------------
+    def _refresh(self, now: float, force: bool = False) -> None:
+        """Rebuild the catalogue of the quiet periods (at most every _CATALOGUE_EVERY_S)."""
+        if self.position is None:
+            self._open = []
+            return
+        if not force and self._cat_t is not None and now - self._cat_t < _CATALOGUE_EVERY_S:
+            return
+        self._cat_t = now
+        h = self.history
+        h.flush(now)
+        eps = build_episodes(self.position, h.setpoints, h.valid_spans(now), h.first_t, h.last_t, h.on,
+                             (h.temp_t, h.temp_v), h.restarts)
+        known = {e["id"] for e in self.episodes}
+        last_end = self.episodes[-1]["end"] if self.episodes else -math.inf
+        self._open = []
+        for e in eps:
+            if not e["settled"]:
+                # Not stored yet; a closed one already serves the comfort step that ends it
+                self._open.append(e)
+                continue
+            # The catalogue only grows forward: a closed period is never selected again differently
+            if not e["complete"] or e["id"] in known or e["start"] < last_end - 1e-6:
+                continue
+            rec = summary(e)
+            rec["day"] = self._clock.day_of(e["end"])
+            self.episodes.append(rec)
+            last_end = e["end"]
+            self._evidence_position = self.position
+        del self.episodes[:-TAR_MAX_NIGHTS]
+
+    def _is_dark(self, t: float) -> bool:
+        return self.position is not None and bool(dark_intervals(self.position, t - 1.0, t + 1.0))
+
+    # ------------------------------------------------------------------
+    # Scheduling
+    # ------------------------------------------------------------------
     def _next_job(self, now: float):
         h = self.history
         if h.is_empty():
             return None
-        # Morning comfort steps whose 2 h response is recorded
+        self._refresh(now, force=any(now >= s["t_sp"] + MORNING_EVAL_DELAY_S for s in self.pending))
+        # Comfort steps whose 2 h response is recorded
         for step in list(self.pending):
             if now < step["t_sp"] + MORNING_EVAL_DELAY_S:
                 continue
-            b_pub = self._b_at(step["t_sp"])
-            if h.gap_overlaps(step["t_sp"] - R_SPAN_S, step["t_sp"] + MORNING_EVAL_DELAY_S - 300.0):
-                self._skip_morning(step, "data gap around the step")
-                continue
-            if not b_pub or b_pub <= 0.0:
-                self._skip_morning(step, "no published b")
-                continue
-            snap = self._snapshot_signals(now)
-            snap.update(t_sp=step["t_sp"], eco=step["eco"], sp_to=step["sp_to"], b_pub=b_pub,
-                        nights=list(self.nights), evals=list(self.evals))
-            return "morning", snap, step
-        # Identification window of today, once 08:00 has passed
-        day = self._clock.day_of(now)
-        t_end = self._clock.at(day, ID_WINDOW_END_H)
-        key = str(day)
-        if now >= t_end + _WINDOW_DELAY_S and key not in self.windows:
-            t_start = self._clock.at(day - ID_WIN_DAYS, ID_WINDOW_END_H)
-            nights = [n for n in range(day - ID_WIN_DAYS, day) if str(n) not in self.rnights]
-            snap = self._snapshot_signals(now)
-            snap["window_days"] = [day] if h.first_t is not None and t_start >= h.first_t else []
-            snap["night_days"] = nights
-            sps = self.history.setpoints
-            snap["sp0"] = sps[0][1] if sps else 0.0
-            snap["sp_events"] = [list(x) for x in sps[1:]]
-            return "window", snap, {"day": day, "now": now}
+            job = self._step_job(step, now)
+            if job is not None:
+                return job
+        # Regulated-night gate and identification window of the next closed period
+        for k, ep in enumerate(self.episodes):
+            if ep["id"] not in self.rnights:
+                return self._window_job(k, now)
         return None
+
+    def _step_job(self, step: dict, now: float):
+        h = self.history
+        t_sp = step["t_sp"]
+        if self._after_restart(t_sp):
+            self._skip_morning(step, "setpoint restored after a restart")
+            return None
+        ep = None
+        if self.position is not None:
+            ep = episode_of_rise(self.episodes, t_sp) or episode_of_rise(
+                [e for e in self._open if e["closed"] and e["complete"]], t_sp)
+        t_hi = t_sp + MORNING_EVAL_DELAY_S - 300.0
+        if ep is not None:
+            t_hi = min(t_hi, ep["dark_end"])
+        if h.gap_overlaps(t_sp - R_SPAN_S, t_hi):
+            self._skip_morning(step, "data gap around the step")
+            return None
+        b_pub = self._b_at(t_sp)
+        if not b_pub or b_pub <= 0.0:
+            self._skip_morning(step, "no published b")
+            return None
+        if self.position is None:
+            self._skip_morning(step, WHY_NO_POSITION)
+            return None
+        if ep is None:
+            self._skip_morning(step, "no quiet period before the step" if self._is_dark(t_sp)
+                               else "comfort step in daylight")
+            return None
+        comp = step_component(ep, t_sp)
+        if comp is None:
+            self._skip_morning(step, "low setpoint not held in the dark before the step")
+            return None
+        if ep["dark_end"] - t_sp < _RESPONSE_MIN_S:
+            self._skip_morning(step, "sunrise too close to the comfort step")
+            return None
+        snap = self._snapshot_signals(now)
+        snap.update(t_sp=t_sp, eco=step["eco"], sp_to=step["sp_to"], b_pub=b_pub, nights=list(self.nights),
+                    evals=list(self.evals), night_id=ep["id"], quiet=[list(x) for x in quiet_intervals(ep)],
+                    fit_end=ep["dark_end"], regulated_start=comp[4],
+                    fast_s=self.fast_pub["value_s"] if self.fast_pub else None, bootstrap_s=self.bootstrap_heat_s)
+        return "morning", snap, step
+
+    def _window_job(self, k: int, now: float):
+        ep = self.episodes[k]
+        a, b, why = regulated_span(ep)
+        snap = self._snapshot_signals(now)
+        snap["gate"] = {"id": ep["id"], "a": a, "b": b, "why": why, "sp": ep["sp"]}
+        window = None
+        if k >= ID_WIN_PERIODS - 1:
+            three = self.episodes[k - ID_WIN_PERIODS + 1: k + 1]
+            prev = self.episodes[k - ID_WIN_PERIODS]["id"] if k >= ID_WIN_PERIODS else None
+            window = {"id": ep["id"], "nights": [e["id"] for e in three],
+                      "intervals": [e.get("ident") or e["quiet"] for e in three],
+                      "t_end": ep["end"], "day": ep["day"], "prev": prev}
+        snap["window"] = window
+        return "window", snap, {"episode": ep, "window": window}
 
     def _skip_morning(self, step: dict, why: str) -> None:
         self.pending.remove(step)
@@ -331,6 +500,7 @@ class TarLearningManager:
                 if job is None:
                     break
                 kind, snap, ctx = job
+                gen = self._generation
                 try:
                     result = await hass.async_add_executor_job(_run_job, kind, snap)
                 except ImportError as err:
@@ -339,8 +509,13 @@ class TarLearningManager:
                     return
                 except Exception as err:  # noqa: BLE001 - a failed fit must never stop the regulation
                     _LOGGER.exception("%s - T_ar learning: %s computation failed", self._name, kind)
+                    if gen != self._generation:
+                        continue
                     self.last_error = f"{kind}: {err}"
                     self._mark_failed(kind, ctx)
+                    continue
+                if gen != self._generation:
+                    # Reset or new position while it ran: the result belongs to forgotten evidence
                     continue
                 await self._apply(hass, kind, ctx, result)
                 self.dirty = True
@@ -349,9 +524,18 @@ class TarLearningManager:
 
     def _mark_failed(self, kind: str, ctx: dict) -> None:
         if kind == "morning":
-            self._skip_morning(ctx, "computation failed")
+            if ctx in self.pending:
+                self._skip_morning(ctx, "computation failed")
         elif kind == "window":
-            self.windows[str(ctx["day"])] = {"ok": False, "why": "computation failed"}
+            ep = ctx["episode"]
+            self.rnights[ep["id"]] = {"ok": False, "why": "computation failed", "t_end": ep["end"]}
+            if ctx["window"] is not None:
+                self.windows[ep["id"]] = dict(self._window_meta(ctx["window"]), ok=False, why="computation failed")
+            self._trim()
+
+    @staticmethod
+    def _window_meta(w: dict) -> dict:
+        return {"nights": list(w["nights"]), "prev": w["prev"], "t_end": w["t_end"], "day": w["day"]}
 
     async def _apply(self, hass, kind: str, ctx: dict, result: dict) -> None:
         if kind == "morning":
@@ -359,17 +543,26 @@ class TarLearningManager:
             return
         if kind != "window":
             return
-        for k, v in result["nights"].items():
-            self.rnights[k] = {"ok": bool(v.get("ok")), "why": v.get("why")}
-        day = ctx["day"]
-        self.windows[str(day)] = result["windows"].get(str(day)) or {"ok": False, "why": "window outside history"}
-        self._trim()
-        w1, w2 = self.windows.get(str(day - ID_WIN_DAYS)), self.windows.get(str(day))
-        b_pub = self._b_at(ctx["now"])
-        if not (w1 and w2 and "cls" in w1 and "cls" in w2 and b_pub and b_pub > 0.0):
+        ep, w = ctx["episode"], ctx["window"]
+        night = result.get("night") or {"ok": False, "why": "computation failed"}
+        self.rnights[ep["id"]] = {"ok": bool(night.get("ok")), "why": night.get("why"), "t_end": ep["end"]}
+        if w is None:
+            self._trim()
             return
-        nights = {k: v for k, v in self.rnights.items()}
-        snap = {"day": day, "w1": w1, "w2": w2, "b_pub": b_pub, "nights": nights, "evals": list(self.evals)}
+        fit = result.get("window") or {"ok": False, "why": "window outside history"}
+        w2 = dict(fit, **self._window_meta(w))
+        self.windows[w["id"]] = w2
+        self._trim()
+        w1 = self.windows.get(w["prev"]) if w["prev"] else None
+        b_pub = self._b_at(w["t_end"])
+        if not (w1 and "cls" in w1 and "cls" in w2 and b_pub and b_pub > 0.0):
+            return
+        if set(w1["nights"]) & set(w2["nights"]):
+            return
+        ids = list(w1["nights"]) + list(w2["nights"])
+        snap = {"day": w["day"], "t": w["t_end"], "window_id": w["id"], "w1": w1, "w2": w2, "b_pub": b_pub,
+                "nights": {n: self.rnights.get(n) for n in ids}, "evals": list(self.evals)}
+        gen = self._generation
         try:
             res = await hass.async_add_executor_job(_run_job, "evaluate", snap)
         except ImportError as err:
@@ -380,6 +573,8 @@ class TarLearningManager:
             _LOGGER.exception("%s - T_ar learning: evaluation failed", self._name)
             self.last_error = f"evaluate: {err}"
             return
+        if gen != self._generation:
+            return
         self.evals.append(res["eval"])
         del self.evals[:-TAR_MAX_EVALUATIONS]
         self.te_pub = res["te_pub"] or self.te_pub
@@ -389,8 +584,10 @@ class TarLearningManager:
     def _apply_morning(self, step: dict, res: dict) -> None:
         if step in self.pending:
             self.pending.remove(step)
-        rec = {k: res.get(k) for k in ("day", "t_sp", "t_s", "accepted", "T", "why", "path", "cls", "term", "ref",
-                                        "night", "night_cls", "room_class", "sel", "b_fit_rel")}
+        nid = res.get("night_id")
+        rec = {k: res.get(k) for k in ("t_sp", "t_s", "accepted", "T", "why", "path", "cls", "term", "ref",
+                                        "night", "night_cls", "room_class", "sel", "b_fit_rel", "night_id")}
+        rec["day"] = self._clock.day_of(step["t_sp"])
         learned = res.get("learned")
         rec["k_per_s"] = learned.get("k_per_s") if learned else None
         rec["tau_w_s"] = learned.get("tau_w_s") if learned else None
@@ -401,20 +598,25 @@ class TarLearningManager:
             rec["confirmed"] = why is None
             rec["unconfirmed_why"] = why
             if why is None:
-                self.fast_values.append(float(res["T"]))
+                # One confirmed value per period: a second evaluation of a period replaces its value
+                self.fast_values = [v for v in self.fast_values if v[0] != nid] + [[nid, float(res["T"])]]
                 del self.fast_values[:-PUB_LAST]
-                self.fast_count += 1
-                pub = fast_publication(self.fast_values)
+                if nid not in self.fast_ids:
+                    self.fast_ids.append(nid)
+                    del self.fast_ids[:-TAR_MAX_MORNINGS]
+                    self.fast_count += 1
+                pub = fast_publication([v[1] for v in self.fast_values])
                 if pub is not None:
-                    self.fast_pub = {"value_s": float(pub), "day": res.get("day")}
+                    self.fast_pub = {"value_s": float(pub), "day": rec["day"]}
         self.mornings.append(rec)
         del self.mornings[:-TAR_MAX_MORNINGS]
-        self.nights.append(res["night_summary"])
+        self.nights = [n for n in self.nights if n.get("night_id") != nid] + [res["night_summary"]]
         del self.nights[:-TAR_MAX_NIGHTS]
 
     def _trim(self) -> None:
         for d in (self.windows, self.rnights):
-            for k in sorted(d, key=int)[:-TAR_MAX_WINDOWS]:
+            keep = TAR_MAX_WINDOWS if d is self.windows else TAR_MAX_NIGHTS
+            for k in sorted(d, key=lambda x: d[x].get("t_end") or 0.0)[:-keep]:
                 del d[k]
 
     # ------------------------------------------------------------------
@@ -468,12 +670,27 @@ class TarLearningManager:
                 },
             },
             "night_room_class": public.room_class(last_room.get("room_class")) if last_room else None,
+            "quiet_periods": self._periods_diagnostics(),
             "pending_steps": len(self.pending),
             "data_invalid_reason": self.history.invalid_reason,
             "history_h": (_r((self.history.last_t - self.history.first_t) / 3600.0)
                           if self.history.first_t is not None and self.history.last_t is not None else 0.0),
             "last_error": self.last_error,
         }
+
+    def _periods_diagnostics(self) -> dict[str, Any]:
+        last = self.episodes[-1] if self.episodes else None
+        tz = self._clock._tz  # pylint: disable=protected-access
+        out: dict[str, Any] = {
+            "reason": public.period_reason(WHY_NO_POSITION) if self.position is None else None,
+            "count": len(self.episodes),
+            "last": None,
+        }
+        if last is not None:
+            sel = last["comps"][last["sel"]]
+            out["last"] = {"start": local_iso(last["quiet"][0], tz), "end": local_iso(last["quiet"][1], tz),
+                           "regulated_from": local_iso(sel[4], tz)}
+        return out
 
     # ------------------------------------------------------------------
     # Persistence
@@ -482,8 +699,12 @@ class TarLearningManager:
         self.dirty = False
         return {
             "version": STATE_VERSION,
+            "position": self._evidence_position.to_list() if self._evidence_position else None,
+            "bootstrap_heat_s": self.bootstrap_heat_s,
             "history": self.history.to_dict(time.time()),
             "pending": self.pending,
+            "episodes": self.episodes,
+            "fast_ids": self.fast_ids,
             "nights": self.nights,
             "mornings": self.mornings,
             "windows": self.windows,
@@ -498,23 +719,69 @@ class TarLearningManager:
         }
 
     def load_state(self, state: dict[str, Any] | None) -> None:
-        if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
+        """Load a saved state; an earlier format keeps only its raw data, a later one is ignored."""
+        if not isinstance(state, dict):
+            return
+        version = state.get("version")
+        if version == 1:
+            self._load_v1(state)
+            return
+        if version != STATE_VERSION:
             return
         try:
             self.history = TarHistory.from_dict(state.get("history"))
             self.pending = [dict(x) for x in state.get("pending") or []]
+            self.episodes = [dict(x) for x in state.get("episodes") or []]
             self.nights = list(state.get("nights") or [])
             self.mornings = list(state.get("mornings") or [])
             self.windows = dict(state.get("windows") or {})
             self.rnights = dict(state.get("rnights") or {})
             self.evals = list(state.get("evals") or [])
-            self.fast_values = [float(x) for x in state.get("fast_values") or []]
+            self.fast_values = [[str(k), float(v)] for k, v in state.get("fast_values") or []]
+            if not all(math.isfinite(v) and v > 0.0 for _, v in self.fast_values):
+                raise ValueError("fast value not finite")
+            self.fast_ids = [str(x) for x in state.get("fast_ids") or []]
             self.fast_count = int(state.get("fast_count") or 0)
             self.fast_pub = state.get("fast_pub")
             self.te_pub = state.get("te_pub")
             self.refined_cls = state.get("refined_cls") or "unknown"
             self.refined_wall = state.get("refined_wall")
+            bh = state.get("bootstrap_heat_s")
+            self.bootstrap_heat_s = float(bh) if isinstance(bh, (int, float)) and math.isfinite(bh) and bh > 0 else None
+            pos = state.get("position")
+            self._evidence_position = validate_position(*pos) if isinstance(pos, list) and len(pos) == 2 else None
+            for e in self.episodes:
+                if not (isinstance(e.get("id"), str) and isinstance(e.get("comps"), list)
+                        and isinstance(e.get("sel"), int) and isinstance(e.get("end"), (int, float))):
+                    raise ValueError("malformed quiet period")
         except (TypeError, ValueError) as err:
             _LOGGER.warning("%s - T_ar learning state ignored: %s", self._name, err)
             self.history = TarHistory()
             self._reset_results()
+            self._evidence_position = None
+            return
+        self._cat_t = None
+        self._check_position()
+
+    def _load_v1(self, state: dict[str, Any]) -> None:
+        """State of the fixed-hour selection: the recorded signals and the pending rises are kept.
+
+        Its nights, windows, evaluations, confirmations and published values were
+        selected by local hours, without a solar check: they are not evidence
+        for the quiet periods and are dropped. The quiet periods are found again
+        from the recorded signals.
+        """
+        try:
+            history = TarHistory.from_dict(state.get("history"))
+            pending = [{"t_sp": round(float(x["t_sp"]), 1), "eco": float(x["eco"]), "sp_to": float(x["sp_to"])}
+                       for x in state.get("pending") or []]
+        except (TypeError, ValueError, KeyError) as err:
+            _LOGGER.warning("%s - T_ar learning state ignored: %s", self._name, err)
+            return
+        self._reset_results()
+        self.history = history
+        self.pending = pending
+        self._evidence_position = None
+        self.dirty = True
+        _LOGGER.info("%s - T_ar learning: earlier state format, its learned values are learned again from the "
+                     "quiet periods", self._name)

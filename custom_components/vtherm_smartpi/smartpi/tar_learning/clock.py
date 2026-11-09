@@ -1,7 +1,8 @@
-"""Local clock of the T_ar learning: days and hours of the room's local time.
+"""Local clock: days and hours of the room's local time.
 
-The methods reason in local time (night from 18:00 to 08:00, sleep span from
-23:00, identification windows ending at 08:00). Times are seconds on one axis
+The T_ar learning uses it only for the dates shown in its diagnostics; the
+room model also uses it for its nights and its daily schedule, and the energy
+balance for its whole local days. Times are seconds on one axis
 (epoch seconds in the integration). A day is an integer index; ``at(day, hour)``
 is the instant of that local hour of that day (hours may exceed 24 or be
 negative), ``day_of(t)`` the day containing ``t``.

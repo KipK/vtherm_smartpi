@@ -39,6 +39,7 @@ from __future__ import annotations
 import bisect
 from typing import Any
 
+from ..quiet_periods import valid_spans as _valid_spans
 from .const import (
     TAR_GAP_S,
     TAR_SPIKE_CONFIRM,
@@ -230,6 +231,10 @@ class TarHistory:
             end = now if now is not None else (self.last_t if self.last_t is not None else self.invalid_since)
             out.append((self.invalid_since, max(end, self.invalid_since + 1.0)))
         return out
+
+    def valid_spans(self, now: float | None = None) -> list[tuple[float, float]]:
+        """Spans of valid data: [first_t, last_t] without the invalid intervals (the open one included)."""
+        return _valid_spans(self.first_t, self.last_t, self.invalid_intervals(now))
 
     def _edge(self, t: float, on: bool) -> None:
         t = round(t, _TIME_DIGITS)

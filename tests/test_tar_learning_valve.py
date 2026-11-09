@@ -70,13 +70,15 @@ def test_level_path_reproduces_the_reference_on_a_pwm_signal(name: str) -> None:
             port.ref_path(m["path"]), m["acc"], m["T"], m["cls"], port.ref_why(m["why"])), m["day"]
     sp_events = [tuple(x) for x in exp["sp_events"]]
     for n, rec in exp["rnights"].items():
-        mine = gates.regulated_night(port.CLOCK, int(n), data["on"], data["off"], data["pub_t"], data["pub_v"],
-                                     20.0, sp_events, exp["cycle_s"], power=pw)
-        assert (mine["ok"], mine["why"]) == (rec["ok"], rec["why"]), n
+        a, b = port.ref_sleep_span(int(n), sp_events)
+        mine = gates.regulated_span(a, b, gates.sp_at(20.0, sp_events, a), data["on"], data["off"], data["pub_t"],
+                                    data["pub_v"], exp["cycle_s"], power=pw, sp_timeline=(20.0, sp_events))
+        why = (rec["why"] or "").replace("in the sleep span", "in the regulated part") or None
+        assert (mine["ok"], mine["why"]) == (rec["ok"], why), n
     edges = identification.grid_data(data["pub_t"], data["pub_v"], data["on"], data["off"], data["ext_t"],
-                                     data["ext_v"], 0.0, data["t_last"], port.CLOCK)
+                                     data["ext_v"], 0.0, data["t_last"])
     levels = identification.grid_data(data["pub_t"], data["pub_v"], [], [], data["ext_t"], data["ext_v"], 0.0,
-                                      data["t_last"], port.CLOCK, power=pw)
+                                      data["t_last"], power=pw)
     assert np.array_equal(edges["u"], levels["u"])
     assert np.array_equal(edges["u_fine"], levels["u_fine"])
 
@@ -168,28 +170,23 @@ def test_valve_mode_is_not_supported() -> None:
     assert m.active and not m.history.is_empty()
 
 
-async def test_valve_end_to_end_run_reproduces_the_reference_pipeline() -> None:
-    """The manager on a valve history (levels of the reference heater) gives the reference decisions."""
-    m, exp = mgr_tests._feed("m3_d5n3")
+async def test_valve_end_to_end_run_matches_the_pwm_run() -> None:
+    """The manager on a valve history (levels of the reference heater) decides like on the PWM edges."""
+    m, _ = mgr_tests._feed("m2_d9n6")
     h = m.history
     h.valve = True
     pw_t, pw_v = _levels(h.on, h.off)
     h.pw_t, h.pw_v = pw_t.tolist(), pw_v.tolist()
+    ref, _ = mgr_tests._feed("m2_d9n6")
     hass = mgr_tests._SyncHass()
-    for k in range(1, 12):
-        await m.async_run(hass, W + k * 86400.0 + 2 * 3600.0 + 700.0)
-        await m.async_run(hass, W + k * 86400.0 + MORNING_EVAL_DELAY_S + 60.0)
-    base = m._clock.day_of(W)
-    ref = {x["day"]: x for x in exp["mornings"]}
-    assert len(m.mornings) == len(ref)
-    for rec in m.mornings:
-        r = ref[rec["day"] - base]
-        assert (rec["path"], rec["accepted"], rec["T"], rec["cls"], rec["why"]) == (
-            port.ref_path(r["path"]), r["acc"], r["T"], r["cls"], port.ref_why(r["why"]))
-    got = [(e["day"] - base, e["cls"], e["te"]) for e in m.evals]
-    assert [(g[0], g[1]) for g in got] == [(e["day"], e["cls"]) for e in exp["evals"]]
-    for g, e in zip(got, exp["evals"]):
-        assert g[2] == pytest.approx(e["te"], rel=1e-3)
+    for mgr in (m, ref):
+        for k in range(1, 12):
+            await mgr.async_run(hass, W + k * 86400.0 + 2 * 3600.0 + 700.0)
+            await mgr.async_run(hass, W + k * 86400.0 + MORNING_EVAL_DELAY_S + 60.0)
+    key = ("day", "path", "accepted", "T", "cls", "why", "confirmed")
+    assert [tuple(r.get(k) for k in key) for r in m.mornings] == [tuple(r.get(k) for k in key) for r in ref.mornings]
+    assert [(e["cls"], e["te"]) for e in m.evals] == [(e["cls"], e["te"]) for e in ref.evals]
+    assert m.rnights == ref.rnights
 
 
 # ---------------------------------------------------------------------------

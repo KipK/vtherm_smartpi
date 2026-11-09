@@ -139,18 +139,21 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `bootstrap_s` | Temps mort du bootstrap/calibration (`model.deadtime_heat_s`), jamais modifié |
 | `in_force_s` / `in_force_source` | Valeur apprise en vigueur (affinée, sinon rapide) et son origine, `null` avant toute publication |
 | `out_of_bound` | `true` lorsque la valeur en vigueur est hors de l'intervalle de 0,5 à 2 fois `bootstrap_s` et n'est donc pas appliquée |
-| `fast.value_s` | Valeur rapide publiée (matins confirmés), `null` avant 3 matins confirmés |
-| `fast.confirmed_mornings` | Nombre de matins acceptés et confirmés |
-| `fast.last_value_s` | Valeur du dernier matin accepté |
-| `fast.last_status` | `confirmed`, `unconfirmed` ou `none` pour le dernier matin accepté |
-| `fast.last_unconfirmed_reason` | Raison pour laquelle le dernier matin accepté n'est pas confirmé (par exemple une nuit restée au moins 1 heure sans chauffe entre 23 h et la montée en confort), en anglais |
-| `fast.last_morning` | Dernier matin évalué : `day`, `accepted`, `reason` (`accepted`, ou la raison, en anglais, pour laquelle le matin n'a pas donné de valeur, par exemple `temperature rise too small`), `room_class` |
+| `fast.value_s` | Valeur rapide publiée (montées de confort confirmées), `null` avant 3 montées confirmées |
+| `fast.confirmed_mornings` | Nombre de montées de confort acceptées et confirmées, une par période calme au plus |
+| `fast.last_value_s` | Valeur de la dernière montée de confort acceptée |
+| `fast.last_status` | `confirmed`, `unconfirmed` ou `none` pour la dernière montée de confort acceptée |
+| `fast.last_unconfirmed_reason` | Raison pour laquelle la dernière montée de confort acceptée n'est pas confirmée (par exemple `the room did not reach its low setpoint before the comfort step`, ou au moins 1 heure sans chauffe alors que la pièce était régulée à sa consigne basse), en anglais |
+| `fast.last_morning` | Dernière montée de confort évaluée, à toute heure : `day`, `accepted`, `reason` (`accepted`, ou la raison, en anglais, pour laquelle la montée n'a pas donné de valeur, par exemple `temperature rise too small`, `comfort step in daylight` ou `sunrise too soon after the comfort step`, `comfort step cut by sunrise before its response could be measured`), `room_class` |
 | `refined.tau_e_s` | Valeur affinée publiée `τe`, `null` avant une publication |
 | `refined.class` | Type de pièce en vigueur issu de l'identification : `thermal_mass` (pièce à masse thermique), `no_thermal_mass` ou `undetermined` |
 | `refined.k_per_s`, `refined.tau_w_h` | Couplage air-murs et constante de temps des murs en vigueur (pièce `thermal_mass`) |
-| `refined.last_evaluation` | Dernière évaluation quotidienne : `day`, `regulated_nights` (les six nuits sont retenues), `class` et `tau_e_s` avant la règle des nuits régulées, ainsi que les `a` et `b` identifiés, dans les unités de `model.a` et `model.b` (pour information, jamais appliqués ; pour une pièce `thermal_mass`, `b` est la perte de l'air vers l'extérieur, les murs étant modélisés à part, il diffère donc du `model.b` effectif) |
-| `night_room_class` | Type de pièce d'après les nuits sans chauffage : `thermal_mass`, `no_thermal_mass` ou `undetermined` |
-| `pending_steps` | Étapes du matin en attente de leur réponse de 2 h |
+| `refined.last_evaluation` | Dernière évaluation, faite à la fin d'une période calme : `day` (date de cette fin), `regulated_nights` (les six périodes de ses deux ajustements sont régulées), `class` et `tau_e_s` avant la règle des nuits régulées, ainsi que les `a` et `b` identifiés, dans les unités de `model.a` et `model.b` (pour information, jamais appliqués ; pour une pièce `thermal_mass`, `b` est la perte de l'air vers l'extérieur, les murs étant modélisés à part, il diffère donc du `model.b` effectif) |
+| `night_room_class` | Type de pièce d'après les périodes calmes sans chauffage : `thermal_mass`, `no_thermal_mass` ou `undetermined` |
+| `quiet_periods.reason` | Raison pour laquelle aucune période calme ne peut être trouvée (`home position unknown: the absence of sun cannot be checked`), `null` sinon |
+| `quiet_periods.count` | Nombre de périodes calmes conservées comme preuves (une par nuit au plus) |
+| `quiet_periods.last` | Dernière période calme fermée : `start` et `end` (heure locale), `regulated_from` (début de sa partie régulée, `null` lorsque la pièce n'a jamais régulé à sa consigne basse) |
+| `pending_steps` | Montées de confort en attente de leur réponse de 2 h |
 | `data_invalid_reason` | Raison pour laquelle les données actuelles sont exclues (par exemple `window open`, `temperature jump`, `hvac not heating`), `null` lorsqu'elles sont valides |
 | `history_h` | Heures de signaux conservées |
 | `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |

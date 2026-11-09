@@ -140,18 +140,21 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `bootstrap_s` | Bootstrap/calibration dead time (`model.deadtime_heat_s`), never modified |
 | `in_force_s` / `in_force_source` | Learned value in force (refined, else fast) and its origin, `null` before any publication |
 | `out_of_bound` | `true` when the value in force lies outside 0.5 to 2 times `bootstrap_s` and is therefore not applied |
-| `fast.value_s` | Published fast value (confirmed mornings), `null` before 3 confirmed mornings |
-| `fast.confirmed_mornings` | Number of accepted and confirmed mornings |
-| `fast.last_value_s` | Value of the last accepted morning |
-| `fast.last_status` | `confirmed`, `unconfirmed` or `none` for the last accepted morning |
-| `fast.last_unconfirmed_reason` | Why the last accepted morning is unconfirmed (for example a night with at least 1 hour without heating between 23:00 and the comfort step) |
-| `fast.last_morning` | Last evaluated morning: `day`, `accepted`, `reason` (`accepted`, or why the morning gave no value, for example `temperature rise too small`), `room_class` |
+| `fast.value_s` | Published fast value (confirmed comfort steps), `null` before 3 confirmed steps |
+| `fast.confirmed_mornings` | Number of accepted and confirmed comfort steps, one per quiet period at most |
+| `fast.last_value_s` | Value of the last accepted comfort step |
+| `fast.last_status` | `confirmed`, `unconfirmed` or `none` for the last accepted comfort step |
+| `fast.last_unconfirmed_reason` | Why the last accepted comfort step is unconfirmed (for example `the room did not reach its low setpoint before the comfort step`, or at least 1 hour without heating while the room was regulated at its low setpoint) |
+| `fast.last_morning` | Last evaluated comfort step, at any hour: `day`, `accepted`, `reason` (`accepted`, or why the step gave no value, for example `temperature rise too small`, `comfort step in daylight`, `sunrise too soon after the comfort step` or `comfort step cut by sunrise before its response could be measured`), `room_class` |
 | `refined.tau_e_s` | Published refined value `τe`, `null` before a publication |
 | `refined.class` | Type of room in force from the identification: `thermal_mass`, `no_thermal_mass` or `undetermined` |
 | `refined.k_per_s`, `refined.tau_w_h` | Air-wall coupling and wall time constant in force (room with `thermal_mass`) |
-| `refined.last_evaluation` | Last daily evaluation: `day`, `regulated_nights` (the six nights qualify), `class` and `tau_e_s` before the regulated-night rule, and the identified `a` and `b` in the units of `model.a` and `model.b` (information only, never applied; for a room with `thermal_mass`, `b` is the loss of the air to the outside, the walls being modelled apart, so it differs from the effective `model.b`) |
-| `night_room_class` | Type of room from the nights without heating: `thermal_mass`, `no_thermal_mass` or `undetermined` |
-| `pending_steps` | Morning steps waiting for their 2 h response |
+| `refined.last_evaluation` | Last evaluation, made when a quiet period ends: `day` (date of that end), `regulated_nights` (the six periods of its two fits are regulated), `class` and `tau_e_s` before the regulated-night rule, and the identified `a` and `b` in the units of `model.a` and `model.b` (information only, never applied; for a room with `thermal_mass`, `b` is the loss of the air to the outside, the walls being modelled apart, so it differs from the effective `model.b`) |
+| `night_room_class` | Type of room from the quiet periods without heating: `thermal_mass`, `no_thermal_mass` or `undetermined` |
+| `quiet_periods.reason` | Why no quiet period can be found (`home position unknown: the absence of sun cannot be checked`), `null` otherwise |
+| `quiet_periods.count` | Number of quiet periods kept as evidence (one per night at most) |
+| `quiet_periods.last` | Last closed quiet period: `start` and `end` (local time), `regulated_from` (start of its regulated part, `null` when the room never regulated at its low setpoint) |
+| `pending_steps` | Comfort steps waiting for their 2 h response |
 | `data_invalid_reason` | Why the current data are excluded (for example `window open`, `temperature jump`, `hvac not heating`), `null` when they are valid |
 | `history_h` | Hours of signals kept |
 | `last_error` | Last computation error, `null` when none |

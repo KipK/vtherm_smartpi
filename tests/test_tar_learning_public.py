@@ -36,6 +36,23 @@ def test_every_morning_reason_of_the_methods_is_translated() -> None:
 
 def test_phase_and_unconfirmed_reasons() -> None:
     assert public.morning_reason("phase HYSTERESIS") == "SmartPI not in steady regulation (hysteresis)"
-    assert public.unconfirmed_reason("night started passive in the sleep span") == (
-        "night with at least 1 hour without heating between 23:00 and the comfort step")
+    assert public.unconfirmed_reason("idle in the regulated part") == (
+        "at least 1 hour without heating while the room was regulated at its low setpoint before the comfort step")
+    assert public.unconfirmed_reason("idle in the regulated part, short delay") == public.unconfirmed_reason(
+        "idle in the regulated part")
+    assert public.unconfirmed_reason("no regulated start") == (
+        "the room did not reach its low setpoint before the comfort step")
+    assert public.unconfirmed_reason("regulated part too short") == (
+        "the room was regulated at its low setpoint for less than 4 hours before the comfort step")
+    assert public.period_reason("home position unknown") == (
+        "home position unknown: the absence of sun cannot be checked")
+
+
+def test_no_public_text_sets_a_clock_condition() -> None:
+    """No reason refers to a fixed local hour."""
+    texts = list(public._MORNING_REASONS.values()) + list(public._UNCONFIRMED.values())
+    texts += list(public._PERIOD_REASONS.values())
+    for text in texts:
+        assert not re.search(r"\d{1,2}:\d{2}", text), text
+        assert "morning" not in text, text
     assert public.morning_reason(None) is None and public.unconfirmed_reason(None) is None

@@ -1,11 +1,15 @@
 """Gates of the T_ar learning.
 
-Regulated night (hand-over of the refined value). The sleep span of a night is
-[23:00, t_end) local, t_end the comfort step of the next morning (first setpoint
-rise in [03:00, 08:00)), else 08:00. The night is regulated iff, over that span:
+Both gates read the regulated part of a quiet period (quiet_periods): it
+starts at the regulated start, the first heater start with the room at its low
+setpoint, and ends at the setpoint rise that ends the period, or at the end of
+the darkness for a period without a rise.
+
+Regulated night (hand-over of the refined value). The period is regulated iff
+its regulated part lasts at least 4 h and, over it:
   (a) the setpoint is constant;
-  (b) every 30 min quarter (from 23:00; a last piece shorter than 15 min is
-      merged into the previous quarter) holds a heater start;
+  (b) every 30 min quarter (from the regulated start; a last piece shorter than
+      15 min is merged into the previous quarter) holds a heater start;
   (c) the mean published temperature of every quarter is within 0.3 C of the
       setpoint;
   (d) the per-cycle mean heater input has |slope| <= 0.05 /h and a residual
@@ -13,33 +17,33 @@ rise in [03:00, 08:00)), else 08:00. The night is regulated iff, over that span:
   (e) the data of the span hold no gap.
 An unmeasured night gain (occupants) is nearly collinear with the loss b in a
 free fall, while during regulation it shows as a duty change: the refined value
-may replace the fast value only when the six nights of its two windows are
+may replace the fast value only when the six periods of its two windows are
 regulated.
 
-Confirmation of the fast morning value. A sleeper leaving during the fit window
-bends the rise and shortens the apparent delay; a night that starts passive in
-the sleep span is the observable sign of that risk:
-  G1  : at least 1 h without heater start in [23:00, t_ref) -> unconfirmed;
+Confirmation of the fast value. A sleeper leaving during the fit window bends
+the rise and shortens the apparent delay; a period that stays without heating
+while the room should regulate at its low setpoint is the observable sign of
+that risk. Without a regulated start, or with a regulated part shorter than
+4 h, nothing can be observed: the morning is unconfirmed (an unknown is never
+taken as a favourable zero).
+  G1  : at least 1 h without heater start in [regulated start, t_ref), or the
+        regulated part unknown or too short -> unconfirmed;
   GT4 : G1 and (T < 900 s, or the fitted exponential baseline b below 0.6 x the
         published b, or a heater start in the 2 h before t_ref) -> unconfirmed.
 t_ref is the step (first heater start after the setpoint rise), else the rise.
 """
 from __future__ import annotations
 
+from ..quiet_periods.const import REGULATED_MIN_S
 from .const import (
     GATE_IDLE_MIN_H,
-    GATE_SLEEP_START_H,
     GT4_BFIT_REL_MIN,
     GT4_T_MIN_S,
     H,
     RN_ECO_TOL_C,
-    RN_NIGHTS_PER_WINDOW,
     RN_QUARTER_MERGE_S,
     RN_QUARTER_S,
     RN_SP_EPS,
-    RN_SP_RISE_FROM_H,
-    RN_SPAN_END_MAX_H,
-    RN_SPAN_START_H,
     RN_U_RESID_MAX,
     RN_U_SLOPE_MAX_H,
     TAR_GATE_G1,
@@ -94,29 +98,26 @@ def quarters(a: float, b: float) -> list[tuple[float, float]]:
     return q
 
 
-def regulated_night(clock, night_day: int, on, off, pub_t, pub_v, sp0: float, ev, cycle_s: float,
-                    init_on: bool = False, valid_fn=None, power=None) -> dict:
-    """Regulated-night gate of the night that starts on the evening of `night_day`.
+def regulated_span(a: float, b: float, sp: float, on, off, pub_t, pub_v, cycle_s: float, init_on: bool = False,
+                   valid_fn=None, power=None, sp_timeline: tuple | None = None) -> dict:
+    """Regulated-night gate of the regulated part [a, b) at the setpoint sp.
 
     power: valve power level timeline (times, levels), used for the holding power instead of the edges.
+    sp_timeline: optional (sp0, events) setpoint timeline checked for a change inside the span.
     """
     import numpy as np  # pylint: disable=import-outside-toplevel
 
     from .signals import duty_bins, level_bins  # pylint: disable=import-outside-toplevel
 
-    a = clock.at(night_day, RN_SPAN_START_H)
-    lo = clock.at(night_day + 1, RN_SP_RISE_FROM_H)
-    hi = clock.at(night_day + 1, RN_SPAN_END_MAX_H)
-    sp_a = sp_at(sp0, ev, a)
-    rises = [te for te, old, new in sp_changes_in(sp0, ev, lo - 1e-6, hi) if new > old + RN_SP_EPS and te >= lo]
-    b = rises[0] if rises else hi
-    out = {"t_start": a, "t_end": b, "sp": sp_a, "why": None}
+    out = {"t_start": a, "t_end": b, "sp": sp, "why": None}
+    if b - a < REGULATED_MIN_S:
+        out["why"] = "regulated part too short"
+        return dict(out, ok=False)
     if valid_fn is not None and not valid_fn(a, b):
         out["why"] = "data gap"
         return dict(out, ok=False)
-    ch = sp_changes_in(sp0, ev, a, b)
-    if ch:
-        out["why"] = "setpoint change in the sleep span"
+    if sp_timeline is not None and sp_changes_in(sp_timeline[0], sp_timeline[1], a, b):
+        out["why"] = "setpoint change in the regulated part"
         return dict(out, ok=False)
     on = np.asarray(on, dtype=float)
     qs = quarters(a, b)
@@ -125,7 +126,7 @@ def regulated_night(clock, night_day: int, on, off, pub_t, pub_v, sp0: float, ev
     devs = []
     for x, y in qs:
         m = zoh_mean(pub_t, pub_v, x, y)
-        devs.append(None if m is None else m - sp_a)
+        devs.append(None if m is None else m - sp)
     out["max_dev"] = None if any(v is None for v in devs) else float(max(abs(v) for v in devs))
     n = int(round((b - a) / cycle_s))
     bins_start = np.asarray([b - (j + 1) * cycle_s for j in range(n)][::-1])
@@ -152,46 +153,65 @@ def regulated_night(clock, night_day: int, on, off, pub_t, pub_v, sp0: float, ev
     return out
 
 
-def window_regulated(nights: dict, day: int, win_days: int) -> bool:
-    """Window ending at 08:00 of `day`: its nights (evenings day - win_days .. day - 1) are all regulated."""
-    ns = range(day - win_days, day)
-    ok = [bool((nights.get(n) or {}).get("ok")) for n in ns]
-    return sum(ok) >= RN_NIGHTS_PER_WINDOW
+def window_regulated(nights: dict, ids) -> bool:
+    """Every period of a window (its keys ids) is regulated."""
+    ids = list(ids)
+    return bool(ids) and all(bool((nights.get(n) or {}).get("ok")) for n in ids)
 
 
 # ---------------------------------------------------------------------------
 # Confirmation of the fast morning value
 # ---------------------------------------------------------------------------
-def max_idle_h(on, t23: float, t_end: float) -> float | None:
-    """Longest span of [t23, t_end) without a heater start (hours)."""
-    if t_end <= t23:
+def max_idle_h(on, t0: float, t_end: float) -> float | None:
+    """Longest span of [t0, t_end) without a heater start (hours)."""
+    if t_end <= t0:
         return None
-    st = sorted(float(x) for x in on if t23 <= x < t_end - 30.0)
-    pts = [t23] + st + [t_end]
+    st = sorted(float(x) for x in on if t0 <= x < t_end - 30.0)
+    pts = [t0] + st + [t_end]
     return max(b - a for a, b in zip(pts, pts[1:])) / H
 
 
-def gate_observables(clock, on, t_sp: float, t_s: float | None) -> dict:
-    """Observables of the confirmation gates of one morning."""
+def gate_observables(on, t_sp: float, t_s: float | None, regulated_start: float | None) -> dict:
+    """Observables of the confirmation gates of one morning.
+
+    regulated_start: start of the regulated part of the period that the rise ends, None when the room
+    never regulated at its low setpoint.
+    """
     t_ref = t_s or t_sp
-    t23 = clock.at(clock.day_of(t_sp) - 1, GATE_SLEEP_START_H)
-    return {"max_idle_sleep_h": max_idle_h(on, t23, t_ref),
+    reg_h = None if regulated_start is None else max(0.0, t_ref - regulated_start) / H
+    idle = None
+    if reg_h is not None and reg_h * H >= REGULATED_MIN_S:
+        idle = max_idle_h(on, regulated_start, t_ref)
+    return {"regulated_start": regulated_start, "regulated_h": reg_h, "max_idle_h": idle,
             "passive_2h": not any(t_ref - 2 * H <= x < t_ref - 30.0 for x in on)}
+
+
+def _idle_reason(obs: dict) -> str | None:
+    """Why the regulated part shows (or cannot exclude) a period without heating, None when it does not."""
+    if obs.get("regulated_start") is None:
+        return "no regulated start"
+    reg_h = obs.get("regulated_h")
+    if reg_h is None or reg_h * H < REGULATED_MIN_S:
+        return "regulated part too short"
+    idle = obs.get("max_idle_h")
+    if idle is None:
+        return "regulated part too short"
+    return "idle in the regulated part" if idle >= GATE_IDLE_MIN_H else None
 
 
 def unconfirmed(gate: str, obs: dict, T: float | None, b_fit_rel: float | None) -> str | None:
     """Reason why an accepted morning is unconfirmed under the gate, None when confirmed."""
-    idle = (obs.get("max_idle_sleep_h") or 0.0) >= GATE_IDLE_MIN_H
+    base = _idle_reason(obs)
     if gate == TAR_GATE_G1:
-        return "night started passive in the sleep span" if idle else None
+        return base
     if gate == TAR_GATE_GT4:
-        if not idle:
+        if base is None:
             return None
-        if (T or 0.0) < GT4_T_MIN_S:
-            return "night started passive in the sleep span, short delay"
+        if T is None or T < GT4_T_MIN_S:
+            return f"{base}, short delay"
         if b_fit_rel is not None and b_fit_rel < GT4_BFIT_REL_MIN:
-            return "night started passive in the sleep span, low fitted loss"
+            return f"{base}, low fitted loss"
         if not obs.get("passive_2h"):
-            return "night started passive in the sleep span, regulated at the step"
+            return f"{base}, regulated at the step"
         return None
     raise ValueError(f"unknown gate {gate}")

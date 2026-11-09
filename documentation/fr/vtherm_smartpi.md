@@ -305,12 +305,21 @@ Points utiles à connaître :
 
 Le retard de l'émetteur `T_ar` est le délai entre le début du chauffage et la hausse de la température de la pièce. Le bootstrap le mesure une seule fois (`deadtime_heat_s`). SmartPI l'apprend aussi pendant la régulation normale et utilise la valeur apprise pour la régulation. Cet apprentissage est toujours actif et ne demande aucun réglage.
 
+**Périodes calmes**
+
+L'apprentissage n'utilise que des périodes calmes : des plages sans soleil, à consigne constante, avec des données valides. Elles proviennent des données enregistrées et de la position de la maison dans Home Assistant ; aucune heure n'est fixée et rien n'a à être déclaré.
+
+- **Pas de soleil.** Le soleil est calculé à partir de la latitude et de la longitude de la maison. Une période se termine quelques minutes avant le lever du soleil et commence quelques minutes après le coucher, jamais après le lever : un soleil bas sur une fenêtre qui lui fait face chauffe déjà la pièce. Sans position valide de la maison, aucune période n'est trouvée et l'apprentissage reste silencieux ; les diagnostics l'indiquent.
+- **Consigne basse.** Une période commence à la baisse de consigne (ou à la tombée de la nuit si la consigne était déjà basse, ou ne change jamais) et se termine à la prochaine hausse de consigne, ou au lever du soleil. Chaque nuit donne au plus une période. Les données manquantes ou exclues la coupent, et le plus long morceau est conservé (au moins 1 heure).
+- **Partie régulée.** La partie d'une période qui commence au premier démarrage du chauffage où la pièce est à moins de 0,3 °C de sa consigne basse. Une pièce qui ne refroidit jamais jusqu'à sa consigne basse (dormeurs, voisin plus chaud) n'a pas de partie régulée.
+
 **Ce qui est appris**
 
-- **Valeur rapide.** Chaque montée de consigne du matin de confort est une réponse indicielle de l'émetteur : une hausse de consigne d'au moins 1 °C entre 03:00 et 10:00 (heure locale). Deux heures après la montée, SmartPI ajuste la hausse de la température. Une pièce à forte inertie (reconnue sur les nuits sans chauffage) bénéficie d'un modèle air-murs dans cet ajustement. La valeur rapide est publiée une fois que 3 matins confirmés concordent : médiane des 5 derniers, avec une dispersion d'au plus `25%`.
-- **Confirmation.** Un matin est non confirmé lorsque la nuit précédente est restée au moins 1 h sans aucun démarrage du chauffage entre 23:00 et la montée de consigne. Les dormeurs qui se lèvent pendant la fenêtre d'ajustement faussent la hausse, et une nuit qui démarre sans chauffage est le signe visible de ce risque. Un matin non confirmé est affiché dans les diagnostics et n'est jamais utilisé.
-- **Valeur affinée.** Chaque jour à 08:00, SmartPI ajuste un modèle de la pièce avec ses murs et son émetteur sur les nuits (18:00 à 08:00) des 3 derniers jours. Il compare cet ajustement à celui réalisé 3 jours plus tôt. Lorsque les deux concordent, ils donnent la classe de la pièce (inertie forte ou non), les paramètres des murs et une constante de temps de l'émetteur `τe`.
-- **Nuits régulées uniquement.** `τe` remplace la valeur rapide seulement lorsque les 6 nuits des deux fenêtres ont été régulées de 23:00 jusqu'à la montée de consigne : consigne constante, un démarrage du chauffage à chaque demi-heure, température à moins de 0,3 °C de la consigne, puissance stable, aucune interruption de données. Sinon, `τe` n'est qu'un diagnostic.
+- **Valeur rapide.** Une montée de confort est une hausse de consigne d'au moins 1 °C, à toute heure, après une consigne basse maintenue dans l'obscurité avec des données valides pendant 2 heures. Deux heures après la montée, SmartPI ajuste la hausse de la température. L'ajustement s'arrête au lever du soleil : lorsque la partie restante avant le lever est trop courte pour les contrôles habituels (durée, chaleur délivrée, hausse), la montée ne donne aucune valeur. Une fenêtre coupée par le lever doit aussi durer 1,5 fois le plus long retard connu avant la montée (la valeur affinée en vigueur, la valeur rapide publiée, ou deux fois la valeur du bootstrap), car un émetteur lent ajusté sur une fenêtre courte donne un retard court qui passe son propre contrôle ; sans aucune de ces valeurs, elle ne donne rien. Une pièce à forte inertie (reconnue sur ses périodes sans chauffage) bénéficie d'un modèle air-murs dans cet ajustement. La valeur rapide est publiée une fois que 3 montées confirmées concordent : médiane des 5 dernières, avec une dispersion d'au plus `25%`.
+- **Confirmation.** Une montée de confort n'est confirmée que lorsque la partie régulée qui la précède a duré au moins 4 heures et que le chauffage a démarré au moins une fois par heure de cette partie. Une partie régulée absente ou de moins de 4 heures laisse la montée non confirmée : rien ne prouve qu'aucun occupant n'a réchauffé la pièce. Les dormeurs qui se lèvent pendant la fenêtre d'ajustement faussent la hausse, et une pièce qui reste sans chauffage alors qu'elle devrait réguler est le signe visible de ce risque. Une montée non confirmée est affichée dans les diagnostics et n'est jamais utilisée.
+- **Valeur affinée.** À chaque fin de période, SmartPI ajuste un modèle de la pièce avec ses murs et son émetteur sur les 3 dernières périodes, et le compare à l'ajustement des 3 périodes précédentes. Chaque période est ajustée avec la réponse à la hausse de consigne qui la termine, pendant 2 heures au plus tant qu'il fait encore nuit et que la nouvelle consigne reste constante : c'est cette réponse qui révèle l'émetteur. Lorsque les deux concordent, ils donnent la classe de la pièce (inertie forte ou non), les paramètres des murs et une constante de temps de l'émetteur `τe`.
+- **Périodes régulées uniquement.** `τe` remplace la valeur rapide seulement lorsque les 6 périodes des deux ajustements ont été régulées sur leur partie régulée, de son début jusqu'à la montée de consigne ou le lever du soleil : au moins 4 heures, consigne constante, un démarrage du chauffage à chaque demi-heure, température à moins de 0,3 °C de la consigne, puissance stable, aucune interruption de données. Sinon, `τe` n'est qu'un diagnostic.
+- **Une période ne compte qu'une fois.** Une période a une seule clé, fixée par ses événements. Une seconde montée de consigne la même nuit, un nouveau calcul ou un redémarrage ne la compte jamais deux fois, ni pour la classe de la pièce ni pour les valeurs confirmées.
 
 **Ce que cela modifie**
 
@@ -321,22 +330,23 @@ Le retard de l'émetteur `T_ar` est le délai entre le début du chauffage et la
 
 **Qualité des données**
 
-L'apprentissage n'utilise que les périodes où SmartPI pilote le chauffage avec des données valides. Ces périodes sont exclues et interrompent une nuit, une fenêtre d'identification ou une montée de consigne comme une donnée manquante (elles ne sont jamais comblées) :
+L'apprentissage n'utilise que les données enregistrées pendant que SmartPI pilote le chauffage. Ces périodes sont exclues et interrompent une période calme ou une montée de confort comme une donnée manquante (elles ne sont jamais comblées) :
 
 - aucune donnée depuis plus de 20 minutes, température intérieure ou extérieure indisponible, ou commande inconnue ;
 - la durée d'arrêt d'un redémarrage de Home Assistant ou du thermostat qui n'est pas ponté (voir [Redémarrages](#redémarrages)) ; un redémarrage ponté n'est qu'un échantillon manquant ;
 - un saut de température de plus de 0,5 °C à plus de 20 °C/h, qu'aucun chauffage ne produit (la valeur est ignorée ; un nouveau niveau confirmé par 3 lectures est conservé) ;
 - une fenêtre ouverte, un délestage, le mode sécurité, un mode HVAC autre que le chauffage, ou une commande remplacée par Versatile Thermostat.
 
-Un matin n'est évalué que si les 2 heures précédant la montée et les 2 h 15 qui la suivent sont valides. Une nuit n'est régulée que si toute sa plage de sommeil est valide. Une fenêtre d'identification ignore les tranches de 10 minutes invalides et exige au moins 50 tranches valides, en séquences d'au moins une heure.
+Une montée de confort n'est évaluée que si les 2 heures qui la précèdent et les 2 h 15 qui la suivent (ou le temps restant jusqu'au lever du soleil) sont valides. Une consigne rétablie dans les 5 minutes suivant un redémarrage n'est pas une montée de confort. Une période n'est comptée comme régulée que si toute sa partie régulée est valide. Un ajustement d'identification n'utilise que les tranches de 10 minutes entièrement comprises dans ses périodes et exige au moins 50 de ces tranches, en séquences d'au moins une heure.
 
 **Prérequis et limites**
 
 - Chauffage uniquement (rien n'est appris ni appliqué en refroidissement), avec des chauffages pilotés par cycles PWM. En mode vanne, rien n'est appris ni appliqué et les diagnostics affichent `valve_mode_not_supported` : la puissance de chauffe d'une vanne n'est connue qu'à travers sa courbe, et une courbe absente ou qui ne correspond pas à la vanne donne un retard faux ; sur un émetteur lent, le retard appris a aussi laissé la montée du matin sous la consigne de confort.
-- Une montée de consigne du matin d'au moins 1 °C, et un temps mort du bootstrap déjà mesuré.
-- La valeur rapide demande 3 matins confirmés. Dans une pièce dont les nuits démarrent sans chauffage, les matins restent non confirmés : la valeur rapide n'y est pas publiée.
-- La valeur affinée demande 6 nuits régulées consécutives, ce qui suppose une consigne éco atteinte avant 23:00 et maintenue toute la nuit.
-- Un occupant présent uniquement en soirée, avant 23:00, n'est pas détecté.
+- La position de la maison renseignée dans Home Assistant, une montée de confort d'au moins 1 °C avant le lever du soleil, et un temps mort du bootstrap déjà mesuré.
+- La valeur rapide demande 3 montées confirmées. Une pièce qui ne régule pas à sa consigne basse pendant 4 heures avant la montée (retour tardif ou absent à la consigne basse) reste non confirmée : la valeur rapide n'y est pas publiée.
+- La valeur affinée demande 6 périodes régulées consécutives, ce qui suppose une consigne basse atteinte au moins 4 heures avant la montée de confort ou le lever du soleil, et maintenue jusque-là.
+- Une montée après le lever du soleil, une consigne basse seulement en journée, ou une maison dont les nuits sont très courtes (été sous les hautes latitudes) ne donne aucune valeur. Une consigne maintenue toute la nuit donne des périodes pour la valeur affinée et la classe de la pièce, mais aucune montée.
+- Un occupant présent uniquement lorsque la consigne est haute n'est pas détecté.
 - Les calculs s'exécutent en arrière-plan : jusqu'à quelques secondes par jour et par thermostat, environ 20 Mo au pic. SmartPI conserve 7 jours de signaux dans son propre fichier de stockage.
 - Ils utilisent les paquets `numpy` et `scipy`, installés avec l'intégration et chargés seulement par les calculs en arrière-plan. S'ils ne peuvent pas être chargés, rien n'est appris, la valeur du bootstrap reste utilisée et les diagnostics affichent `dependencies_unavailable`.
 

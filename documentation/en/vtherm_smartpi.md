@@ -312,12 +312,21 @@ Useful points to know:
 
 The emitter delay `T_ar` is the time between the start of the heating and the rise of the room temperature. The bootstrap measures it once (`deadtime_heat_s`). SmartPI also learns it during normal regulation and uses the learned value for the regulation. This learning is always on and needs no setting.
 
+**Quiet periods**
+
+The learning uses only quiet periods: stretches without sun, at a constant setpoint, with valid data. They come from the recorded data and the position of the home in Home Assistant; no hour is fixed and nothing has to be declared.
+
+- **No sun.** The sun is computed from the latitude and longitude of the home. A period ends a few minutes before sunrise and starts a few minutes after sunset, never after sunrise: a low sun on a window facing it already heats the room. Without a valid home position, no period is found and the learning stays silent; the diagnostics say so.
+- **Low setpoint.** A period starts at the setpoint drop (or at nightfall when the setpoint was already low, or never changes) and ends at the next setpoint rise, or at sunrise. Each night gives at most one period. Missing or excluded data cut it, and the longest piece is kept (at least 1 hour).
+- **Regulated part.** The part of a period from the first heater start with the room within 0.3 °C of its low setpoint. A room that never cools to its low setpoint (sleepers, a warmer neighbour) has no regulated part.
+
 **What it learns**
 
-- **Fast value.** Each morning comfort step is a step response of the emitter: a setpoint rise of at least 1 °C between 03:00 and 10:00 (local time). Two hours after the step, SmartPI fits the rise of the temperature. A room with thermal mass (recognised on nights without heating) gets an air-walls model in that fit. The fast value is published once 3 confirmed mornings agree: median of the last 5, with a spread of at most 25 %.
-- **Confirmation.** A morning is unconfirmed when the night before stayed at least 1 h without any heater start between 23:00 and the step. Sleepers who get up during the fit window bias the rise, and a night that starts without heating is the visible sign of that risk. An unconfirmed morning is shown in the diagnostics and never used.
-- **Refined value.** Every day at 08:00, SmartPI fits a model of the room with its walls and its emitter over the nights (18:00 to 08:00) of the last 3 days. It compares that fit with the one made 3 days earlier. When both agree, they give the room class (thermal mass or not), the wall parameters and an emitter time constant `τe`.
-- **Regulated nights only.** `τe` replaces the fast value only when the 6 nights of both windows were regulated from 23:00 to the comfort step: constant setpoint, a heater start in every half hour, temperature within 0.3 °C of the setpoint, steady power, no data gap. Otherwise `τe` is a diagnostic only.
+- **Fast value.** A comfort step is a setpoint rise of at least 1 °C, at any hour, after a low setpoint held in the dark with valid data for 2 hours. Two hours after the step, SmartPI fits the rise of the temperature. The fit stops at sunrise: when the part left before sunrise is too short for the usual checks (duration, heat delivered, rise), the step gives no value. A window cut by sunrise must also last 1.5 times the longest delay known before the step (the refined value in force, the published fast value, or twice the bootstrap value), because a slow emitter fitted on a short window gives a short delay that passes its own check; without any of them it gives no value. A room with thermal mass (recognised on its periods without heating) gets an air-walls model in that fit. The fast value is published once 3 confirmed steps agree: median of the last 5, with a spread of at most 25 %.
+- **Confirmation.** A step is confirmed only when the regulated part before it lasted at least 4 hours and the heater started at least once every hour of it. A regulated part that is missing or shorter than 4 hours leaves the step unconfirmed: nothing proves that no occupant warmed the room. Sleepers who get up during the fit window bias the rise, and a room that stays without heating while it should regulate is the visible sign of that risk. An unconfirmed step is shown in the diagnostics and never used.
+- **Refined value.** Each time a period ends, SmartPI fits a model of the room with its walls and its emitter over the last 3 periods, and compares it with the fit of the 3 periods before them. Each period is fitted with the response to the setpoint rise that ends it, for up to 2 hours while it is still dark and the new setpoint constant: that response is what reveals the emitter. When both agree, they give the room class (thermal mass or not), the wall parameters and an emitter time constant `τe`.
+- **Regulated periods only.** `τe` replaces the fast value only when the 6 periods of both fits were regulated over their regulated part, from its start to the setpoint rise or sunrise: at least 4 hours, constant setpoint, a heater start in every half hour, temperature within 0.3 °C of the setpoint, steady power, no data gap. Otherwise `τe` is a diagnostic only.
+- **One period counts once.** A period has one key, set by its events. A second rise the same night, a new computation or a restart never counts it twice, neither for the room class nor for the confirmed values.
 
 **What it changes**
 
@@ -328,22 +337,23 @@ The emitter delay `T_ar` is the time between the start of the heating and the ri
 
 **Data quality**
 
-The learning only uses periods when SmartPI controls the heater with valid data. These periods are excluded, and they interrupt a night, an identification window or a morning step like missing data (they are never filled in):
+The learning only uses data recorded while SmartPI controls the heater. These periods are excluded, and they cut a quiet period or a comfort step like missing data (they are never filled in):
 
 - no data for more than 20 minutes, an unavailable indoor or outdoor temperature, or an unknown command;
 - the downtime of a restart of Home Assistant or of the thermostat that is not bridged (see [Restarts](#restarts)); a bridged restart is only a missing sample;
 - a temperature jump of more than 0.5 °C at more than 20 °C/h, which no heating produces (the value is ignored; a new level confirmed by 3 readings is kept);
 - window open, power shedding, safety mode, HVAC mode other than heating, or a command overridden by Versatile Thermostat.
 
-A morning is evaluated only when the 2 hours before the step and the 2 h 15 after it are valid. A night counts as regulated only when its whole sleep span is valid. An identification window ignores the invalid 10-minute bins and needs at least 50 valid bins in runs of at least one hour.
+A comfort step is evaluated only when the 2 hours before it and the 2 h 15 after it (or the time left until sunrise) are valid. A setpoint restored within 5 minutes after a restart is not a comfort step. A period counts as regulated only when its whole regulated part is valid. An identification fit uses only the 10-minute bins wholly inside its periods and needs at least 50 of them in runs of at least one hour.
 
 **Requirements and limits**
 
 - Heating only (nothing is learned or applied in cooling), and heaters driven by PWM cycles. In valve mode nothing is learned or applied and the diagnostics show `valve_mode_not_supported`: the heating power of a valve is known only through the valve curve, and a curve that is missing or does not match the valve gives a wrong delay; on a slow emitter, the learned delay also left the morning rise short of the comfort setpoint.
-- A morning comfort step of at least 1 °C, and a bootstrap dead time already measured.
-- The fast value needs 3 confirmed mornings. In a room whose nights start without heating, mornings stay unconfirmed: the fast value is not published there.
-- The refined value needs 6 consecutive regulated nights, which requires an eco setpoint reached before 23:00 and held all night.
-- An occupant present only in the evening, before 23:00, is not detected.
+- The position of the home set in Home Assistant, a comfort step of at least 1 °C before sunrise, and a bootstrap dead time already measured.
+- The fast value needs 3 confirmed steps. A room that does not regulate at its low setpoint for 4 hours before the step (late or no return to the low setpoint) stays unconfirmed: the fast value is not published there.
+- The refined value needs 6 consecutive regulated periods, which requires a low setpoint reached at least 4 hours before the comfort step or sunrise, and held until then.
+- A step after sunrise, a low setpoint only in daylight, or a home with only short nights (summer at high latitudes) gives no value. A setpoint held all night gives periods for the refined value and the room class, but no step.
+- An occupant present only while the setpoint is high is not detected.
 - The computations run in the background: up to a few seconds per day and per thermostat, about 20 MB at peak. SmartPI keeps 7 days of signals in its own storage file.
 - They use the `numpy` and `scipy` packages, installed with the integration and loaded only by the background computations. If they cannot be loaded, nothing is learned, the bootstrap value stays in use and the diagnostics show `dependencies_unavailable`.
 

@@ -5,6 +5,12 @@ heater edges, outdoor temperature, SmartPI phase and published parameters) and
 the decisions of the reference pipeline: per morning (fast value, path, room
 class, night indicator, gate observables), per night (regulated or not), per
 identification window and per evaluation (class, tau_e, in-force values).
+
+The reference pipeline selected its data by local hours: nights from 18:00 to
+08:00, a sleep span from 23:00 to the comfort step, windows of three days ending
+at 08:00. The integration selects quiet periods instead; these tests give its
+numerical methods the reference periods as explicit intervals, so they check
+the methods themselves against the reference.
 """
 
 from __future__ import annotations
@@ -26,12 +32,30 @@ from custom_components.vtherm_smartpi.smartpi.tar_learning import (
 from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import OffsetClock
 from custom_components.vtherm_smartpi.smartpi.tar_learning.signals import Anchors, ExtTL
 
+H = 3600.0
+
 FIXTURES = Path(__file__).parent / "fixtures" / "tar_learning"
 RUNS = ("m3_d5n3", "pr_d5n3", "pr_d11n7", "m2_d9n6")
 ECO = {"N3": 19.0, "N6": 17.0, "N7": 16.0}
 CLOCK = OffsetClock(6.0)  # simulation time 0 is 06:00 local
 # Labels of the reference pipeline -> labels of the integration
 PATHS = {"v3": "night", "v3reg": "night_regulated", "R": "regulated"}
+
+
+# Periods of the reference pipeline (local hours of the simulated days)
+REF_NIGHTS = [(CLOCK.at(d, 18.0), CLOCK.at(d + 1, 8.0)) for d in range(-1, 15)]
+
+
+def ref_sleep_start(t_sp: float) -> float:
+    """23:00 of the evening before the morning of t_sp."""
+    return CLOCK.at(CLOCK.day_of(t_sp) - 1, 23.0)
+
+
+def ref_sleep_span(night_day: int, sp_events) -> tuple[float, float]:
+    """[23:00, first rise in [03:00, 08:00) or 08:00) of the night starting on the evening of night_day."""
+    lo, hi = CLOCK.at(night_day + 1, 3.0), CLOCK.at(night_day + 1, 8.0)
+    rises = [te for te, old, new in gates.sp_changes_in(20.0, sp_events, lo - 1e-6, hi) if new > old and te >= lo]
+    return CLOCK.at(night_day, 23.0), (rises[0] if rises else hi)
 
 
 def ref_path(path: str) -> str:
@@ -78,7 +102,7 @@ def _inputs(data, exp) -> morning.MorningInputs:
         anch=Anchors(data["pub_t"], data["pub_v"]), ext=ExtTL(data["ext_t"], data["ext_v"]),
         ext_t=data["ext_t"], ext_v=data["ext_v"], on=on, off=off,
         spans=room_mass.passive_spans(on, off, data["t_last"]), params_at=params_at, phase_at=phase_at,
-        clock=CLOCK, cycle_s=exp["cycle_s"], b_pub=exp["b_true"],
+        quiet=REF_NIGHTS, cycle_s=exp["cycle_s"], b_pub=exp["b_true"],
     )
 
 
@@ -114,8 +138,10 @@ def test_gates_and_publication_match_reference(run) -> None:
         for m in exp["mornings"]:
             if m["max_idle_sleep_h"] is None and m["passive_2h"] is None:
                 continue
-            obs = gates.gate_observables(CLOCK, data["on"], m["t_sp"], m["t_s"])
-            assert obs["max_idle_sleep_h"] == pytest.approx(m["max_idle_sleep_h"], abs=1e-12)
+            t23 = ref_sleep_start(m["t_sp"])
+            obs = gates.gate_observables(data["on"], m["t_sp"], m["t_s"], t23)
+            assert obs["max_idle_h"] == pytest.approx(m["max_idle_sleep_h"], abs=1e-12)
+            assert obs["regulated_h"] >= 4.0
             assert obs["passive_2h"] == m["passive_2h"]
             if not m["acc"]:
                 continue
@@ -133,12 +159,15 @@ def test_gates_and_publication_match_reference(run) -> None:
 
 
 def test_regulated_nights_match_reference(run) -> None:
+    """The regulated-night rule on the reference sleep spans."""
     _name, data, exp = run
     sp_events = [tuple(x) for x in exp["sp_events"]]
     for n, rec in exp["rnights"].items():
-        mine = gates.regulated_night(CLOCK, int(n), data["on"], data["off"], data["pub_t"], data["pub_v"], 20.0,
-                                     sp_events, exp["cycle_s"])
-        assert (mine["ok"], mine["why"]) == (rec["ok"], rec["why"]), n
+        a, b = ref_sleep_span(int(n), sp_events)
+        mine = gates.regulated_span(a, b, gates.sp_at(20.0, sp_events, a), data["on"], data["off"], data["pub_t"],
+                                    data["pub_v"], exp["cycle_s"], sp_timeline=(20.0, sp_events))
+        why = (rec["why"] or "").replace("in the sleep span", "in the regulated part") or None
+        assert (mine["ok"], mine["why"]) == (rec["ok"], why), n
 
 
 def test_evaluations_and_values_in_force_match_reference(run) -> None:
@@ -151,8 +180,8 @@ def test_evaluations_and_values_in_force_match_reference(run) -> None:
         if day - 3 not in wins or day < 6:
             continue
         e = identification.evaluate_day(wins[day - 3], wins[day], exp["b_true"] / 60.0)
-        e["day"] = day
-        if not (gates.window_regulated(nights, day - 3, 3) and gates.window_regulated(nights, day, 3)):
+        e["day"] = e["t"] = day
+        if not gates.window_regulated(nights, list(range(day - 6, day))):
             e = identification.silence(e, "not regulated (R)")
         evals.append(e)
     for e, ref in zip(evals, exp["evals"]):
@@ -169,13 +198,14 @@ def test_identification_window_matches_reference(name: str) -> None:
     """Nights-only multi-day fit of the first window (class 'mass' or 'one', tau_e, k, tau_w)."""
     data, exp = _load(name)
     d = identification.grid_data(data["pub_t"], data["pub_v"], data["on"], data["off"], data["ext_t"],
-                                 data["ext_v"], 0.0, data["t_last"], CLOCK)
+                                 data["ext_v"], 0.0, data["t_last"])
     wins = {w["day"]: w for w in exp["windows"]}
     for day in exp["window_days_fit"]:
         ref = wins[day]
-        t0, t1 = identification.window_bounds(CLOCK, day)
+        t0, t1 = CLOCK.at(day - 3, 8.0), CLOCK.at(day, 8.0)
+        nights = [(a, b) for a, b in REF_NIGHTS if a >= t0 and b <= t1]
         j = int(np.searchsorted(data["pub_t"], t1, side="right"))
-        mine = identification.window_fit(d, t0, t1, identification.q_obs(data["pub_v"][:j]))
+        mine = identification.window_fit(d, t0, t1, nights, identification.q_obs(data["pub_v"][:j]))
         assert mine["cls"] == ref["cls"]
         assert mine["q_obs"] == pytest.approx(ref["q_obs"], rel=1e-12)
         assert mine["dbic"] == pytest.approx(ref["dbic"], rel=1e-9)

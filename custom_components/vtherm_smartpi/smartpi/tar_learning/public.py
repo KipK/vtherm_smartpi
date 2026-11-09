@@ -11,11 +11,20 @@ ROOM_UNDETERMINED = "undetermined"
 
 _ROOM_CLASSES = {"mass": ROOM_THERMAL_MASS, "one": ROOM_NO_THERMAL_MASS}
 
-# Why a morning comfort step gave no value
+# Why a comfort step gave no value
 _MORNING_REASONS = {
     "accepted": "accepted",
     "computation failed": "computation failed",
     "data gap around the step": "missing or excluded data around the comfort step",
+    "home position unknown": "home position unknown: the absence of sun cannot be checked",
+    "comfort step in daylight": "comfort step in daylight",
+    "no quiet period before the step":
+        "no quiet period before the comfort step (dark, constant setpoint and valid data for at least 1 hour)",
+    "low setpoint not held in the dark before the step":
+        "low setpoint not held in the dark with valid data for the 2 hours before the comfort step",
+    "sunrise too close to the comfort step": "sunrise too soon after the comfort step",
+    "excitation: cut by sunrise": "comfort step cut by sunrise before its response could be measured",
+    "setpoint restored after a restart": "setpoint restored after a restart, not a comfort step",
     "no published b": "heat loss b not learned yet",
     "no heater start after the comfort step": "no heating start after the comfort step",
     "night not usable for the room class": "night not usable for this type of room",
@@ -42,7 +51,18 @@ _MORNING_REASONS = {
     "regulated: unknown mass (silent)": "type of room not known yet",
 }
 
-_UNCONFIRMED_PASSIVE_NIGHT = "night with at least 1 hour without heating between 23:00 and the comfort step"
+# Why an accepted comfort step is not used (G1 and GT4 share the first part)
+_UNCONFIRMED = {
+    "idle in the regulated part":
+        "at least 1 hour without heating while the room was regulated at its low setpoint before the comfort step",
+    "no regulated start": "the room did not reach its low setpoint before the comfort step",
+    "regulated part too short": "the room was regulated at its low setpoint for less than 4 hours before the comfort step",
+}
+
+# Why no quiet period can be found
+_PERIOD_REASONS = {
+    "home position unknown": "home position unknown: the absence of sun cannot be checked",
+}
 
 
 def room_class(code: str | None) -> str | None:
@@ -53,7 +73,7 @@ def room_class(code: str | None) -> str | None:
 
 
 def morning_reason(code: str | None) -> str | None:
-    """Plain reason of a morning decision; an unknown code is shown as is."""
+    """Plain reason of a comfort-step decision; an unknown code is shown as is."""
     if code is None:
         return None
     if code.startswith("phase "):
@@ -62,9 +82,14 @@ def morning_reason(code: str | None) -> str | None:
 
 
 def unconfirmed_reason(code: str | None) -> str | None:
-    """Plain reason why an accepted morning is not used."""
+    """Plain reason why an accepted comfort step is not used."""
     if code is None:
         return None
-    if code.startswith("night started passive in the sleep span"):
-        return _UNCONFIRMED_PASSIVE_NIGHT
-    return code
+    return _UNCONFIRMED.get(code.split(",")[0], code)
+
+
+def period_reason(code: str | None) -> str | None:
+    """Plain reason why no quiet period can be found."""
+    if code is None:
+        return None
+    return _PERIOD_REASONS.get(code, code)

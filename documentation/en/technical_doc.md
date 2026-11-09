@@ -363,6 +363,81 @@ The lag is learned on constant-power episodes, which the hysteresis bootstrap
 provides. In PWM regulation the duty cycle changes from cycle to cycle, so an
 installation already out of the bootstrap rarely provides one.
 
+### 3.8 Quiet periods of the emitter delay learning
+
+The emitter delay learning (`smartpi/tar_learning/`) selects its data with
+`smartpi/quiet_periods/`, a pure Python module shared by the methods that need
+a room free of solar gains. No local hour enters the selection; times are epoch
+seconds and half-open intervals `[start, end)`.
+
+**Darkness.** The position comes from the Home Assistant configuration
+(`hass.config.latitude`, `hass.config.longitude`), injected by the handler and
+validated by the manager: finite numbers within [-90, 90] and [-180, 180]
+(zero is valid). The geometric elevation of the centre of the sun is computed
+with the `astral` package shipped with Home Assistant. Darkness is the centre
+below `-0.833 - 0.5 = -1.333` degrees: -0.833 degrees is the standard sunrise
+and sunset (the upper limb on the apparent horizon, 34' of refraction plus 16'
+of radius), and 0.5 degrees covers the usual spread of the refraction near the
+horizon. The elevation is sampled every 600 s on a grid aligned on the epoch; a
+sample counts as dark only 0.05 degrees below the threshold (the elevation
+departs from a chord by at most 0.014 degrees on a 600 s step near the horizon),
+each crossing is refined by bisection to 1 s, then every boundary is moved
+120 s inwards for the accuracy of the solar algorithm. The darkness therefore
+ends a few minutes before sunrise and starts a few minutes after sunset, never
+later than sunrise. A darkness longer than 24 h (polar night) is cut into blocks
+of 24 h anchored on its true start; a polar day has no darkness. Without a valid
+position (or without `astral`) there is no darkness and no period: the methods
+stay silent and `quiet_periods.reason` says why.
+
+**Periods.** A plateau is a maximal interval of constant setpoint. A setback
+run goes from a setpoint drop to the next rise (further drops stay in the run).
+A darkness holds at most one episode: the longest part of a setback run inside
+it, or the whole darkness when the setpoint does not change inside it (held
+setpoint). The episode ends at the rise that ends the run, or at the end of the
+darkness. Its quiet components are its plateau pieces intersected with the
+valid spans of the history (`TarHistory.valid_spans`: everything but the
+invalid intervals); a bridged restart leaves no invalid interval and does not
+cut them. The selected component is the longest one (at least 1 h, the earliest
+on a tie).
+
+**Regulated start.** For a component, the first heater start at or after the
+start of its plateau with the indoor temperature within 0.3 °C of the setpoint;
+when it lies before the component, the component start if the data between them
+are valid. A heater start within 60 s after a restart does not count. None when
+the room never regulates there.
+
+**Identification interval.** The selected component, continued after the rise
+that ends the episode while it is still dark, the new setpoint constant and the
+data valid, for at most 2 h (the response horizon of the comfort-step fit). The
+response to the rise is the main excitation of the emitter: without it the
+emitter time constant of a regulated room is poorly determined. The regulated
+night and the comfort step still end at the rise.
+
+**Keys.** An episode is closed once its end is at or before the last
+observation, settled once its identification interval is known too, and
+complete when the history covers it from its start. Its key is
+`q<version>:<origin>:<start of the selected component>` at 0.1 s, the origin
+being the start of the episode. The manager rebuilds the catalogue at most every
+10 minutes and stores the settled and complete episodes (60 at most) with their
+components: the stored catalogue only grows forward, so a key never changes
+when the history is pruned, and a period found again gets the same key.
+
+**Uses.**
+
+| Rule | Data |
+|---|---|
+| Comfort step | a rise of at least 1 °C after a low setpoint held 2 h (in the history), not within 300 s after a restart; evaluated when it ends an episode and the component that ends at the rise covers the 2 h before it |
+| Fit window of a step | every response window ends at the end of the darkness; the excitation rules (`exc_window_T`, energy, rise, sensor period) judge the truncated window; less than 600 s left gives no fit. A window `Wsp` cut by the darkness must also pass `exc_window_T` for the largest of the fitted value, the refined value in force, the published fast value and twice the bootstrap dead time (the first moment of a first-order emitter is about twice the apparent dead time the bootstrap measures); without any of them the step is refused |
+| Night indicator | passive spans intersected with the quiet components of the episode of the step, on the 600 s grid of the segment |
+| G1 / GT4 | longest span without a heater start in `[regulated start, t_ref)`; no regulated start, or a regulated part under 4 h, is an unknown observable and leaves the step unconfirmed |
+| Regulated night | `[regulated start, end of the episode)` of the selected component, at least 4 h, valid to its end; then the existing quarter, temperature, power-slope and residual rules |
+| Identification window | the identification intervals of three consecutive settled episodes (bins wholly inside them), the wall state starting 10 h before the first; compared with the window of the three episodes before, never overlapping |
+| Room class, fast value | one night entry and one confirmed value per key, replaced before the room class or the publication is computed |
+
+Evaluations carry their decision time (end of their last episode); the class,
+wall parameters and `τe` in force at a step are those decided before the step.
+The local date of the diagnostics (`day`) is for display only.
+
 ---
 
 ## 4. Smart-PI control
@@ -941,6 +1016,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `guards.py`            | `guard_cut` and `guard_kick`                                |
 | `thermal_twin_1r1c.py` | thermal twin and predictive diagnostics                     |
 | `restart_bridge.py`    | the one decision on whether a restart is bridged, consulted by every component, and the context of the last tick |
+| `quiet_periods/`       | darkness from the home position (`astral`), plateaus, setback runs, episodes, keys and regulated start of the quiet periods |
 | `diagnostics.py`       | canonical live diagnostic payload                           |
 | `diagnostic_history.py` | versioned envelope and stable Recorder series               |
 | `tint_filter.py`       | adaptive indoor-temperature filtering                       |
@@ -1041,6 +1117,16 @@ The current payload from `SmartPI.save_state()` notably contains:
 The control loop schedules at most one delayed write of this payload per five-minute window; Home Assistant flushes a pending write at shutdown. Services and entity removal write a snapshot immediately.
 
 Past event timestamps (temperature histories, calibration start, passive period and episode of the response lag) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
+
+The emitter delay learning keeps its own store (state version 2): history,
+pending comfort steps, catalogue of quiet periods with their keys, night
+entries, regulated-period decisions, windows, evaluations, confirmed values
+keyed by period, publications and the home position the evidence was found
+with. A version 1 store keeps only its history and its pending rises: its
+nights, windows, evaluations, confirmations and published values were selected
+by local hours without a solar check and are dropped, then found again from the
+history. A change of the home position forgets the evidence of the periods. A
+later version is ignored.
 
 #### Restarts
 

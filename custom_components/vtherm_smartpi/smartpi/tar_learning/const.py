@@ -63,13 +63,17 @@ TAR_SPIKE_CONFIRM = 3
 TAR_SAVE_DELAY_S = 1800
 
 # ---------------------------------------------------------------------------
-# Morning comfort step (event detection on the live setpoint)
+# Comfort step (event detection on the live setpoint)
 # ---------------------------------------------------------------------------
+# A comfort step is a setpoint rise of at least STEP_MIN_RISE_C, at any time of
+# day, after a low setpoint held for the 2 h of the baseline; it is used only
+# when it ends a quiet period (quiet_periods).
 STEP_MIN_RISE_C = 1.0
-STEP_FROM_H = 3.0
-STEP_TO_H = 10.0
 STEP_MERGE_S = 900.0
-# The morning is evaluated once the 2 h response after the step is recorded.
+# After a restart Versatile Thermostat restores its state in steps: a rise seen
+# within this delay after the first observation is a restoration, not a step.
+STEP_RESTART_GUARD_S = 300.0
+# The step is evaluated once the 2 h response after it is recorded.
 MORNING_EVAL_DELAY_S = 2.0 * H + 900.0 + 300.0
 
 # ---------------------------------------------------------------------------
@@ -102,8 +106,6 @@ RM_RULE = {
 }
 TAU2_EDGE_H = 1000.0
 NIGHT_LOOKBACK_S = 10.0 * H
-NIGHT_FROM_H = 18.0
-NIGHT_TO_H = 8.0
 WASHOUT_FALLBACK_S = 3.0 * H
 MIN_FIT_S = 1.0 * H
 PEAK_SMOOTH_S = 1800.0
@@ -150,9 +152,8 @@ PUB_MIN_ACCEPTED = 3
 PUB_LAST = 5
 PUB_MAD_REL = 0.25
 
-# Occupant gates of the fast value
+# Occupant gates of the fast value (over the regulated part of the period)
 GATE_IDLE_MIN_H = 1.0
-GATE_SLEEP_START_H = 23.0
 GT4_T_MIN_S = 900.0
 GT4_BFIT_REL_MIN = 0.6
 
@@ -172,8 +173,12 @@ ID_TE_MAX = 7200.0
 ID_TW_LO = 1.0 * H
 ID_TW_HI = 800.0 * H
 ID_MIN_SAMPLES = 50
-ID_WIN_DAYS = 3
-ID_WINDOW_END_H = 8.0
+# A window holds three consecutive quiet periods; it is compared with the
+# window of the three periods before it.
+ID_WIN_PERIODS = 3
+# The wall state (low-pass of the measured air) of a window starts this long
+# before its first period.
+ID_WALL_WARMUP_S = 10.0 * H
 ID_K_TOL = math.log(1.25)
 ID_TW_TOL = math.log(1.5)
 ID_PRECISE_Q = 0.015
@@ -186,14 +191,20 @@ ID_TE_PUB_MAX_FRAC = 0.95
 ID_TE_TOL = math.log(1.5)
 ID_PUB_LAST = 5
 
-# Regulated night (hand-over of the refined value)
-RN_SPAN_START_H = 23.0
-RN_SP_RISE_FROM_H = 3.0
-RN_SPAN_END_MAX_H = 8.0
+# Regulated night (hand-over of the refined value), over the regulated part of a period
 RN_QUARTER_S = 1800.0
 RN_QUARTER_MERGE_S = 900.0
 RN_ECO_TOL_C = 0.3
 RN_U_SLOPE_MAX_H = 0.05
 RN_U_RESID_MAX = 0.10
-RN_NIGHTS_PER_WINDOW = 3
 RN_SP_EPS = 1e-6
+
+# ---------------------------------------------------------------------------
+# Local hours still used by the room model (room_model/periods.py, observer.py
+# and manager.py select their nights and schedule their job with them). The
+# T_ar learning itself uses no local hour.
+# ---------------------------------------------------------------------------
+NIGHT_FROM_H = 18.0
+NIGHT_TO_H = 8.0
+ID_WIN_DAYS = 3
+ID_WINDOW_END_H = 8.0

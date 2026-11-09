@@ -29,9 +29,7 @@ from scipy.signal import lfilter
 from .const import (
     LONG_NIGHT_H,
     MIN_FIT_S,
-    NIGHT_FROM_H,
     NIGHT_LOOKBACK_S,
-    NIGHT_TO_H,
     PEAK_SMOOTH_S,
     RM_BIN_S,
     RM_GRID_S,
@@ -296,7 +294,7 @@ def segment_flag(r: dict, rule: dict = RM_RULE) -> tuple[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Passive spans and the washed-out night part
+# Passive spans and the washed-out quiet part
 # ---------------------------------------------------------------------------
 def passive_spans(on_edges, off_edges, t_last: float) -> list[tuple[float, float]]:
     """(heater cut, next heater start) spans of at least MIN_FIT_S; t_last ends an open span."""
@@ -332,34 +330,52 @@ def post_cut_peak(anch, cut: float, end: float) -> float:
     return float(tb[int(np.argmax(sm))]) if len(vb) > w else cut
 
 
-def is_night(tod_h: float) -> bool:
-    return tod_h >= NIGHT_FROM_H or tod_h < NIGHT_TO_H
+def quiet_part(s0: float, e: float, quiet) -> tuple[float, float] | None:
+    """Longest part of [s0, e) inside the quiet intervals, on a 600 s grid from s0.
 
-
-def night_part(s0: float, e: float, clock):
-    """Longest local-night part [18:00, 08:00) of [s0, e) on a 600 s grid."""
+    A grid point inside a quiet interval opens or extends a part; the part ends
+    at the first point outside, and never after the end of its quiet interval.
+    """
     grid = np.arange(s0, e, 600.0)
     if len(grid) == 0:
         return None
-    nm = np.array([is_night(clock.tod_h(float(x))) for x in grid])
-    best, cur = None, None
-    for x, n in zip(grid, nm):
-        if n and cur is None:
-            cur = x
-        if (not n) and cur is not None:
-            if best is None or x - cur > best[1] - best[0]:
-                best = (cur, x)
+    ivs = sorted((float(a), float(b)) for a, b in quiet)
+
+    def inside(x: float) -> float | None:
+        for a, b in ivs:
+            if a <= x < b:
+                return b
+        return None
+
+    best, cur, cur_end = None, None, None
+    for x in grid:
+        b = inside(float(x))
+        if b is not None and cur is not None and b != cur_end:
+            # the next quiet interval starts at once: close the current part at its end
+            if best is None or cur_end - cur > best[1] - best[0]:
+                best = (cur, cur_end)
             cur = None
-    if cur is not None and (best is None or e - cur > best[1] - best[0]):
-        best = (cur, e)
+        if b is not None and cur is None:
+            cur, cur_end = float(x), b
+        if b is None and cur is not None:
+            end = min(float(x), cur_end)
+            if best is None or end - cur > best[1] - best[0]:
+                best = (cur, end)
+            cur = None
+    if cur is not None:
+        end = min(e, cur_end)
+        if best is None or end - cur > best[1] - best[0]:
+            best = (cur, end)
     return best
 
 
-def night_segment(anch, spans, params_at, t_end: float, clock, valid_until=None):
-    """Longest washed-out night part (>= 1 h) of the passive spans ending by t_end.
+def night_segment(anch, spans, params_at, t_end: float, quiet, valid_until=None):
+    """Longest washed-out quiet part (>= 1 h) of the passive spans ending by t_end.
 
-    params_at(t) returns (reliable cool dead time or None, published lag or None)
-    valid at t. valid_until(a, b) optionally shortens [a, b) at the first data gap.
+    quiet: the quiet intervals (no sun, constant setpoint, valid data) the
+    segment must lie in. params_at(t) returns (reliable cool dead time or
+    None, published lag or None) valid at t. valid_until(a, b) optionally
+    shortens [a, b) at the first data gap.
     """
     best = None
     for c, e in spans:
@@ -374,7 +390,7 @@ def night_segment(anch, spans, params_at, t_end: float, clock, valid_until=None)
         s0 = max(c + base, peak)
         if e2 - s0 < MIN_FIT_S:
             continue
-        nb = night_part(s0, e2, clock)
+        nb = quiet_part(s0, e2, quiet)
         if not nb or nb[1] - nb[0] < MIN_FIT_S:
             continue
         if best is None or nb[1] - nb[0] > best["s1"] - best["s0"]:
@@ -385,7 +401,7 @@ def night_segment(anch, spans, params_at, t_end: float, clock, valid_until=None)
 def classify_night(anch, ext_t, ext_v, seg):
     """Night class and the fit of the night segment (None when not fitted)."""
     if seg is None:
-        return {"cls": "none", "why": "no washed-out night part >= 1 h"}, None
+        return {"cls": "none", "why": "no washed-out quiet part >= 1 h"}, None
     r = fit_segment(anch, ext_t, ext_v, seg["s0"], seg["s1"], cut=seg["cut"])
     if r is None:
         return {"cls": "none", "why": "too few anchors", **seg}, None

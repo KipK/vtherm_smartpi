@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Emitter delay learning: no fixed hour any more. It learns on quiet periods
+  found in the data: no sun (computed from the home position in Home
+  Assistant), a constant low setpoint from the setback to the next rise or
+  sunrise, valid data. Without a home position it stays silent and says why
+  in `tar_learning.quiet_periods`.
+- Emitter delay learning: a comfort step is any rise of at least 1 °C before
+  sunrise after 2 hours at the low setpoint; its fit stops at sunrise. A
+  window cut by sunrise must also hold the longest delay known before the
+  step. A setpoint restored after a restart is not a step.
+- Emitter delay learning: the confirmation and the regulated-night rule start
+  when the room regulates at its low setpoint and need 4 hours of it; an
+  unknown no longer confirms a step.
+- Emitter delay learning: identification over the last three quiet periods,
+  compared with the three before; each period counts once for the room class
+  and the confirmed values.
+- Emitter delay learning: values learned with the former fixed hours are
+  dropped once and learned again from the kept history.
+
 - Room model (heating, PWM heaters): SmartPI identifies each day a model of
   the room with its air, walls and emitter, follows the room state and
   publishes temperature forecasts and their errors in the `room_model`

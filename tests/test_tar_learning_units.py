@@ -9,7 +9,7 @@ import pytest
 
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.deadtime_estimator import DeadTimeEstimator
-from custom_components.vtherm_smartpi.smartpi.tar_learning import gates, identification, policy
+from custom_components.vtherm_smartpi.smartpi.tar_learning import gates, identification, policy, public
 from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock, OffsetClock
 from custom_components.vtherm_smartpi.smartpi.tar_learning.const import (
     TAR_APPLY_BOUND_HIGH,
@@ -148,22 +148,36 @@ def test_regulation_view_never_touches_the_estimator() -> None:
 # Gates
 # ---------------------------------------------------------------------------
 def test_g1_and_gt4() -> None:
-    c = OffsetClock(6.0)
     t_sp = 2 * 86400.0
-    t23 = c.at(1, 23.0)
-    regulated = [t23 + 1200.0 * i for i in range(22)]
-    obs = gates.gate_observables(c, regulated, t_sp, t_sp + 60.0)
-    assert obs["max_idle_sleep_h"] < 1.0 and not obs["passive_2h"]
+    reg = t_sp - 7 * 3600.0  # regulated start 7 h before the step
+    regulated = [reg + 1200.0 * i for i in range(22)]
+    obs = gates.gate_observables(regulated, t_sp, t_sp + 60.0, reg)
+    assert obs["max_idle_h"] < 1.0 and not obs["passive_2h"]
     assert gates.unconfirmed("G1", obs, 300.0, None) is None
-    passive = [t23 + 600.0, t_sp + 60.0]
-    obs = gates.gate_observables(c, passive, t_sp, t_sp + 60.0)
-    assert obs["max_idle_sleep_h"] > 1.0 and obs["passive_2h"]
-    assert gates.unconfirmed("G1", obs, 1200.0, None) is not None
+    passive = [reg, reg + 600.0, t_sp + 60.0]
+    obs = gates.gate_observables(passive, t_sp, t_sp + 60.0, reg)
+    assert obs["max_idle_h"] > 1.0 and obs["passive_2h"]
+    assert gates.unconfirmed("G1", obs, 1200.0, None) == "idle in the regulated part"
     assert gates.unconfirmed("GT4", obs, 1200.0, 0.9) is None
     assert gates.unconfirmed("GT4", obs, 600.0, 0.9) is not None
     assert gates.unconfirmed("GT4", obs, 1200.0, 0.5) is not None
     with pytest.raises(ValueError):
         gates.unconfirmed("other", obs, 1.0, None)
+
+
+def test_g1_never_takes_an_unknown_as_a_favourable_zero() -> None:
+    """No regulated start (room never at its low setpoint), or a regulated part under 4 h: unconfirmed."""
+    t_sp = 2 * 86400.0
+    starts = [t_sp - 3 * 3600.0 + 600.0 * i for i in range(18)]
+    obs = gates.gate_observables(starts, t_sp, None, None)
+    assert obs["max_idle_h"] is None and obs["regulated_h"] is None
+    assert gates.unconfirmed("G1", obs, 300.0, None) == "no regulated start"
+    obs = gates.gate_observables(starts, t_sp, None, t_sp - 3 * 3600.0)
+    assert obs["max_idle_h"] is None and obs["regulated_h"] == pytest.approx(3.0)
+    assert gates.unconfirmed("G1", obs, 300.0, None) == "regulated part too short"
+    # An observable missing from a record is unknown, never zero
+    assert gates.unconfirmed("G1", {}, 300.0, None) is not None
+    assert gates.unconfirmed("G1", {"regulated_start": 0.0, "regulated_h": 5.0}, 300.0, None) is not None
 
 
 def test_quarters_merge_short_tail() -> None:
@@ -172,9 +186,11 @@ def test_quarters_merge_short_tail() -> None:
 
 
 def test_window_regulated_needs_every_night() -> None:
-    nights = {1: {"ok": True}, 2: {"ok": True}, 3: {"ok": True}, 4: {"ok": False}}
-    assert gates.window_regulated(nights, 4, 3)
-    assert not gates.window_regulated(nights, 5, 3)
+    nights = {"a": {"ok": True}, "b": {"ok": True}, "c": {"ok": True}, "d": {"ok": False}}
+    assert gates.window_regulated(nights, ["a", "b", "c"])
+    assert not gates.window_regulated(nights, ["b", "c", "d"])
+    assert not gates.window_regulated(nights, ["a", "b", "x"])  # a night never gated is not regulated
+    assert not gates.window_regulated(nights, [])
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +222,69 @@ def test_class_in_force_resets_on_disagreement() -> None:
 
 
 def test_te_in_force_keeps_latest_publication() -> None:
-    evs = [{"day": 6, "cls": "mass", "te_ok": True, "te": 300.0},
-           {"day": 7, "cls": "unknown", "te_ok": False, "te": None}]
+    evs = [{"day": 6, "t": 6, "cls": "mass", "te_ok": True, "te": 300.0},
+           {"day": 7, "t": 7, "cls": "unknown", "te_ok": False, "te": None}]
     assert identification.te_in_force(evs, 6) is None
     assert identification.te_in_force(evs, 7)["value"] == 300.0
     assert identification.te_in_force(evs, 8)["value"] == 300.0
-    silenced = identification.silence({"cls": "mass", "te": 300.0, "te_ok": True, "day": 6}, "not regulated")
+    silenced = identification.silence({"cls": "mass", "te": 300.0, "te_ok": True, "day": 6, "t": 6},
+                                      "not regulated")
     assert silenced["cls"] == "unknown" and silenced["te_raw"] == 300.0
     assert identification.te_in_force([silenced], 7) is None
+
+
+# ---------------------------------------------------------------------------
+# Comfort step cut by sunrise
+# ---------------------------------------------------------------------------
+def _row(T: float, win: float, cut) -> dict:
+    """A passive-night comfort step that passes every rule but the window ones."""
+    from custom_components.vtherm_smartpi.smartpi.tar_learning.morning import FW
+
+    return {"night": "passive", "rms_base": 0.005, "q": 0.01, "sensor_period_s": 60.0, "cut": cut,
+            "win_s": {"Wsp": win}, "energy_s": {"Wsp": 3 * win},
+            "fit": {FW: {"T": T, "a_per_min": 0.1, "rms": 0.01, "edge": False}, "rise": {"Wsp": 1.0}}}
+
+
+def test_a_slow_emitter_cut_by_sunrise_is_refused() -> None:
+    """A 2300 s emitter cut 1600 s after its start fits a short delay (900 s) that passes its own window rule;
+    its bootstrap dead time (1150 s, first moment about 2300 s) refuses it."""
+    from custom_components.vtherm_smartpi.smartpi.tar_learning import jobs, morning
+
+    assert morning.gate_night_class(_row(900.0, 1600.0, None)) == (True, "accepted")  # without the cut rule
+    floor = jobs.delay_floor(None, None, 1150.0)
+    assert floor == pytest.approx(2300.0)
+    assert morning.gate_night_class(_row(900.0, 1600.0, {"floor": floor})) == (False, "excitation: cut by sunrise")
+    # a refined value or a published fast value in force raises the floor too
+    assert jobs.delay_floor({"value": 2500.0}, 1800.0, 400.0) == 2500.0
+    assert jobs.delay_floor(None, 1800.0, 400.0) == 1800.0
+    # no reference at all: a cut window cannot be checked
+    assert morning.gate_night_class(_row(900.0, 1600.0, {"floor": None}))[1] == "excitation: cut by sunrise"
+    assert public.morning_reason("excitation: cut by sunrise") == (
+        "comfort step cut by sunrise before its response could be measured")
+
+
+def test_a_fast_emitter_cut_late_is_accepted() -> None:
+    from custom_components.vtherm_smartpi.smartpi.tar_learning import jobs, morning
+
+    floor = jobs.delay_floor(None, None, 312.0)
+    assert morning.gate_night_class(_row(300.0, 5400.0, {"floor": floor})) == (True, "accepted")
+    # the regulated branch applies the same rule
+    from custom_components.vtherm_smartpi.smartpi.tar_learning.morning import FW
+
+    x = {"T": 300.0, "a_per_min": 0.1, "rms": 0.01, "edge": False}
+    assert morning._gate_fit(x, 0.01, 5400.0, 9000.0, 1.0, 60.0, {"floor": floor}) == (True, "accepted")
+    assert morning._gate_fit(x, 0.01, 1600.0, 9000.0, 1.0, 60.0, {"floor": 2300.0})[1] == "excitation: cut by sunrise"
+    assert FW
+
+
+@pytest.mark.parametrize("T, win", [(690.0, 3185.0), (1560.0, 3274.0)])
+def test_salon_steps_cut_by_sunrise(T: float, win: float) -> None:
+    """The two salon steps of the field week cut by sunrise (fitted 690 s and 1560 s, windows of 53 and 55 min).
+
+    With the bootstrap dead time only (458 s, first moment about 916 s), both pass: that reference is itself
+    short for this emitter. Once a value near the uncut fit (2310 s) is in force, both are refused."""
+    from custom_components.vtherm_smartpi.smartpi.tar_learning import jobs, morning
+
+    assert morning.gate_night_class(_row(T, win, {"floor": jobs.delay_floor(None, None, 458.0)}))[0]
+    assert morning.gate_night_class(_row(T, win, {"floor": jobs.delay_floor(None, 2310.0, 458.0)})) == (
+        False, "excitation: cut by sunrise")

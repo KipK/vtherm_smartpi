@@ -1,8 +1,12 @@
-"""Morning-step estimator of T_ar (numpy, scipy).
+"""Comfort-step estimator of T_ar (numpy, scipy).
 
-Each morning comfort step (setpoint rise at t_sp) is a step response of the
-emitter. The response fit (response.py) needs a baseline, the trajectory the
-room would have followed without the step, and a room response:
+Each comfort step (setpoint rise at t_sp that ends a quiet period) is a step
+response of the emitter. The response windows end at the latest at the end of
+the darkness (fit_end): data after sunrise are never fitted, and the gates
+below judge the truncated windows (a window cut by sunrise also has to hold
+the longest delay known before the step, cut_refusal). Its record keeps the
+name "morning". The response fit (response.py) needs a baseline, the
+trajectory the room would have followed without the step, and a room response:
 
 - passive night (no heater start in the 2 h before the step t_s, the first
   heater start within 15 min of t_sp): the baseline follows the night class
@@ -58,6 +62,9 @@ from .room_mass import (
 from .signals import Anchors, ExtTL, level_on_grid, sensor_period, u_on_grid
 
 WINDOWS = ("W45", "Wsp", "W2h")
+# Shortest response window left before sunrise for a fit
+RESPONSE_MIN_S = 600.0
+CUT_REASON = "excitation: cut by sunrise"
 # Decision paths: night-class baseline (night without heating or regulated night),
 # regulated night with the night-class baseline, regulated branch
 PATH_NIGHT = "night"
@@ -80,19 +87,55 @@ class MorningInputs:
     spans: list
     params_at: Callable[[float], tuple]
     phase_at: Callable[[float], str]
-    clock: object
+    # Quiet intervals (no sun, constant setpoint, valid data) of the period the step ends
+    quiet: list
     cycle_s: float
     b_pub: float
     valid_until: Callable[[float, float], float] | None = None
     cache: KernelCache = field(default_factory=KernelCache)
     # Valve power level timeline (times, levels); None for a PWM heater (edges)
     power: tuple | None = None
+    # End of the darkness: no response window goes beyond it (None: no limit)
+    fit_end: float | None = None
+    # Shortest first moment the emitter can have from what is known before the step (largest of the
+    # refined value in force, the published fast value and twice the bootstrap dead time), None if unknown
+    t_floor: float | None = None
+
+    def cut(self, ends: dict) -> dict:
+        """Response window ends truncated at fit_end."""
+        if self.fit_end is None:
+            return ends
+        return {wn: min(e, self.fit_end) for wn, e in ends.items()}
+
+    def cut_info(self, ends: dict, cut_ends: dict) -> dict | None:
+        """What the gates need when sunrise cuts the window Wsp (None when it does not)."""
+        if self.fit_end is None or cut_ends["Wsp"] >= ends["Wsp"] - 1e-6:
+            return None
+        return {"floor": self.t_floor}
 
     def u_grid(self, t0: float, t1: float):
         """Heater input (0..1) on the fit grid [t0, t1)."""
         if self.power is not None:
             return level_on_grid(self.power[0], self.power[1], t0, t1)
         return u_on_grid(self.on, self.off, t0, t1)
+
+
+def cut_refusal(cut: dict | None, T: float, win: float) -> str | None:
+    """Why a response window cut by sunrise cannot give a value, None when it can (or is not cut).
+
+    The window Wsp is cut when sunrise comes before the room reaches the new
+    setpoint. A short window lets a slow emitter fit a short delay, and that short
+    value then satisfies its own window rule (window >= exc_window_T x T). A cut
+    window must therefore pass the rule for the largest delay known before the
+    step (MorningInputs.t_floor) as well as for the fitted one. Without any such
+    reference the window cannot be checked and gives nothing.
+    """
+    if cut is None:
+        return None
+    floor = cut.get("floor")
+    if floor is None or win < RULES["exc_window_T"] * max(T, floor):
+        return CUT_REASON
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +253,7 @@ def morning_night_class(inp: MorningInputs, t_sp: float, sp_to: float, nights: l
     on, anch = inp.on, inp.anch
     starts = [x for x in on if t_sp - 30.0 <= x <= t_sp + 900.0]
     t_s = float(starts[0]) if starts else None
-    seg = night_segment(anch, inp.spans, inp.params_at, t_s if t_s is not None else t_sp, inp.clock,
+    seg = night_segment(anch, inp.spans, inp.params_at, t_s if t_s is not None else t_sp, inp.quiet,
                         inp.valid_until)
     night, night_fit = classify_night(anch, inp.ext_t, inp.ext_v, seg)
     nights.append(night)
@@ -224,6 +267,9 @@ def morning_night_class(inp: MorningInputs, t_sp: float, sp_to: float, nights: l
     if phase != STABLE:
         row["reason"] = f"phase {phase}"
         return row
+    if inp.fit_end is not None and inp.fit_end - t_s < RESPONSE_MIN_S:
+        row["reason"] = "sunrise too close to the comfort step"
+        return row
     passive = not any(t_s - 7200.0 <= x < t_s - 30.0 for x in on)
     g0 = t_s - 1800.0
     grid, u = inp.u_grid(g0, t_s + 7200.0 + DT)
@@ -232,8 +278,10 @@ def morning_night_class(inp: MorningInputs, t_sp: float, sp_to: float, nights: l
     du = u[i0:] - u_base
     gw = grid[i0:]
     reach = anch.first_reach(t_s, sp_to - 0.1)
-    ends = {"W45": t_s + 2700.0, "W2h": t_s + 7200.0,
-            "Wsp": min(t_s + 7200.0, max(t_s + 600.0, reach)) if reach else t_s + 7200.0}
+    uncut = {"W45": t_s + 2700.0, "W2h": t_s + 7200.0,
+             "Wsp": min(t_s + 7200.0, max(t_s + 600.0, reach)) if reach else t_s + 7200.0}
+    ends = inp.cut(uncut)
+    row["cut"] = inp.cut_info(uncut, ends)
     sel = select_baseline(night["cls"], night_fit is not None, room, passive, is_long(night))
     n_w = {wn: int(round((ends[wn] - t_s) / DT)) for wn in ends}
     row.update(night="passive" if passive else "regulated", sel=sel,
@@ -315,12 +363,14 @@ def branch_r(inp: MorningInputs, t_sp: float, eco: float | None, sp_to: float) -
     st = stationarity(anch, on, grid, u, t_sp, cycle_s, eco)
     t_end = t_sp + R_POST_S
     reach = anch.first_reach(t_sp, sp_to - 0.1)
-    ends = {"W45": min(t_sp + 2700.0, t_end), "W2h": t_end,
-            "Wsp": min(t_end, min(t_sp + 7200.0, max(t_sp + 600.0, reach)) if reach else t_sp + 7200.0)}
+    uncut = {"W45": min(t_sp + 2700.0, t_end), "W2h": t_end,
+             "Wsp": min(t_end, min(t_sp + 7200.0, max(t_sp + 600.0, reach)) if reach else t_sp + 7200.0)}
+    ends = inp.cut(uncut)
     i0 = int(np.searchsorted(grid, t_sp))
     du_full = u - st["u_hold"]
     n_w = {wn: int(round((ends[wn] - t_sp) / DT)) for wn in ends}
     out = {"stat": st, "q": anch.q, "sensor_period_s": sensor_period(anch.pub_t, anch.pub_v, t_sp),
+           "cut": inp.cut_info(uncut, ends),
            "win_s": {wn: ends[wn] - t_sp for wn in ends},
            "energy_s": {wn: float(np.sum(du_full[i0:i0 + n_w[wn]]) * DT) for wn in ends}}
     tb, rms_cyc = baseline_cycles(anch, t_sp, cycle_s)
@@ -374,6 +424,9 @@ def gate_night_class(r: dict) -> tuple[bool, str]:
         return False, "fit invalid"
     if x["rms"] > max(RULES["fit_rms_c"], RULES["fit_rms_q"] * q):
         return False, "fit rms"
+    why = cut_refusal(r.get("cut"), T, r["win_s"]["Wsp"])
+    if why is not None:
+        return False, why
     if r["win_s"]["Wsp"] < RULES["exc_window_T"] * T:
         return False, "excitation: window"
     if r["energy_s"]["Wsp"] < max(RULES["exc_energy_T"] * T, RULES["exc_energy_min_s"]):
@@ -404,12 +457,15 @@ def gate_night_regulated(r: dict) -> tuple[bool, str]:
     return gate_night_class(dict(r, rms_cyc=0.0))
 
 
-def _gate_fit(x, q, win, energy, rise, period) -> tuple[bool, str]:
+def _gate_fit(x, q, win, energy, rise, period, cut: dict | None = None) -> tuple[bool, str]:
     T = x.get("T") if x else None
     if T is None or x.get("edge") or not x.get("a_per_min") or x["a_per_min"] <= 0:
         return False, "fit invalid"
     if x["rms"] > max(RULES["fit_rms_c"], RULES["fit_rms_q"] * q):
         return False, "fit rms"
+    why = cut_refusal(cut, T, win)
+    if why is not None:
+        return False, why
     if win < RULES["exc_window_T"] * T:
         return False, "excitation: window"
     if energy < max(RULES["exc_energy_T"] * T, RULES["exc_energy_min_s"]):
@@ -444,7 +500,7 @@ def gate_r(r: dict) -> tuple[bool, str]:
     q = R.get("q") or 0.1
     fit = R.get("fit") or {}
     return _gate_fit(fit.get(FW), q, R["win_s"]["Wsp"], R["energy_s"]["Wsp"], (fit.get("rise") or {}).get("Wsp"),
-                     R.get("sensor_period_s"))
+                     R.get("sensor_period_s"), R.get("cut"))
 
 
 def decide(r: dict) -> dict:

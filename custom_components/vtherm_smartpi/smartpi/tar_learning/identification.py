@@ -7,15 +7,19 @@ with u_e the heater input through a first-order emitter of time constant
 tau_e and LP the first-order low-pass of time constant tau_w. The wall state is
 the low-pass of the MEASURED air temperature, started at the window start with
 a free correction delta exp(-t/tau_w); the air is simulated from u, Te and that
-wall state, restarted (free initial air) at each night segment. With
+wall state, restarted (free initial air) at each quiet segment. With
 lam = b + k the air pole, the output is linear in (a, b, k delta, c, Ti0 per
 segment), so (lam, tau_w, tau_e) is profiled on a grid and refined
 (Nelder-Mead). The one-constant reference is the same fit with k = 0.
 
-A window holds the night samples (local 18:00 -> 08:00) of three days on a
-600 s grid and ends at 08:00. Window class: 'mass' iff dBIC >= 10, k > 0,
-k/b >= 1, tau_w in [2, 300] h and not on the grid edge; 'one' iff dBIC < 0.
-The evaluation of a day uses two disjoint windows (ending 3 days apart):
+A window holds the samples of three consecutive quiet periods (no sun,
+constant setpoint, valid data; quiet_periods) on a 600 s grid: a bin is fitted
+only when it lies wholly inside one of them, and the air restarts at each one.
+The wall state starts ID_WALL_WARMUP_S before the first period. Window class:
+'mass' iff dBIC >= 10, k > 0, k/b >= 1, tau_w in [2, 300] h and not on the grid
+edge; 'one' iff dBIC < 0.
+An evaluation uses two windows with disjoint periods (the three periods of a
+window and the three before them):
 'mass' when both are 'mass' and agree (k within x1.25, tau_w within x1.5);
 'one' when both are one-constant fits of a precise sensor that agree with each
 other and with the published b. The emitter time constant tau_e of a decisive
@@ -55,10 +59,6 @@ from .const import (
     ID_TW_MAX_H,
     ID_TW_MIN_H,
     ID_TW_TOL,
-    ID_WIN_DAYS,
-    ID_WINDOW_END_H,
-    NIGHT_FROM_H,
-    NIGHT_TO_H,
 )
 from .signals import Anchors, bin_mean, duty_bins, level_bins
 
@@ -70,10 +70,10 @@ LAM_LO, LAM_HI = float(LAM_C.min()), float(LAM_C.max())
 # ---------------------------------------------------------------------------
 # Grid data
 # ---------------------------------------------------------------------------
-def grid_data(pub_t, pub_v, on, off, ext_t, ext_v, t0: float, t_end: float, clock, valid_mask=None,
+def grid_data(pub_t, pub_v, on, off, ext_t, ext_v, t0: float, t_end: float, valid_mask=None,
               power=None) -> dict:
     """Data on the 600 s grid [t0, t_end - step): anchors interpolated at the bin starts, heater duty of the
-    bins (and of 60 s bins for the emitter), bin-mean outdoor temperature, local hour, validity.
+    bins (and of 60 s bins for the emitter), bin-mean outdoor temperature, validity.
 
     power: valve power level timeline (times, levels); the duty is then its bin mean instead of the
     duty of the heater edges."""
@@ -93,8 +93,7 @@ def grid_data(pub_t, pub_v, on, off, ext_t, ext_v, t0: float, t_end: float, cloc
     valid = grid >= first
     if valid_mask is not None:
         valid &= valid_mask(grid, step)
-    return {"t": grid, "y": y, "u": u, "u_fine": u_fine, "te": te, "tod": np.asarray(clock.tod_h_array(grid)),
-            "valid": valid, "step": step}
+    return {"t": grid, "y": y, "u": u, "u_fine": u_fine, "te": te, "valid": valid, "step": step}
 
 
 def u_emit(d: dict, tau_e: float) -> np.ndarray:
@@ -363,14 +362,18 @@ def q_obs(pub_v) -> float | None:
     return float(dv.min()) if len(dv) else None
 
 
-def night_mask(d: dict) -> np.ndarray:
-    tod = d["tod"]
-    return (tod >= NIGHT_FROM_H) | (tod < NIGHT_TO_H)
+def interval_mask(d: dict, intervals) -> np.ndarray:
+    """Bins lying wholly inside one of the intervals."""
+    t, step = d["t"], d["step"]
+    m = np.zeros(len(t), dtype=bool)
+    for a, b in intervals:
+        m |= (t >= a) & (t + step <= b + 1e-6)
+    return m
 
 
-def window_fit(d: dict, t0: float, t1: float, q: float | None) -> dict:
-    """Nights-only fit of the window [t0, t1) (08:00 to 08:00, ID_WIN_DAYS days); slim result."""
-    nm = night_mask(d)
+def window_fit(d: dict, t0: float, t1: float, intervals, q: float | None) -> dict:
+    """Fit of the window [t0, t1) on the bins inside the quiet intervals; slim result."""
+    nm = interval_mask(d, intervals)
     i0 = int(np.searchsorted(d["t"], t0 - 1e-6))
     i1 = int(np.searchsorted(d["t"], t1 - 1e-6))
     f = fit_nights(d, i0, i1, nm)
@@ -382,7 +385,7 @@ def window_fit(d: dict, t0: float, t1: float, q: float | None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Evaluation of a day (rules)
+# Evaluation of two windows (rules)
 # ---------------------------------------------------------------------------
 def _gm(a, b):
     return math.sqrt(a * b)
@@ -421,7 +424,7 @@ def one_rule(w1: dict, w2: dict, b_pub_per_s: float) -> tuple[bool, str]:
 
 
 def evaluate_day(w1: dict, w2: dict, b_pub_per_s: float) -> dict:
-    """Refined evaluation of one day from its two windows (w1 earlier, w2 later)."""
+    """Refined evaluation from two windows with disjoint periods (w1 earlier, w2 later)."""
     okm, whym = mass_rule(w1, w2)
     oko, whyo = one_rule(w1, w2, b_pub_per_s)
     if okm and oko:
@@ -456,15 +459,16 @@ def evaluate_day(w1: dict, w2: dict, b_pub_per_s: float) -> dict:
 def silence(e: dict, why: str) -> dict:
     """An evaluation kept as a diagnostic only: unknown for the pipeline, raw class and tau_e kept."""
     return {"cls": "unknown", "why_mass": why, "why_one": why, "te_pair": [None, None], "te_ok": False,
-            "te": None, "day": e.get("day"), "silenced": True, "cls_raw": e["cls"], "te_raw": e.get("te"),
+            "te": None, "day": e.get("day"), "t": e.get("t"), "silenced": True, "cls_raw": e["cls"], "te_raw": e.get("te"),
             "te_ok_raw": e.get("te_ok"), "k_raw": e.get("k"), "tau_w_raw": e.get("tau_w"),
             "a_raw": e.get("a"), "b_raw": e.get("b")}
 
 
-def class_in_force(evals: list[tuple[int, str]], morning: int) -> str:
-    """Class in force at a morning from the (day, cls) evaluations of days < morning: the latest decisive
-    class; two decisive evaluations that disagree make it 'unknown' until two consecutive ones agree."""
-    dec = [c for d, c in sorted(evals) if d < morning and c in ("mass", "one")]
+def class_in_force(evals: list[tuple[float, str]], t_ref: float) -> str:
+    """Class in force at t_ref from the (decision time, cls) evaluations decided before t_ref: the latest
+    decisive class; two decisive evaluations that disagree make it 'unknown' until two consecutive ones
+    agree."""
+    dec = [c for t, c in sorted(evals) if t < t_ref and c in ("mass", "one")]
     if not dec:
         return "unknown"
     if len(dec) == 1:
@@ -478,9 +482,9 @@ def class_in_force(evals: list[tuple[int, str]], morning: int) -> str:
     return state
 
 
-def params_in_force(evs: list[dict], morning: int) -> dict | None:
-    """Median (k, tau_w) over the last ID_PUB_LAST evaluations classed 'mass' (days < morning)."""
-    ms = [e for e in sorted(evs, key=lambda x: x["day"]) if e["day"] < morning and e["cls"] == "mass"]
+def params_in_force(evs: list[dict], t_ref: float) -> dict | None:
+    """Median (k, tau_w) over the last ID_PUB_LAST evaluations classed 'mass' decided before t_ref."""
+    ms = [e for e in sorted(evs, key=lambda x: x["t"]) if e["t"] < t_ref and e["cls"] == "mass"]
     if not ms:
         return None
     last = ms[-ID_PUB_LAST:]
@@ -488,20 +492,15 @@ def params_in_force(evs: list[dict], morning: int) -> dict | None:
             "tau_w_s": float(np.median([e["tau_w"] for e in last])), "n": len(last), "from_day": last[-1]["day"]}
 
 
-def te_in_force(evs: list[dict], morning: int) -> dict | None:
-    """Refined tau_e in force at a morning: the latest publication of a day < morning, a publication being
+def te_in_force(evs: list[dict], t_ref: float) -> dict | None:
+    """Refined tau_e in force at t_ref: the latest publication decided before t_ref, a publication being
     the median of the passing values among the last ID_PUB_LAST evaluations."""
-    es = sorted(evs, key=lambda x: x["day"])
+    es = sorted(evs, key=lambda x: x["t"])
     pub = None
     for i, e in enumerate(es):
-        if e["day"] >= morning:
+        if e["t"] >= t_ref:
             break
         last = [x for x in es[max(0, i - ID_PUB_LAST + 1): i + 1] if x.get("te_ok")]
         if last:
             pub = {"value": float(np.median([x["te"] for x in last])), "n": len(last), "day": e["day"]}
     return pub
-
-
-def window_bounds(clock, day: int) -> tuple[float, float]:
-    """Start and end of the identification window of a day: 08:00 local, ID_WIN_DAYS days earlier."""
-    return clock.at(day - ID_WIN_DAYS, ID_WINDOW_END_H), clock.at(day, ID_WINDOW_END_H)

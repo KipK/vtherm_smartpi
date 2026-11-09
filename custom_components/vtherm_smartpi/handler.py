@@ -211,6 +211,9 @@ class SmartPIHandler:
                 algo.tar_learning.load_state(await self._tar_store.async_load())
             except Exception as e:
                 _LOGGER.error("%s - Failed to load SmartPI T_ar learning data: %s", t, e)
+            # The quiet periods need the home position to rule out the sun (validated by the manager)
+            config = getattr(t.hass, "config", None)
+            algo.tar_learning.set_position(getattr(config, "latitude", None), getattr(config, "longitude", None))
             available = dependencies_importable()
             algo.tar_learning.set_dependencies(available)
         if self._room_store and isinstance(algo, SmartPI) and getattr(algo, "room_model", None) is not None:
