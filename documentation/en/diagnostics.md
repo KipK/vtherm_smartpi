@@ -74,7 +74,7 @@ available, `twin`.
 | `state` | Detector state (`WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`) |
 | `last_power` | Last power seen by the detector |
 | `waiting_elapsed_s` | Age of the response being waited for in seconds, `null` when no detection is armed |
-| `heat_last_outcome` / `cool_last_outcome` | Outcome of the last wait for a rising / falling response: `detected`, `timeout`, `aborted` (power transition before a detection), `null` before the first one |
+| `heat_last_outcome` / `cool_last_outcome` | Outcome of the last wait for a rising / falling response: `detected`, `timeout`, `aborted` (power transition before a detection), `rejected` (the temperature already moved in the direction of the response before the power start, too steeply or too irregularly to measure it), `null` before the first one |
 
 `analysis.learning.response_lag` describes the response lag used by the `a`
 learning:

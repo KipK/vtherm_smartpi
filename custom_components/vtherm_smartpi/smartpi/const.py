@@ -354,6 +354,16 @@ TIN_HISTORY_RETENTION_MIN = DT_MAX_MIN + 60
 # drop is still attributed to the power cut.
 DEADTIME_ACTIVE_TIMEOUT_S = 14400.0
 DEADTIME_PASSIVE_TIMEOUT_S = 43200.0
+# Free-running trend before an active power start: fitted on the raw samples of
+# the last 30 min of the OFF period (after the passive delay of the last stop),
+# with at least 15 min and 4 samples (3 per half window to compare the slopes
+# of the two halves). A trend whose fitted change stays within one sensor step
+# (floored at this value) is flat.
+DEADTIME_PRESTART_WINDOW_S = 1800.0
+DEADTIME_PRESTART_MIN_SPAN_S = 900.0
+DEADTIME_PRESTART_MIN_SAMPLES = 4
+DEADTIME_PRESTART_MIN_HALF_SAMPLES = 3
+DEADTIME_PRESTART_STEP_FLOOR_C = 0.01
 TIN_HISTORY_MAX_SAMPLES = 1800
 
 

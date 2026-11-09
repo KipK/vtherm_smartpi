@@ -21,6 +21,7 @@ from .const import (
     TIN_HISTORY_MAX_SAMPLES,
     TIN_HISTORY_RETENTION_MIN,
 )
+from .deadtime_trend import prestart_trend
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 _TIN_HISTORY_RETENTION_S = TIN_HISTORY_RETENTION_MIN * 60.0
@@ -65,8 +66,12 @@ class DeadTimeEstimator:
         # response being waited for: the dead time does not depend on the
         # retention of the temperature history when the drop comes late.
         self._near_extreme_time: float | None = None
+        # Free-running trend (degC/s) removed from the temperature while an
+        # active response is waited for; 0.0 for a passive response or a room
+        # without a trend in the direction of the response.
+        self._trend_slope: float = 0.0
         # Outcome of the last detection per response ("detected", "timeout",
-        # "aborted"), published for diagnostics.
+        # "aborted", "rejected"), published for diagnostics.
         self.last_outcome: dict[str, str | None] = {"heat": None, "cool": None}
 
         # Last detections; the published dead time is their median so that a
@@ -129,6 +134,7 @@ class DeadTimeEstimator:
         self.cool_peak_temp = None
         self._waiting_power_on = None
         self._near_extreme_time = None
+        self._trend_slope = 0.0
         self.last_outcome = {"heat": None, "cool": None}
         self._history_heat.clear()
         self._history_cool.clear()
@@ -146,6 +152,7 @@ class DeadTimeEstimator:
         self.cool_peak_temp = None
         self._waiting_power_on = None
         self._near_extreme_time = None
+        self._trend_slope = 0.0
         self._tin_history.clear()
         self._tin_lp_history.clear()
 
@@ -210,13 +217,38 @@ class DeadTimeEstimator:
         now: float,
         tin: float,
         power_on: bool,
+        off_since: float | None = None,
     ) -> None:
-        """Arm a physical rising or falling temperature response."""
+        """Arm a physical rising or falling temperature response.
+
+        An active response (power on) is measured against the free-running
+        trend of the OFF period before the start (``off_since`` onwards); a
+        trend too irregular to be extrapolated rejects the detection.
+        """
         # A response still waited for is replaced by the new power transition.
         if self.state == "WAITING_HEAT_RESPONSE":
             self.last_outcome["heat"] = "aborted"
         elif self.state == "WAITING_COOL_RESPONSE":
             self.last_outcome["cool"] = "aborted"
+        self._trend_slope = 0.0
+        if power_on:
+            trend = prestart_trend(
+                self._tin_history,
+                start_ts=now,
+                off_since_ts=off_since,
+                direction=_direction(response),
+                detection_threshold_c=self.detection_threshold,
+            )
+            if trend.rejected:
+                self.last_outcome[response] = "rejected"
+                self.state = "COOLING" if response == "cool" else "HEATING"
+                self._waiting_power_on = None
+                _LOGGER.debug(
+                    "DeadTime: %s response not armed (trend before the start not extrapolable)",
+                    response,
+                )
+                return
+            self._trend_slope = trend.slope_c_per_s
         self._waiting_power_on = power_on
         self._near_extreme_time = now
         if response == "cool":
@@ -228,11 +260,25 @@ class DeadTimeEstimator:
             self.heat_trough_temp = tin
             self.state = "WAITING_HEAT_RESPONSE"
         _LOGGER.debug(
-            "DeadTime: State -> %s (power_on=%s, temp=%.3f)",
+            "DeadTime: State -> %s (power_on=%s, temp=%.3f, trend=%.3f degC/h)",
             self.state,
             power_on,
             tin,
+            self._trend_slope * 3600.0,
         )
+
+    def _detrended(self, ts: float, value: float, start: float) -> float:
+        """Return the temperature minus the extrapolated free-running trend."""
+        return value - self._trend_slope * (ts - start)
+
+    def _trend_dominates(self, response: str, now: float, start: float) -> bool:
+        """Return True when the trend accounts for at least the detection threshold.
+
+        The response is then not separable from the free-running trend: the
+        extrapolation carries as much of the move as the response itself.
+        """
+        drift = _direction(response) * self._trend_slope * (now - start)
+        return drift >= self.detection_threshold
 
     def update(
         self,
@@ -288,6 +334,7 @@ class DeadTimeEstimator:
                     now=now,
                     tin=tin,
                     power_on=True,
+                    off_since=self._free_running_since(hvac_mode),
                 )
             else:
                 self.state = "COOLING" if active_response == "cool" else "HEATING"
@@ -354,30 +401,36 @@ class DeadTimeEstimator:
                     self.last_outcome["heat"] = "timeout"
                     _LOGGER.debug("DeadTime: Heat Timeout (%.0fs)", elapsed)
                 else:
-                    if tin < self.heat_trough_temp:
-                        self.heat_trough_temp = tin
-                    if tin <= self.heat_trough_temp + 0.01:
+                    start = self.heat_start_time
+                    level = self._detrended(now, tin, start)
+                    if level < self.heat_trough_temp:
+                        self.heat_trough_temp = level
+                    if level <= self.heat_trough_temp + 0.01:
                         self._near_extreme_time = now
-                    delta = tin - self.heat_trough_temp
+                    delta = level - self.heat_trough_temp
                     if delta >= self.detection_threshold:
                         # 3.A Look back for inflection point
                         inflection_time = self._near_extreme_time or now
                         for t_hist, v_hist in reversed(self._tin_lp_history):
-                            if t_hist < self.heat_start_time:
+                            if t_hist < start:
                                 break
                             # The temperature started rising here
-                            if v_hist <= self.heat_trough_temp + 0.01:
+                            if self._detrended(t_hist, v_hist, start) <= self.heat_trough_temp + 0.01:
                                 inflection_time = t_hist
                                 break
 
                         # True deadtime is from heat_start_time to inflection_time
-                        dt = max(0.0, inflection_time - self.heat_start_time)
+                        dt = max(0.0, inflection_time - start)
 
-                        self._add_sample_heat(dt)
                         self.state = "HEATING"
                         self._waiting_power_on = None
-                        self.last_outcome["heat"] = "detected"
-                        _LOGGER.info("SmartPI: Heat Deadtime detected = %.1fs (ascension delayed by %.1fs)", dt, now - inflection_time)
+                        if self._trend_dominates("heat", now, start):
+                            self.last_outcome["heat"] = "rejected"
+                            _LOGGER.debug("DeadTime: Heat detection rejected (trend before the start dominates the rise)")
+                        else:
+                            self._add_sample_heat(dt)
+                            self.last_outcome["heat"] = "detected"
+                            _LOGGER.info("SmartPI: Heat Deadtime detected = %.1fs (ascension delayed by %.1fs)", dt, now - inflection_time)
 
         elif self.state == "WAITING_COOL_RESPONSE":
             if self.cool_start_time is not None and self.cool_peak_temp is not None:
@@ -390,32 +443,38 @@ class DeadTimeEstimator:
                     self.last_outcome["cool"] = "timeout"
                     _LOGGER.debug("DeadTime: Cool Timeout (%.0fs)", elapsed)
                 else:
+                    start = self.cool_start_time
+                    level = self._detrended(now, tin, start)
                     # Peak update
-                    if tin > self.cool_peak_temp:
-                        self.cool_peak_temp = tin
-                    if tin >= self.cool_peak_temp - 0.01:
+                    if level > self.cool_peak_temp:
+                        self.cool_peak_temp = level
+                    if level >= self.cool_peak_temp - 0.01:
                         self._near_extreme_time = now
 
                     # Drop detection
-                    delta = self.cool_peak_temp - tin
+                    delta = self.cool_peak_temp - level
                     if delta >= self.detection_threshold:
                         # 3.A Look back for inflection point
                         inflection_time = self._near_extreme_time or now
                         for t_hist, v_hist in reversed(self._tin_lp_history):
-                            if t_hist < self.cool_start_time:
+                            if t_hist < start:
                                 break
                             # The temperature started dropping here
-                            if v_hist >= self.cool_peak_temp - 0.01:
+                            if self._detrended(t_hist, v_hist, start) >= self.cool_peak_temp - 0.01:
                                 inflection_time = t_hist
                                 break
 
-                        dt = max(0.0, inflection_time - self.cool_start_time)
+                        dt = max(0.0, inflection_time - start)
 
-                        self._add_sample_cool(dt)
                         self.state = "COOLING"
                         self._waiting_power_on = None
-                        self.last_outcome["cool"] = "detected"
-                        _LOGGER.info("SmartPI: Cool Deadtime detected = %.1fs (drop delayed by %.1fs)", dt, now - inflection_time)
+                        if self._trend_dominates("cool", now, start):
+                            self.last_outcome["cool"] = "rejected"
+                            _LOGGER.debug("DeadTime: Cool detection rejected (trend before the start dominates the drop)")
+                        else:
+                            self._add_sample_cool(dt)
+                            self.last_outcome["cool"] = "detected"
+                            _LOGGER.info("SmartPI: Cool Deadtime detected = %.1fs (drop delayed by %.1fs)", dt, now - inflection_time)
 
         # Default states if running without detection
         elif u_applied > 0.01 and self.state == "OFF":
@@ -425,6 +484,18 @@ class DeadTimeEstimator:
                 self.state = "OFF"
 
         self.last_power = u_applied
+
+    def _free_running_since(self, hvac_mode: VThermHvacMode) -> float | None:
+        """Return the start of the free-running part of the current OFF period.
+
+        Right after a stop the emitter keeps acting on the room for the
+        passive dead time; the trend before a start is taken after it.
+        """
+        if self.last_stop_time is None:
+            return None
+        passive_s, passive_reliable = self.passive_deadtime(hvac_mode)
+        delay = passive_s if passive_reliable and passive_s is not None else 0.0
+        return self.last_stop_time + max(0.0, float(delay))
 
     def _timeout_s(self) -> float:
         """Wait limit of the armed response: active after a power start, passive after a cut."""
@@ -500,6 +571,11 @@ class DeadTimeEstimator:
                 t_mono = wall_to_monotonic_ts(t_wall)
                 if t_mono is not None:
                     history.append((t_mono, v))
+
+
+def _direction(response: str) -> float:
+    """Return the sign of the temperature move of a response."""
+    return -1.0 if response == "cool" else 1.0
 
 
 def deadtime_window_active(
