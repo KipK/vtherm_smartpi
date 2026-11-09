@@ -53,8 +53,6 @@ TAR_MAX_WINDOWS = 12
 # nights, identification bins and morning steps like a data gap.
 # A bin is valid only with an observation within this delay.
 TAR_GAP_S = 1200.0
-# Bins around a restart of Home Assistant or SmartPI are invalid.
-TAR_RESTART_MARGIN_S = 600.0
 # A temperature jump larger than TAR_SPIKE_MIN_C faster than TAR_SPIKE_RATE_C_PER_H
 # is not physical (a strong morning heating rises by a few C per hour).
 TAR_SPIKE_MIN_C = 0.5

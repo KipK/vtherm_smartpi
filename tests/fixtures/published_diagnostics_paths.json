@@ -134,6 +134,7 @@
   "control.in_near_band",
   "control.ki",
   "control.kp",
+  "control.last_restart",
   "control.mode",
   "control.phase",
   "control.restart_reason",

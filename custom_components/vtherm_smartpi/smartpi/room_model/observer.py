@@ -16,6 +16,12 @@ mode, safety mode, command not SmartPI's) or a downtime up to RM_RESUME_MAX_S
 keeps the state and reopens its uncertainty; a longer one restarts the
 observer at the wall equilibrium.
 
+A bridged restart (restart_bridge.py) is not a pause: the command applied at
+the stop is held over the downtime, the state is propagated through it like
+any missing sample and the forecasts in progress go on. After any other
+restart the heater is taken as stopped from the saved state's time, the
+uncertainty is reopened and the forecasts in progress are dropped.
+
 An open window changes the air balance, not the exchange between the air and
 the walls. While it is open the air state is held at the measured temperature
 after each sub-step, the wall state follows its own equation driven by that
@@ -110,6 +116,8 @@ class RoomObserver:
         self.nights: dict[str, list[float]] = {}
         self._resumed = False
         self._fc_cache: tuple[float, list[float]] | None = None
+        # A loaded state waits for the restart decision (resolve_restart)
+        self._restart_pending = False
 
     # ------------------------------------------------------------------
     # Configuration
@@ -170,6 +178,7 @@ class RoomObserver:
 
         window: SmartPI is out of control because a window is open (the air follows the measurement).
         """
+        self.settle_restart()
         if temp is not None:
             self._new_measurement(now, float(temp), meas_key, meas_t)
         if self.params is None:
@@ -463,11 +472,38 @@ class RoomObserver:
             "t": self.t, "x": self.x, "P": self.P, "te": self.te, "ue_x": self.ue_x, "y_last": self.y_last,
             "paused_since": self.paused_since, "pause_window": self.pause_window, "settle_until": self.settle_until,
             "restarts": self.restarts,
+            "innov": [self.innov_bias, self.innov_nis, self.innov_n], "d_sat_s": self.d_sat_s,
             "timeline": self.timeline.to_dict(), "score": self.score.to_dict(), "nights": self.nights,
         }
 
+    def resolve_restart(self, bridged: bool, stop_t: float | None = None) -> None:
+        """Apply the restart decision to a loaded state, before the first tick after it.
+
+        Bridged: the command at the stop (stop_t) is held until the next applied
+        command and the forecasts in progress go on. Otherwise the heater is
+        taken as stopped from the saved state's time, the state's uncertainty
+        is reopened at the first tick and the forecasts in progress are dropped.
+        """
+        if not self._restart_pending:
+            return
+        self._restart_pending = False
+        if bridged and stop_t is not None:
+            self.timeline.plan(stop_t, [(stop_t, self.timeline.at(stop_t))])
+            return
+        self._reset_innovations()
+        self.d_sat_s = 0.0
+        if self.t is not None and self.x is not None:
+            self._resumed = True
+            self.timeline.stop(self.t)
+        self.score.drop_pending()
+
+    def settle_restart(self) -> None:
+        """An input before the restart was decided: the restart is not bridged."""
+        if self._restart_pending:
+            self.resolve_restart(False)
+
     def load(self, data: dict[str, Any] | None) -> None:
-        """Restore a saved state; the heater is taken as stopped during the downtime."""
+        """Restore a saved state; resolve_restart then applies the restart decision."""
         if not isinstance(data, dict):
             return
         try:
@@ -490,8 +526,13 @@ class RoomObserver:
                     self.paused_since = None if ps is None else float(ps)
                     self.settle_until = None if su is None else float(su)
                     self.pause_window = bool(data.get("pause_window"))
-                    self._resumed = True
-                    self.timeline.stop(self.t)
+                    innov = data.get("innov")
+                    if isinstance(innov, list) and len(innov) == 3:
+                        bias, nis, n = float(innov[0]), float(innov[1]), int(innov[2])
+                        if math.isfinite(bias) and math.isfinite(nis):
+                            self.innov_bias, self.innov_nis, self.innov_n = bias, nis, n
+                    d_sat = float(data.get("d_sat_s") or 0.0)
+                    self.d_sat_s = d_sat if math.isfinite(d_sat) else 0.0
         except (TypeError, ValueError, IndexError):
             self.x = self.P = self.t = self.te = None
-        self.score.drop_pending()
+        self._restart_pending = True

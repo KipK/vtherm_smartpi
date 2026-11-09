@@ -59,7 +59,7 @@ Le bloc `live` est organisé par responsabilité :
 
 | Bloc | Contenu |
 |---|---|
-| `control` | Phase, mode, gains (`kp`, `ki`), temps intégral effectif `ti_min` (minutes), saturation et bandes de régulation |
+| `control` | Phase, mode, gains (`kp`, `ki`), temps intégral effectif `ti_min` (minutes), saturation, bandes de régulation et dernier redémarrage (`last_restart`) |
 | `power` | Puissances du cycle courant et suivant, PI/FF, limites et puissance appliquée |
 | `temperature` | Températures intérieure/extérieure, erreurs et état de l'intégrale |
 | `model` | Modèle A/B, confiance, constante de temps et temps morts |
@@ -73,6 +73,16 @@ Le bloc `live` est organisé par responsabilité :
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
 | `tar_learning` | Apprentissage du retard de l'émetteur |
 | `room_model` | Modèle de pièce |
+
+`control.last_restart` décrit le dernier redémarrage de Home Assistant ou de
+l'intégration. Il vaut `null` avant le premier calcul de la régulation après le
+redémarrage, et pour un thermostat qui démarre sans données sauvegardées.
+
+| Champ | Signification |
+|---|---|
+| `bridged` | `true` lorsque le redémarrage a été ponté : les mesures en cours ont repris et rien n'a été exclu des données d'apprentissage. `false` lorsque SmartPI a repris avec prudence |
+| `downtime_s` | Durée de l'arrêt, en secondes ; `null` lorsqu'elle ne peut pas être mesurée (saut d'horloge, pas de données sauvegardées) |
+| `reason` | Raison pour laquelle le redémarrage n'a pas été ponté, `null` lorsqu'il l'a été : `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown`, `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, ou une exclusion avant l'arrêt ou après le redémarrage (par exemple `window open before the stop`, `safety mode after the restart`) |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
@@ -96,7 +106,7 @@ est disponible, `twin`.
 | `episodes` | Nombre d'épisodes actifs terminés depuis le début de l'apprentissage ; il continue après la publication du retard et peut dépasser `episodes_target` |
 | `episodes_target` | Nombre d'épisodes après lequel le modèle de puissance délivrée est résolu sans retard publié (`7`) |
 | `episode_median_s` | Durée médiane des épisodes actifs récents en secondes, `null` avec moins de 3 épisodes |
-| `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage). `episode interrupted by restart` : épisode en cours lors d'un redémarrage, non repris, compté sans estimation. Peut être vide juste après un redémarrage |
+| `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage). `episode interrupted by restart` : épisode en cours lors d'un redémarrage non ponté, non repris, compté sans estimation. Peut être vide juste après un redémarrage |
 
 Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 

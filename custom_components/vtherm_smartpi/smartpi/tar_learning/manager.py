@@ -196,6 +196,20 @@ class TarLearningManager:
             return
         self.history.applied_cycle(now, power, max(float(cycle_min) * 60.0, 60.0), cycle_start)
 
+    # ------------------------------------------------------------------
+    # Restart
+    # ------------------------------------------------------------------
+    def restart_context(self) -> tuple[float, bool] | None:
+        """(last observation, heater state saved) of a restart to decide, None without history."""
+        h = self.history
+        if not h.restart_pending:
+            return None
+        return float(h.last_t), h.heater_saved
+
+    def on_restart(self, bridged: bool, t_resume: float) -> None:
+        """Apply the restart decision (restart_bridge.py) before the first observation after it."""
+        self.history.resolve_restart(bridged, t_resume)
+
     def _on_setpoint_change(self, t: float, old: float, new: float) -> None:
         if new - old < STEP_MIN_RISE_C:
             return
@@ -247,6 +261,7 @@ class TarLearningManager:
             "ext_t": list(h.ext_t), "ext_v": list(h.ext_v),
             "on": list(h.on), "off": list(h.off),
             "phases": list(h.phases), "params": list(h.params), "gaps": h.invalid_intervals(now),
+            "restarts": [list(x) for x in h.restarts],
             "first_t": h.first_t, "last_t": h.last_t, "t_last": now,
             "cycle_s": self._cycle_s, "pw": h.power_levels(),
         }
@@ -467,7 +482,7 @@ class TarLearningManager:
         self.dirty = False
         return {
             "version": STATE_VERSION,
-            "history": self.history.to_dict(),
+            "history": self.history.to_dict(time.time()),
             "pending": self.pending,
             "nights": self.nights,
             "mornings": self.mornings,

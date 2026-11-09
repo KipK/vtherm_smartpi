@@ -7,10 +7,7 @@ import pytest
 
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT, VThermHvacMode_OFF
 from custom_components.vtherm_smartpi.smartpi.tar_learning import jobs
-from custom_components.vtherm_smartpi.smartpi.tar_learning.const import (
-    TAR_GAP_S,
-    TAR_RESTART_MARGIN_S,
-)
+from custom_components.vtherm_smartpi.smartpi.tar_learning.const import TAR_GAP_S
 from custom_components.vtherm_smartpi.smartpi.tar_learning.history import TarHistory
 from custom_components.vtherm_smartpi.smartpi.tar_learning.manager import TarLearningManager
 
@@ -87,13 +84,16 @@ def test_identification_bins_and_regulated_nights_respect_invalid_intervals() ->
 
 
 # 2. restarts and downtime ----------------------------------------------------------
-def test_restart_marks_its_margins_and_downtime_invalid() -> None:
+def test_restart_not_bridged_marks_only_its_downtime_invalid() -> None:
     h = TarHistory()
     _clean(h, 0.0, 3600.0)
     restored = TarHistory.from_dict(h.to_dict())
-    _obs(restored, 3900.0, temp=20.62)  # 5 min later: shorter than a data gap
-    assert restored.gaps == [(3600.0 - TAR_RESTART_MARGIN_S, 3900.0 + TAR_RESTART_MARGIN_S)]
-    assert restored.gap_overlaps(3500.0, 3600.0)
+    _obs(restored, 3900.0, temp=20.62)  # 5 min later, no restart decision: not bridged
+    assert restored.gaps == [(3600.0, 3900.0)]
+    assert restored.gap_overlaps(3700.0, 3800.0)
+    assert not restored.gap_overlaps(3000.0, 3600.0)
+    assert not restored.gap_overlaps(3900.0, 4500.0)
+    assert restored.restarts == [(3600.0, 3900.0, False)]
 
 
 def test_invalid_period_open_at_save_is_kept_after_restart() -> None:

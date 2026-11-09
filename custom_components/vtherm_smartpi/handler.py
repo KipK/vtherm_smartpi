@@ -68,6 +68,8 @@ class SmartPIHandler:
         self._room_store: SmartPIRoomModelStore | None = None
         self._room_task = None
         self._recalc_timer_remove = None
+        # The recalculation timer has not started yet in this session
+        self._first_timer_start = True
         # Remover of the applied-command receipt callback; None without receipts
         self._receipt_remove = None
         # State for learning
@@ -161,6 +163,7 @@ class SmartPIHandler:
             self._valve_curve_params,
             valve_mode=valve_mode_enabled,
         )
+        t.prop_algorithm.restart_exclusion_probe = self._restart_exclusion
 
         _LOGGER.info("%s - SmartPI Algorithm initialized", t)
         async_dispatcher_send(t.hass, SIGNAL_SMARTPI_TARGET_UPDATED, t.unique_id)
@@ -229,6 +232,11 @@ class SmartPIHandler:
         """Why the heater is not under SmartPI's command at this tick (None when it is)."""
         if t.vtherm_hvac_mode != VThermHvacMode_HEAT:
             return "hvac not heating"
+        return SmartPIHandler._control_exclusion(t, algo)
+
+    @staticmethod
+    def _control_exclusion(t, algo) -> str | None:
+        """Why SmartPI's command is not the applied one, whatever the HVAC mode (None when it is)."""
         if SmartPIHandler._window_open(t):
             return RM_EXCLUDED_WINDOW
         if t.is_overpowering_detected is True:
@@ -240,6 +248,21 @@ class SmartPIHandler:
             return "command unknown"
         if abs(on_percent - algo.on_percent) > 1e-6:
             return "command overridden"
+        return None
+
+    def _restart_exclusion(self) -> str | None:
+        """Why SmartPI is not in control at the first tick after a restart, before any command.
+
+        The command itself (overridden or unknown) is only known once applied:
+        the safety mode is what overrides it at a restart.
+        """
+        t = self._thermostat
+        if self._window_open(t):
+            return RM_EXCLUDED_WINDOW
+        if t.is_overpowering_detected is True:
+            return RM_EXCLUDED_SHEDDING
+        if getattr(getattr(t, "safety_manager", None), "is_safety_detected", False) is True:
+            return "safety mode"
         return None
 
     @staticmethod
@@ -490,6 +513,11 @@ class SmartPIHandler:
             )
             safety = getattr(getattr(t, "safety_manager", None), "is_safety_detected", False)
             algo.vt_safety_override = safety is True
+            if isinstance(algo, SmartPI):
+                # The restart is decided once, before the first observations of this session.
+                algo.resolve_restart(
+                    t.vtherm_hvac_mode, t.current_temperature, t.is_overpowering_detected is True
+                )
             t.prop_algorithm.calculate(
                 target_temp=t.target_temperature,
                 current_temp=t.current_temperature,
@@ -501,6 +529,9 @@ class SmartPIHandler:
                 off_reason=t.hvac_off_reason,
                 temperature_measure_id=getattr(t, "last_temperature_measure", None),
             )
+            if isinstance(algo, SmartPI):
+                # The restart decision checks the HVAC mode itself (HEAT or COOL).
+                algo.note_control_exclusion(self._control_exclusion(t, algo))
             if isinstance(algo, SmartPI) and getattr(algo, "tar_learning", None) is not None:
                 algo.observe_tar_learning(
                     t.target_temperature,
@@ -654,10 +685,15 @@ class SmartPIHandler:
             self._start_recalc_timer()
 
             # When resuming from OFF state (e.g., window close), reset the cycle start state
-            # to prevent using stale learning window data.
+            # to prevent using stale learning window data. A bridged restart is not
+            # a resume: its learning window goes on.
+            first_start, self._first_timer_start = self._first_timer_start, False
             if timer_was_stopped and t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
-                t.prop_algorithm.reset_cycle_state()
-                _LOGGER.debug("%s - SmartPI resumed from OFF: cycle and learning window reset", t.name)
+                if first_start and t.prop_algorithm.restart_bridged:
+                    _LOGGER.debug("%s - SmartPI started after a bridged restart: cycle state kept", t.name)
+                else:
+                    t.prop_algorithm.reset_cycle_state()
+                    _LOGGER.debug("%s - SmartPI resumed from OFF: cycle and learning window reset", t.name)
         else:
             self._stop_recalc_timer()
             # Cancel any ongoing calibration when switching to OFF/SLEEP mode

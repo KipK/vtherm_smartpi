@@ -92,6 +92,9 @@ class DeadTimeEstimator:
         self._tin_lp_history: Deque[Tuple[float, float]] = deque(
             maxlen=TIN_HISTORY_MAX_SAMPLES
         )
+        # Detection state saved before a restart (wall-clock times), resumed
+        # only when the restart is bridged (resume_after_restart).
+        self._restart_detection: dict | None = None
 
     @property
     def tin_history(self) -> Deque[Tuple[float, float]]:
@@ -140,6 +143,7 @@ class DeadTimeEstimator:
         self._history_cool.clear()
         self._tin_history.clear()
         self._tin_lp_history.clear()
+        self._restart_detection = None
 
     def reset_observation(self, current_power: float = 0.0) -> None:
         """Clear transient detection state while preserving learned dead times."""
@@ -511,6 +515,58 @@ class DeadTimeEstimator:
         self.deadtime_cool_s = statistics.median(self._history_cool)
         self.deadtime_cool_reliable = len(self._history_cool) >= 1
 
+    def _detection_state(self) -> dict:
+        """Detection state in progress, in wall-clock time."""
+        if self._restart_detection is not None:
+            # Saved again before the restart was decided: keep the first stop's state.
+            return dict(self._restart_detection)
+        return {
+            "state": self.state,
+            "last_power": self.last_power,
+            "last_stop_wall": monotonic_to_wall_ts(self.last_stop_time),
+            "heat_start_wall": monotonic_to_wall_ts(self.heat_start_time),
+            "heat_trough_temp": self.heat_trough_temp,
+            "cool_start_wall": monotonic_to_wall_ts(self.cool_start_time),
+            "cool_peak_temp": self.cool_peak_temp,
+            "waiting_power_on": self._waiting_power_on,
+            "near_extreme_wall": monotonic_to_wall_ts(self._near_extreme_time),
+            "trend_slope": self._trend_slope,
+        }
+
+    def resume_after_restart(self, bridged: bool) -> None:
+        """Apply the restart decision to the detection saved before the stop.
+
+        Bridged: the actuator kept its state over the stop, so the detection in
+        progress, the last power and the last stop resume; the timeout still
+        applies from the saved start. Otherwise the state of load_state stays.
+        """
+        saved, self._restart_detection = self._restart_detection, None
+        if not bridged or not saved:
+            return
+        state = saved.get("state")
+        if state not in {"OFF", "HEATING", "COOLING", "WAITING_HEAT_RESPONSE", "WAITING_COOL_RESPONSE"}:
+            return
+        try:
+            last_power = float(saved.get("last_power") or 0.0)
+            trend = float(saved.get("trend_slope") or 0.0)
+            trough = saved.get("heat_trough_temp")
+            peak = saved.get("cool_peak_temp")
+            trough = None if trough is None else float(trough)
+            peak = None if peak is None else float(peak)
+        except (TypeError, ValueError):
+            return
+        waiting = saved.get("waiting_power_on")
+        self.state = state
+        self.last_power = last_power
+        self.last_stop_time = wall_to_monotonic_ts(saved.get("last_stop_wall"))
+        self.heat_start_time = wall_to_monotonic_ts(saved.get("heat_start_wall"))
+        self.heat_trough_temp = trough
+        self.cool_start_time = wall_to_monotonic_ts(saved.get("cool_start_wall"))
+        self.cool_peak_temp = peak
+        self._waiting_power_on = waiting if isinstance(waiting, bool) else None
+        self._near_extreme_time = wall_to_monotonic_ts(saved.get("near_extreme_wall"))
+        self._trend_slope = trend
+
     def save_state(self) -> dict:
         """Save state for persistence."""
         return {
@@ -523,6 +579,7 @@ class DeadTimeEstimator:
             "history_cool": list(self._history_cool),
             "tin_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_history],
             "tin_lp_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_lp_history],
+            "detection": self._detection_state(),
         }
 
     def load_state(self, state: dict) -> None:
@@ -553,13 +610,15 @@ class DeadTimeEstimator:
         if self._history_cool:
             self.deadtime_cool_s = statistics.median(self._history_cool)
 
-        # An in-progress detection is not restored: the actuator state during
-        # the outage is unknown, so a response spanning it is not attributable.
-        # Legacy states may still carry detection keys; they are ignored.
+        # An in-progress detection is restored only across a bridged restart
+        # (resume_after_restart): otherwise the actuator state during the
+        # outage is unknown, so a response spanning it is not attributable.
         self.reset_observation()
         # The OFF duration before the restart is unknown: the minimum OFF time
         # must elapse within this session before a detection can be armed.
         self.last_stop_time = time.monotonic()
+        detection = state.get("detection")
+        self._restart_detection = dict(detection) if isinstance(detection, dict) else None
 
         # Restore temperature histories (a missing filtered history stays empty)
         for key, history in (

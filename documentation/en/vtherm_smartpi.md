@@ -331,7 +331,7 @@ The emitter delay `T_ar` is the time between the start of the heating and the ri
 The learning only uses periods when SmartPI controls the heater with valid data. These periods are excluded, and they interrupt a night, an identification window or a morning step like missing data (they are never filled in):
 
 - no data for more than 20 minutes, an unavailable indoor or outdoor temperature, or an unknown command;
-- 10 minutes before and after a restart of Home Assistant or of the thermostat, and the downtime between them;
+- the downtime of a restart of Home Assistant or of the thermostat that is not bridged (see [Restarts](#restarts)); a bridged restart is only a missing sample;
 - a temperature jump of more than 0.5 °C at more than 20 °C/h, which no heating produces (the value is ignored; a new level confirmed by 3 readings is kept);
 - window open, power shedding, safety mode, HVAC mode other than heating, or a command overridden by Versatile Thermostat.
 
@@ -367,7 +367,7 @@ SmartPI also maintains a room model. The model describes the room with its air, 
 - **Publication.** The values of a day are published only when the model follows the measured temperature closely and without systematic error, the values agree with those found 3 days earlier on other nights, and those earlier values also predict the new nights. The check of the error looks for a bias, a large spread, long runs of hourly means of the same sign, a correlation over one hour, and a link with the heating, the setpoint or the outdoor temperature. Shorter ripples, from the sensor response or the heating cycles, do not matter at the scale of the model. A model whose heating response `a` is more than twice or less than half the `a` learned by the regulation is refused (`the heating response differs too much from the one measured by the regulation`): such a model lumps the walls into the air. The fits take the free gain of the heat balance in force as a known heat input. Once a heat balance is in force, a model whose ratio `b_eq / a` differs from its slope by more than 5 % is refused too (`the model's heat loss disagrees with the measured heat balance`): with heavy walls, `b_eq` is the small difference between the loss of the air and the share the walls take, and a slightly wrong emitter response time shifts it by several %. The walls of such a model would not match the measured losses either. Two agreeing results are averaged, and the published values are the median of the last 3 accepted results; both are taken on `a`, the ratio `b_eq / a`, the wall share of the air loss and the wall rate, so the static ratio keeps the value the fits agree on. Otherwise the last published values are kept.
 - **Simple model.** The walls are kept in the model only with a precise temperature sensor (steps of 0.015 °C or less), when they carry a real share of the losses in both series of nights, when their time constant is at least 3 hours, and when they predict the following nights better than the simple model. Otherwise the model is the simple one, with `a` and `b_eq` only, like the A/B model.
 - **Disturbances.** A night in which SmartPI sees heat gains or losses that the model does not explain, compared with the other recent nights, is left out of the identification. A gain present every night (sleepers every night, for example) is not detected.
-- **Tracking.** Once a model is published, SmartPI follows the state of the room (air, walls and unexplained gains) at each regulation tick, with the power actually applied and the outdoor temperature. It corrects that state at each new temperature value; a value repeated by the sensor is not a new measurement. With a sensor in steps of 0.1 °C, a change is read as the crossing of the midpoint between the two values. Tracking pauses outside heating and when SmartPI is not in control (safety mode, command overridden). After a pause or a restart of up to 3 hours the state is resumed; after a longer one it restarts with the walls in balance with the air, and settles for about 3 hours.
+- **Tracking.** Once a model is published, SmartPI follows the state of the room (air, walls and unexplained gains) at each regulation tick, with the power actually applied and the outdoor temperature. It corrects that state at each new temperature value; a value repeated by the sensor is not a new measurement. With a sensor in steps of 0.1 °C, a change is read as the crossing of the midpoint between the two values. Tracking pauses outside heating and when SmartPI is not in control (safety mode, command overridden). After a pause or a restart of up to 3 hours the state is resumed; after a longer one it restarts with the walls in balance with the air, and settles for about 3 hours. A bridged restart (see [Restarts](#restarts)) is not a pause: the tracking goes on as if nothing had happened.
   - **Power shedding** does not pause the tracking: the heater is known to be off, so the state goes on being corrected with zero heating from the start of the shedding (the rest of the interrupted cycle is not counted) until SmartPI's command resumes.
   - **Open window.** The window changes the air, not the exchange between the air and the walls. While it is open, the air of the model follows the measured temperature and the walls follow that air. When it closes, the tracking resumes from the measured temperature and is `ok` again at once; the holding power brings the wall extra power back in over 30 minutes. A window open for more than 3 hours restarts the tracking as above.
 
@@ -402,6 +402,22 @@ The cost is a slight overshoot, around 0.1 °C, at the end of a morning rise in 
 - Its parameters and state are kept in their own storage file and survive restarts. The `reset_smartpi_learning` service clears them.
 
 The `live.room_model` block of the [diagnostics](./diagnostics.md#room-model) shows the model status, its values, the heat balance in force, the forecasts and their errors. `live.feedforward.source` shows which model gives the holding power, and `live.feedforward.wall_power_percent` the wall part of it.
+
+### Restarts
+
+When Home Assistant restarts or the integration reloads, Versatile Thermostat leaves the heater as it was: a heater that was on stays on until SmartPI's first command after the restart. A short restart is therefore only a gap of a few measurements, and SmartPI **bridges** it: it carries on as if nothing had happened.
+
+A restart is bridged when all of these hold:
+
+- the stop lasted at most 10 minutes;
+- the thermostat was in the same mode before and after it, heating or cooling, with the same cycle settings;
+- SmartPI was in control before and after it (no open window, power shedding, safety mode or command overridden);
+- the indoor temperature did not jump during the stop;
+- the stored data are recent (a crash that lost the last writes makes the stop look long).
+
+After a bridged restart, the measurements in progress resume (dead time, learning windows, emitter delay), the heater is taken as unchanged over the stop, nothing is excluded from the emitter delay learning or the room model (both heating only), and learning is not paused. After any other restart SmartPI starts again carefully: the measurements in progress are dropped, learning pauses for one cycle, and only the stop itself is excluded from the learning data.
+
+The diagnostic sensor shows the last restart in `control.last_restart`.
 
 ## Recommended settings
 

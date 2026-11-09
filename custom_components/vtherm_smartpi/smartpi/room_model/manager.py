@@ -19,6 +19,10 @@ force (learned T_ar or bootstrap); its first-order part tau_e is the refined
 T_ar value when published (else the whole first moment), the delay L the rest.
 The identification refines that first moment within a bounded grid.
 
+Restarts: the time of the last tick and of the save are kept with the state, so
+that a bridged restart (restart_bridge.py) holds the command applied at the
+stop over the downtime (observer.py).
+
 Power shedding keeps the observer running: the heater is off at a known power.
 From the first tick of a shedding period the command timeline is held at zero
 until SmartPI is back in control, so the rest of an interrupted cycle is not
@@ -100,10 +104,16 @@ class RoomModelManager:
         self._a_per_min: float | None = None
         self._emitter: tuple[float, float] | None = None
         self._shedding = False
+        # Last tick of this session; the saved last tick and save time of a restart to decide
+        self._last_t: float | None = None
+        self._restart_saved: dict[str, float | None] | None = None
+        self._restart_pending = False
         self._reset_results()
 
     def _reset_results(self) -> None:
         self.observer = RoomObserver(self._clock)
+        self._restart_saved = None
+        self._restart_pending = False
         self.params: RoomParams | None = None
         self.q: float | None = None
         self.windows: dict[str, dict] = {}
@@ -155,6 +165,8 @@ class RoomModelManager:
         reason pauses the observer.
         first_moment_s: HEAT dead time in force, the first moment of the emitter response.
         """
+        self._settle_restart()
+        self._last_t = now
         self._a_per_min = a_per_min if a_per_min and a_per_min > 0.0 else None
         self._emitter = self._emitter_split(first_moment_s)
         key, meas_t = _measure_key(measure_id)
@@ -174,6 +186,7 @@ class RoomModelManager:
 
         During power shedding the heater stays off whatever the command.
         """
+        self._settle_restart()
         tl = self.observer.timeline
         if hvac_mode != VThermHvacMode_HEAT or self._shedding:
             tl.stop(now)
@@ -182,6 +195,42 @@ class RoomModelManager:
         else:
             tl.applied_cycle(now, power, max(float(cycle_min) * 60.0, 60.0), cycle_start)
         tl.prune(now)
+
+    # ------------------------------------------------------------------
+    # Restart
+    # ------------------------------------------------------------------
+    def restart_context(self) -> tuple[float | None, bool] | None:
+        """(last tick, command saved) of a restart to decide, None without a saved state to resume.
+
+        A state saved without its last tick (older format) gives (None, False): the
+        command over the downtime is unknown.
+        """
+        if not self._restart_pending:
+            return None
+        saved = self._restart_saved
+        if saved is None:
+            obs = self.observer
+            if obs.t is None and not obs.timeline.t:
+                return None
+            return None, False
+        return saved["last_t"], True
+
+    def on_restart(self, bridged: bool, t_resume: float) -> None:
+        """Apply the restart decision (restart_bridge.py) before the first tick after it."""
+        if not self._restart_pending:
+            return
+        self._restart_pending = False
+        saved = self._restart_saved
+        stop_t = None
+        if bridged and saved is not None and saved["last_t"] is not None:
+            last_t = saved["last_t"]
+            t = saved["saved_t"] if saved["saved_t"] is not None else last_t
+            stop_t = min(max(t, last_t), max(t_resume, last_t))
+        self.observer.resolve_restart(bridged and stop_t is not None, stop_t)
+
+    def _settle_restart(self) -> None:
+        if self._restart_pending:
+            self.on_restart(False, 0.0)
 
     def _te_pub(self) -> float | None:
         te_pub = getattr(self._tar, "te_pub", None) if self._tar is not None else None
@@ -340,9 +389,32 @@ class RoomModelManager:
             "candidates": self.candidates,
             "records": self.records,
             "observer": self.observer.to_dict(),
+            "restart": self._restart_save(),
             "energy_balance": {"slope": self.eb_slope, "gain": self.eb_gain, "days": self.eb_days,
                                "day": self.eb_day, "reason": self.eb_reason},
         }
+
+    def _restart_save(self) -> dict[str, float | None] | None:
+        """Last tick and time of the save (the command applied at a stop)."""
+        if self._restart_pending:
+            # Saved again before the first tick after a restart: the stop is still the first one.
+            return dict(self._restart_saved) if self._restart_saved is not None else None
+        if self._last_t is None:
+            return None
+        return {"last_t": self._last_t, "saved_t": time.time()}
+
+    @staticmethod
+    def _load_restart(data: Any) -> dict[str, float | None] | None:
+        if not isinstance(data, dict):
+            return None
+        try:
+            last_t = float(data["last_t"])
+            saved_t = None if data.get("saved_t") is None else float(data["saved_t"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not math.isfinite(last_t) or (saved_t is not None and not math.isfinite(saved_t)):
+            return None
+        return {"last_t": last_t, "saved_t": saved_t}
 
     def _load_energy_balance(self, data: Any) -> None:
         """Restore the static model in force; an invalid one is dropped (a state without it has none)."""
@@ -379,6 +451,8 @@ class RoomModelManager:
             self.observer = RoomObserver(self._clock)
             self.observer.configure(self.params, self.q)
             self.observer.load(state.get("observer"))
+            self._restart_saved = self._load_restart(state.get("restart"))
+            self._restart_pending = True
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.warning("%s - room model state ignored: %s", self._name, err)
             self._reset_results()

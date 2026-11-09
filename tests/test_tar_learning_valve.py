@@ -109,6 +109,8 @@ def test_valve_history_round_trip_closes_the_level_at_a_restart() -> None:
     h.record(600.0, temp=19.1, ext=2.0, setpoint=19.0, phase="STABLE", b=0.002, dtc=None, lag=None)
     back = TarHistory.from_dict(h.to_dict())
     assert back.valve
+    # A restart that is not bridged cuts the level at the last observation
+    back.resolve_restart(False, 700.0)
     assert back.pw_t == [0.0, 600.0] and back.pw_v == [0.4, 0.0]
     assert back.off == [600.0]
     # A PWM history keeps its kind and its edges

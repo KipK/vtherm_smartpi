@@ -93,8 +93,10 @@ def test_history_gaps_prune_and_persistence() -> None:
     _rec(h, 5100.0, 20.4)
     restored = TarHistory.from_dict(h.to_dict())
     assert restored.temp_v == h.temp_v and restored.gaps == h.gaps
-    # A heater on at save time is closed at load (no open on period across a restart)
-    assert len(restored.on) == len(restored.off)
+    # A heater on at save time is closed at the last observation when the restart is not
+    # bridged (no open on period across it)
+    restored.resolve_restart(False, 5200.0)
+    assert len(restored.on) == len(restored.off) and restored.off[-1] == 5100.0
     later = TAR_HISTORY_RETENTION_S + 6000.0
     _rec(restored, later, 21.0)
     restored.prune(later)

@@ -140,6 +140,59 @@ class SmartPIIntegralGuard:
         # Direction (+1 / -1) of a stalled recovery released softly, 0 when none
         self._soft_sign = 0
 
+    def save_state(self) -> dict:
+        """Guard state, for a restart that is bridged."""
+        return {
+            "source": self._source.value,
+            "block_positive": self._block_positive,
+            "stable_cycles": self._stable_cycles,
+            "peak_slope_h": self._peak_signed_recovery_slope_h,
+            "stall_min": self._stall_min,
+            "last_release_reason": self._last_release_reason,
+            "last_abs_error": self._last_abs_error,
+            "resume_error_ref": self._resume_error_ref,
+            "suspended_stall": None if self._suspended_stall is None else list(self._suspended_stall),
+            "soft_sign": self._soft_sign,
+        }
+
+    def restore(self, state: object) -> bool:
+        """Restore a saved guard state (bridged restart); False and unchanged when it is invalid."""
+        if not isinstance(state, dict):
+            return False
+        try:
+            source = IntegralGuardSource(state.get("source", "none"))
+            suspended = state.get("suspended_stall")
+            if suspended is not None:
+                block, stall, last_err = suspended
+                suspended = (bool(block), float(stall), None if last_err is None else float(last_err))
+            last_abs = state.get("last_abs_error")
+            ref = state.get("resume_error_ref")
+            values = (
+                bool(state.get("block_positive", True)),
+                int(state.get("stable_cycles", 0)),
+                float(state.get("peak_slope_h", 0.0)),
+                float(state.get("stall_min", 0.0)),
+                str(state.get("last_release_reason", "reset")),
+                None if last_abs is None else float(last_abs),
+                None if ref is None else float(ref),
+                int(state.get("soft_sign", 0)),
+            )
+        except (TypeError, ValueError):
+            return False
+        self._source = source
+        (
+            self._block_positive,
+            self._stable_cycles,
+            self._peak_signed_recovery_slope_h,
+            self._stall_min,
+            self._last_release_reason,
+            self._last_abs_error,
+            self._resume_error_ref,
+            self._soft_sign,
+        ) = values
+        self._suspended_stall = suspended
+        return True
+
     @property
     def soft_release_active(self) -> bool:
         """Return True while a stalled recovery is released at a reduced integral rate."""

@@ -98,12 +98,11 @@ sauvegardé sans bloc de retard de réponse attend la première mise à jour de 
 Dans la bande d'hystérésis, la sortie conserve son état tout-ou-rien précédent. Une
 sortie modulée laissée par une autre phase n'est pas un état d'hystérésis : elle est
 ramenée à 0 jusqu'au prochain seuil. L'état tout-ou-rien est persisté avec l'heure
-murale du dernier calcul. Au redémarrage, le premier calcul le reprend dans la bande
-lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` (3.7) et que
-le mode HVAC est inchangé, comme l'aurait fait une hystérésis jamais interrompue.
-Hors de la bande, les seuils décident. Sinon, et pour un état sauvegardé sans cet
-état, la sortie repart à 0. Une phase de chauffe en cours peut ainsi reprendre après
-un redémarrage court.
+murale du dernier calcul. Après un redémarrage ponté (5.4), le premier calcul le
+reprend dans la bande, comme l'aurait fait une hystérésis jamais interrompue.
+Hors de la bande, les seuils décident. Après tout autre redémarrage, et pour un
+état sauvegardé sans cet état, la sortie repart à 0. Une phase de chauffe ou de
+refroidissement en cours peut ainsi reprendre après un redémarrage court.
 
 La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dérive repose sur `b_converged_for_a()` :
 
@@ -258,7 +257,7 @@ réponse physique de la pièce, pas le sens de la transition de puissance :
 Ainsi, OFF -> ON apprend `heat` en mode HEAT mais `cool` en mode COOL.
 La transition ON -> OFF apprend la réponse passive opposée.
 
-La détection suit la température intérieure filtrée, y compris pendant une calibration forcée : une mesure brute qui oscille d'un pas de capteur détecterait sinon une réponse dès l'échelon de puissance. Une détection en cours n'est pas reprise après un redémarrage, et la durée minimale OFF doit être observée dans la session en cours avant qu'une détection puisse être armée.
+La détection suit la température intérieure filtrée, y compris pendant une calibration forcée : une mesure brute qui oscille d'un pas de capteur détecterait sinon une réponse dès l'échelon de puissance. Une détection en cours reprend après un redémarrage ponté (5.4) : son état, son début, son creux ou son pic, la tendance avant le démarrage, la dernière puissance et la dernière coupure de puissance sont persistés en temps mural, et son délai d'expiration continue de courir depuis le début sauvegardé. Après tout autre redémarrage, elle est abandonnée, et la durée minimale OFF doit être observée à nouveau dans la session en cours avant qu'une détection puisse être armée.
 
 Une réponse est détectée dès que la température s'est écartée de `0.05 °C` de son creux (chauffe) ou de son pic (refroidissement) depuis la transition de puissance. Le temps mort court de la transition au dernier instant à moins de `0.01 °C` de ce creux ou de ce pic, suivi pendant l'attente : il ne dépend donc pas de la rétention de l'historique de température. L'attente abandonne après `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s` pour une réponse active (puissance démarrée) et `DEADTIME_PASSIVE_TIMEOUT_S = 43200 s` pour une réponse passive (puissance coupée) : après une coupure, un émetteur qui stocke beaucoup de chaleur (plancher chauffant) continue de réchauffer la pièce, puis plafonne, et la baisse peut arriver plusieurs heures plus tard. Pendant le bootstrap, l'attente passive se termine par une détection ou par une reprise de chauffe, qui exige une baisse que la détection voit d'abord ; la limite ne fait que borner le délai au-delà duquel une baisse n'est plus attribuée à la coupure. Une transition de puissance abandonne une attente en cours. L'issue de la dernière attente de chaque réponse et l'âge de l'attente en cours sont publiés (`analysis.deadtime`).
 
@@ -289,7 +288,7 @@ La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée
 
 Les `RESPONSE_LAG_HISTORY = 7` dernières estimations sont conservées. Le retard est publié lorsqu'au moins `RESPONSE_LAG_MIN_ESTIMATES = 3` estimations donnent un écart-type combiné de leur médiane pondérée par l'inverse des variances au plus égal à `RESPONSE_LAG_MAX_REL_UNC = 0.15` de cette médiane (plancher `RESPONSE_LAG_UNC_FLOOR_S = 30 s`) ; les estimations situées à plus de trois écarts-types de la médiane ne sont pas combinées. Un ensemble incohérent conserve la valeur publiée, afin que des estimations dispersées n'activent et ne désactivent pas le modèle de puissance délivrée. Une discontinuité de plus de 1 s entre deux mises à jour termine l'épisode au dernier instant observé, et la coupure de puissance est datée à la reprise.
 
-Un redémarrage reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive, ou début, puissance, constance, durée passive préalable et température extérieure de l'épisode) et reconverti en horloge monotone au chargement. Il s'applique à la première observation qui suit, lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` et que le mode HVAC est inchangé. Pendant un arrêt court, l'actionneur conserve son dernier état ; au-delà (hôte arrêté, coupure de courant, mise à jour), la puissance n'est pas connue. Une période passive reprend, et l'arrêt compte comme passif. Un épisode reprend lorsque la première puissance appliquée après le redémarrage est égale à la sienne à `RESPONSE_LAG_U_TOL` près. Sinon, il est compté comme épisode terminé, sans estimation (`episode interrupted by restart`), et une puissance non nulle ouvre un nouvel épisode sans période passive connue. Les franchissements viennent de l'historique brut du détecteur de temps mort, persisté de la même façon ; il ne contient aucun échantillon pendant l'arrêt. Un état sauvegardé sans ce contexte ne reprend rien.
+Un redémarrage ponté (5.4) reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive, ou début, puissance, constance, durée passive préalable et température extérieure de l'épisode) et reconverti en horloge monotone au chargement. Le chauffage a conservé la puissance engagée pendant l'arrêt, et la première mise à jour après le redémarrage couvre l'arrêt avec cette puissance : une période passive se poursuit, et l'arrêt compte comme passif ; un épisode se poursuit, et la première observation le prolonge ou le termine comme toute autre. Après tout autre redémarrage, la période passive est abandonnée et un épisode est compté comme terminé, sans estimation (`episode interrupted by restart`) ; une puissance non nulle ouvre alors un nouvel épisode sans période passive connue. Les franchissements viennent de l'historique brut du détecteur de temps mort, persisté de la même façon ; il ne contient aucun échantillon pendant l'arrêt. Un état sauvegardé sans ce contexte ne reprend rien.
 
 L'inversion suppose une réponse à retard unique (premier ordre). Elle ne restitue le temps de séjour moyen que pour un tel émetteur, ou lorsque l'épisode dure plusieurs fois le retard. Sur un émetteur qui combine un retard pur et une inertie, ou deux inerties successives, l'ordonnée à l'origine d'un épisode court est plus tardive que celle d'un retard unique de même temps de séjour : le retard publié est alors surestimé, d'environ 1,3 fois sur les formes simulées, ou n'est jamais publié lorsque l'épisode reste dans le régime transitoire.
 
@@ -733,7 +732,9 @@ Cette séquence évite de faire apprendre à l'intégrale une dynamique de repri
 Les états transitoires de rattrapage ne sont pas restaurés après reboot :
 
 - la trajectoire analytique active est purgée,
-- la garde intégrale est remise à zéro,
+- la garde intégrale est remise à zéro, sauf après un redémarrage ponté (5.4),
+  qui restaure sa source, sa direction, son horloge de stagnation et son relâchement
+  progressif,
 - tout `integral_hold_mode` temporaire est effacé.
 
 Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer des états servo transitoires qui ne sont plus physiquement valides hors de leur session d'origine. Le timestamp mural de la dernière régulation active valide est persisté et n'est pas rafraîchi lorsque le mode HVAC est OFF. Si l'inactivité dépasse 96 heures, la mémoire PI du contrôleur est purgée à la reprise tandis que le modèle A/B appris reste disponible. Si le mode HVAC après un redémarrage diffère du mode du modèle persisté (HEAT versus COOL), l'intégrale est effacée. Lorsqu'une itération de régulation est ignorée parce que le capteur de température est absent ou que `guard_cut` est actif, le suivi du temps repart comme après un passage en OFF, afin que l'erreur ne soit pas intégrée sur la période ignorée.
@@ -848,6 +849,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `autocalib.py`         | supervision et déclenchement automatique                 |
 | `guards.py`            | `guard_cut` et `guard_kick`                              |
 | `thermal_twin_1r1c.py` | jumeau thermique et diagnostics prédictifs               |
+| `restart_bridge.py`    | décision unique de pontage ou non d'un redémarrage, consultée par chaque composant, et contexte du dernier calcul |
 | `diagnostics.py`       | payload canonique des diagnostics live                  |
 | `diagnostic_history.py` | enveloppe versionnée et séries Recorder stables         |
 | `tint_filter.py`       | filtrage adaptatif de la température intérieure          |
@@ -946,12 +948,46 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "ff_wall": {...},  # part des murs appliquée et son fondu
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap uniquement
+    "restart": {...},  # dernier calcul, puissance engagée, garde intégrale (pontage du redémarrage)
 }
 ```
 
 La boucle de régulation planifie au plus une écriture différée de ce payload par fenêtre de cinq minutes ; Home Assistant vide une écriture en attente à l'arrêt. Les services et la suppression de l'entité écrivent immédiatement un snapshot.
 
 Les timestamps d'événements passés (historiques de température, début de calibration, période passive et épisode du retard de réponse) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
+
+#### Redémarrages
+
+Versatile Thermostat n'envoie aucune commande au chauffage lorsque l'intégration est déchargée ou que Home Assistant s'arrête, ni au démarrage en chauffe ou en refroidissement avant son premier cycle : sur un arrêt court, le chauffage garde son dernier état commandé. Un tel arrêt n'est qu'un trou de quelques échantillons. `restart_bridge.py` décide une seule fois, au premier calcul d'un thermostat prêt (une consigne est fixée) après un chargement, si le redémarrage est **ponté**. Toutes les conditions suivantes doivent être réunies :
+
+- la durée d'arrêt, sur l'horloge murale, depuis le plus ancien dernier calcul des trois stockages (algorithme, apprentissage de `T_ar`, modèle de pièce) jusqu'au premier calcul, est au plus `RESTART_BRIDGE_MAX_GAP_S = 600 s` ; un stockage écrit longtemps avant l'arrêt (une écriture différée perdue lors d'un plantage) rend la durée d'arrêt longue ;
+- le mode HVAC est le même au dernier calcul et au premier, HEAT ou COOL, et la configuration du cycle (durée de cycle, délais minimaux de marche et d'arrêt, mode vanne) est la même ;
+- l'état de l'actionneur a été sauvegardé : la puissance engagée dans le stockage de l'algorithme et, en HEAT, aussi l'état du cycle de chauffe dans l'historique de `T_ar` et le dernier calcul du modèle de pièce, pour les stockages qui contiennent des données (un stockage d'ancien format n'en a aucun) ;
+- SmartPI avait la main au dernier calcul et l'a au premier : ni fenêtre ouverte, ni délestage, ni mode sécurité, ni commande remplacée, ni état inconnu (après le redémarrage, l'état de la fenêtre, du délestage et de la sécurité du thermostat est lu avant toute commande) ;
+- la première température intérieure passe la règle de saut de l'historique de `T_ar` (un saut de plus de `0.5 °C` à plus de `20 °C/h` n'est pas physique) par rapport à la dernière, datée de son dernier changement ;
+- l'horloge murale n'a pas sauté (pas de durée d'arrêt négative, pas de dernier calcul d'un stockage dans le futur).
+
+Chaque composant consulte cette décision ; aucun ne décide seul. L'état transitoire dont chaque composant a besoin est sauvegardé avec elle (en temps mural) et reste en attente jusqu'à la décision.
+
+| Composant | Redémarrage ponté | Autre redémarrage |
+|---|---|---|
+| Puissance engagée | restaurée (le chauffage l'a conservée) ; le premier calcul couvre la durée d'arrêt avec elle | 0 jusqu'à la première commande appliquée |
+| Suivi du temps | le premier calcul couvre la durée d'arrêt, sans le gel de l'apprentissage d'un cycle ; la mise en forme de la consigne et FF3 repartent encore de la consigne brute pendant ce cycle | premier calcul d'une nouvelle session, apprentissage gelé pendant un cycle |
+| Garde intégrale | restaurée | remise à zéro |
+| Détection du temps mort | la détection en cours reprend (3.6) | abandonnée, durée minimale OFF comptée depuis le chargement |
+| Fenêtre d'apprentissage a/b | la fenêtre en cours reprend avec ses accumulateurs ; son segment de bilan intégral recommence | effacée |
+| Retard de réponse | période passive ou épisode repris (3.7) | épisode compté comme interrompu |
+| Sortie tout-ou-rien du bootstrap | reprise dans la bande (3.1) | repart à 0 |
+| Historique de `T_ar` (HEAT uniquement ; en COOL comme un autre redémarrage) | la durée d'arrêt est un échantillon manquant (pas d'intervalle invalide) ; l'état du chauffage à l'arrêt est tenu jusqu'à la première commande qui suit, sans aucun front | la période de chauffe est close au dernier calcul, et seule la durée d'arrêt est invalide |
+| Modèle de pièce (HEAT uniquement ; en COOL comme un autre redémarrage) | la commande appliquée à l'arrêt est tenue pendant la durée d'arrêt ; l'état est propagé à travers elle et les prévisions en cours se poursuivent | le chauffage est considéré comme éteint d'après l'état sauvegardé, l'incertitude est rouverte et les prévisions en cours sont abandonnées |
+
+L'état du chauffage à l'arrêt est celui de l'écriture du stockage : un rechargement écrit les stockages au déchargement, et Home Assistant écrit les stockages en attente à son arrêt. Une période de chauffe prévue pour se terminer avant l'arrêt est terminée ; un chauffage allumé à l'arrêt reste allumé jusqu'à la première commande après le redémarrage.
+
+Un redémarrage non ponté n'exclut de l'historique de `T_ar` que sa durée d'arrêt (du dernier calcul au premier), et non une marge autour : l'état de l'actionneur pendant la durée d'arrêt est inconnu, mais les observations avant et après sont valides.
+
+L'historique de `T_ar` garde un repère de chaque redémarrage (dernier calcul, premier calcul, ponté) dans `restarts`, afin que les règles ultérieures voient encore un redémarrage qui n'a laissé aucun intervalle invalide. Le jumeau thermique garde sa propre restauration selon la durée d'arrêt (restauration complète sous 5 minutes), et le modèle de pièce sa limite de reprise de 3 heures.
+
+`control.last_restart` publie la décision de la session courante (5.5).
 
 Les pools de bilan intégral et les compteurs d'issues de fenêtres ne sont pas
 persistés : ils repartent vides à chaque démarrage. Les observations des mesures de
@@ -1007,6 +1043,8 @@ puissance précédente (`legacy_gap_fill`) reste utilisable.
 `diagnostic_history.py` enveloppe ce payload dans `schema_version`, `live` et le
 bloc stable de dix-huit séries `history`. Les entités normales excluent `live` du
 Recorder ; la sous-classe debug l'enregistre directement. Le mode debug ne fait que sélectionner la classe de capteur enregistrée ; il n'ajoute pas de second bloc de diagnostic.
+
+`control.last_restart` donne la décision sur le redémarrage de la session courante : `bridged`, la durée d'arrêt `downtime_s` (en secondes, `null` lorsque l'horloge a sauté ou que rien n'a été sauvegardé) et, pour un redémarrage non ponté, la `reason` en mots simples. Il vaut `null` avant le premier calcul d'un thermostat restauré depuis un stockage, et pour un thermostat sans état sauvegardé.
 
 `analysis.learning.learn_ok_count` et `learn_skip_count` sont des compteurs
 d'exécution relatifs au processus Home Assistant courant. Les compteurs
@@ -1071,7 +1109,7 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
 | `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
 | `RESPONSE_LAG_U_TOL`           | `0.05` |
-| `RESPONSE_LAG_RESTART_MAX_GAP_S` | `600` |
+| `RESTART_BRIDGE_MAX_GAP_S` (`RESPONSE_LAG_RESTART_MAX_GAP_S`) | `600` |
 | `RESPONSE_LAG_PASSIVE_SPAN_S`  | `3600` |
 | `RESPONSE_LAG_MIN_INVERSION_SLOPE` | `0.05` |
 | `RESPONSE_LAG_RESOLVABLE_FRAC` | `0.9`  |

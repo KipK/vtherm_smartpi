@@ -27,6 +27,7 @@ from .const import (
 from .ab_window_balance import ABWindowBalance
 from .learning_outcomes import LearningOutcomes
 from .response_lag import ResponseLagEstimator
+from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 # Two observed intervals are contiguous within this tolerance (s).
 _CONTIGUITY_TOL_S = 1.0
@@ -104,6 +105,9 @@ class LearningWindowManager:
         self._lag_model: float | None = None
         # End of the last observed interval (contiguity of the observations).
         self._last_update_now: float | None = None
+        # Window saved before a restart (wall-clock times), resumed only when
+        # the restart is bridged (resume_after_restart).
+        self._restart_window: dict | None = None
 
     # --------------------------------------------------------------------------
     # Properties for diagnostic access
@@ -201,6 +205,7 @@ class LearningWindowManager:
         self._T_ext_start = 0.0
         self._learning_start_date = datetime.now()
         self._learning_resume_ts = None
+        self._restart_window = None
 
     def set_learning_resume_ts(self, ts: Optional[float]) -> None:
         """Set the learning resume timestamp for cooldown after interruption.
@@ -269,6 +274,79 @@ class LearningWindowManager:
         self._learning_resume_ts = None
         self._response_lag.load_state(state.get("response_lag"))
         self._lag_model = self._response_lag.lag_s
+        window = state.get("window")
+        self._restart_window = dict(window) if isinstance(window, dict) else None
+
+    def _window_state(self) -> dict | None:
+        """Window in progress and end of the last observed interval, in wall-clock time."""
+        if self._restart_window is not None:
+            # Saved again before the restart was decided: keep the first stop's window.
+            return dict(self._restart_window)
+        if self._last_update_now is None:
+            return None
+        return {
+            "last_update_wall": monotonic_to_wall_ts(self._last_update_now),
+            "active": self._active,
+            "start_wall": monotonic_to_wall_ts(self._start_ts),
+            "T_int_start": self._T_int_start,
+            "T_ext_start": self._T_ext_start,
+            "u_int": self._u_int,
+            "uf_int": self._uf_int,
+            "t_int_s": self._t_int_s,
+            "u_first": self._u_first,
+            "sliding_elapsed_s": self._sliding_elapsed_s,
+            "close_at_wall": monotonic_to_wall_ts(self._close_at),
+            "u_count": self._u_count,
+            "u_mean": self._u_mean,
+            "u_m2": self._u_m2,
+            "last_extend_method": self._last_extend_method,
+        }
+
+    def resume_after_restart(self, bridged: bool) -> None:
+        """Apply the restart decision to the window and the response lag saved before the stop.
+
+        Bridged: the window in progress resumes with its accumulators, and the
+        first update after the restart, which spans the stop, keeps it
+        contiguous. Its balance segment starts again at the restart. Otherwise
+        nothing is resumed (as a window cleared at startup).
+        """
+        self._response_lag.resolve_restart(bridged)
+        saved, self._restart_window = self._restart_window, None
+        if not bridged or not saved:
+            return
+        last = wall_to_monotonic_ts(saved.get("last_update_wall"))
+        if last is None:
+            return
+        try:
+            active = bool(saved.get("active"))
+            start = wall_to_monotonic_ts(saved.get("start_wall"))
+            values = {
+                key: float(saved.get(key) or 0.0)
+                for key in ("T_int_start", "T_ext_start", "u_int", "uf_int", "t_int_s",
+                            "sliding_elapsed_s", "u_mean", "u_m2")
+            }
+            u_first = saved.get("u_first")
+            u_first = None if u_first is None else float(u_first)
+            u_count = int(saved.get("u_count") or 0)
+        except (TypeError, ValueError):
+            return
+        self._last_update_now = last
+        if not active or start is None:
+            return
+        self._active = True
+        self._start_ts = start
+        self._T_int_start = values["T_int_start"]
+        self._T_ext_start = values["T_ext_start"]
+        self._u_int = values["u_int"]
+        self._uf_int = values["uf_int"]
+        self._t_int_s = values["t_int_s"]
+        self._u_first = u_first
+        self._sliding_elapsed_s = values["sliding_elapsed_s"]
+        self._close_at = wall_to_monotonic_ts(saved.get("close_at_wall"))
+        self._u_count = u_count
+        self._u_mean = values["u_mean"]
+        self._u_m2 = values["u_m2"]
+        self._last_extend_method = str(saved.get("last_extend_method") or "")
 
     def save_state(self) -> dict:
         """Save state to persistence dict.
@@ -282,6 +360,7 @@ class LearningWindowManager:
                 if self._learning_start_date else None
             ),
             "response_lag": self._response_lag.save_state(),
+            "window": self._window_state(),
         }
 
     # --------------------------------------------------------------------------

@@ -98,12 +98,11 @@ learning update.
 Inside the hysteresis band, the output keeps its previous on/off state. A
 modulated output left by another phase is not a hysteresis state: it is set to 0
 until the next threshold. The on/off state is persisted with the wall-clock time
-of the last calculation. After a restart, the first calculation resumes it inside
-the band when the stop lasted at most `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s`
-(3.7) and the HVAC mode is unchanged, as an uninterrupted hysteresis would have.
-Outside the band, the thresholds decide. Otherwise, and for a state saved without
-it, the output starts at 0. A heating phase in progress can thus resume after a
-short restart.
+of the last calculation. After a bridged restart (5.4), the first calculation
+resumes it inside the band, as an uninterrupted hysteresis would have. Outside the
+band, the thresholds decide. After any other restart, and for a state saved
+without it, the output starts at 0. A heating or cooling phase in progress can
+thus resume after a short restart.
 
 The `b` convergence used for drift-aware `a` learning relies on `b_converged_for_a()`:
 
@@ -247,7 +246,7 @@ physical room response, not the power-transition direction:
 Therefore OFF -> ON learns `heat` in HEAT mode but `cool` in COOL mode. The
 ON -> OFF transition learns the opposite passive response.
 
-Detection tracks the filtered indoor temperature, including during a forced calibration: a raw measurement that oscillates by one sensor step would otherwise detect a response as soon as the power steps. A detection in progress is not resumed after a restart, and the minimum OFF duration must be observed again in the new session before a detection can be armed.
+Detection tracks the filtered indoor temperature, including during a forced calibration: a raw measurement that oscillates by one sensor step would otherwise detect a response as soon as the power steps. A detection in progress resumes after a bridged restart (5.4): its state, start, trough or peak, pre-start trend, last power and last power cut are persisted as wall-clock times, and its timeout still runs from the saved start. After any other restart it is dropped, and the minimum OFF duration must be observed again in the new session before a detection can be armed.
 
 A response is detected once the temperature has moved by `0.05 °C` from its trough (heat) or peak (cool) since the power transition. The dead time runs from the transition to the last instant within `0.01 °C` of that trough or peak, tracked during the wait, so it does not depend on the retention of the temperature history. The wait gives up after `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s` for an active response (power started) and `DEADTIME_PASSIVE_TIMEOUT_S = 43200 s` for a passive response (power cut): after a cut, an emitter with a large stored heat (floor heating) keeps warming the room, then plateaus, and the drop can come several hours later. In the bootstrap the passive wait ends by a detection or a power restart, which needs a drop the detection sees first; the limit only bounds how late a drop is still attributed to the cut. A power transition aborts a pending wait. The outcome of the last wait per response and the age of the wait in progress are published (`analysis.deadtime`).
 
@@ -309,21 +308,19 @@ away from the median are not combined. An inconsistent set keeps the published
 value, so dispersed estimates do not switch the delivered power model on and off. A discontinuity of more than 1 s between two updates ends the
 episode at the last observed instant, and the power cut is dated at the resume.
 
-A restart resumes the passive period or the active episode in progress at the
-save. The context is persisted as wall-clock times (last observed instant, then
-start of the passive period, or start, power, constancy, preceding passive time
-and outdoor temperature of the episode) and converted back to the monotonic
-clock on load. It applies to the first following observation, when the stop
-lasted at most `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` and the HVAC mode is
-unchanged. During a short stop the actuator keeps its last state; beyond it (host
-down, power outage, update) the power is unknown. A passive period resumes, and
-the stop counts as passive. An episode resumes when the first applied power after
-the restart equals its power within `RESPONSE_LAG_U_TOL`. Otherwise it is counted
-as an ended episode without an estimate (`episode interrupted by restart`), and a
-nonzero power opens a new episode without a known passive period. The crossings
-come from the raw history of the dead time detector, persisted the same way; it
-holds no sample during the stop. A state saved without this context resumes
-nothing.
+A bridged restart (5.4) resumes the passive period or the active episode in
+progress at the save. The context is persisted as wall-clock times (last observed
+instant, then start of the passive period, or start, power, constancy, preceding
+passive time and outdoor temperature of the episode) and converted back to the
+monotonic clock on load. The heater kept the committed power over the stop, and
+the first update after the restart spans the stop with that power: a passive
+period goes on and the stop counts as passive; an episode goes on, and the first
+observation continues or ends it like any other. After any other restart the
+passive period is dropped and an episode is counted as an ended episode without
+an estimate (`episode interrupted by restart`); a nonzero power then opens a new
+episode without a known passive period. The crossings come from the raw history
+of the dead time detector, persisted the same way; it holds no sample during the
+stop. A state saved without this context resumes nothing.
 
 The inversion assumes a single-lag (first-order) response. It recovers the mean
 residence time only for such an emitter, or when the episode lasts several times
@@ -834,7 +831,8 @@ This sequence prevents the integral from learning a resume transient that is sti
 Transient catch-up states are not restored after a reboot:
 
 - the active analytical trajectory is cleared,
-- the integral guard is reset,
+- the integral guard is reset, except after a bridged restart (5.4), which
+  restores its source, direction, stall clock and soft release,
 - any temporary `integral_hold_mode` is cleared.
 
 The restart therefore keeps only useful persistent PI memory, without restoring transient servo states that are no longer physically valid outside their original runtime session. The wall-clock timestamp of the last valid active regulation tick is persisted and is not refreshed while HVAC is OFF. If inactivity exceeds 96 hours, controller PI memory is purged on resume while the learned A/B model remains available. If the HVAC mode after a restart differs from the mode of the persisted model (HEAT versus COOL), the integral is cleared. When a tick is skipped because the temperature sensor is missing or `guard_cut` is active, time tracking restarts like after OFF, so the error is not integrated over the skipped period.
@@ -942,6 +940,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `autocalib.py`         | supervision and automatic triggering                        |
 | `guards.py`            | `guard_cut` and `guard_kick`                                |
 | `thermal_twin_1r1c.py` | thermal twin and predictive diagnostics                     |
+| `restart_bridge.py`    | the one decision on whether a restart is bridged, consulted by every component, and the context of the last tick |
 | `diagnostics.py`       | canonical live diagnostic payload                           |
 | `diagnostic_history.py` | versioned envelope and stable Recorder series               |
 | `tint_filter.py`       | adaptive indoor-temperature filtering                       |
@@ -1035,12 +1034,75 @@ The current payload from `SmartPI.save_state()` notably contains:
     "ff_wall": {...},  # applied wall part and its blend
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap only
+    "restart": {...},  # last tick, committed power, integral guard (restart bridge)
 }
 ```
 
 The control loop schedules at most one delayed write of this payload per five-minute window; Home Assistant flushes a pending write at shutdown. Services and entity removal write a snapshot immediately.
 
 Past event timestamps (temperature histories, calibration start, passive period and episode of the response lag) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
+
+#### Restarts
+
+Versatile Thermostat sends no command to the heater when the integration is
+unloaded or Home Assistant stops, and none at the start in heating or cooling
+before its first cycle: over a short stop the heater keeps its last commanded
+state. Such a
+stop is only a gap of a few samples. `restart_bridge.py` decides once, at the
+first calculation of a ready thermostat (a target is set) after a load, whether
+the restart is **bridged**. All of these must hold:
+
+- the downtime, on the wall clock from the oldest last tick of the three stores
+  (algorithm, T_ar learning, room model) to the first tick, is at most
+  `RESTART_BRIDGE_MAX_GAP_S = 600 s`; a store written long before the stop (a
+  debounced write lost in a crash) makes the downtime long;
+- the HVAC mode is the same at the last tick and at the first tick, HEAT or
+  COOL, and the cycle configuration (cycle length, minimum on and off delays,
+  valve mode) is the same;
+- the actuator state was saved: the committed power in the algorithm store and,
+  in HEAT, also the heater cycle state in the T_ar history and the last tick of
+  the room model, for the stores that hold data (a store of an older format has
+  none);
+- SmartPI was in control at the last tick and is at the first tick: no window
+  open, power shedding, safety mode, command overridden or unknown (after the
+  restart, the window, shedding and safety state of the thermostat is read
+  before any command);
+- the first indoor temperature passes the jump rule of the T_ar history (more
+  than `0.5 °C` at more than `20 °C/h` is not physical) against the last one,
+  dated from its last change;
+- the wall clock did not jump (no negative downtime, no store tick in the future).
+
+Every component consults this decision; none decides on its own. The transient
+state each component needs is saved with it (wall-clock times) and stays aside
+until the decision.
+
+| Component | Bridged restart | Other restart |
+|---|---|---|
+| Committed power | restored (the heater kept it); the first tick spans the downtime with it | 0 until the first applied command |
+| Time tracking | the first tick spans the downtime, without the one-cycle learning freeze; setpoint shaping and FF3 still start from the raw setpoint on that cycle | first tick of a new session, learning frozen for one cycle |
+| Integral guard | restored | reset |
+| Dead time detection | the detection in progress resumes (3.6) | dropped, minimum OFF time from the load |
+| a/b learning window | the window in progress resumes with its accumulators; its integral balance segment starts again | cleared |
+| Response lag | passive period or episode resumed (3.7) | episode counted as interrupted |
+| Bootstrap on/off output | resumed inside the band (3.1) | starts at 0 |
+| T_ar history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |
+| Room model (HEAT only; in COOL as another restart) | the command applied at the stop is held over the downtime; the state is propagated through it and the forecasts in progress go on | the heater is taken as stopped from the saved state, the uncertainty is reopened and the forecasts in progress are dropped |
+
+The heater state at the stop is the one of the store write: a reload writes the
+stores at the unload, and Home Assistant writes the pending stores at its stop.
+An on time planned to end before the stop has ended; a heater on at the stop
+stays on until the first command after the restart.
+
+A restart that is not bridged excludes only its downtime from the T_ar history
+(last tick to first tick), not a margin around it: the actuator state over the
+downtime is unknown, but the observations before and after it are valid.
+
+The T_ar history keeps a marker of every restart (last tick, first tick,
+bridged) in `restarts`, so that later rules can still see a restart that left no
+invalid interval. The thermal twin keeps its own restore by downtime (full
+restore below 5 minutes), and the room model its resume limit of 3 hours.
+
+`control.last_restart` publishes the decision of the current session (5.5).
 
 The integral-balance pools and the window-outcome counters are not persisted:
 they start empty at each startup. The observations of the `a` measurements are
@@ -1094,6 +1156,12 @@ power (`legacy_gap_fill`) stays usable.
 stable eighteen-series `history` block. Normal sensor entities exclude `live` from
 Recorder; the debug sensor subclass records it directly. The debug option only selects the sensor class that is recorded; it does not
 add a second diagnostic block.
+
+`control.last_restart` gives the decision on the restart of the current session:
+`bridged`, the downtime `downtime_s` (seconds, `null` when the clock jumped or
+nothing was saved) and, for a restart that is not bridged, the `reason` in plain
+words. It is `null` before the first tick of a thermostat restored from a store,
+and for a thermostat without a saved state.
 
 `analysis.learning.learn_ok_count` and `learn_skip_count` are runtime counters
 relative to the current Home Assistant process. Persisted model counters remain
@@ -1157,7 +1225,7 @@ acceptance or rejection without changing the learning decision.
 | `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
 | `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
 | `RESPONSE_LAG_U_TOL`           | `0.05` |
-| `RESPONSE_LAG_RESTART_MAX_GAP_S` | `600` |
+| `RESTART_BRIDGE_MAX_GAP_S` (`RESPONSE_LAG_RESTART_MAX_GAP_S`) | `600` |
 | `RESPONSE_LAG_PASSIVE_SPAN_S`  | `3600` |
 | `RESPONSE_LAG_MIN_INVERSION_SLOPE` | `0.05` |
 | `RESPONSE_LAG_RESOLVABLE_FRAC` | `0.9`  |

@@ -19,14 +19,20 @@ applied_level(), where
 explicit deterministic rules mark intervals invalid (``gaps``):
 - no observation for more than TAR_GAP_S (data gap, downtime);
 - an unavailable indoor or outdoor temperature, or a command that is not known;
-- TAR_RESTART_MARGIN_S around a restart (the history is never stitched across
-  a downtime as if it were continuous);
+- the downtime of a restart that is not bridged (see restart_bridge.py), from
+  the last observation before it to the first one after it;
 - a physically impossible jump of the temperature (the sample is dropped; a new
   level confirmed by TAR_SPIKE_CONFIRM samples is kept, with the jump invalid);
 - the periods when SmartPI is not in control (reason given by the caller:
   window open, power shedding, safety mode, HVAC not heating, command overridden).
 Invalid intervals are never filled in: they break nights, identification bins
 and morning steps like a data gap.
+
+Restarts: the heater state at the stop is saved with the history. Over a
+bridged restart it is held until the first command after it (the actuator
+keeps its last state) and the downtime is only a missing sample. Otherwise the
+on period is closed at the last observation and the downtime is invalid. Every
+restart leaves a marker (stop, resume, bridged) in ``restarts``.
 """
 from __future__ import annotations
 
@@ -35,7 +41,6 @@ from typing import Any
 
 from .const import (
     TAR_GAP_S,
-    TAR_RESTART_MARGIN_S,
     TAR_SPIKE_CONFIRM,
     TAR_SPIKE_MIN_C,
     TAR_SPIKE_RATE_C_PER_H,
@@ -55,6 +60,12 @@ _LEVEL_DIGITS = 4
 def _cap(lst: list, n: int) -> None:
     if len(lst) > n:
         del lst[: len(lst) - n]
+
+
+def is_temperature_jump(dv: float, dt: float) -> bool:
+    """A change of dv (C) within dt (s) that is not physical for a room temperature."""
+    dt = max(dt, 1.0)
+    return dv > TAR_SPIKE_MIN_C and dv / dt * 3600.0 > TAR_SPIKE_RATE_C_PER_H
 
 
 class TarHistory:
@@ -80,7 +91,14 @@ class TarHistory:
         # Data quality state
         self.invalid_since: float | None = None
         self.invalid_reason: str | None = None
+        # Restart markers: (last observation before the stop, first one after it, bridged)
+        self.restarts: list[tuple[float, float, bool]] = []
+        # A restart waits for its first observation; its decision (True: bridged) once known
         self._restart_pending = False
+        self._restart_bridged: bool | None = None
+        # Heater state saved with the history (None: not saved) and the time of that save
+        self._heater_saved = False
+        self._saved_t: float | None = None
         self._spike: list[tuple[float, float]] = []
         # Heater state rebuilt from the applied cycles
         self._heater_on = False
@@ -97,10 +115,22 @@ class TarHistory:
             _cap(self.gaps, TAR_HISTORY_MAX_EVENTS)
 
     def _touch(self, t: float) -> None:
+        bridged = None
         if self._restart_pending:
+            if self._restart_bridged is None:
+                self.resolve_restart(False, t)
+            bridged = self._restart_bridged
             self._restart_pending = False
-            start = (self.last_t if self.last_t is not None else t) - TAR_RESTART_MARGIN_S
-            self._invalid(start, t + TAR_RESTART_MARGIN_S)
+            self._restart_bridged = None
+            self._saved_t = None
+            if self.last_t is not None:
+                self.restarts.append((round(self.last_t, _TIME_DIGITS), round(t, _TIME_DIGITS), bridged))
+                _cap(self.restarts, TAR_HISTORY_MAX_EVENTS)
+        if bridged is False and self.last_t is not None:
+            # A restart that is not bridged: only the downtime itself is invalid.
+            # The actuator state over it is unknown, but a margin around it would
+            # mark valid observations invalid without adding any information.
+            self._invalid(self.last_t, t)
         elif self.last_t is not None and t - self.last_t > TAR_GAP_S:
             self._invalid(self.last_t, t)
         if self.first_t is None:
@@ -174,9 +204,7 @@ class TarHistory:
         v = round(temp, _TEMP_DIGITS)
         jump = False
         if self.temp_v and self.temp_v[-1] != v:
-            dv = abs(v - self.temp_v[-1])
-            dt = max(t - self.temp_t[-1], 1.0)
-            jump = dv > TAR_SPIKE_MIN_C and dv / dt * 3600.0 > TAR_SPIKE_RATE_C_PER_H
+            jump = is_temperature_jump(abs(v - self.temp_v[-1]), t - self.temp_t[-1])
         if jump:
             # Not physical: dropped, unless a new level is confirmed by consecutive samples.
             if self._spike and abs(self._spike[-1][1] - v) > TAR_SPIKE_MIN_C:
@@ -220,6 +248,7 @@ class TarHistory:
         """Rebuild the heater edges from an applied command (power 0..1)."""
         if self.last_t is not None and t < self.last_t - 1.0:
             return
+        self._settle_restart(t)
         self._advance(t)
         power = min(max(float(power), 0.0), 1.0)
         if cycle_start:
@@ -239,6 +268,7 @@ class TarHistory:
         """Record an applied valve command (heat-equivalent power 0..1), held until the next one."""
         if self.last_t is not None and t < self.last_t - 1.0:
             return
+        self._settle_restart(t)
         level = round(min(max(float(power), 0.0), 1.0), _LEVEL_DIGITS)
         tr = round(t, _TIME_DIGITS)
         if level > 0.0 and (cycle_start or level > self._level):
@@ -261,6 +291,64 @@ class TarHistory:
     def flush(self, now: float) -> None:
         """Close the on period of the running cycle when it ended before now."""
         self._advance(now)
+
+    # ------------------------------------------------------------------
+    # Restart
+    # ------------------------------------------------------------------
+    @property
+    def restart_pending(self) -> bool:
+        """A restart waits for its decision (the history holds observations before it)."""
+        return self._restart_pending and self._restart_bridged is None and self.last_t is not None
+
+    @property
+    def heater_saved(self) -> bool:
+        """The heater state at the stop was saved with the history."""
+        return self._heater_saved
+
+    def resolve_restart(self, bridged: bool, t_resume: float) -> None:
+        """Apply the restart decision to the heater state, before the first observation after it.
+
+        Bridged: the heater state at the stop (time of the save) is held until the
+        first command after the restart, without any edge. Otherwise the on period
+        (or the valve level) is closed at the last observation.
+        """
+        if not self._restart_pending or self._restart_bridged is not None:
+            return
+        last_t = self.last_t
+        if bridged and self._heater_saved and last_t is not None:
+            self._restart_bridged = True
+            # Only the stop itself (the save) is known: an on time planned to end
+            # before it has ended, a heater on at the stop stays on.
+            stop = min(max(self._saved_t if self._saved_t is not None else last_t, last_t), max(t_resume, last_t))
+            self._advance(stop)
+            if self._heater_on:
+                self._off_due = None
+            return
+        self._restart_bridged = False
+        if last_t is None:
+            return
+        t_cut = round(last_t, _TIME_DIGITS)
+        if self.valve:
+            if self.pw_v and self.pw_v[-1] > 0.0:
+                t_cut = round(max(self.pw_t[-1], last_t), _TIME_DIGITS)
+                self.pw_t.append(t_cut)
+                self.pw_v.append(0.0)
+                self.off.append(t_cut)
+        elif len(self.on) > len(self.off):
+            self.off.append(round(max(self.on[-1], last_t), _TIME_DIGITS))
+        self._heater_on = False
+        self._off_due = None
+        self._cycle_start = None
+        self._level = 0.0
+
+    def _settle_restart(self, t: float) -> None:
+        """A command before the first observation of an undecided restart: the restart is not bridged."""
+        if self._restart_pending and self._restart_bridged is None:
+            self.resolve_restart(False, t)
+
+    def restarts_between(self, a: float, b: float) -> list[tuple[float, float, bool]]:
+        """Restart markers whose stop or resume lies in [a, b), or that span it."""
+        return [r for r in self.restarts if r[0] < b and r[1] >= a]
 
     def mark_interrupted(self, t: float) -> None:
         """Close the heater state when the observation stops (restart, HVAC off)."""
@@ -290,6 +378,7 @@ class TarHistory:
             i = max(0, bisect.bisect_left([x[0] for x in lst], cutoff) - 1)
             del lst[:i]
         self.gaps = [g for g in self.gaps if g[1] >= cutoff]
+        self.restarts = [r for r in self.restarts if r[1] >= cutoff]
         if self.first_t is not None and self.first_t < cutoff:
             self.first_t = cutoff
 
@@ -314,7 +403,11 @@ class TarHistory:
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, saved_t: float | None = None) -> dict[str, Any]:
+        """Plain data of the history; saved_t: time of the save (the heater state at a stop)."""
+        if self._restart_pending and self._saved_t is not None:
+            # Saved again before the first observation: the stop is still the first one.
+            saved_t = self._saved_t
         return {
             "temp_t": self.temp_t,
             "temp_v": self.temp_v,
@@ -333,6 +426,14 @@ class TarHistory:
             "last_t": self.last_t,
             "invalid_since": self.invalid_since,
             "invalid_reason": self.invalid_reason,
+            "restarts": [list(x) for x in self.restarts],
+            "heater": {
+                "on": self._heater_on,
+                "cycle_start": self._cycle_start,
+                "off_due": self._off_due,
+                "level": self._level,
+                "saved_t": saved_t,
+            },
         }
 
     @classmethod
@@ -359,19 +460,19 @@ class TarHistory:
             if data.get("invalid_since") is not None and h.last_t is not None:
                 since = float(data["invalid_since"])
                 h.gaps.append((since, max(float(h.last_t), since + 1.0)))
-            # The first observation after a restart marks the downtime and its margins invalid.
+            h.restarts = [(float(r[0]), float(r[1]), bool(r[2])) for r in data.get("restarts", [])]
+            # The restart is decided before the first observation (resolve_restart).
             h._restart_pending = h.last_t is not None
             if len(h.temp_t) != len(h.temp_v) or len(h.ext_t) != len(h.ext_v) or len(h.pw_t) != len(h.pw_v):
                 return cls()
-            # A stopped heater cannot be on across a restart: close an open on period.
-            if h.valve:
-                if h.pw_v and h.pw_v[-1] > 0.0 and h.last_t is not None:
-                    t_cut = round(max(h.pw_t[-1], h.last_t), _TIME_DIGITS)
-                    h.pw_t.append(t_cut)
-                    h.pw_v.append(0.0)
-                    h.off.append(t_cut)
-            elif len(h.on) > len(h.off) and h.last_t is not None:
-                h.off.append(round(max(h.on[-1], h.last_t), _TIME_DIGITS))
+            heater = data.get("heater")
+            if isinstance(heater, dict):
+                h._heater_on = bool(heater.get("on"))
+                for key, attr in (("cycle_start", "_cycle_start"), ("off_due", "_off_due"), ("saved_t", "_saved_t")):
+                    v = heater.get(key)
+                    setattr(h, attr, None if v is None else float(v))
+                h._level = float(heater.get("level") or 0.0)
+                h._heater_saved = True
         except (TypeError, ValueError, IndexError):
             return cls()
         return h

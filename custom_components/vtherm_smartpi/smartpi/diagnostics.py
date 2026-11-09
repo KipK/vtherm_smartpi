@@ -71,6 +71,7 @@ def _build_control(algo: SmartPI) -> Dict[str, Any]:
         "ki": ki,
         "ti_min": _integral_time_min(kp, ki),
         "restart_reason": algo._last_restart_reason,
+        "last_restart": algo.restart.public(),
         "saturation_state": algo.last_sat,
         "in_deadband": algo.in_deadband,
         "in_near_band": algo.in_near_band,

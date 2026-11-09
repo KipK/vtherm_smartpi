@@ -413,19 +413,51 @@ class ResponseLagEstimator:
         elif not on and self._off_start is None:
             self._off_start = t_step
 
+    def resolve_restart(self, bridged: bool) -> None:
+        """Apply the restart decision (restart_bridge.py) to the saved period or episode.
+
+        Bridged: the actuator kept its state over the stop, so the period or the
+        episode resumes at the first observation, which continues or ends it.
+        Otherwise the passive period is dropped and an episode is counted as
+        ended without an estimate.
+        """
+        restore = self._restore
+        if restore is None:
+            return
+        if bridged:
+            restore["bridged"] = True
+            return
+        self._restore = None
+        if restore.get("episode") is not None:
+            self._episodes += 1
+            self._last_reason = "episode interrupted by restart"
+
     def _resume_after_restart(self, t_resume: float, u: float, mode: str | None) -> None:
         """Resume the passive period or the episode saved before a restart.
 
-        The power over the stop is unknown: the saved context is only resumed
-        across a stop of at most RESPONSE_LAG_RESTART_MAX_GAP_S, during which
-        the actuator keeps its last state, and in the saved hvac mode (a mode
-        change clears the estimator before). An episode is resumed when the
-        first applied power equals its power; otherwise it is counted as an
-        ended episode without an estimate.
+        After a bridged restart (resolve_restart) the period or the episode
+        resumes as saved. Without a restart decision (the estimator used on its
+        own), the power over the stop is unknown: the saved context is only
+        resumed across a stop of at most RESPONSE_LAG_RESTART_MAX_GAP_S, during
+        which the actuator keeps its last state, and in the saved hvac mode (a
+        mode change clears the estimator before). An episode is then resumed
+        when the first applied power equals its power; otherwise it is counted
+        as an ended episode without an estimate.
         """
         restore = self._restore
         self._restore = None
         if restore is None:
+            return
+        episode = restore.get("episode")
+        if restore.get("bridged"):
+            if episode is None:
+                self._off_start = restore["off_start"]
+                return
+            self._ep_start = episode["start"]
+            self._ep_u0 = episode["u0"]
+            self._ep_const = episode["const"]
+            self._ep_off_before_s = episode["off_before_s"]
+            self._ep_t_ext = episode["t_ext"]
             return
         gap = t_resume - restore["last_obs"]
         short_stop = (
@@ -433,7 +465,6 @@ class ResponseLagEstimator:
             and mode is not None
             and mode == self._model_hvac_mode
         )
-        episode = restore.get("episode")
         if episode is None:
             if short_stop and restore.get("off_start") is not None:
                 # The heater was not driven during the stop: still passive.

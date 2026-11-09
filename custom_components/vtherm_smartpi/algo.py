@@ -81,7 +81,7 @@ from .smartpi.const import (
     NEAR_SETPOINT_UNWIND_STEPS,
     NEAR_BAND_HYSTERESIS_C,
     INTEGRAL_GUARD_STALL_CYCLES,
-    RESPONSE_LAG_RESTART_MAX_GAP_S,
+    RESTART_BRIDGE_MAX_GAP_S,
     clamp,
 )
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
@@ -134,6 +134,8 @@ from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.tar_learning.manager import TarLearningManager
 from .smartpi.room_model.feedforward import HoldingTransfer, select_source, static_model
 from .smartpi.room_model.manager import RoomModelManager
+from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING
+from .smartpi.restart_bridge import RestartAfter, RestartBridge, RestartDecision, decide
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
 from .smartpi.timestamp_utils import (
     elapsed_wall_minutes,
@@ -357,8 +359,17 @@ class SmartPI:
         self._last_ff_result: FFResult | None = None
 
         # Bootstrap on/off output saved before a restart (monotonic time),
-        # applied by the first calculation.
+        # applied by the first calculation after a bridged restart.
         self._hysteresis_restore: dict | None = None
+
+        # Restart bridge: context of the last tick, and the decision on the
+        # restart of this session, consulted by every component.
+        self.restart = RestartBridge()
+        # Set by the handler: why SmartPI is not in control at the first tick
+        # after a restart, as seen by the thermostat (window, shedding, safety).
+        self.restart_exclusion_probe = None
+        # The next time tracking spans the downtime of a bridged restart.
+        self._bridge_first_tick = False
 
         # --- Safety-First Governance (Delegated to self.gov) ---
         if saved_state:
@@ -1369,7 +1380,120 @@ class SmartPI:
                 "wall_ts": monotonic_to_wall_ts(hysteresis["ts"]),
                 "hvac_mode": hysteresis["hvac_mode"],
             }
+        restart = self._restart_context()
+        if restart is not None:
+            state["restart"] = restart
         return state
+
+    def _restart_context(self) -> dict | None:
+        """Last tick, heater state and transient regulation state, for a bridged restart."""
+        context = self.restart.save()
+        if context is None or self.restart.pending:
+            # Saved again before the restart was decided: the first stop's context.
+            return context
+        context.update(
+            committed=[self._committed_on_percent, self._actuator_committed_on_percent],
+            calc_wall=monotonic_to_wall_ts(self._last_calculate_time),
+            heat_episode_wall=monotonic_to_wall_ts(self._t_heat_episode_start),
+            cool_episode_wall=monotonic_to_wall_ts(self._t_cool_episode_start),
+            integral_guard=self.integral_guard.save_state(),
+            integral_guard_mode=self._last_integral_guard_mode,
+        )
+        return context
+
+    def _restart_cycle(self) -> tuple:
+        """Cycle configuration that a bridged restart must keep."""
+        return (
+            float(self._cycle_min),
+            int(self._minimal_activation_delay),
+            int(self._minimal_deactivation_delay),
+            bool(self._valve_mode_enabled),
+        )
+
+    def _calc_exclusion(self, power_shedding: bool) -> str | None:
+        """Why SmartPI is not in control, from the inputs of a calculation."""
+        if power_shedding:
+            return RM_EXCLUDED_SHEDDING
+        if self.vt_safety_override:
+            return "safety mode"
+        return None
+
+    def note_control_exclusion(self, excluded: str | None) -> None:
+        """Why SmartPI's command is not the applied one at this tick, as seen by the thermostat."""
+        self.restart.note_exclusion(excluded)
+
+    @property
+    def restart_bridged(self) -> bool:
+        """The restart of this session was bridged."""
+        return self.restart.bridged
+
+    def resolve_restart(
+        self,
+        hvac_mode: VThermHvacMode | None,
+        current_temp: float | None,
+        power_shedding: bool = False,
+    ) -> RestartDecision | None:
+        """Decide the restart once, at the first tick after a load, and apply it to every component."""
+        if not self.restart.pending:
+            return self.restart.decision
+        stores = []
+        for manager in (self.tar_learning, self.room_model):
+            context = manager.restart_context() if manager is not None else None
+            if context is not None:
+                stores.append(context)
+        excluded = self._calc_exclusion(power_shedding)
+        probe = self.restart_exclusion_probe
+        if excluded is None and callable(probe):
+            excluded = probe()
+        decision = decide(
+            self.restart.before(stores),
+            RestartAfter(
+                now=time.time(),
+                hvac_mode=None if hvac_mode is None else str(hvac_mode),
+                cycle=self._restart_cycle(),
+                excluded=excluded,
+                temp=current_temp,
+            ),
+        )
+        saved = self.restart.saved
+        self.restart.resolve(decision)
+        self._apply_restart_decision(decision, saved)
+        if decision.bridged:
+            _LOGGER.info("%s - Restart bridged (stop of %.0f s)", self._name, decision.downtime_s)
+        else:
+            _LOGGER.info("%s - Restart not bridged: %s", self._name, decision.reason)
+        return decision
+
+    def _apply_restart_decision(self, decision: RestartDecision, saved: dict | None) -> None:
+        """Resume the work in progress of every component after a bridged restart, or drop it."""
+        bridged = decision.bridged
+        self.dt_est.resume_after_restart(bridged)
+        self.learn_win.resume_after_restart(bridged)
+        # The learning histories are HEAT-only: in COOL they keep their handling outside heating.
+        if self.tar_learning is not None:
+            self.tar_learning.on_restart(decision.heat_bridged, decision.t_resume)
+        if self.room_model is not None:
+            self.room_model.on_restart(decision.heat_bridged, decision.t_resume)
+        if not bridged or saved is None:
+            return
+        try:
+            linear, actuator = (clamp(float(v), 0.0, 1.0) for v in saved["committed"])
+        except (KeyError, TypeError, ValueError):
+            linear = actuator = 0.0
+        # The heater kept the committed command over the stop.
+        self._committed_on_percent = linear
+        self._actuator_committed_on_percent = actuator
+        self._last_u_applied = linear
+        self.u_prev = linear
+        self._t_heat_episode_start = wall_to_monotonic_ts(saved.get("heat_episode_wall"))
+        self._t_cool_episode_start = wall_to_monotonic_ts(saved.get("cool_episode_wall"))
+        if self.integral_guard.restore(saved.get("integral_guard")):
+            mode = saved.get("integral_guard_mode")
+            self._last_integral_guard_mode = mode if isinstance(mode, str) else "off"
+        # The first tick spans the stop, without the learning freeze of a startup.
+        self._last_calculate_time = wall_to_monotonic_ts(saved.get("calc_wall"))
+        self._startup_grace_period = False
+        self._bridge_first_tick = True
 
     def _hysteresis_output_context(self) -> dict | None:
         """Return the bootstrap on/off output to resume after a restart."""
@@ -1402,18 +1526,20 @@ class SmartPI:
             return None
         return {"on": value["on"], "ts": ts, "hvac_mode": mode}
 
-    def _take_hysteresis_restore(self, now: float, hvac_mode: VThermHvacMode | None) -> float | None:
-        """Consume the saved bootstrap output; return it when it applies.
+    def _take_hysteresis_restore(self, hvac_mode: VThermHvacMode | None) -> float | None:
+        """Consume the saved bootstrap output once the restart is decided; return it when it applies.
 
-        It applies after a stop of at most RESPONSE_LAG_RESTART_MAX_GAP_S in
-        the same hvac mode: over such a stop the actuator keeps its last state,
-        as an uninterrupted hysteresis would have.
+        It applies after a bridged restart in the same hvac mode: over such a
+        stop the actuator keeps its last state, as an uninterrupted hysteresis
+        would have.
         """
+        if self.restart.pending:
+            return None
         restore = self._hysteresis_restore
         self._hysteresis_restore = None
         if restore is None or hvac_mode is None or str(hvac_mode) != restore["hvac_mode"]:
             return None
-        if not 0.0 <= now - restore["ts"] <= RESPONSE_LAG_RESTART_MAX_GAP_S:
+        if not self.restart.bridged:
             return None
         return 1.0 if restore["on"] else 0.0
 
@@ -1462,6 +1588,10 @@ class SmartPI:
         self._last_integral_guard_mode = "reboot_reset"
         self.twin.load_state(state.get("twin_state", {}))
         self._hysteresis_restore = self._load_hysteresis_output(state.get("hysteresis_output"))
+        # The restart is decided at the first tick (resolve_restart); until then
+        # the transient state above stays as after a cold start.
+        self.restart.load(state.get("restart"))
+        self._bridge_first_tick = False
 
         # Load main algorithm scalars
         self._deadtime_skip_count_a = int(state.get("deadtime_skip_count_a", 0))
@@ -1613,6 +1743,7 @@ class SmartPI:
         resumed_from_off = False
         startup_first_run = False
         resume_guard_source = IntegralGuardSource.NONE
+        bridge_tick, self._bridge_first_tick = self._bridge_first_tick, False
         if self._last_calculate_time is None:
             first_run = True
         else:
@@ -1646,8 +1777,15 @@ class SmartPI:
                 self.learn_win.set_learning_resume_ts(now + (LEARNING_PAUSE_RESUME_MIN * 60.0))
                 _LOGGER.debug("%s - Resume from OFF: Learning paused for %d min", self._name, LEARNING_PAUSE_RESUME_MIN)
 
-        # A gap between two ticks never counts for more than one cycle
-        dt_min = min(dt_min, self._cycle_min)
+        # A gap between two ticks never counts for more than one cycle, except
+        # the downtime of a bridged restart, over which the heater kept the
+        # committed command. Its first cycle still starts from the raw setpoint,
+        # as after any restart.
+        max_dt_min = self._cycle_min
+        if bridge_tick:
+            startup_first_run = True
+            max_dt_min = max(max_dt_min, RESTART_BRIDGE_MAX_GAP_S / 60.0)
+        dt_min = min(dt_min, max_dt_min)
 
         return dt_min, resumed_from_off, startup_first_run, resume_guard_source
 
@@ -2133,8 +2271,21 @@ class SmartPI:
                     self._name,
                 )
 
+        # The restart of this session is decided at the first tick of a ready
+        # thermostat (a target is set), then the tick context is kept.
+        if target_temp is not None:
+            if self.restart.pending:
+                self.resolve_restart(hvac_mode, current_temp, power_shedding)
+            self.restart.note_tick(
+                time.time(),
+                hvac_mode=hvac_mode,
+                temp=current_temp,
+                cycle=self._restart_cycle(),
+                excluded=self._calc_exclusion(power_shedding),
+            )
+
         # The saved bootstrap output only applies to the first calculation.
-        hysteresis_restore = self._take_hysteresis_restore(now, hvac_mode)
+        hysteresis_restore = self._take_hysteresis_restore(hvac_mode)
 
         # --- 1. Validation & Handle OFF ---
         if self._validate_and_handle_off(target_temp, current_temp, hvac_mode, power_shedding, off_reason):

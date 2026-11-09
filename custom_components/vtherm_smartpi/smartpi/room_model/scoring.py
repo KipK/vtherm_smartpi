@@ -86,7 +86,9 @@ class ForecastScore:
         self.__init__()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"errors": self.errors, "unchanged": self.unchanged, "last_origin_t": self.last_origin_t}
+        """Errors and forecasts in progress (resumed after a bridged restart, dropped otherwise)."""
+        return {"errors": self.errors, "unchanged": self.unchanged, "last_origin_t": self.last_origin_t,
+                "origins": self.origins}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "ForecastScore":
@@ -100,6 +102,14 @@ class ForecastScore:
                 s.errors, s.unchanged = err, unc
             lo = data.get("last_origin_t")
             s.last_origin_t = None if lo is None else float(lo)
-        except (TypeError, ValueError):
+            origins = []
+            for o in data.get("origins") or []:
+                x = [float(v) for v in o["x"]]
+                if len(x) != 3 or not all(math.isfinite(v) for v in x):
+                    continue
+                origins.append({"t0": float(o["t0"]), "x": x, "y0": float(o["y0"]),
+                                "next": min(max(int(o["next"]), 0), len(RM_HORIZONS_S))})
+            s.origins = [o for o in origins if o["next"] < len(RM_HORIZONS_S)]
+        except (TypeError, ValueError, KeyError):
             return cls()
         return s

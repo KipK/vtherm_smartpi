@@ -59,7 +59,7 @@ The `live` block is organized by responsibility:
 
 | Block | Content |
 |---|---|
-| `control` | Phase, regulation mode, gains (`kp`, `ki`), effective integral time `ti_min` (minutes), saturation and regulation bands |
+| `control` | Phase, regulation mode, gains (`kp`, `ki`), effective integral time `ti_min` (minutes), saturation, regulation bands and the last restart (`last_restart`) |
 | `power` | Current and next-cycle power, PI/FF split, limits and applied power |
 | `temperature` | Indoor/outdoor temperatures, errors and integral state |
 | `model` | A/B model, confidence, time constant and dead times |
@@ -73,6 +73,16 @@ The `live` block is organized by responsibility:
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
 | `tar_learning` | Emitter delay learning |
 | `room_model` | Room model |
+
+`control.last_restart` describes the last restart of Home Assistant or of the
+integration. It is `null` before the first regulation tick after the restart,
+and for a thermostat that starts without saved data.
+
+| Field | Meaning |
+|---|---|
+| `bridged` | `true` when the restart was bridged: the measurements in progress resumed and nothing was excluded from the learning data. `false` when SmartPI started again carefully |
+| `downtime_s` | Duration of the stop, in seconds; `null` when it cannot be measured (clock jump, no saved data) |
+| `reason` | Why the restart was not bridged, `null` when it was: `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown`, `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, or an exclusion before the stop or after the restart (for example `window open before the stop`, `safety mode after the restart`) |
 
 `analysis` groups the advanced live values into `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` and, when
@@ -97,7 +107,7 @@ learning:
 | `episodes` | Number of active episodes ended since the start of the learning; it keeps counting after the lag is published and may exceed `episodes_target` |
 | `episodes_target` | Number of episodes after which the delivered power model is resolved without a published lag (`7`) |
 | `episode_median_s` | Median duration of the recent active episodes in seconds, `null` with fewer than 3 episodes |
-| `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used). `episode interrupted by restart`: episode in progress at a restart, not resumed, counted without an estimate. May be empty right after a restart |
+| `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used). `episode interrupted by restart`: episode in progress at a restart that was not bridged, counted without an estimate. May be empty right after a restart |
 
 During the bootstrap, `learning.bootstrap_status` describes the current step:
 

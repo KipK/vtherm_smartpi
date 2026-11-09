@@ -42,6 +42,12 @@ All notable changes to this project will be documented in this file.
   value within 0.5 to 2 times that value. The bootstrap value is kept. The gains
   use half of the learned value, as an apparent dead time. Requires `numpy` and
   `scipy`. PWM heaters only: in valve mode nothing is learned or applied.
+- Restarts: a short restart of Home Assistant or of the integration in the same
+  mode, heating or cooling (at most 10 minutes, SmartPI in control before and
+  after) is bridged: the
+  measurements and learning in progress resume, and nothing is excluded from the
+  learning data. Another restart excludes only its downtime, without the
+  10-minute margins. `control.last_restart` shows the last decision.
 
 ## [0.6.3]
 
