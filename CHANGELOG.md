@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6.3]
 
 - Regulation: the heating dead time no longer shrinks in a room that is
   already warming when the heater starts, for example when people get up. The
