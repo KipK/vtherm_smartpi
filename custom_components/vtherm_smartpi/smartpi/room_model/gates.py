@@ -1,11 +1,28 @@
 """Publication rules of the room model identification (pure Python).
 
-A window fit passes its checks when its values are plausible and its
-residuals (on the fitted periods) show no bias and no structure. A day
-publishes a candidate only when the window of the day and the window ending
-ID_WIN_DAYS days earlier (disjoint) both pass, agree, and the earlier
-parameters predict the later window (held-out residual checks, parameters
-frozen, initial states re-estimated).
+A window fit passes its checks when its values are plausible, its residuals
+(on the fitted periods) show no bias and no structure, and the window
+determines its identifiable coordinates precisely enough (below). A window
+publishes a candidate only when it and the window of the three periods before
+it (disjoint) both pass, agree, and the earlier parameters predict the later
+window (held-out residual checks, parameters frozen, initial states
+re-estimated).
+
+Information: the precision of a fit comes from its Jacobian at the optimum
+(identification.precision): the least-squares covariance of all its
+parameters, the emitter first moment included when the window estimated it,
+scaled by the autocorrelation time of the residuals. A fit is kept only when
+the 95 % interval of each coordinate it contributes is no wider than the
+tolerance with which the agreement of two windows compares it (RM_AGREE_TOL):
+a window less precise than that would agree or disagree with another one by
+chance. Those coordinates are a and b_eq / a for the simple model, a, alpha
+and c = gamma / beta for the full model: the static loss comes from the energy
+balance, and the full model's b_eq / a (the small difference alpha - c) is
+checked against it within 5 % before a publication and before any use. The
+interval is the asymptotic one of least squares; its 95 % level and the
+reuse of the agreement tolerances are choices of the method. A full fit whose
+wall share is below RM_WALL_SHARE_MIN is never used, so its precision is not
+required (the logit of a vanishing share is not determined).
 
 The full model (air and walls) is chosen when the sensor is precise, the wall
 carries a real share of the air loss in both windows and the full model beats
@@ -36,6 +53,7 @@ import statistics
 
 from .const import (
     RM_A_ONLINE_RATIO_MAX,
+    RM_INFO_Z,
     RM_AGREE_TOL,
     RM_EB_AGREE_TOL,
     RM_FULL_HELDOUT_GAIN,
@@ -72,6 +90,7 @@ WHY_FAILED = "failed"
 WHY_EMITTER_EDGE = "emitter edge"
 WHY_A_ONLINE = "a online"
 WHY_EB = "energy balance"
+WHY_INFO = "information"
 
 WALL_COARSE = "coarse sensor"
 WALL_SMALL = "no wall share"
@@ -102,18 +121,51 @@ def residuals_ok(check: dict | None, sensor: str, held_out: bool = False, q: flo
     return True
 
 
+# Coordinate of the precision -> key of the agreement tolerance that compares it
+_INFO_TOL = {"a": "a", "b_eq_a": "b_eq", "alpha": "alpha", "c": "c"}
+
+
+def info_ok(info: dict | None, struct: str, params: dict) -> bool:
+    """The fit determines the coordinates it contributes within the agreement tolerances (95 %).
+
+    Simple model: a and b_eq / a. Model with walls: a and its wall dynamics, alpha and c; its b_eq / a is the
+    small difference alpha - c, never used as the static loss (the energy balance is) and checked against the
+    energy balance in force within 5 % before a publication and before any use. A full fit without a real
+    wall share is not used (decide), so its precision is not required.
+    """
+    if struct == STRUCT_FULL:
+        if params["alpha"] <= 0.0 or params["c"] / params["alpha"] < RM_WALL_SHARE_MIN:
+            return True
+        keys = ["a", "alpha", "c"]
+    else:
+        keys = ["a", "b_eq_a"]
+    if not info or not isinstance(info.get("sd"), dict):
+        return False
+    sd = info["sd"]
+    for k in keys:
+        v = sd.get(k)
+        if v is None or not math.isfinite(v) or RM_INFO_Z * v > RM_AGREE_TOL[_INFO_TOL[k]]:
+            return False
+    return True
+
+
 def fit_record(fit: dict | None, struct: str, sensor: str, tau_e: float, L: float, q: float | None) -> dict:
-    """Slim record of one window fit: parameters, residual summary and verdict."""
+    """Slim record of one window fit: parameters, residual summary, precision and verdict."""
     if fit is None:
         return {"ok": False, "why": WHY_FIT}
     params = RoomParams(struct, fit["a"], fit["alpha"], fit["beta"] if struct == STRUCT_FULL else 1.0 / 3600.0,
                         fit["c"], tau_e, L)
+    info = fit.get("info")
     rec = {"params": params.to_dict(), "b_eq": params.b_eq, "gain": fit.get("gain"),
-           "check": slim_check(fit.get("check"))}
+           "check": slim_check(fit.get("check")),
+           "info": None if not info else {"sd": {k: round(v, 4) for k, v in info["sd"].items()},
+                                          "tau": round(info["tau"], 2)}}
     if not params.plausible() or fit.get("beta_at_bound"):
         rec.update(ok=False, why=WHY_RANGE)
     elif not residuals_ok(fit.get("check"), sensor, q=q):
         rec.update(ok=False, why=WHY_RESIDUALS)
+    elif not info_ok(info, struct, rec["params"]):
+        rec.update(ok=False, why=WHY_INFO)
     else:
         rec.update(ok=True, why=None)
     return rec
@@ -197,7 +249,7 @@ def combine(p: dict, q: dict) -> dict:
 
 def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: float | None = None,
            eb: float | None = None) -> dict:
-    """Decision of a day: {"struct", "candidate", "wall"} or {"why", "wall"}.
+    """Decision of a window: {"struct", "candidate", "wall"} or {"why", "wall"}.
 
     a_online: heating response of the online estimate (per second), None when unknown.
     eb: energy-balance slope in force (b_eq / a units), None before a first qualified value.
@@ -213,7 +265,7 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: fl
     if not precise:
         wall, full_why = WALL_COARSE, None
     elif not full.get("ok"):
-        wall = WALL_NOT_CONFIRMED if full.get("why") == WHY_RESIDUALS else WALL_SMALL
+        wall = WALL_NOT_CONFIRMED if full.get("why") in (WHY_RESIDUALS, WHY_INFO) else WALL_SMALL
         full_why = None
     elif min(r["params"]["c"] / r["params"]["alpha"] for r in ([full, p_full] if p_full.get("ok") else [full])) \
             < RM_WALL_SHARE_MIN:

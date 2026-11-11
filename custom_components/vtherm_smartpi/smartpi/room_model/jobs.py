@@ -1,28 +1,34 @@
-"""Daily identification of the room model, run in an executor (numpy, scipy).
+"""Identification of the room model and daily energy balance, run in an executor (numpy, scipy).
 
-The job takes a snapshot of plain Python data and returns plain Python data,
-so it never touches the event loop state.
+The jobs take a snapshot of plain Python data and return plain Python data,
+so they never touch the event loop state.
 
-Energy balance: the job first computes the static model of the whole days
-before the day (energy_balance.py), whatever the outcome of the fits. The
-slope in force for the decision is that slope when it qualifies, else the one
-in force before the job (snap["eb"], None before a first qualified value); a
-candidate's b_eq / a must agree with it (gates.py).
+Energy balance (balance_job): the static model of the whole local days before
+the day of the snapshot (energy_balance.py), computed once a day whatever the
+quiet periods. Identification (identify_job): the window of three closed quiet
+periods of the snapshot (periods.py); a candidate's b_eq / a must agree with
+the slope in force (snap["eb"], None before a first qualified value; gates.py).
 
 Emitter search: the full model is fitted with the emitter first moment on the
 fixed grid RM_EMITTER_GRID_S, split into tau_e and L like the manager does;
 the lowest cost, refined by a bounded Brent search in log time between its
 grid neighbours, sets the emitter of the
-day's fits. The grid does not depend on the dead time in force. Every fit
+window's fits. The grid does not depend on the dead time in force. Every fit
 takes the constant free gain in force of the energy balance as a known input
 (identification.py). The cost profile is judged against the residual variance
 per effective independent residual (const.py):
 - significant, optimum at an end of the grid: the emitter lies outside it,
-  the day is refused;
+  the window is refused;
 - not significant: the window does not determine the emitter; the emitter in
   force is used when the T_ar learning has published a refined value, else
   the grid optimum. The static loss of such a fit is then judged by its
   agreement with the energy balance.
+
+Information: each fit carries the precision of its identifiable coordinates
+(identification.precision), the emitter included when the window estimated
+it; a fit that does not determine them well enough is refused (gates.py).
+There is no minimum duration of the fit periods: the precision says whether
+they carry enough information.
 """
 from __future__ import annotations
 
@@ -42,14 +48,16 @@ from .const import (
     RM_EMITTER_XATOL,
     RM_MIN_DELTA_C,
     RM_MIN_EVENTS,
-    RM_MIN_FIT_H,
     RM_MIN_HEAT_S,
     STRUCT_FULL,
     STRUCT_REDUCED,
 )
 from .emitter import split_first_moment
 from .observer import is_precise
-from .periods import fit_periods, window_bounds
+from .periods import fit_periods
+
+# Step of the emitter first moment (log) for the precision of a window that estimated its emitter
+_EM_DLOG = 0.02
 
 
 def _te_pub(snap: dict, tau_e: float, L: float) -> float | None:
@@ -112,25 +120,53 @@ def refine_emitter(snap: dict, periods: list, data: identification.WindowData, t
     return out
 
 
-def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
-    """Fit the window of snap["day"], check it against the earlier window and decide."""
-    clock = LocalClock(snap.get("tz"))
+def balance_job(snap: dict[str, Any]) -> dict[str, Any]:
+    """Energy balance of the whole local days before snap["day"]."""
     day = int(snap["day"])
-    t0, t1 = window_bounds(clock, day)
-    rec: dict[str, Any] = {"day": day, "eb": energy_balance.daily(snap, clock, day)}
+    return {"day": day, "eb": energy_balance.daily(snap, LocalClock(snap.get("tz")), day)}
+
+
+def _emitter_problems(data: identification.WindowData, em: dict, te_pub: float | None,
+                      gain: float, full: bool) -> tuple | None:
+    """Problems at the emitter first moment x exp(-+_EM_DLOG) when the window estimated it, else None."""
+    if em.get("source") != "grid":
+        return None
+    fm = float(em["first_moment"])
+    lo = data.with_emitter(*split_first_moment(fm * math.exp(-_EM_DLOG), te_pub))
+    hi = data.with_emitter(*split_first_moment(fm * math.exp(_EM_DLOG), te_pub))
+    return identification.Problem(lo, full, gain), identification.Problem(hi, full, gain), _EM_DLOG
+
+
+def _fit(data: identification.WindowData, full: bool, gain: float, em: dict, te_pub: float | None,
+         warm: dict | None = None) -> dict | None:
+    """Fit of one structure with the precision of its identifiable coordinates."""
+    pb = identification.Problem(data, full, gain)
+    f = identification.fit(pb, warm=warm) if full else identification.fit(pb)
+    if f is not None:
+        f["info"] = identification.precision(pb, f, _emitter_problems(data, em, te_pub, gain, full))
+    return f
+
+
+def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
+    """Fit the window of snap["window"], check it against the earlier window and decide."""
+    w = snap["window"]
+    t_end = float(w["t_end"])
+    rec: dict[str, Any] = {"id": w["id"], "day": LocalClock(snap.get("tz")).day_of(t_end), "t_end": t_end,
+                           "nights": list(w["nights"]), "prev_id": w.get("prev")}
     first_t, last_t = snap.get("first_t"), snap.get("last_t")
-    if first_t is None or last_t is None or first_t > t0 + 0.5 * (t1 - t0) or last_t < t1:
+    t0 = min(float(x[0]) for x in w["intervals"])
+    if first_t is None or last_t is None or first_t > t0 or last_t < t_end:
         rec["why"] = gates.WHY_HISTORY
         return _done(rec, snap)
     tau_e, L = snap.get("tau_e"), snap.get("L")
     if tau_e is None or L is None:
         rec["why"] = gates.WHY_EMITTER
         return _done(rec, snap)
-    excluded = [int(n) for n in snap.get("excluded_nights") or []]
-    rec["excluded_nights"] = [n for n in excluded if day - 3 <= n < day]
-    periods = fit_periods(clock, day, float(first_t), float(last_t), [tuple(g) for g in snap["gaps"]], excluded)
+    excluded = [str(n) for n in snap.get("excluded_nights") or []]
+    rec["excluded_nights"] = [n for n in w["nights"] if n in excluded]
+    periods = fit_periods(w, float(first_t), float(last_t), [tuple(g) for g in snap["gaps"]], excluded)
     pub_t = np.asarray(snap["pub_t"], dtype=float)
-    j = int(np.searchsorted(pub_t, t1, side="right"))
+    j = int(np.searchsorted(pub_t, t_end, side="right"))
     q = q_obs(snap["pub_v"][:j])
     precise = is_precise(q)
     rec["q"] = q
@@ -141,8 +177,8 @@ def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
     data = identification.WindowData(snap, periods, float(tau_e), float(L))
     rec["hours"] = round(data.hours, 2)
     rec["events"] = data.n_events
-    rec["nights"] = sorted({s["night"] for s in data.segments})
-    if data.hours < RM_MIN_FIT_H or data.n_events < RM_MIN_EVENTS:
+    rec["fitted"] = [n for n in w["nights"] if any(s["night"] == n for s in data.segments)]
+    if data.n_events < RM_MIN_EVENTS:
         rec["why"] = gates.WHY_DISTURBED if rec["excluded_nights"] else gates.WHY_DATA
         return _done(rec, snap)
     rec["heat_s"] = round(data.heat_s(), 1)
@@ -154,7 +190,7 @@ def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
     if delta is None or delta < RM_MIN_DELTA_C:
         rec["why"] = gates.WHY_DELTA
         return _done(rec, snap)
-    gain = eb_gain_in_force(rec, snap)
+    gain = eb_gain_in_force(snap)
     rec["gain"] = gain
     em = refine_emitter(snap, periods, data, float(tau_e), float(L), gain)
     rec["emitter"] = {"tau_e": round(em["tau_e"], 1), "L": round(em["L"], 1),
@@ -164,14 +200,15 @@ def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
     if em["edge"]:
         rec["why"] = gates.WHY_EMITTER_EDGE
         return _done(rec, snap)
+    te_pub = _te_pub(snap, float(tau_e), float(L))
     tau_e, L, data = em["tau_e"], em["L"], em["data"]
     sensor = "precise" if precise else "coarse"
-    red = identification.fit(identification.Problem(data, False, gain))
+    red = _fit(data, False, gain, em, te_pub)
     rec["reduced"] = gates.fit_record(red, STRUCT_REDUCED, sensor, float(tau_e), float(L), q)
     prev = snap.get("prev")
     if precise:
         warm = ((prev or {}).get("full") or {}).get("params")
-        full = identification.fit(identification.Problem(data, True, gain), warm=warm)
+        full = _fit(data, True, gain, em, te_pub, warm=warm)
         rec["full"] = gates.fit_record(full, STRUCT_FULL, sensor, float(tau_e), float(L), q)
     held: dict[str, Any] = {}
     for struct in ("full", "reduced"):
@@ -182,25 +219,15 @@ def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
     return _done(rec, snap)
 
 
-def eb_in_force(rec: dict, snap: dict) -> float | None:
-    """Energy-balance slope in force for the decision: the job's own when it qualifies, else the earlier one."""
-    fresh = (rec.get("eb") or {}).get("value")
-    if fresh is not None:
-        return float(fresh)
-    prev = snap.get("eb")
-    return None if prev is None else float(prev)
+def eb_in_force(snap: dict) -> float | None:
+    """Energy-balance slope in force for the decision (None before a first qualified value)."""
+    eb = snap.get("eb")
+    return None if eb is None else float(eb)
 
 
-def eb_gain_in_force(rec: dict, snap: dict) -> float:
-    """Constant free gain of the static model in force for the fits: the job's own when it qualifies, else the
-    earlier one, 0 without one."""
-    eb = rec.get("eb") or {}
-    if eb.get("value") is not None:
-        g = eb.get("gain")
-    elif snap.get("eb") is not None:
-        g = snap.get("eb_gain")
-    else:
-        g = None
+def eb_gain_in_force(snap: dict) -> float:
+    """Constant free gain of the static model in force for the fits, 0 without one."""
+    g = snap.get("eb_gain") if snap.get("eb") is not None else None
     try:
         g = 0.0 if g is None else float(g)
     except (TypeError, ValueError):
@@ -211,6 +238,7 @@ def eb_gain_in_force(rec: dict, snap: dict) -> float:
 def _done(rec: dict, snap: dict) -> dict:
     a_per_min = snap.get("a_per_min")
     a_online = float(a_per_min) / 60.0 if a_per_min else None
+    rec["eb"] = eb_in_force(snap)
     rec["decision"] = gates.decide(rec, snap.get("prev"), rec.get("held") or {}, bool(rec.get("precise")),
-                                   a_online=a_online, eb=eb_in_force(rec, snap))
+                                   a_online=a_online, eb=rec["eb"])
     return rec

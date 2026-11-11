@@ -165,7 +165,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 
 | Field | Meaning |
 |---|---|
-| `status` | `learning`, `identified` (model with walls), `simple model` (model without walls), or `not identified: ` followed by the reason (for example `not identified: too little heating during the nights`) |
+| `status` | `learning`, `identified` (model with walls), `simple model` (model without walls), or `not identified: ` followed by the reason (for example `not identified: too little heating during the quiet periods`) |
 | `tracking` | State of the room tracking: `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` or `wall state implausible` |
 | `walls` | `identified`, or why the walls are not in the model: `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model`; `null` before any result |
 | `a` | Heating response at full power, in the units of `model.a` (°C per minute) |
@@ -177,9 +177,9 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `forecast_checks` | Number of past forecasts checked per horizon |
 | `unchanged_temperature_error_c` | Same error for a forecast that keeps the temperature unchanged, as a reference |
 | `wall_extra_power_percent` | Extra power the walls currently absorb beyond their steady share, in % of full power (negative when they give heat back); `null` without identified walls, without a precise sensor or while the tracking is not `ok` |
-| `identified_day` | Day of the values in use, `null` before a publication |
-| `last_identification_day` | Day of the last daily identification |
-| `last_refusal_reason` | Why the last daily identification published nothing (for example `waiting for a second series of nights to confirm`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation` or `the model's heat loss disagrees with the measured heat balance`), `null` when it published |
+| `identified_day` | Day of the values in use (the day their last quiet period ended), `null` before a publication |
+| `last_identification_day` | Day of the last identification (the day its last quiet period ended) |
+| `last_refusal_reason` | Why the last identification published nothing (for example `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation` or `the model's heat loss disagrees with the measured heat balance`), `null` when it published |
 | `energy_balance_loss_per_c` | Heat loss of the heat balance in force: the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. It is the slope of a straight line through the daily heat balances of the whole days kept (up to 7), computed once a day. Once a model is published, the static part of the holding power is `energy_balance_loss_per_c` × (setpoint − outdoor temperature) − the free gain. A day whose heat balance is refused keeps the previous values; `null` before a first accepted value |
 | `energy_balance_free_gain_percent` | Constant free heat gain of the heat balance in force, in % of full power: heat from a warmer room next door or from steady occupants, negative for a loss to a colder room. `0` while the indoor-outdoor difference has not varied enough between the days to tell a gain apart from the losses (and the days show none); `null` before a first accepted value |
 | `energy_balance_days` | Number of days used by the heat balance in force, `null` before a first accepted value |

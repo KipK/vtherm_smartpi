@@ -22,10 +22,18 @@ All notable changes to this project will be documented in this file.
 - Emitter delay learning: values learned with the former fixed hours are
   dropped once and learned again from the kept history.
 
-- Room model (heating, PWM heaters): SmartPI identifies each day a model of
-  the room with its air, walls and emitter, follows the room state and
-  publishes temperature forecasts and their errors in the `room_model`
-  diagnostics.
+- Room model (heating, PWM heaters): SmartPI identifies a model of the room
+  with its air, walls and emitter, follows the room state and publishes
+  temperature forecasts and their errors in the `room_model` diagnostics.
+- Room model: identified on the same quiet periods as the emitter delay
+  learning, each time a period ends, over the last three periods compared
+  with the three before; no fixed hour.
+- Room model: a fit is kept only when the periods determine its values
+  precisely enough, judged from the fit itself; no minimum number of hours.
+- Room model: the heat balance runs once per finished day, quiet periods or
+  not.
+- Room model: windows learned with the former fixed hours are dropped once;
+  the published model and its tracking are kept.
 - Room model heat balance: each day SmartPI fits a straight line through the
   heat balances of the whole days it keeps (up to 7): the power needed per
   degree of indoor-outdoor difference, and a constant free heat gain (a warmer

@@ -13,7 +13,6 @@ from custom_components.vtherm_smartpi.smartpi.const import RESTART_BRIDGE_MAX_GA
 from custom_components.vtherm_smartpi.smartpi.room_model.manager import RoomModelManager
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 from custom_components.vtherm_smartpi.smartpi.room_model.observer import RoomObserver
-from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
 from custom_components.vtherm_smartpi.smartpi.tar_learning.history import TarHistory
 
 CYCLE = (10.0, 0, 0, False)
@@ -251,7 +250,7 @@ def _params(p: dict) -> RoomParams:
 
 
 def _observer() -> RoomObserver:
-    ob = RoomObserver(LocalClock("UTC"))
+    ob = RoomObserver()
     ob.configure(_params(rsim.MASS), 0.01)
     return ob
 

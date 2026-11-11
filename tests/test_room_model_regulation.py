@@ -41,6 +41,8 @@ def _prefill(history, days: float = 5.0) -> None:
 def _running(holder: dict, publish: bool = True):
     def prepare(algo) -> None:
         algo.tar_learning.set_dependencies(True)
+        # The home position of the synthetic room: its setback nights are quiet periods
+        algo.tar_learning.set_position(rsim.LAT, rsim.LON)
         _prefill(algo.tar_learning.history)
         if publish:
             params = RoomParams.reduced(sim.A_TRUE, sim.B_TRUE, sim.TAU_EMITTER, 0.0)
@@ -51,6 +53,8 @@ def _running(holder: dict, publish: bool = True):
             # Energy-balance ratio in force, 3 % above the fitted b_eq / a: the static part uses it
             algo.room_model.eb_slope = EB_RATIO
             algo.room_model.eb_day = rsim.day_of(sim.WALL0) - 1
+            # ... and the balance of the finished days is already computed today
+            algo.room_model.eb_run_day = rsim.day_of(sim.WALL0)
         holder["algo"] = algo
 
     return prepare
@@ -70,9 +74,10 @@ def test_published_room_model_gives_the_holding_power() -> None:
     assert _sha(rows) != REFERENCE["sha256"]
     algo = holder["algo"]
     room = algo.room_model
-    # The module really ran: the identification of the day was computed, the observer tracked the room
-    assert [r["day"] for r in room.records] == [rsim.day_of(sim.WALL0)]
-    assert room.windows[str(rsim.day_of(sim.WALL0))].get("reduced") is not None
+    # The module really ran: the windows of the closed quiet periods were identified, the observer tracked the
+    # room
+    assert len(room.records) == 3 and [r["id"] for r in room.records] == list(room.windows)
+    assert all(w.get("reduced") is not None for w in room.windows.values())
     published = algo.get_published_diagnostics()
     diag = published["room_model"]
     assert diag["status"] == "simple model"
@@ -94,11 +99,13 @@ def test_published_room_model_gives_the_holding_power() -> None:
 
 
 def test_room_model_learning_is_identical_to_the_reference() -> None:
-    """Nothing published (observer waiting, identification running): the regulation is bit-identical."""
+    """Nothing published (observer waiting, identification of the closed quiet periods running): the
+    regulation is bit-identical."""
     holder: dict = {}
     rows = sim.run(REFERENCE["hours"], tar_learning=True, room_model=True, prepare=_running(holder, publish=False))
     assert _sha(rows) == REFERENCE["sha256"]
     assert holder["algo"].room_model.params is None
+    assert len(holder["algo"].room_model.records) == 3
     published = holder["algo"].get_published_diagnostics()
     assert published["feedforward"]["source"] == "learned model"
     diag = published["room_model"]

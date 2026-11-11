@@ -59,12 +59,17 @@ RM_HORIZON_LABELS = ("1h", "2h", "6h", "12h")
 RM_SCORE_EVERY_S = 1.0 * H
 RM_SCORE_KEEP = 168
 
-# Night disturbance summary of the observer (detected heat gains or losses)
+# Disturbance of the quiet periods (detected heat gains or losses): mean of the
+# disturbance over the identification interval of each closed period.
 RM_NIGHT_MIN_TRACK_S = 4.0 * H
-# A night whose mean disturbance differs from the median of the recent nights
+# A period whose mean disturbance differs from the median of the recent periods
 # by more than this (C/h) is excluded from the identification.
 RM_NIGHT_D_DEV_C_H = 0.08
 RM_NIGHTS_KEEP = 14
+# The disturbance of each tracked sub-step is kept until the periods it may
+# belong to are closed: longer than the longest identification interval (a
+# 24 h block of a polar night and the response tail after it).
+RM_STEPS_KEEP_S = 36.0 * H
 
 # ---------------------------------------------------------------------------
 # Feed-forward
@@ -79,7 +84,6 @@ RM_WALL_FADE_S = 0.5 * H
 # ---------------------------------------------------------------------------
 RM_FIT_STEP_S = 60.0
 RM_MIN_SEGMENT_S = 1.0 * H
-RM_MIN_FIT_H = 18.0
 RM_MIN_EVENTS = 40
 RM_MIN_HEAT_S = 3600.0       # full-power equivalent heating over the fit periods
 RM_MIN_DELTA_C = 3.0         # mean indoor-outdoor difference over the fit periods
@@ -140,6 +144,10 @@ RM_RES_RUNS_BLOCK_S = 1.0 * H
 RM_RES_RUNS_MIN_BLOCKS = 10
 RM_RES_AC_1H_MAX = 0.4
 RM_RES_CORR_MAX = 0.3
+
+# Information of a fit: the 95 % interval (normal quantile) of each identifiable
+# coordinate must be no wider than its agreement tolerance below (gates.py).
+RM_INFO_Z = 1.96
 
 # Agreement of two successive windows (|ln ratio|)
 RM_AGREE_TOL = {

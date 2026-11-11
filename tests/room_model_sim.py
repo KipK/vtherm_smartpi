@@ -19,6 +19,9 @@ from scipy.linalg import expm
 H = 3600.0
 DAY = 86400.0
 T0 = dt.datetime(2026, 1, 5, 0, 0, tzinfo=dt.timezone.utc).timestamp()  # local midnight (UTC)
+# Home position of the synthetic rooms: in January the sun is down from about 15:00 to 09:00 UTC, so a
+# setback night 22:00-06:00 and the 2 h response after it are quiet periods.
+LAT, LON = 60.0, 0.0
 
 # Mass room (per second): a, alpha, beta, c; emitter tau_e and delay L (s)
 MASS = {"a": 0.0012, "alpha": 1.0 / (2.5 * H), "beta": 1.0 / (80.0 * H), "c": 0.65 / (2.5 * H),
@@ -123,12 +126,33 @@ def simulate(p: dict, days: float, *, q: float = 0.01, noise: float = 0.0, seed:
             "first_t": t0, "last_t": t0 + n * h, "cycles": cycles, "truth": (np.array(tru_t), np.array(tru_a), np.array(tru_w))}
 
 
+def quiet_periods(sim: dict, gaps=()) -> list[dict]:
+    """Closed quiet periods of a simulated record (the shared catalogue, at the test position)."""
+    from custom_components.vtherm_smartpi.smartpi.quiet_periods import build_episodes, summary, valid_spans
+    from custom_components.vtherm_smartpi.smartpi.quiet_periods.solar import validate_position
+
+    valid = valid_spans(sim["first_t"], sim["last_t"], list(gaps))
+    eps = build_episodes(validate_position(LAT, LON), sim["sp"], valid, sim["first_t"], sim["last_t"], sim["on"],
+                         (sim["pub_t"], sim["pub_v"]), [])
+    return [summary(e) for e in eps if e["settled"] and e["complete"]]
+
+
+def window(sim: dict, day: int, gaps=()) -> dict | None:
+    """Identification window of the last three quiet periods closed by 08:00 of `day` (date ordinal)."""
+    from custom_components.vtherm_smartpi.smartpi.room_model.periods import windows
+
+    t = dt.datetime.combine(dt.date.fromordinal(day), dt.time(8, 0), tzinfo=dt.timezone.utc).timestamp()
+    ws = [w for w in windows(quiet_periods(sim, gaps)) if w["t_end"] <= t]
+    return ws[-1] if ws else None
+
+
 def snapshot(sim: dict, day: int, *, prev=None, tau_e=None, L=None, a_per_min=None, excluded=()) -> dict:
-    """Snapshot of the identification job of a day (date ordinal)."""
+    """Snapshot of the identification job of the window closed by 08:00 of a day (date ordinal)."""
     return {"tz": "UTC", "day": day, "pub_t": sim["pub_t"], "pub_v": sim["pub_v"], "ext_t": sim["ext_t"],
             "ext_v": sim["ext_v"], "on": sim["on"], "off": sim["off"], "pw": None, "gaps": [],
             "first_t": sim["first_t"], "last_t": sim["last_t"], "sp": [list(x) for x in sim["sp"]],
-            "tau_e": tau_e, "L": L, "a_per_min": a_per_min, "excluded_nights": list(excluded), "prev": prev}
+            "tau_e": tau_e, "L": L, "a_per_min": a_per_min, "excluded_nights": list(excluded), "prev": prev,
+            "window": window(sim, day)}
 
 
 def day_of(t: float) -> int:
@@ -172,7 +196,7 @@ def prefill_history(history, p: dict, days: float, t_end: float, **kw) -> None:
 
 def apply_energy_balance(algo, t: float) -> dict:
     """Energy balance of the whole days before t on the recorded T_ar history, applied to the room model as the
-    daily job does; returns the computation."""
+    balance job does; returns the computation."""
     from custom_components.vtherm_smartpi.smartpi.room_model import energy_balance
     from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
 

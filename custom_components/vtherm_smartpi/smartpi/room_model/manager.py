@@ -3,16 +3,26 @@
 Once published, the room model gives the regulation its feed-forward holding
 power in heating and the equilibrium of the braking prediction
 (feedforward.py). The manager feeds the observer at each regulation tick and
-with each applied command, schedules the daily identification (jobs.py, run in an executor on
-the history recorded by the T_ar learning), publishes the qualified
-parameters, and holds the persistence and the diagnostics.
+with each applied command, schedules the computations (jobs.py, run in an
+executor on the history recorded by the T_ar learning), publishes the
+qualified parameters, and holds the persistence and the diagnostics.
 
-Energy balance: each daily job also computes the static model of the whole
-days before it (energy_balance.py): the slope b_eq / a and the constant free
-gain. A qualified model comes into force; a refused day keeps the model in
-force and records why. The model in force gives the static part of the
-feed-forward once a room model is published, and its slope is the reference
-that the fits must agree with to be published.
+Identification: the quiet periods come from the shared catalogue of the T_ar
+learning (no sun, constant setpoint, valid data). Each closed period that
+completes a window of three periods starts one identification of that window
+(keyed by the period, never computed twice), compared with the window of the
+three periods before it. The jobs run at most once per _JOB_MIN_GAP_S of
+elapsed time, oldest window first; no local hour is involved. The observer
+gives each closed period the mean of its disturbance, and the periods that
+stand out are left out of the fits.
+
+Energy balance: once a local day is over, a job computes the static model of
+the whole days before it (energy_balance.py): the slope b_eq / a and the
+constant free gain, whatever the quiet periods. A qualified model comes into
+force; a refused day keeps the model in force and records why. The model in
+force gives the static part of the feed-forward once a room model is
+published, and its slope is the reference that the fits must agree with to be
+published.
 
 Emitter: the first moment of the emitter response is the HEAT dead time in
 force (learned T_ar or bootstrap); its first-order part tau_e is the refined
@@ -38,9 +48,8 @@ from typing import Any
 
 from ...hvac_mode import VThermHvacMode_HEAT
 from ..tar_learning.clock import LocalClock
-from ..tar_learning.const import ID_WIN_DAYS, ID_WINDOW_END_H
 from ..tar_learning.manager import STATUS_UNAVAILABLE
-from . import gates, public
+from . import gates, public, periods
 from .const import (
     RM_EXCLUDED_SHEDDING,
     RM_EXCLUDED_WINDOW,
@@ -55,14 +64,24 @@ from .observer import HEALTH_NO_MODEL, HEALTH_OK, HEALTH_PAUSED, HEALTH_WAITING,
 
 _LOGGER = logging.getLogger(__name__)
 
-STATE_VERSION = 1
-_JOB_DELAY_S = 1200.0
+# 2: identification windows keyed by quiet period, disturbance of the observer by period, separate energy
+# balance schedule
+STATE_VERSION = 2
+# Shortest elapsed time between two identification jobs
+_JOB_MIN_GAP_S = 3600.0
+# The energy balance of a finished local day waits this long after its end, for the last recorded data
+_EB_DELAY_S = 1200.0
+
+KIND_IDENTIFY = "identify"
+KIND_BALANCE = "balance"
 
 
-def _run_job(snap: dict) -> dict:
+def _run_job(kind: str, snap: dict) -> dict:
     """Executor entry point: the numerical modules are imported here, never on the event loop."""
     from . import jobs  # pylint: disable=import-outside-toplevel
 
+    if kind == KIND_BALANCE:
+        return jobs.balance_job(snap)
     return jobs.identify_job(snap)
 
 
@@ -111,7 +130,7 @@ class RoomModelManager:
         self._reset_results()
 
     def _reset_results(self) -> None:
-        self.observer = RoomObserver(self._clock)
+        self.observer = RoomObserver()
         self._restart_saved = None
         self._restart_pending = False
         self.params: RoomParams | None = None
@@ -130,6 +149,9 @@ class RoomModelManager:
         self.eb_days: int | None = None
         self.eb_day: int | None = None
         self.eb_reason: str | None = None
+        # Last day whose energy balance was computed (None: none yet); time of the last identification job
+        self.eb_run_day: int | None = None
+        self.last_job_t: float | None = None
 
     def reset(self) -> None:
         """Forget the identified parameters and the observer state."""
@@ -242,52 +264,103 @@ class RoomModelManager:
         return split_first_moment(float(first_moment_s), self._te_pub())
 
     # ------------------------------------------------------------------
-    # Daily identification
+    # Scheduling
     # ------------------------------------------------------------------
+    def _periods(self, now: float) -> list[dict]:
+        """Closed quiet periods known at now, oldest first."""
+        tar = self._tar
+        get = getattr(tar, "quiet_periods", None)
+        if get is None:
+            return []
+        return [p for p in get(now) if periods.interval(p)[1] <= now]
+
+    def _snapshot(self, now: float) -> dict:
+        tar = self._tar
+        snap = tar.signals_snapshot(now)
+        snap["sp"] = [list(x) for x in tar.history.setpoints]
+        snap["a_per_min"] = self._a_per_min
+        return snap
+
+    def _balance_job(self, now: float):
+        day = self._clock.day_of(now)
+        if self.eb_run_day is not None and day <= self.eb_run_day:
+            return None
+        if now < self._clock.at(day, 0.0) + _EB_DELAY_S:
+            return None
+        snap = self._snapshot(now)
+        snap["day"] = day
+        return KIND_BALANCE, snap
+
+    def _identify_job(self, now: float):
+        pers = self._periods(now)
+        self.observer.attach_periods([(p["id"], *periods.interval(p)) for p in pers], now)
+        if self.last_job_t is not None and now - self.last_job_t < _JOB_MIN_GAP_S:
+            return None
+        h = self._tar.history
+        done_t = max((float(w.get("t_end") or 0.0) for w in self.windows.values()), default=None)
+        for w in periods.windows(pers):
+            if w["id"] in self.windows or (done_t is not None and w["t_end"] <= done_t):
+                continue
+            if h.first_t is None or min(x[0] for x in w["intervals"]) < h.first_t:
+                # Its data are no longer recorded
+                continue
+            snap = self._snapshot(now)
+            snap["window"] = w
+            snap["tau_e"], snap["L"] = self._emitter if self._emitter else (None, None)
+            snap["te_pub"] = self._te_pub()
+            snap["excluded_nights"] = self.observer.disturbed_nights()
+            snap["prev"] = self.windows.get(w["prev"]) if w["prev"] else None
+            snap["eb"] = self.eb_slope
+            snap["eb_gain"] = self.eb_gain
+            return KIND_IDENTIFY, snap
+        return None
+
     def _next_job(self, now: float):
         tar = self._tar
         if tar is None or tar.history.is_empty():
             return None
-        day = self._clock.day_of(now)
-        if str(day) in self.windows or now < self._clock.at(day, ID_WINDOW_END_H) + _JOB_DELAY_S:
-            return None
-        snap = tar.signals_snapshot(now)
-        snap["sp"] = [list(x) for x in tar.history.setpoints]
-        snap["day"] = day
-        snap["tau_e"], snap["L"] = self._emitter if self._emitter else (None, None)
-        snap["te_pub"] = self._te_pub()
-        snap["a_per_min"] = self._a_per_min
-        snap["excluded_nights"] = self.observer.disturbed_nights()
-        snap["prev"] = self.windows.get(str(day - ID_WIN_DAYS))
-        snap["eb"] = self.eb_slope
-        snap["eb_gain"] = self.eb_gain
-        return snap
+        return self._balance_job(now) or self._identify_job(now)
 
     async def async_run(self, hass, now: float | None = None) -> None:
-        """Run the identification of the day in the executor, once."""
+        """Run the due computations in the executor, one at a time."""
         if self._running or not self.active:
             return
         self._running = True
         try:
-            t = time.time() if now is None else now
-            snap = self._next_job(t)
-            if snap is None:
-                return
-            day = snap["day"]
-            try:
-                result = await hass.async_add_executor_job(_run_job, snap)
-            except ImportError as err:
-                _LOGGER.warning("%s - room model: %s", self._name, err)
-                self._tar.set_dependencies(False)
-                return
-            except Exception as err:  # noqa: BLE001 - a failed fit must never stop the regulation
-                _LOGGER.exception("%s - room model: identification failed", self._name)
-                self.last_error = str(err)
-                result = {"day": day, "why": gates.WHY_FAILED, "decision": {"why": gates.WHY_FAILED, "wall": None}}
-            self._apply(result)
-            self.dirty = True
+            while True:
+                t = time.time() if now is None else now
+                job = self._next_job(t)
+                if job is None:
+                    return
+                kind, snap = job
+                if kind == KIND_IDENTIFY:
+                    self.last_job_t = t
+                try:
+                    result = await hass.async_add_executor_job(_run_job, kind, snap)
+                except ImportError as err:
+                    _LOGGER.warning("%s - room model: %s", self._name, err)
+                    self._tar.set_dependencies(False)
+                    return
+                except Exception as err:  # noqa: BLE001 - a failed fit must never stop the regulation
+                    _LOGGER.exception("%s - room model: %s computation failed", self._name, kind)
+                    self.last_error = str(err)
+                    result = self._failed(kind, snap)
+                if kind == KIND_BALANCE:
+                    self.eb_run_day = int(snap["day"])
+                    self.apply_energy_balance(int(snap["day"]), result.get("eb"))
+                else:
+                    self._apply(result)
+                self.dirty = True
         finally:
             self._running = False
+
+    def _failed(self, kind: str, snap: dict) -> dict:
+        if kind == KIND_BALANCE:
+            return {"day": snap["day"], "eb": None}
+        w = snap["window"]
+        return {"id": w["id"], "day": self._clock.day_of(float(w["t_end"])), "t_end": w["t_end"],
+                "nights": list(w["nights"]), "prev_id": w.get("prev"), "why": gates.WHY_FAILED,
+                "decision": {"why": gates.WHY_FAILED, "wall": None}}
 
     def apply_energy_balance(self, day: int, eb: dict | None) -> None:
         """Take the energy balance of a day: a qualified static model comes into force, a refused one keeps the
@@ -307,23 +380,23 @@ class RoomModelManager:
         self.eb_reason = eb.get("reason") or gates.WHY_FAILED
 
     def _apply(self, rec: dict) -> None:
+        """Take the result of an identification job."""
+        key = str(rec["id"])
         day = int(rec["day"])
-        self.apply_energy_balance(day, rec.get("eb"))
-        self.windows[str(day)] = {k: rec.get(k) for k in ("day", "why", "q", "precise", "full", "reduced")}
-        for k in sorted(self.windows, key=int)[:-RM_MAX_WINDOWS]:
+        self.windows[key] = dict({k: rec.get(k) for k in ("day", "why", "q", "precise", "full", "reduced")},
+                                 t_end=rec.get("t_end"), nights=rec.get("nights"), prev=rec.get("prev_id"))
+        for k in sorted(self.windows, key=lambda x: float(self.windows[x].get("t_end") or 0.0))[:-RM_MAX_WINDOWS]:
             del self.windows[k]
         dec = rec.get("decision") or {}
-        eb = rec.get("eb") or {}
-        self.records.append({"day": day, "why": dec.get("why"), "struct": dec.get("struct"), "wall": dec.get("wall"),
-                             "eb": {"slope": eb.get("slope"), "gain": eb.get("gain"), "days": eb.get("days"),
-                                    "reason": eb.get("reason")},
+        self.records.append({"day": day, "id": key, "why": dec.get("why"), "struct": dec.get("struct"),
+                             "wall": dec.get("wall"), "eb": rec.get("eb"), "hours": rec.get("hours"),
                              "held": rec.get("held"), "excluded_nights": rec.get("excluded_nights")})
         del self.records[:-RM_MAX_RECORDS]
         if dec.get("candidate") is None:
             if self.params is None:
                 self.wall_code = dec.get("wall")
             return
-        self.candidates.append(dict(dec["candidate"], struct=dec["struct"], day=day))
+        self.candidates.append(dict(dec["candidate"], struct=dec["struct"], day=day, id=key))
         del self.candidates[:-RM_PUB_LAST * 3]
         params = RoomParams.from_dict(gates.published(self.candidates))
         if params is None:
@@ -391,7 +464,8 @@ class RoomModelManager:
             "observer": self.observer.to_dict(),
             "restart": self._restart_save(),
             "energy_balance": {"slope": self.eb_slope, "gain": self.eb_gain, "days": self.eb_days,
-                               "day": self.eb_day, "reason": self.eb_reason},
+                               "day": self.eb_day, "reason": self.eb_reason, "run_day": self.eb_run_day},
+            "last_job_t": self.last_job_t,
         }
 
     def _restart_save(self) -> dict[str, float | None] | None:
@@ -435,8 +509,10 @@ class RoomModelManager:
             self.eb_slope, self.eb_gain, self.eb_days, self.eb_day = slope, gain, days, day
 
     def load_state(self, state: dict[str, Any] | None) -> None:
-        if not isinstance(state, dict) or state.get("version") != STATE_VERSION:
+        """Load a saved state; the earlier format keeps its model and observer state, a later one is ignored."""
+        if not isinstance(state, dict) or state.get("version") not in (1, STATE_VERSION):
             return
+        old = state.get("version") == 1
         try:
             self.params = RoomParams.from_dict(state.get("params"))
             q = state.get("q")
@@ -444,15 +520,40 @@ class RoomModelManager:
             pd = state.get("published_day")
             self.published_day = None if pd is None else int(pd)
             self.wall_code = state.get("wall_code")
-            self.windows = {str(k): dict(v) for k, v in (state.get("windows") or {}).items()}
-            self.candidates = [dict(c) for c in state.get("candidates") or []]
             self.records = [dict(r) for r in state.get("records") or []]
             self._load_energy_balance(state.get("energy_balance"))
-            self.observer = RoomObserver(self._clock)
+            self.observer = RoomObserver()
             self.observer.configure(self.params, self.q)
             self.observer.load(state.get("observer"))
             self._restart_saved = self._load_restart(state.get("restart"))
             self._restart_pending = True
+            if old:
+                self._drop_v1_evidence()
+                return
+            self.windows = {str(k): dict(v) for k, v in (state.get("windows") or {}).items()}
+            self.candidates = [dict(c) for c in state.get("candidates") or []]
+            run_day = (state.get("energy_balance") or {}).get("run_day")
+            self.eb_run_day = None if run_day is None else int(run_day)
+            t = state.get("last_job_t")
+            self.last_job_t = float(t) if isinstance(t, (int, float)) and math.isfinite(t) else None
         except (TypeError, ValueError, AttributeError) as err:
             _LOGGER.warning("%s - room model state ignored: %s", self._name, err)
             self._reset_results()
+
+    def _drop_v1_evidence(self) -> None:
+        """State of the fixed-hour nights: the published model, its observer state, the energy balance in force
+        and the records shown in the diagnostics are kept.
+
+        Its windows and candidates were selected by local hours and keyed by day, and the observer's night
+        disturbances were summed over local hours: they are no evidence for the quiet periods and are dropped
+        (the disturbance of a period cannot be rebuilt without its steps). The next windows are computed from
+        the quiet periods of the recorded history.
+        """
+        self.windows = {}
+        self.candidates = []
+        self.observer.drop_periods()
+        self.eb_run_day = None
+        self.last_job_t = None
+        self.dirty = True
+        _LOGGER.info("%s - room model: earlier state format, its identification windows are computed again from "
+                     "the quiet periods", self._name)

@@ -1,8 +1,10 @@
-"""Room model manager: daily identification, publication, persistence, diagnostics and fallbacks."""
+"""Room model manager: identification on the quiet periods, energy balance, publication, persistence,
+migration, diagnostics and fallbacks."""
 
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 
 import pytest
@@ -37,9 +39,11 @@ class _SyncHass:
         return func(*args)
 
 
-def _tar(data: dict) -> TarLearningManager:
+def _tar(data: dict, position: bool = True) -> TarLearningManager:
     tar = TarLearningManager("room", "UTC")
     tar.set_dependencies(True)
+    if position:
+        tar.set_position(rsim.LAT, rsim.LON)
     h = tar.history
     h.temp_t, h.temp_v = list(data["pub_t"]), list(data["pub_v"])
     h.ext_t, h.ext_v = list(data["ext_t"]), list(data["ext_v"])
@@ -85,15 +89,19 @@ def mass_manager():
 def test_end_to_end_identification_and_observation(mass_manager) -> None:
     m, _ = mass_manager
     outcomes = [(r["day"] - D0, r["why"], r["struct"]) for r in m.records]
-    assert outcomes[0] == (0, gates.WHY_HISTORY, None)
-    assert (3, gates.WHY_NO_PREVIOUS, None) in outcomes
-    # The energy balance needs 4 whole days. Here the walls release the heat of the start of the simulation
-    # (wall time 80 h): the daily balances drift and the balance is refused, so no agreement check applies
-    # and the fits publish on their own checks.
-    eb = [(r["day"] - D0, r["eb"]["reason"]) for r in m.records]
-    assert all(why == "history" for d, why in eb if d < 4)
-    assert all(why == eb_mod.REASON_DRIFT for d, why in eb if d >= 4)
+    # One identification per window of three closed quiet periods (setback 22:00-06:00 and the response to
+    # the rise until 08:00), from the morning the third period closes; the first three windows have no
+    # earlier disjoint window to agree with
+    pers = rsim.quiet_periods(rsim.simulate(rsim.MASS, DAYS))
+    assert [r["id"] for r in m.records] == [p["id"] for p in pers[2:]]
+    assert [d for d, _, _ in outcomes] == list(range(3, DAYS))
+    assert all(why == gates.WHY_NO_PREVIOUS for _, why, _ in outcomes[:3])
     assert all(s == "full" for d, _, s in outcomes if d >= 6)
+    # The energy balance runs on its own, once per finished day. Here the walls release the heat of the start of
+    # the simulation (wall time 80 h): the daily balances drift and the balance is refused, so no agreement
+    # check applies and the fits publish on their own checks.
+    assert m.eb_run_day == D0 + DAYS - 1 and m.eb_reason == eb_mod.REASON_DRIFT
+    assert all(r["eb"] is None for r in m.records)
     diag = m.diagnostics()
     assert set(diag) == DIAG_KEYS
     assert diag["status"] == "identified"
@@ -130,7 +138,11 @@ def test_diagnostics_hold_plain_values_only(mass_manager) -> None:
             assert public.tracking(v) != v
     for code in (gates.WALL_COARSE, gates.WALL_SMALL, gates.WALL_NOT_CONFIRMED, gates.WALL_NOT_BETTER):
         assert public.walls("reduced", code).startswith("not identified: ")
-    assert public.status(None, gates.WHY_HEAT, True) == "not identified: too little heating during the nights"
+    assert public.status(None, gates.WHY_HEAT, True) == "not identified: too little heating during the quiet periods"
+    assert public.status(None, gates.WHY_INFO, True) == (
+        "not identified: the quiet periods do not determine the model precisely enough yet")
+    for why in whys:
+        assert not any(w in public.reason(why) for w in ("night", "08:00", "18:00", "day"))
     assert public.status(None, gates.WHY_NO_PREVIOUS, True) == "learning"
     assert public.status("reduced", None, True) == "simple model"
     eb_codes = {v for k, v in vars(eb_mod).items() if k.startswith("REASON_")}
@@ -271,7 +283,7 @@ async def test_failed_computation_and_missing_packages(monkeypatch) -> None:
     m._emitter = (600.0, 120.0)
     now = rsim.T0 + 4 * 86400.0 + 9 * 3600.0
 
-    def boom(snap):
+    def boom(kind, snap):
         raise RuntimeError("bad fit")
 
     monkeypatch.setattr(manager_mod, "_run_job", boom)
@@ -281,17 +293,158 @@ async def test_failed_computation_and_missing_packages(monkeypatch) -> None:
     assert diag["last_error"] == "bad fit"
     assert diag["energy_balance_loss_per_c"] is None
     assert diag["energy_balance_refusal_reason"] == "computation failed"
-    # Once a day only
-    await m.async_run(_SyncHass(), now=now + 3600.0)
+    # A window is computed once, failed or not; the next one waits for the cadence
+    assert len(m.records) == 1 and m.eb_run_day == D0 + 4
+    await m.async_run(_SyncHass(), now=now + 600.0)
     assert len(m.records) == 1
+    await m.async_run(_SyncHass(), now=now + 3600.0)
+    assert len(m.records) == 2 and m.records[0]["id"] != m.records[1]["id"]
 
-    def no_numpy(snap):
+    def no_numpy(kind, snap):
         raise ImportError("No module named 'scipy'")
 
     monkeypatch.setattr(manager_mod, "_run_job", no_numpy)
     await m.async_run(_SyncHass(), now=now + 86400.0)
     assert not tar.active and not m.active
     assert m.diagnostics()["status"] == "not identified: numerical libraries unavailable"
+
+
+def _fake_jobs(monkeypatch) -> list:
+    """_run_job replaced by a recorder: a refused balance, a window refused for its data."""
+    calls = []
+
+    def fake(kind, snap):
+        calls.append((kind, snap))
+        if kind == manager_mod.KIND_BALANCE:
+            return {"day": snap["day"], "eb": {"value": None, "gain": None, "reason": "history", "slope": None,
+                                               "days": 0}}
+        w = snap["window"]
+        return {"id": w["id"], "day": D0, "t_end": w["t_end"], "nights": w["nights"], "prev_id": w["prev"],
+                "why": gates.WHY_DATA, "decision": {"why": gates.WHY_DATA, "wall": None}}
+
+    monkeypatch.setattr(manager_mod, "_run_job", fake)
+    return calls
+
+
+async def test_identification_starts_when_a_window_of_periods_closes(monkeypatch) -> None:
+    """A window of three closed quiet periods starts one identification, oldest first, at most one per hour of
+    elapsed time; each window once, compared with the window of the three periods before it."""
+    data = rsim.simulate(rsim.NO_MASS, 8.0)
+    m = RoomModelManager("room", "UTC", _tar(data))
+    m._emitter = (600.0, 120.0)
+    calls = _fake_jobs(monkeypatch)
+    pers = rsim.quiet_periods(data)
+    ends = [p["ident"][1] for p in pers]
+    # Before the third period has closed: the balance of the day, no identification
+    await m.async_run(_SyncHass(), now=ends[2] - 60.0)
+    assert [k for k, _ in calls] == ["balance"]
+    # Catch-up after a downtime: the closed windows one at a time, oldest first, one per hour
+    t = ends[5] + 120.0
+    for i in range(8):
+        await m.async_run(_SyncHass(), now=t + i * 1800.0)
+    ident = [snap for k, snap in calls if k == "identify"]
+    assert [s["window"]["id"] for s in ident] == [p["id"] for p in pers[2:6]]
+    assert [s["window"]["nights"] for s in ident][-1] == [p["id"] for p in pers[3:6]]
+    # The window of periods 3-5 is compared with the one of periods 0-2: disjoint, and it was computed
+    last = ident[-1]
+    assert last["window"]["prev"] == pers[2]["id"] and last["prev"] is not None
+    assert not set(m.windows[pers[2]["id"]]["nights"]) & set(last["window"]["nights"])
+    assert all(s["prev"] is None for s in ident[:3])
+    # Never twice on the same periods, even after a reload
+    n = len(ident)
+    back = RoomModelManager("room", "UTC", m._tar)
+    back.load_state(json.loads(json.dumps(m.save_state())))
+    await back.async_run(_SyncHass(), now=ends[5] + 6 * 3600.0)
+    await m.async_run(_SyncHass(), now=ends[5] + 6 * 3600.0)
+    assert len([k for k, _ in calls if k == "identify"]) == n
+    # The next period closes the next window
+    await m.async_run(_SyncHass(), now=ends[6] + 120.0)
+    assert calls[-1][1]["window"]["id"] == pers[6]["id"]
+
+
+async def test_energy_balance_of_each_finished_day_without_any_quiet_period(monkeypatch) -> None:
+    """Without a home position there is no quiet period and no identification; the balance of each finished
+    local day still runs, once, from 20 minutes after its end."""
+    p = rsim.NO_MASS
+    data = rsim.simulate(p, 6.5)
+    m = RoomModelManager("room", "UTC", _tar(data, position=False))
+    m._a_per_min = p["a"] * 60.0
+    m._emitter = (600.0, 120.0)
+    kinds = []
+    real = manager_mod._run_job
+
+    def spy(kind, snap):
+        kinds.append((kind, snap.get("day")))
+        return real(kind, snap)
+
+    monkeypatch.setattr(manager_mod, "_run_job", spy)
+    for d in range(1, 7):
+        for dt_s in (600.0, 1500.0, 9 * 3600.0):
+            await m.async_run(_SyncHass(), now=rsim.T0 + d * 86400.0 + dt_s)
+    assert kinds == [("balance", D0 + d) for d in range(1, 7)]
+    assert m.records == [] and m.windows == {}
+    assert m.eb_day == D0 + 6 and m.eb_slope == pytest.approx(p["alpha"] / p["a"], rel=0.03)
+
+
+async def test_energy_balance_follows_the_local_days_across_clock_changes(monkeypatch) -> None:
+    """Days of 23 h and 25 h: one balance per local day, each after its local midnight."""
+    from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
+
+    tz = "Europe/Paris"
+    clock = LocalClock(tz)
+    for first in (dt.date(2026, 3, 27), dt.date(2026, 10, 23)):
+        tar = TarLearningManager("room", tz)
+        tar.set_dependencies(True)
+        t0 = clock.at(first.toordinal(), 0.0)
+        tar.history.temp_t, tar.history.temp_v = [t0], [19.0]
+        tar.history.first_t, tar.history.last_t = t0, t0 + 5 * 86400.0
+        m = RoomModelManager("room", tz, tar)
+        calls = _fake_jobs(monkeypatch)
+        t = t0 + 600.0
+        while t < clock.at(first.toordinal() + 5, 0.0):
+            await m.async_run(_SyncHass(), now=t)
+            t += 600.0
+        days = [snap["day"] for k, snap in calls if k == "balance"]
+        assert days == list(range(first.toordinal(), first.toordinal() + 5))
+        for k, snap in calls:
+            assert snap["t_last"] >= clock.at(snap["day"], 0.0) + 1200.0
+
+
+def test_earlier_state_keeps_the_model_and_drops_the_day_keyed_evidence(mass_manager) -> None:
+    """A state of the fixed-hour nights: the published model, its observer state, the energy balance in force and
+    the records are kept; the windows and candidates keyed by day and the night disturbances summed over local
+    hours are dropped, never read as periods."""
+    m, _ = mass_manager
+    state = json.loads(json.dumps(m.save_state()))
+    old = dict(state, version=1, windows={str(D0 + 7): dict(next(iter(state["windows"].values())), day=D0 + 7)},
+               candidates=[dict(c, day=D0 + 7) for c in state["candidates"]], last_job_t=None)
+    obs = {k: v for k, v in state["observer"].items() if k not in ("steps", "attached_t")}
+    old["observer"] = dict(obs, nights={str(D0 + 6): [0.001, 50000.0], str(D0 + 7): [0.002, 50400.0]})
+    old["energy_balance"] = {k: v for k, v in state["energy_balance"].items() if k != "run_day"}
+    back = RoomModelManager("room", "UTC", m._tar)
+    back.load_state(old)
+    assert back.params == m.params and back.q == m.q and back.published_day == m.published_day
+    assert back.observer.x == m.observer.x and back.observer.P == m.observer.P and back.observer.t == m.observer.t
+    assert back.observer.timeline.to_dict() == m.observer.timeline.to_dict()
+    assert (back.eb_slope, back.eb_gain, back.eb_day) == (m.eb_slope, m.eb_gain, m.eb_day)
+    assert back.records == m.records
+    assert back.windows == {} and back.candidates == []
+    assert back.observer.nights == {} and back.observer.steps == [] and back.observer.attached_t is None
+    assert back.eb_run_day is None and back.last_job_t is None and back.dirty
+    assert back.diagnostics()["status"] == m.diagnostics()["status"]
+    # Saved again, it is the current format; loading it twice changes nothing
+    again = json.loads(json.dumps(back.save_state()))
+    assert again["version"] == manager_mod.STATE_VERSION
+    twice = RoomModelManager("room", "UTC", m._tar)
+    twice.load_state(again)
+    twice.load_state(again)
+    assert twice.windows == {} and twice.candidates == [] and twice.params == m.params
+    # A later format is ignored; a malformed one too
+    later = RoomModelManager("room", "UTC", m._tar)
+    later.load_state(dict(state, version=manager_mod.STATE_VERSION + 1))
+    assert later.params is None
+    later.load_state(dict(state, observer=dict(state["observer"], nights={"q1:1:1": ["x"]})))
+    assert later.params == m.params and later.observer.nights == {}
 
 
 def test_emitter_split_uses_the_refined_tau_e() -> None:

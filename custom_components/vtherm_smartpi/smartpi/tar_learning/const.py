@@ -198,13 +198,3 @@ RN_ECO_TOL_C = 0.3
 RN_U_SLOPE_MAX_H = 0.05
 RN_U_RESID_MAX = 0.10
 RN_SP_EPS = 1e-6
-
-# ---------------------------------------------------------------------------
-# Local hours still used by the room model (room_model/periods.py, observer.py
-# and manager.py select their nights and schedule their job with them). The
-# T_ar learning itself uses no local hour.
-# ---------------------------------------------------------------------------
-NIGHT_FROM_H = 18.0
-NIGHT_TO_H = 8.0
-ID_WIN_DAYS = 3
-ID_WINDOW_END_H = 8.0

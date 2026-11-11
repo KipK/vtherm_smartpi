@@ -304,7 +304,7 @@ Le retard est appris sur des épisodes à puissance constante, que fournit le bo
 
 ### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur
 
-L'apprentissage du retard de l'émetteur (`smartpi/tar_learning/`) sélectionne ses données avec `smartpi/quiet_periods/`, un module Python pur partagé par les méthodes qui ont besoin d'une pièce à l'abri des apports solaires. Aucune heure locale n'intervient dans la sélection ; les temps sont des secondes epoch et des intervalles semi-ouverts `[start, end)`.
+L'apprentissage du retard de l'émetteur (`smartpi/tar_learning/`) et le modèle de pièce sélectionnent leurs données avec `smartpi/quiet_periods/`, un module Python pur partagé par les méthodes qui ont besoin d'une pièce à l'abri des apports solaires. Aucune heure locale n'intervient dans la sélection ; les temps sont des secondes epoch et des intervalles semi-ouverts `[start, end)`.
 
 **Obscurité.** La position provient de la configuration de Home Assistant (`hass.config.latitude`, `hass.config.longitude`), injectée par le handler et validée par le manager : nombres finis dans [-90, 90] et [-180, 180] (zéro est valide). L'élévation géométrique du centre du soleil est calculée avec le paquet `astral` livré avec Home Assistant. L'obscurité correspond à un centre situé sous `-0.833 - 0.5 = -1.333` degrés : -0,833 degré est le lever et le coucher du soleil standard (le bord supérieur sur l'horizon apparent, 34' de réfraction plus 16' de rayon), et 0,5 degré couvre l'étalement habituel de la réfraction près de l'horizon. L'élévation est échantillonnée toutes les 600 s sur une grille alignée sur l'epoch ; un échantillon ne compte comme sombre qu'à 0,05 degré sous le seuil (l'élévation s'écarte d'une corde d'au plus 0,014 degré sur un pas de 600 s près de l'horizon), chaque franchissement est affiné par dichotomie à 1 s, puis chaque borne est repoussée de 120 s vers l'intérieur pour la précision de l'algorithme solaire. L'obscurité se termine donc quelques minutes avant le lever du soleil et commence quelques minutes après le coucher, jamais plus tard que le lever. Une obscurité de plus de 24 h (nuit polaire) est découpée en blocs de 24 h ancrés sur son début réel ; un jour polaire n'a pas d'obscurité. Sans position valide (ou sans `astral`), il n'y a ni obscurité ni période : les méthodes restent silencieuses et `quiet_periods.reason` en donne la raison.
 
@@ -327,6 +327,7 @@ L'apprentissage du retard de l'émetteur (`smartpi/tar_learning/`) sélectionne 
 | Nuit régulée | `[début régulé, fin de l'épisode)` de la composante retenue, d'au moins 4 h, valide jusqu'à sa fin ; puis les règles existantes sur les demi-heures, la température, la pente de puissance et le résidu |
 | Fenêtre d'identification | les intervalles d'identification de trois épisodes établis consécutifs (tranches entièrement comprises dans celles-ci), l'état des murs commençant 10 h avant le premier ; comparée à la fenêtre des trois épisodes précédents, sans recouvrement |
 | Classe de la pièce, valeur rapide | une entrée de nuit et une valeur confirmée par clé, remplacées avant le calcul de la classe de la pièce ou de la publication |
+| Modèle de pièce | les mêmes fenêtres de trois épisodes établis et leurs intervalles d'identification, moins les périodes que le suivi a trouvées perturbées (voir 4.2) ; la perturbation du suivi est sommée par clé |
 
 Les évaluations portent leur instant de décision (fin de leur dernier épisode) ; la classe, les paramètres des murs et `τe` en vigueur à une montée sont ceux décidés avant elle. La date locale des diagnostics (`day`) ne sert qu'à l'affichage.
 
@@ -439,9 +440,7 @@ mauvaise puissance de maintien dans les pièces lourdes, basse après un abaisse
 et haute lorsque les murs restituent de la chaleur. L'apport gratuit fait partie de la partie
 statique : sans lui, l'intégrale porterait $g_{EB}$ pour toujours.
 
-**Bilan énergétique.** La tâche du modèle de pièce calcule, une fois par jour après 08:00 avec
-l'identification, le bilan de chaque journée locale entière de l'historique de T_ar qui précède
-le jour (7 au plus ; intervalles de 10 min, intervalles invalides exclus) :
+**Bilan énergétique.** Une tâche propre calcule, une fois par jour local, 20 minutes après le minuit local et quelles que soient les périodes calmes, le bilan de chaque journée locale entière de l'historique de T_ar qui précède le jour (7 au plus ; intervalles de 10 min, intervalles invalides exclus). Minuit n'est que la limite de ces journées civiles (journées de 23 h et de 25 h aux changements d'heure) ; il ne sélectionne aucune période :
 
 $$ u_d = \frac{\sum u \, \Delta t - \Delta T_{in} / a}{\sum \Delta t}, \qquad D_d = \overline{T_{in} - T_{ext}} $$
 
@@ -501,16 +500,17 @@ les périodes ajustées) compte les changements de signe de leurs moyennes horai
 a au moins 10 ; les autres contrôles (biais, dispersion, autocorrélation à 1 h, corrélation avec
 la sortie de l'émetteur, la consigne et la température extérieure) restent les mêmes.
 
-**Accord avec le bilan énergétique.** Chaque ajustement de l'identification quotidienne prend
-l'apport gratuit en vigueur comme une entrée de chaleur connue, $a(u_e + g_{EB})$ ; l'apport
-n'est pas ajusté fenêtre par fenêtre : sur les nuits, $T_{in} - T_{ext}$ varie trop peu pour
-séparer une entrée constante de la perte statique. Un candidat de l'identification quotidienne
-(modèle avec murs ou modèle simple) n'est publié que si son propre $b_{eq}/a$ concorde avec
-$s_{EB}$ à 5 % près ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$) ; sinon le jour ne publie
-rien (`the model's heat loss disagrees with the measured heat balance`). Le modèle en vigueur
-est celui calculé par la même tâche lorsqu'il est qualifié, sinon le précédent. Sans modèle
-qualifié, il n'y a pas de tel contrôle, mais le modèle de pièce ne donne pas non plus de
-puissance de maintien.
+**Fenêtres d'identification.** Le modèle de pièce lit le catalogue des périodes calmes de l'apprentissage T_ar (voir 3.8) par `TarLearningManager.quiet_periods` ; `room_model/periods.py` en est l'adaptateur. Une fenêtre est formée de trois périodes fermées consécutives du catalogue, chacune ajustée sur son intervalle d'identification (la composante calme, prolongée par la réponse à la hausse pendant 2 h au plus dans l'obscurité), découpée par les intervalles invalides et conservée en morceaux d'au moins 1 h, chaque morceau avec son propre état initial de l'air et des murs. Elle est indexée par sa dernière période et comparée à la fenêtre des trois périodes qui la précèdent, si bien que les deux ne partagent jamais une période ; les premières fenêtres n'en ont pas (`waiting for a second series of quiet periods to confirm`). Une fenêtre est calculée une seule fois, lorsque sa dernière période est établie, de la plus ancienne à la plus récente, au plus une tâche par heure écoulée ; aucune heure locale n'intervient. Une fenêtre dont les données ont quitté l'historique de 7 jours est ignorée.
+
+**Périodes perturbées.** Le suivi conserve la perturbation $d$ de chaque sous-pas suivi de 60 s (36 h au plus) jusqu'à ce que les périodes auxquelles il peut appartenir soient établies, puisque la sélection d'une période n'est définitive qu'alors. Chaque période établie reçoit alors $\int d \, dt$ et la durée suivie sur son intervalle d'identification, un sous-pas franchissant une borne comptant pour sa fraction intérieure ; les pas antérieurs à sa fin sont abandonnés. Une période d'au moins 4 h suivies dont la moyenne s'écarte de plus de 0,08 °C/h de la médiane des 14 dernières périodes est exclue des fenêtres qui la contiennent.
+
+**Information.** Chaque ajustement (modèle simple et modèle avec murs) reçoit la covariance de tous ses paramètres à partir de la jacobienne $J$ de ses sorties pondérées du modèle à l'optimum : les paramètres non linéaires, $a$, les états initiaux de l'air et des murs de chaque morceau et, lorsque la fenêtre a estimé l'émetteur (recherche sur grille, et non la valeur affinée en vigueur), le logarithme du premier moment de l'émetteur (différence centrale à ±2 %) :
+
+$$ C = \tau_{int} \, s^2 (J^\top J)^{-1}, \qquad s^2 = \frac{\sum w r^2}{\sum w - p} $$
+
+avec $\tau_{int}$ le nombre de résidus divisé par leur nombre effectif (le temps d'autocorrélation intégré utilisé par la recherche de l'émetteur) : des résidus corrélés portent moins d'information que leur nombre. Les écarts-types des coordonnées qu'un ajustement apporte s'en déduisent par la méthode delta : $\ln a$ et $\ln(b_{eq}/a)$ pour le modèle simple ; $\ln a$, $\ln \alpha$ et $\ln c$ ($c = \gamma / \beta$) pour le modèle avec murs, dont $b_{eq}/a = (\alpha - c)/a$ n'est jamais la perte statique et est vérifié contre $s_{EB}$ à 5 % près avant une publication et avant tout usage. Un ajustement est refusé (`the quiet periods do not determine the model precisely enough yet`) lorsque $1.96 \, \sigma$ de l'un d'eux dépasse la tolérance avec laquelle l'accord de deux fenêtres le compare : $\ln 1.15$ pour $a$, $\ln 1.25$ pour $b_{eq}/a$ et $\alpha$, $\ln 1.35$ pour $c$. Un modèle avec murs dont la part des murs $c/\alpha$ est inférieure à 0,1 n'est jamais utilisé, si bien que sa précision n'est pas exigée. La covariance est celle, asymptotique, des moindres carrés ; le niveau de 95 % et la réutilisation des tolérances d'accord sont des choix de la méthode. Il n'y a pas de durée minimale d'ajustement : c'est la précision qui décide si les périodes portent assez d'information. Les autres conditions ne changent pas : au moins 40 événements de température, une heure de chauffage équivalente à pleine puissance et un écart moyen intérieur-extérieur de 3 °C sur les morceaux ajustés.
+
+**Accord avec le bilan énergétique.** Chaque ajustement de l'identification prend l'apport gratuit en vigueur comme une entrée de chaleur connue, $a(u_e + g_{EB})$ ; l'apport n'est pas ajusté fenêtre par fenêtre : sur les périodes calmes, $T_{in} - T_{ext}$ varie trop peu pour séparer une entrée constante de la perte statique. Un candidat (modèle avec murs ou modèle simple) n'est publié que si son propre $b_{eq}/a$ concorde avec $s_{EB}$ à 5 % près ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$) ; sinon la fenêtre ne publie rien (`the model's heat loss disagrees with the measured heat balance`). Le modèle en vigueur est le dernier modèle qualifié au moment de la tâche. Sans modèle qualifié, il n'y a pas de tel contrôle, mais le modèle de pièce ne donne pas non plus de puissance de maintien.
 
 $s_{EB}$ est borné à 3, comme $k_{ff}$. Une source de modèle de pièce s'applique à
 plein poids (`warmup_scale = 1`) et n'utilise pas la perturbation non mesurée $d$ du
@@ -986,6 +986,8 @@ La boucle de régulation planifie au plus une écriture différée de ce payload
 Les timestamps d'événements passés (historiques de température, début de calibration, période passive et épisode du retard de réponse) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
 
 L'apprentissage du retard de l'émetteur conserve son propre stockage (version d'état 2) : historique, montées de confort en attente, catalogue des périodes calmes avec leurs clés, entrées de nuit, décisions sur les parties régulées, fenêtres, évaluations, valeurs confirmées par période, publications et la position de la maison avec laquelle les preuves ont été trouvées. Un stockage de version 1 ne conserve que son historique et ses hausses en attente : ses nuits, fenêtres, évaluations, confirmations et valeurs publiées avaient été sélectionnées par heures locales sans contrôle solaire et sont abandonnées, puis retrouvées à partir de l'historique. Un changement de position de la maison oublie les preuves des périodes. Une version plus récente est ignorée.
+
+Le modèle de pièce conserve son propre stockage (version d'état 2) : paramètres publiés et leurs candidats, fenêtres et enregistrements indexés par leur dernière période calme, état de l'observateur avec la perturbation des périodes et les sous-pas en attente d'une période, bilan thermique en vigueur avec le dernier jour calculé, et heure de la dernière tâche d'identification. Un stockage de version 1 conserve son modèle publié, l'état physique de l'observateur (air, murs, perturbation, chronologie des commandes, scores des prévisions), le bilan thermique en vigueur et ses enregistrements ; ses fenêtres et candidats (indexés par jour, sélectionnés par heures locales) et ses perturbations nocturnes (sommées sur les heures locales, sans leurs sous-pas) sont abandonnés, et les fenêtres sont recalculées à partir des périodes calmes. Une version plus récente est ignorée.
 
 #### Redémarrages
 

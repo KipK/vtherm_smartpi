@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 import numpy as np
@@ -11,7 +12,7 @@ from scipy.linalg import expm as sp_expm
 import room_model_sim as rsim
 from custom_components.vtherm_smartpi.smartpi.room_model import linalg as la
 from custom_components.vtherm_smartpi.smartpi.room_model import model as rm
-from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_HORIZONS_S, RM_SCORE_KEEP
+from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_HORIZONS_S, RM_SCORE_KEEP, RM_STEPS_KEEP_S
 from custom_components.vtherm_smartpi.smartpi.room_model.emitter import CommandTimeline, emitter_step
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 from custom_components.vtherm_smartpi.smartpi.room_model.observer import (
@@ -21,7 +22,6 @@ from custom_components.vtherm_smartpi.smartpi.room_model.observer import (
     RoomObserver,
 )
 from custom_components.vtherm_smartpi.smartpi.room_model.scoring import ForecastScore
-from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
 
 H = 3600.0
 
@@ -126,7 +126,7 @@ def mass_run():
 
 
 def _observer(plant, q=0.01) -> RoomObserver:
-    ob = RoomObserver(LocalClock("UTC"))
+    ob = RoomObserver()
     ob.configure(_params(plant), q)
     return ob
 
@@ -236,7 +236,7 @@ def test_inconsistent_measurements_are_flagged() -> None:
     assert ob.health() not in (HEALTH_OK, HEALTH_SETTLING)
 
 
-def test_disturbed_night_is_detected() -> None:
+def test_disturbed_period_is_detected() -> None:
     p = rsim.NO_MASS
     night = rsim.T0 + 3 * 86400.0  # local midnight of the fourth day
 
@@ -245,8 +245,72 @@ def test_disturbed_night_is_detected() -> None:
 
     data = rsim.simulate(p, 6.0, gain=gain)
     ob = _observer(p)
-    _replay(ob, data, rsim.T0 + 600.0, rsim.T0 + 6 * 86400.0)
-    assert ob.disturbed_nights() == [rsim.day_of(night) - 1]
+    pers = [(q["id"], *q["ident"]) for q in rsim.quiet_periods(data)]
+    # The manager gives the observer the closed periods at each run (here every hour)
+    for h in range(144):
+        t = rsim.T0 + h * H
+        _replay(ob, data, max(t, rsim.T0 + 600.0), t + H)
+        ob.attach_periods([x for x in pers if x[2] <= t + H], t + H)
+    hit = [k for k, a, b in pers if a <= night < b]
+    assert len(hit) == 1 and ob.disturbed_nights() == hit
+    # Each period counts once: a second call changes nothing, and the steps already used are forgotten
+    assert all(v[1] == pytest.approx(10 * H, abs=120.0) for v in ob.nights.values())
+    nights = {k: list(v) for k, v in ob.nights.items()}
+    ob.attach_periods(pers, rsim.T0 + 6 * 86400.0)
+    assert ob.nights == nights
+    assert not ob.steps or ob.steps[0][0] >= pers[-1][2] - 60.0
+
+
+def _tracked(ob: RoomObserver, t0: float, ds: list[float]) -> None:
+    for i, d in enumerate(ds):
+        ob._track(t0 + 60.0 * (i + 1), d)
+
+
+def test_period_disturbance_weights_each_step_by_its_overlap() -> None:
+    """A sub-step crossing the bound between two periods counts for its part inside each: the integral and the
+    duration are assigned exactly once."""
+    ob = RoomObserver()
+    t0 = 1_000_000.0
+    _tracked(ob, t0, [float(i) for i in range(60)])
+    cut = t0 + 30 * 60.0 + 15.0  # 15 s into the 31st step
+    ob.attach_periods([("q1:a", t0 - 600.0, cut), ("q1:b", cut, t0 + 3600.0)], t0 + 4000.0)
+    a, b = ob.nights["q1:a"], ob.nights["q1:b"]
+    assert a[1] == pytest.approx(30 * 60.0 + 15.0) and b[1] == pytest.approx(29 * 60.0 + 45.0)
+    total = sum(60.0 * i for i in range(60))
+    assert a[0] == pytest.approx(sum(60.0 * i for i in range(30)) + 15.0 * 30)
+    assert a[0] + b[0] == pytest.approx(total) and a[1] + b[1] == pytest.approx(3600.0)
+    # A period that ends less than a step before now waits; the steps used are forgotten
+    ob2 = RoomObserver()
+    _tracked(ob2, t0, [1.0] * 60)
+    ob2.attach_periods([("q1:c", t0, t0 + 3600.0)], t0 + 3630.0)
+    assert ob2.nights == {}
+    ob2.attach_periods([("q1:c", t0, t0 + 3600.0)], t0 + 3700.0)
+    assert ob2.nights["q1:c"] == pytest.approx([3600.0, 3600.0, t0]) and ob2.steps == []
+
+
+def test_late_selection_takes_the_steps_of_the_final_period() -> None:
+    """The selection of a period is final only once it is closed: the steps wait in the buffer, and only the
+    final period (here the longest piece after a gap, chosen at the close) gets them; nothing was summed under
+    another key before."""
+    ob = RoomObserver()
+    t0 = 2_000_000.0
+    _tracked(ob, t0, [0.0] * 120 + [2.0] * 300)
+    assert ob.nights == {} and sum(len(ds) for _, ds in ob.steps) == 420
+    # The period finally selected starts after a gap at 2 h
+    final = ("q1:x", t0 + 7200.0, t0 + 420 * 60.0)
+    ob.attach_periods([final], t0 + 420 * 60.0 + 60.0)
+    assert ob.nights["q1:x"][:2] == pytest.approx([2.0 * 300 * 60.0, 300 * 60.0])
+    # Saved and restored with the steps still pending
+    ob3 = RoomObserver()
+    _tracked(ob3, t0, [0.5] * 90)
+    back = RoomObserver()
+    back.load(json.loads(json.dumps(ob3.to_dict())))
+    assert back.steps == ob3.steps and back.nights == {}
+    # A gap in the tracking starts a new run of steps; the buffer is bounded
+    _tracked(ob3, t0 + 90 * 60.0 + 600.0, [0.5] * 3)
+    assert len(ob3.steps) == 2
+    _tracked(ob3, t0 + 40 * 3600.0, [0.5])
+    assert ob3.steps[0][0] >= t0 + 40 * 3600.0 - RM_STEPS_KEEP_S - 60.0
 
 
 # ---------------------------------------------------------------------------

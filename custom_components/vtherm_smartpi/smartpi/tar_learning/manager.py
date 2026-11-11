@@ -403,6 +403,16 @@ class TarLearningManager:
             self._evidence_position = self.position
         del self.episodes[:-TAR_MAX_NIGHTS]
 
+    def quiet_periods(self, now: float) -> list[dict]:
+        """Closed quiet periods of the catalogue (oldest first), for the other methods (none without a position).
+
+        The entries are the catalogue's own records: they must not be modified.
+        """
+        if self.history.is_empty():
+            return []
+        self._refresh(now)
+        return list(self.episodes)
+
     def _is_dark(self, t: float) -> bool:
         return self.position is not None and bool(dark_intervals(self.position, t - 1.0, t + 1.0))
 

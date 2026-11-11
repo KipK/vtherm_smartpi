@@ -20,7 +20,7 @@ The heat input is a (u_e + g), with g the constant free gain of the static
 model in force (energy_balance.py, a share of full power: heat from a warmer
 neighbour, steady occupants), taken as known: without it such a gain would be
 read as a lower static loss, and the fit's b_eq / a could not match the
-energy-balance slope. The gain is not fitted per window: over the nights the
+energy-balance slope. The gain is not fitted per window: over the quiet periods the
 indoor-outdoor difference varies too little to separate a constant input from
 the static loss, and a fitted one trades against b_eq freely.
 
@@ -37,9 +37,16 @@ hours ahead (wall term, forecasts from 1 h), and ripple shorter than an hour
 without any error at the scale of the model. The effective number of
 independent residuals (the count over the integrated autocorrelation time) is
 reported for the emitter search (jobs.py).
+
+Precision (precision()): the least-squares covariance of all the parameters of
+a fit at its optimum, from the Jacobian of the weighted model outputs, scaled
+by the integrated autocorrelation time of the residuals; it gives the
+standard deviations of the identifiable coordinates that the publication
+rules compare (gates.py).
 """
 from __future__ import annotations
 
+import copy
 import math
 
 import numpy as np
@@ -159,6 +166,12 @@ class WindowData:
                                   "te0": float(self.te[i0]), "night": night})
         self.n_events = int(sum(len(s["k"]) for s in self.segments))
         self.hours = float(sum(s["N"] for s in self.segments) * STEP / H)
+
+    def with_emitter(self, tau_e: float, L: float) -> WindowData:
+        """The same window with another emitter (the emitter output recomputed, the rest shared)."""
+        out = copy.copy(self)
+        out.ue = emitter_bins(self.u, STEP, tau_e, L)
+        return out
 
     def _anchor_at(self, t: float) -> float | None:
         if len(self.anch_t) == 0 or t < self.anch_t[0] - 2.0 * H:
@@ -394,6 +407,120 @@ def held_out(data: WindowData, params: dict, gain: float = 0.0) -> dict | None:
         x = [math.log(params["alpha"])]
     _, out = pb.solve(x, a_fixed=params["a"], detail=True)
     return None if out is None else out["check"]
+
+
+# ---------------------------------------------------------------------------
+# Precision of the identified parameters
+# ---------------------------------------------------------------------------
+_DX = 1e-3       # step of the numerical derivatives in the nonlinear parameters (log or logit units)
+_DLOG_EM = 0.02  # step of the numerical derivative in the log of the emitter first moment
+
+
+def _predictions(pb: Problem, x, a: float, init: list) -> np.ndarray | None:
+    """Weighted model outputs at the anchors for the nonlinear parameters x, a and the initial states."""
+    q = pb.params(x)
+    cols = pb.columns(q)
+    k_te = 0.5 * (q["c"] + q["alpha"]) if pb.full else 0.0
+    out = []
+    for (yu, yt, yd, yo, y0, yw), s, (ta0, w0) in zip(cols, pb.data.segments, init):
+        k = s["k"]
+        m = a * (yu[k] + pb.gain * yo[k]) + yt[k] + k_te * yd[k] + ta0 * y0[k] + w0 * yw[k]
+        out.append(m * np.sqrt(s["w"]))
+    return np.concatenate(out) if out else None
+
+
+def precision(pb: Problem, fit: dict, emitter: tuple[Problem, Problem, float] | None = None) -> dict | None:
+    """Standard deviations of the identifiable coordinates of a fit, from its Jacobian at the optimum.
+
+    Least squares: the covariance of all the parameters (nonlinear ones, a, the initial air and wall state of
+    every period, and the emitter first moment when the window estimated it) is s2 (J' J)^-1, with J the
+    Jacobian of the weighted model outputs, s2 the residual variance per unit weight and the result scaled by
+    the integrated autocorrelation time of the residuals (count over effective count): correlated residuals
+    carry less information than their number. The linear parameters are included, so their uncertainty is in
+    the result (it equals the profile over them).
+
+    emitter: (problem at first moment x exp(-h), problem at first moment x exp(+h), h) when the emitter was
+    estimated by the window; its uncertainty then enters every coordinate.
+
+    Returns {"sd": {"a", "b_eq_a"[, "alpha", "c"]}, "tau"} with the standard deviations of the logarithms
+    (relative), None when a coordinate is not determined (singular information).
+    """
+    d = pb.data
+    x0 = np.asarray(fit["x"], dtype=float)
+    a = float(fit["a"])
+    init = fit["init"]
+    nseg = len(d.segments)
+    if nseg == 0 or a <= 0.0:
+        return None
+    base = _predictions(pb, x0, a, init)
+    if base is None:
+        return None
+    cols = []
+    nx = len(x0)
+    for j in range(nx):
+        e = np.zeros(nx)
+        e[j] = _DX
+        hi, lo = _predictions(pb, x0 + e, a, init), _predictions(pb, x0 - e, a, init)
+        if hi is None or lo is None:
+            return None
+        cols.append((hi - lo) / (2.0 * _DX))
+    # a enters linearly: derivative in ln a
+    q = pb.params(x0)
+    pcols = pb.columns(q)
+    rows_a, n = [], 0
+    for (yu, _yt, _yd, yo, _y0, _yw), s in zip(pcols, d.segments):
+        k = s["k"]
+        rows_a.append(a * (yu[k] + pb.gain * yo[k]) * np.sqrt(s["w"]))
+    cols.append(np.concatenate(rows_a))
+    for si, ((_yu, _yt, _yd, _yo, y0, yw), s) in enumerate(zip(pcols, d.segments)):
+        k = s["k"]
+        for col in ((y0,) + ((yw,) if pb.full else ())):
+            v = np.zeros(len(base))
+            v[n:n + len(k)] = col[k] * np.sqrt(s["w"])
+            cols.append(v)
+        n += len(k)
+    if emitter is not None:
+        lo_pb, hi_pb, h = emitter
+        hi, lo = _predictions(hi_pb, x0, a, init), _predictions(lo_pb, x0, a, init)
+        if hi is None or lo is None:
+            return None
+        cols.append((hi - lo) / (2.0 * h))
+    J = np.column_stack(cols)
+    p = J.shape[1]
+    w_sum = float(sum(np.sum(s["w"]) for s in d.segments))
+    dof = w_sum - p
+    if dof <= 0.0:
+        return None
+    check = fit.get("check") or {}
+    n_res, n_eff = check.get("n"), check.get("n_eff")
+    tau = max(1.0, float(n_res) / float(n_eff)) if n_res and n_eff else 1.0
+    s2 = float(fit["cost"]) / dof
+    F = J.T @ J
+    try:
+        C = np.linalg.inv(F) * s2 * tau
+    except np.linalg.LinAlgError:
+        return None
+    ia = nx
+
+    def sd(grad: dict[int, float]) -> float | None:
+        g = np.zeros(p)
+        for i, v in grad.items():
+            g[i] = v
+        var = float(g @ C @ g)
+        return math.sqrt(var) if math.isfinite(var) and var >= 0.0 else None
+
+    out = {"a": sd({ia: 1.0})}
+    if pb.full:
+        sig = q["g"]
+        # ln alpha = x0; ln c = x0 + ln g; ln b_eq = x0 + ln(1 - g), g = 1 / (1 + exp(-x2))
+        out["b_eq_a"] = sd({0: 1.0, 2: -sig, ia: -1.0})
+        out["alpha"] = sd({0: 1.0})
+        out["c"] = sd({0: 1.0, 2: 1.0 - sig})
+    else:
+        out["b_eq_a"] = sd({0: 1.0, ia: -1.0})
+    if any(v is None for v in out.values()):
+        return None
+    return {"sd": out, "tau": tau}
 
 
 # ---------------------------------------------------------------------------

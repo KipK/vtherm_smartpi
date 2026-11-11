@@ -34,6 +34,14 @@ part back in (feedforward.py).
 Health checks are separate from the estimation: mean and spread of the
 normalised innovations, air uncertainty, a disturbance held at its bound, an
 implausible wall state and the settling time after a restart.
+
+Disturbance of the quiet periods: the disturbance of each tracked sub-step is
+kept until the quiet periods it may belong to are closed (their selection is
+final only then); each closed period then gets the integral of the
+disturbance and the tracked duration over its identification interval, a
+sub-step that crosses a bound counting for its part inside only. A period
+whose mean stands out from the recent periods is left out of the
+identification.
 """
 from __future__ import annotations
 
@@ -41,7 +49,7 @@ import math
 import statistics
 from typing import Any
 
-from ..tar_learning.const import ID_PRECISE_Q, NIGHT_FROM_H, NIGHT_TO_H
+from ..tar_learning.const import ID_PRECISE_Q
 from . import model as rm
 from .const import (
     H,
@@ -59,6 +67,7 @@ from .const import (
     RM_RESUME_MAX_S,
     RM_SETTLE_S,
     RM_STEP_S,
+    RM_STEPS_KEEP_S,
     RM_WALL_EXTRA_MAX,
 )
 from .emitter import CommandTimeline, emitter_step
@@ -88,8 +97,7 @@ def is_precise(q: float | None) -> bool:
 class RoomObserver:
     """State of one room under published parameters."""
 
-    def __init__(self, clock) -> None:
-        self._clock = clock
+    def __init__(self) -> None:
         self.params: RoomParams | None = None
         self.q: float | None = None
         self._disc: Discrete | None = None
@@ -113,7 +121,12 @@ class RoomObserver:
         self.d_sat_s = 0.0
         self.restarts = 0
         self.score = ForecastScore()
+        # Disturbance of the closed quiet periods: key -> [integral, tracked duration, start]
         self.nights: dict[str, list[float]] = {}
+        # Tracked steps not yet in a closed period: [start of the first step, [disturbance of each step]]
+        self.steps: list[list] = []
+        # End of the last attached period
+        self.attached_t: float | None = None
         self._resumed = False
         self._fc_cache: tuple[float, list[float]] | None = None
         # A loaded state waits for the restart decision (resolve_restart)
@@ -343,7 +356,7 @@ class RoomObserver:
             self.score.step(phi, gam, v, dmax)
             self.score.score(t1, self.y_last)
             if not self.settling:
-                self._night_track(t1, nx[2])
+                self._track(t1, nx[2])
 
     def _correct(self, y: float) -> None:
         P, x = self.P, self.x
@@ -435,34 +448,77 @@ class RoomObserver:
         return out
 
     # ------------------------------------------------------------------
-    # Night disturbance summary
+    # Disturbance of the quiet periods
     # ------------------------------------------------------------------
-    def _night_of(self, t: float) -> int | None:
-        tod = self._clock.tod_h(t)
-        if tod >= NIGHT_FROM_H:
-            return self._clock.day_of(t)
-        if tod < NIGHT_TO_H:
-            return self._clock.day_of(t) - 1
-        return None
+    def _track(self, t1: float, d: float) -> None:
+        """Keep the disturbance of a tracked step [t1 - RM_STEP_S, t1) until the periods it may belong to are
+        known."""
+        steps = self.steps
+        if steps and abs(steps[-1][0] + RM_STEP_S * (len(steps[-1][1]) + 1) - t1) <= 1e-3:
+            steps[-1][1].append(d)
+        else:
+            steps.append([t1 - RM_STEP_S, [d]])
+        self._trim_steps(t1 - RM_STEPS_KEEP_S)
 
-    def _night_track(self, t: float, d: float) -> None:
-        n = self._night_of(t)
-        if n is None:
-            return
-        rec = self.nights.setdefault(str(n), [0.0, 0.0])
-        rec[0] += d * RM_STEP_S
-        rec[1] += RM_STEP_S
+    def _trim_steps(self, t_min: float) -> None:
+        """Forget the tracked steps that end before t_min."""
+        steps = self.steps
+        while steps:
+            t0, ds = steps[0]
+            n = int(math.floor((t_min - t0) / RM_STEP_S + 1e-9))
+            if n <= 0:
+                break
+            if n >= len(ds):
+                steps.pop(0)
+                continue
+            steps[0] = [t0 + n * RM_STEP_S, ds[n:]]
+            break
+
+    def _integral(self, a: float, b: float) -> tuple[float, float]:
+        """Disturbance integral and tracked duration over [a, b): a step that crosses a bound counts for its
+        part inside only."""
+        s_d = dur = 0.0
+        for t0, ds in self.steps:
+            t_end = t0 + RM_STEP_S * len(ds)
+            if t_end <= a or t0 >= b:
+                continue
+            i0 = max(0, int(math.floor((a - t0) / RM_STEP_S)))
+            i1 = min(len(ds), int(math.ceil((b - t0) / RM_STEP_S)))
+            for i in range(i0, i1):
+                s0 = t0 + i * RM_STEP_S
+                w = min(b, s0 + RM_STEP_S) - max(a, s0)
+                if w > 0.0:
+                    s_d += ds[i] * w
+                    dur += w
+        return s_d, dur
+
+    def attach_periods(self, periods: list[tuple[str, float, float]], now: float) -> None:
+        """Give the closed periods (key, start, end) their disturbance integral and tracked duration, once.
+
+        A period is attached once it ended a sub-step before now (the state has been propagated over it); the
+        steps before the end of the last attached period are then forgotten (a later period always starts
+        after it), and a period that ends before it is not attached any more.
+        """
+        for key, a, b in periods:
+            if b > now - RM_STEP_S or (self.attached_t is not None and b <= self.attached_t) or key in self.nights:
+                continue
+            s_d, dur = self._integral(a, b)
+            self.nights[key] = [s_d, dur, float(a)]
+            self.attached_t = b if self.attached_t is None else max(self.attached_t, b)
         if len(self.nights) > RM_NIGHTS_KEEP:
-            for key in sorted(self.nights, key=int)[:-RM_NIGHTS_KEEP]:
+            for key in sorted(self.nights, key=lambda k: self.nights[k][2])[:-RM_NIGHTS_KEEP]:
                 del self.nights[key]
+        if self.attached_t is not None:
+            self._trim_steps(self.attached_t)
 
-    def disturbed_nights(self) -> list[int]:
-        """Nights whose mean disturbance stands out from the recent nights (detected heat gains or losses)."""
-        means = {int(k): v[0] / v[1] * H for k, v in self.nights.items() if v[1] >= RM_NIGHT_MIN_TRACK_S}
+    def disturbed_nights(self) -> list[str]:
+        """Periods whose mean disturbance stands out from the recent periods (detected heat gains or losses)."""
+        means = {k: v[0] / v[1] * H for k, v in self.nights.items() if v[1] >= RM_NIGHT_MIN_TRACK_S}
         if len(means) < 3:
             return []
         med = statistics.median(means.values())
-        return sorted(n for n, m in means.items() if abs(m - med) > RM_NIGHT_D_DEV_C_H)
+        return sorted((k for k, m in means.items() if abs(m - med) > RM_NIGHT_D_DEV_C_H),
+                      key=lambda k: self.nights[k][2])
 
     # ------------------------------------------------------------------
     # Persistence
@@ -474,6 +530,7 @@ class RoomObserver:
             "restarts": self.restarts,
             "innov": [self.innov_bias, self.innov_nis, self.innov_n], "d_sat_s": self.d_sat_s,
             "timeline": self.timeline.to_dict(), "score": self.score.to_dict(), "nights": self.nights,
+            "steps": self.steps, "attached_t": self.attached_t,
         }
 
     def resolve_restart(self, bridged: bool, stop_t: float | None = None) -> None:
@@ -502,6 +559,24 @@ class RoomObserver:
         if self._restart_pending:
             self.resolve_restart(False)
 
+    def _load_periods(self, data: dict[str, Any]) -> None:
+        """Disturbance of the quiet periods; a malformed entry drops them all (they are evidence only)."""
+        self.drop_periods()
+        try:
+            nights = {str(k): [float(v[0]), float(v[1]), float(v[2])] for k, v in (data.get("nights") or {}).items()}
+            steps = [[float(t0), [float(d) for d in ds]] for t0, ds in data.get("steps") or []]
+            att = data.get("attached_t")
+            att = None if att is None else float(att)
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return
+        vals = [x for v in nights.values() for x in v] + [t0 for t0, _ in steps] + [d for _, ds in steps for d in ds]
+        if all(math.isfinite(x) for x in vals) and (att is None or math.isfinite(att)):
+            self.nights, self.steps, self.attached_t = nights, [s for s in steps if s[1]], att
+
+    def drop_periods(self) -> None:
+        """Forget the disturbance of the periods and the steps kept for them."""
+        self.nights, self.steps, self.attached_t = {}, [], None
+
     def load(self, data: dict[str, Any] | None) -> None:
         """Restore a saved state; resolve_restart then applies the restart decision."""
         if not isinstance(data, dict):
@@ -509,7 +584,7 @@ class RoomObserver:
         try:
             self.timeline = CommandTimeline.from_dict(data.get("timeline"))
             self.score = ForecastScore.from_dict(data.get("score"))
-            self.nights = {str(k): [float(v[0]), float(v[1])] for k, v in (data.get("nights") or {}).items()}
+            self._load_periods(data)
             self.restarts = int(data.get("restarts") or 0)
             self.ue_x = float(data.get("ue_x") or 0.0)
             y = data.get("y_last")

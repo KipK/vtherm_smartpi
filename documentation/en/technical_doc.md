@@ -365,7 +365,7 @@ installation already out of the bootstrap rarely provides one.
 
 ### 3.8 Quiet periods of the emitter delay learning
 
-The emitter delay learning (`smartpi/tar_learning/`) selects its data with
+The emitter delay learning (`smartpi/tar_learning/`) and the room model select their data with
 `smartpi/quiet_periods/`, a pure Python module shared by the methods that need
 a room free of solar gains. No local hour enters the selection; times are epoch
 seconds and half-open intervals `[start, end)`.
@@ -433,6 +433,7 @@ when the history is pruned, and a period found again gets the same key.
 | Regulated night | `[regulated start, end of the episode)` of the selected component, at least 4 h, valid to its end; then the existing quarter, temperature, power-slope and residual rules |
 | Identification window | the identification intervals of three consecutive settled episodes (bins wholly inside them), the wall state starting 10 h before the first; compared with the window of the three episodes before, never overlapping |
 | Room class, fast value | one night entry and one confirmed value per key, replaced before the room class or the publication is computed |
+| Room model | the same windows of three settled episodes and their identification intervals, minus the periods the tracking found disturbed (§4.2); the disturbance of the tracking is summed per key |
 
 Evaluations carry their decision time (end of their last episode); the class,
 wall parameters and `τe` in force at a step are those decided before the step.
@@ -552,9 +553,11 @@ in heavy rooms, low after a setback and high when the walls give heat back.
 The free gain is part of the static part: without it the integral would carry
 $g_{EB}$ for good.
 
-**Energy balance.** The room model job computes, once a day after 08:00 with
-the identification, the balance of each whole local day of the T_ar history
-before the day (at most 7; 10 min bins, invalid intervals excluded):
+**Energy balance.** A job of its own computes, once per local day 20 minutes
+after its midnight and whatever the quiet periods, the balance of each whole
+local day of the T_ar history before the day (at most 7; 10 min bins, invalid
+intervals excluded). Midnight is only the boundary of these civil days (23 h
+and 25 h days at the clock changes); it selects no period:
 
 $$ u_d = \frac{\sum u \, \Delta t - \Delta T_{in} / a}{\sum \Delta t}, \qquad D_d = \overline{T_{in} - T_{ext}} $$
 
@@ -597,16 +600,67 @@ A refused day keeps the previous qualified model
 (`room_model.energy_balance_refusal_reason` says why); the model in force,
 its day and its number of days are saved with the room model.
 
-**Agreement with the energy balance.** Every fit of the daily identification
-takes the free gain in force as a known heat input, $a(u_e + g_{EB})$; the
-gain is not fitted per window: over the nights $T_{in} - T_{ext}$ varies too
+**Identification windows.** The room model reads the catalogue of quiet
+periods of the T_ar learning (§3.8) through `TarLearningManager.quiet_periods`;
+`room_model/periods.py` is its adapter. A window is three consecutive closed
+periods of the catalogue, each fitted on its identification interval (the
+quiet component, continued by the response to the rise for at most 2 h in the
+dark), cut by the invalid intervals and kept in pieces of at least 1 h, each
+piece with its own initial air and wall state. It is keyed by its last period
+and compared with the window of the three periods before it, so the two never
+share a period; the first windows have none (`waiting for a second series of
+quiet periods to confirm`). A window is computed once, when its last period is
+settled, oldest first, at most one job per hour of elapsed time; no local hour
+is involved. A window whose data have left the 7-day history is skipped.
+
+**Disturbed periods.** The tracking keeps the disturbance $d$ of each tracked
+60 s sub-step (at most 36 h) until the periods it may belong to are settled,
+since the selection of a period is final only then. Each settled period then
+gets $\int d \, dt$ and the tracked duration over its identification
+interval, a sub-step crossing a bound counting for its fraction inside; the
+steps before its end are dropped. A period with at least 4 h tracked whose mean
+differs from the median of the last 14 periods by more than 0.08 °C/h is left
+out of the windows that hold it.
+
+**Information.** Each fit (simple model and model with walls) gets the
+covariance of all its parameters from the Jacobian $J$ of its weighted model
+outputs at the optimum: the nonlinear parameters, $a$, the initial air and
+wall states of every piece and, when the window estimated the emitter (grid
+search, not the refined value in force), the log of the emitter first moment
+(central difference at ±2 %):
+
+$$ C = \tau_{int} \, s^2 (J^\top J)^{-1}, \qquad s^2 = \frac{\sum w r^2}{\sum w - p} $$
+
+with $\tau_{int}$ the residual count over its effective count (the integrated
+autocorrelation time used by the emitter search): correlated residuals carry
+less information than their number. The standard deviations of the
+coordinates a fit contributes follow by the delta method: $\ln a$ and
+$\ln(b_{eq}/a)$ for the simple model; $\ln a$, $\ln \alpha$ and $\ln c$
+($c = \gamma / \beta$) for the model with walls, whose $b_{eq}/a = (\alpha - c)/a$
+is never the static loss and is checked against $s_{EB}$ within 5 % before a
+publication and before any use. A fit is refused
+(`the quiet periods do not determine the model precisely enough yet`) when
+$1.96 \, \sigma$ of one of them exceeds the tolerance with which the agreement
+of two windows compares it: $\ln 1.15$ for $a$, $\ln 1.25$ for $b_{eq}/a$ and
+$\alpha$, $\ln 1.35$ for $c$. A model with walls whose wall share $c/\alpha$ is
+below 0.1 is never used, so its precision is not required. The covariance is
+the asymptotic one of least squares; the 95 % level and the reuse of the
+agreement tolerances are the choices of the method. There is no minimum fit
+duration: the precision decides whether the periods carry enough information.
+The other conditions are unchanged: at least 40 temperature events, one hour
+of full-power equivalent heating and a mean indoor-outdoor difference of 3 °C
+over the fitted pieces.
+
+**Agreement with the energy balance.** Every fit of the identification takes
+the free gain in force as a known heat input, $a(u_e + g_{EB})$; the gain is
+not fitted per window: over the quiet periods $T_{in} - T_{ext}$ varies too
 little to separate a constant input from the static loss. A candidate (model
 with walls or simple model) is published only if its own $b_{eq}/a$ agrees
 with $s_{EB}$ within 5 % ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$);
-otherwise the day publishes nothing (`the model's heat loss disagrees with
-the measured heat balance`). The model in force is the one computed by the
-same job when it qualifies, else the previous one. Without a qualified model
-there is no such check, but the room model gives no holding power either.
+otherwise the window publishes nothing (`the model's heat loss disagrees with
+the measured heat balance`). The model in force is the last qualified one at
+the time of the job. Without a qualified model there is no such check, but
+the room model gives no holding power either.
 
 **Emitter search.** The emitter first moment of the fits is searched on a
 fixed grid, independent of the dead time in force: 13 values log-spaced from
@@ -1127,6 +1181,18 @@ nights, windows, evaluations, confirmations and published values were selected
 by local hours without a solar check and are dropped, then found again from the
 history. A change of the home position forgets the evidence of the periods. A
 later version is ignored.
+
+The room model keeps its own store (state version 2): published parameters
+and their candidates, windows and records keyed by their last quiet period,
+the observer state with the disturbance of the periods and the sub-steps
+waiting for a period, the energy balance in force with the last day computed,
+and the time of the last identification job. A version 1 store keeps its
+published model, the observer's physical state (air, walls, disturbance,
+command timeline, forecast scores), the energy balance in force and its
+records; its windows and candidates (keyed by day, selected by local hours) and
+its night disturbances (summed over local hours, without their sub-steps) are
+dropped, and the windows are computed again from the quiet periods. A later
+version is ignored.
 
 #### Restarts
 

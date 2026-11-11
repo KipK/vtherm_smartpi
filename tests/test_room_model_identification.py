@@ -1,4 +1,5 @@
-"""Room model identification: fits on synthetic rooms, publication rules, energy balance, fit periods."""
+"""Room model identification: fits on synthetic rooms, publication rules, energy balance, fit periods,
+information of a fit."""
 
 from __future__ import annotations
 
@@ -12,9 +13,14 @@ import room_model_sim as rsim
 from custom_components.vtherm_smartpi.smartpi.room_model import gates, jobs, public
 from custom_components.vtherm_smartpi.smartpi.room_model import energy_balance
 from custom_components.vtherm_smartpi.smartpi.room_model import identification
-from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_EMITTER_CHI2, RM_EMITTER_GRID_S
+from custom_components.vtherm_smartpi.smartpi.room_model.const import (
+    RM_AGREE_TOL,
+    RM_EMITTER_CHI2,
+    RM_EMITTER_GRID_S,
+    RM_INFO_Z,
+)
 from custom_components.vtherm_smartpi.smartpi.room_model.energy_balance import heater_timeline
-from custom_components.vtherm_smartpi.smartpi.room_model.periods import fit_periods
+from custom_components.vtherm_smartpi.smartpi.room_model.periods import fit_periods, windows
 from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
 
 D0 = rsim.day_of(rsim.T0)
@@ -55,15 +61,21 @@ def test_full_model_identified_on_a_mass_room(mass_data) -> None:
     p = rsim.MASS
     first, second, worst = _two_windows(mass_data, p)
     assert first["decision"] == {"why": gates.WHY_NO_PREVIOUS, "wall": gates.WALL_NOT_CONFIRMED}
+    # The two windows are three quiet periods each, disjoint, the second compared with the first
+    assert second["prev_id"] == first["id"] and not set(first["nights"]) & set(second["nights"])
+    assert first["fitted"] == first["nights"] and len(first["nights"]) == 3
     # The energy balance of the whole days before the day: the walls still release the heat of the start of the
     # simulation (wall time 80 h), the heating need drifts by several % from day to day, and the balance is
     # refused; its slope (the outdoor temperature repeats every day: the slope alone) is a few % high
-    for rec in (first, second):
-        assert rec["eb"]["reason"] == energy_balance.REASON_DRIFT and rec["eb"]["value"] is None
-    assert second["eb"]["slope"] == pytest.approx((p["alpha"] - p["c"]) / p["a"], rel=0.06)
-    early = jobs.identify_job(rsim.snapshot(mass_data, D0 + 3, tau_e=p["tau_e"], L=p["L"],
-                                            a_per_min=p["a"] * 60.0))
-    assert early["eb"]["reason"] == "history" and early["eb"]["value"] is None
+    for d in (4, 7):
+        eb = jobs.balance_job(rsim.snapshot(mass_data, D0 + d, a_per_min=p["a"] * 60.0))["eb"]
+        assert eb["reason"] == energy_balance.REASON_DRIFT and eb["value"] is None
+    assert eb["slope"] == pytest.approx((p["alpha"] - p["c"]) / p["a"], rel=0.06)
+    early = jobs.balance_job(rsim.snapshot(mass_data, D0 + 3, a_per_min=p["a"] * 60.0))
+    assert early["day"] == D0 + 3 and early["eb"]["reason"] == "history" and early["eb"]["value"] is None
+    # Each fit carries the precision of its identifiable coordinates, here within the tolerances
+    info = second["full"]["info"]
+    assert gates.info_ok(info, "full", second["full"]["params"]) and info["sd"]["a"] < 0.01
     dec = second["decision"]
     assert dec["struct"] == "full"
     c = dec["candidate"]
@@ -106,16 +118,19 @@ def test_refusals_before_the_fit(mass_data) -> None:
     p = rsim.MASS
     snap = rsim.snapshot(mass_data, D0 + 4, tau_e=None, L=None)
     assert jobs.identify_job(snap)["decision"]["why"] == gates.WHY_EMITTER
-    snap = rsim.snapshot(mass_data, D0 + 1, tau_e=p["tau_e"], L=p["L"])
-    assert jobs.identify_job(snap)["decision"]["why"] == gates.WHY_HISTORY
-    snap = rsim.snapshot(mass_data, D0 + 4, tau_e=p["tau_e"], L=p["L"], excluded=[D0 + 1, D0 + 2, D0 + 3])
+    # The recorded data no longer cover the window
+    snap = rsim.snapshot(mass_data, D0 + 4, tau_e=p["tau_e"], L=p["L"])
+    late = dict(snap, first_t=snap["window"]["intervals"][0][0] + H)
+    assert jobs.identify_job(late)["decision"]["why"] == gates.WHY_HISTORY
+    keys = snap["window"]["nights"]
+    snap = rsim.snapshot(mass_data, D0 + 4, tau_e=p["tau_e"], L=p["L"], excluded=keys + ["q1:0.0:0.0"])
     rec = jobs.identify_job(snap)
     assert rec["decision"]["why"] == gates.WHY_DISTURBED
-    assert rec["excluded_nights"] == [D0 + 1, D0 + 2, D0 + 3]
-    # One disturbed night is left out, the others are fitted
-    snap = rsim.snapshot(mass_data, D0 + 4, tau_e=p["tau_e"], L=p["L"], excluded=[D0 + 2])
+    assert rec["excluded_nights"] == keys
+    # One disturbed period is left out, the others are fitted
+    snap = rsim.snapshot(mass_data, D0 + 4, tau_e=p["tau_e"], L=p["L"], excluded=[keys[1]])
     rec = jobs.identify_job(snap)
-    assert rec["nights"] == [D0 + 1, D0 + 3]
+    assert rec["fitted"] == [keys[0], keys[2]] and rec["nights"] == keys
 
 
 def test_no_heating_is_refused(mass_data) -> None:
@@ -128,6 +143,7 @@ def test_no_heating_is_refused(mass_data) -> None:
 # ---------------------------------------------------------------------------
 # Publication rules
 # ---------------------------------------------------------------------------
+_INFO = {"sd": {"a": 0.01, "b_eq_a": 0.01, "alpha": 0.01, "c": 0.01}, "tau": 1.0}
 _GOOD = {"n": 200, "mean": 0.001, "rms": 0.02, "runs_z": -1.0, "ac1h": 0.1, "corr_u": 0.05, "corr_sp": 0.0,
          "corr_te": 0.1}
 
@@ -349,43 +365,130 @@ def test_daily_energy_balance_covers_the_whole_days_before_the_day(no_mass_data)
     # A refused day gives the reason, no value
     rec = energy_balance.daily(dict(snap, on=[], off=[]), clock, D0 + 6)
     assert rec["value"] is None and rec["gain"] is None and rec["reason"] == "days"
-    # The job computes it first, whatever the outcome of the fits
-    job = jobs.identify_job(dict(snap, tau_e=None, L=None))
-    assert job["decision"]["why"] == gates.WHY_EMITTER
-    assert job["eb"] == energy_balance.daily(snap, clock, D0 + 6)
+    # Its own job, whatever the quiet periods: a record without any period gives the same balance
+    flat = dict(snap, sp=[[no_mass_data["first_t"], 20.0]], window=None)
+    assert jobs.balance_job(flat) == {"day": D0 + 6, "eb": energy_balance.daily(snap, clock, D0 + 6)}
+    # The identification only reads the slope in force
+    job = jobs.identify_job(dict(snap, tau_e=None, L=None, eb=0.0321))
+    assert job["decision"]["why"] == gates.WHY_EMITTER and job["eb"] == 0.0321
 
 
 def test_job_checks_the_candidate_against_the_energy_balance_in_force(mass_data) -> None:
-    """The ratio in force for the decision is the job's own when it qualifies, else the earlier one."""
+    """The slope in force for the decision is the one of the snapshot (None before a first qualified value)."""
     p = rsim.MASS
     first, second, _ = _two_windows(mass_data, p)
     snap = rsim.snapshot(mass_data, D0 + 7, prev=_slim(first), tau_e=p["tau_e"], L=p["L"],
                          a_per_min=p["a"] * 60.0)
-    assert jobs.eb_in_force(second, snap) == second["eb"]["value"]
-    refused = dict(second, eb={"value": None, "gain": None, "reason": "scatter", "slope": 0.04})
-    assert jobs.eb_in_force(refused, dict(snap, eb=0.021)) == 0.021
-    assert jobs.eb_in_force(refused, snap) is None
+    assert jobs.eb_in_force(dict(snap, eb=0.021)) == 0.021
+    assert jobs.eb_in_force(snap) is None and second["eb"] is None
     gain = gates._coords(second["decision"]["candidate"])[1]
-    far = jobs._done(dict(refused), dict(snap, eb=gain * 1.10))
+    far = jobs._done(dict(second), dict(snap, eb=gain * 1.10))
     assert far["decision"] == {"why": gates.WHY_EB, "wall": gates.WALL_NOT_CONFIRMED}
-    near = jobs._done(dict(refused), dict(snap, eb=gain * 1.03))
+    near = jobs._done(dict(second), dict(snap, eb=gain * 1.03))
     assert near["decision"]["struct"] == "full"
 
 
-def test_fit_periods_are_the_valid_nights() -> None:
-    clock = LocalClock("UTC")
-    first = clock.at(D0 - 10, 0.0)
-    last = clock.at(D0 + 1, 0.0)
-    per = fit_periods(clock, D0, first, last, [])
-    assert [n for _, _, n in per] == [D0 - 3, D0 - 2, D0 - 1]
-    assert all(b - a == pytest.approx(14 * H) for a, b, _ in per)
-    gap = (clock.at(D0 - 2, 23.0), clock.at(D0 - 1, 2.0))
-    per = fit_periods(clock, D0, first, last, [gap], excluded_nights=[D0 - 3])
-    assert [(round((b - a) / H, 3), n) for a, b, n in per] == [(5.0, D0 - 2), (6.0, D0 - 2), (14.0, D0 - 1)]
-    # Pieces shorter than the minimum are dropped
-    gap2 = (clock.at(D0 - 1, 18.5), clock.at(D0, 7.5))
-    per = fit_periods(clock, D0, first, last, [gap2])
-    assert D0 - 1 not in [n for _, _, n in per]
+def _period(k: int, a: float, b: float) -> dict:
+    return {"id": f"q1:{a:.1f}:{a:.1f}", "quiet": [a, b - 2 * H], "ident": [a, b]}
+
+
+def test_windows_are_three_closed_periods_compared_with_the_three_before() -> None:
+    pers = [_period(k, k * DAY + 22 * H, k * DAY + 32 * H) for k in range(8)]
+    ws = windows(pers)
+    assert [w["id"] for w in ws] == [p["id"] for p in pers[2:]]
+    for k, w in enumerate(ws, start=2):
+        assert w["nights"] == [p["id"] for p in pers[k - 2: k + 1]]
+        assert w["intervals"] == [p["ident"] for p in pers[k - 2: k + 1]] and w["t_end"] == pers[k]["ident"][1]
+        if k < 5:
+            assert w["prev"] is None
+            continue
+        # The window compared with it is the one of the three periods before: disjoint
+        prev = next(x for x in ws if x["id"] == w["prev"])
+        assert prev["nights"] == [p["id"] for p in pers[k - 5: k - 2]]
+        assert not set(prev["nights"]) & set(w["nights"])
+    # A period without its recorded identification interval falls back on its quiet part
+    assert windows([dict(p, ident=None) for p in pers[:3]])[0]["intervals"][0] == pers[0]["quiet"]
+
+
+def test_fit_periods_are_the_valid_identification_intervals() -> None:
+    pers = [_period(k, k * DAY + 22 * H, k * DAY + 32 * H) for k in range(3)]
+    w = windows(pers)[0]
+    first, last = -DAY, 10 * DAY
+    per = fit_periods(w, first, last, [])
+    assert [n for _, _, n in per] == w["nights"]
+    assert all(b - a == pytest.approx(10 * H) for a, b, _ in per)
+    # Cut by an invalid interval: two pieces with their own initial state; a disturbed period is left out
+    gap = (DAY + 25 * H, DAY + 28 * H)
+    per = fit_periods(w, first, last, [gap], excluded=[w["nights"][0]])
+    assert [(round((b - a) / H, 3), n) for a, b, n in per] == [(3.0, w["nights"][1]), (4.0, w["nights"][1]),
+                                                               (10.0, w["nights"][2])]
+    # Pieces shorter than the minimum are dropped; the recorded data bound the intervals
+    gap2 = (2 * DAY + 22.5 * H, 2 * DAY + 31.5 * H)
+    assert w["nights"][2] not in [n for _, _, n in fit_periods(w, first, last, [gap2])]
+    per = fit_periods(w, 22 * H + 5 * H, 2 * DAY + 26 * H, [])
+    assert [(round((b - a) / H, 3), n) for a, b, n in per] == [(5.0, w["nights"][0]), (10.0, w["nights"][1]),
+                                                               (4.0, w["nights"][2])]
+
+
+def test_periods_come_from_the_shared_catalogue(mass_data) -> None:
+    """The fit periods of a window are the identification intervals of the catalogue's quiet periods: the
+    setback 22:00-06:00 and the 2 h response to the rise while it is dark."""
+    pers = rsim.quiet_periods(mass_data)
+    assert len(pers) == 8
+    for p in pers:
+        a, b = p["ident"]
+        assert p["kind"] == "setback" and p["quiet"][1] == p["rise_t"]
+        assert (a - rsim.T0) % DAY == pytest.approx(22 * H, abs=1.0) and b - a == pytest.approx(10 * H, abs=1.0)
+    w = rsim.window(mass_data, D0 + 4)
+    assert w["nights"] == [p["id"] for p in pers[1:4]] and w["prev"] is None
+    assert rsim.window(mass_data, D0 + 7)["prev"] == w["id"]
+    # A gap splits a night: the longest piece is the period, and only it is fitted
+    g = (pers[2]["quiet"][0] + 2 * H, pers[2]["quiet"][0] + 3 * H)
+    cut = rsim.window(mass_data, D0 + 4, gaps=[g])
+    k = cut["nights"].index(next(n for n in cut["nights"] if n not in w["nights"]))
+    assert k == 1 and cut["intervals"][1][0] == pytest.approx(g[1], abs=0.1)
+
+
+def _fit_on(data: dict, span_h: float, emitter: bool = False) -> dict:
+    """Model with walls fitted on the first span_h hours of each period of the window closed on day 4."""
+    p = rsim.MASS
+    snap = rsim.snapshot(data, D0 + 4, tau_e=p["tau_e"], L=p["L"], a_per_min=p["a"] * 60.0)
+    w = snap["window"]
+    per = [(a, min(b, a + span_h * H), n) for (a, b), n in zip(w["intervals"], w["nights"])]
+    d = identification.WindowData(snap, per, p["tau_e"], p["L"])
+    pb = identification.Problem(d, True)
+    f = identification.fit(pb)
+    em = {"source": "grid", "first_moment": p["tau_e"] + p["L"]} if emitter else {}
+    f["info"] = identification.precision(pb, f, jobs._emitter_problems(d, em, p["tau_e"], 0.0, True))
+    return dict(gates.fit_record(f, "full", "precise", p["tau_e"], p["L"], 0.01), hours=d.hours)
+
+
+def test_information_of_a_fit_is_its_precision_not_its_duration() -> None:
+    """The precision of the identifiable coordinates, from the Jacobian of the fit, decides; the same 12 hours
+    determine the walls with a clean sensor and not with a noisy one, and 30 hours of the noisy one do."""
+    clean = rsim.simulate(rsim.MASS, 4.5)
+    noisy = rsim.simulate(rsim.MASS, 4.5, noise=0.02)
+    short_clean = _fit_on(clean, 4.0)
+    assert short_clean["hours"] == pytest.approx(12.0, abs=0.1) and short_clean["ok"] is True
+    short_noisy = _fit_on(noisy, 4.0)
+    assert short_noisy["ok"] is False and short_noisy["why"] == gates.WHY_INFO
+    sd = short_noisy["info"]["sd"]
+    assert RM_INFO_Z * sd["alpha"] > RM_AGREE_TOL["alpha"]
+    long_noisy = _fit_on(noisy, 10.0)
+    assert long_noisy["hours"] == pytest.approx(30.0, abs=0.1) and long_noisy["ok"] is True
+    # A window that estimated its emitter carries the uncertainty of that estimate too
+    with_em = _fit_on(noisy, 10.0, emitter=True)["info"]["sd"]
+    assert with_em["b_eq_a"] > long_noisy["info"]["sd"]["b_eq_a"] and with_em["a"] > long_noisy["info"]["sd"]["a"]
+    # The refusal shows with its plain reason and keeps the walls unconfirmed
+    cur = {"q": 0.01, "full": short_noisy, "reduced": {"ok": False, "why": gates.WHY_INFO}}
+    assert gates.decide(cur, None, {}, True) == {"why": gates.WHY_INFO, "wall": gates.WALL_NOT_CONFIRMED}
+    assert public.reason(gates.WHY_INFO) == "the quiet periods do not determine the model precisely enough yet"
+    # Without a precision, or with one not determined, a fit is not kept; a model without a real wall share
+    # is never used, so its precision is not required
+    params = long_noisy["params"]
+    assert not gates.info_ok(None, "full", params)
+    assert not gates.info_ok({"sd": dict(long_noisy["info"]["sd"], c=float("nan"))}, "full", params)
+    assert gates.info_ok(None, "full", dict(params, c=0.05 * params["alpha"]))
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +626,8 @@ def test_emitter_split_keeps_the_refined_lag() -> None:
 def test_wall_rate_above_the_cap_is_refused() -> None:
     from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 
-    fit = {"a": 1e-3, "alpha": 1e-4, "beta": 1.0 / (2.0 * H), "c": 5e-5, "check": dict(_GOOD, rms=0.01)}
+    fit = {"a": 1e-3, "alpha": 1e-4, "beta": 1.0 / (2.0 * H), "c": 5e-5, "check": dict(_GOOD, rms=0.01),
+           "info": _INFO}
     assert gates.fit_record(fit, "full", "precise", 600.0, 0.0, 0.01)["why"] == gates.WHY_RANGE
     ok = gates.fit_record(dict(fit, beta=1.0 / (4.0 * H)), "full", "precise", 600.0, 0.0, 0.01)
     assert ok["ok"] is True
@@ -567,10 +671,9 @@ def test_fit_with_the_free_gain_in_force_matches_the_energy_balance() -> None:
     assert without["reduced"]["b_eq"] / without["reduced"]["params"]["a"] < 0.9 * slope
     assert without["decision"].get("struct") is None
     assert without["decision"]["why"] in (gates.WHY_EB, gates.WHY_RESIDUALS)
-    # The gain in force: the job's own qualified one, else the earlier one, 0 without one
-    assert jobs.eb_gain_in_force({"eb": {"value": 0.03, "gain": 0.05}}, {"eb": 0.02, "eb_gain": 0.1}) == 0.05
-    assert jobs.eb_gain_in_force({"eb": {"value": None, "gain": None}}, {"eb": 0.02, "eb_gain": 0.1}) == 0.1
-    assert jobs.eb_gain_in_force({"eb": {"value": None}}, {"eb": None, "eb_gain": 0.1}) == 0.0
+    # The gain in force: the one of the static model in force, 0 without one
+    assert jobs.eb_gain_in_force({"eb": 0.02, "eb_gain": 0.1}) == 0.1
+    assert jobs.eb_gain_in_force({"eb": None, "eb_gain": 0.1}) == 0.0
 
 
 # ---------------------------------------------------------------------------
