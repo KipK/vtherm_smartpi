@@ -87,6 +87,7 @@ All notable changes to this project will be documented in this file.
   measurements and learning in progress resume, and nothing is excluded from the
   learning data. Another restart excludes only its downtime, without the
   10-minute margins. `control.last_restart` shows the last decision.
+
 ## [0.6.4]
 
 - Regulation: the heating dead time no longer shrinks after a start in a room
