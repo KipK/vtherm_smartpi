@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6.4]
 
 - Restart bridge: a setpoint changed during the stop is now seen as a setpoint change at the first tick.
 - Learning histories and room model observer: a clock that goes back starts a new origin instead of freezing the recording.
