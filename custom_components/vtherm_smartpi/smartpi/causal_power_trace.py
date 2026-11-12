@@ -39,6 +39,7 @@ class ControlOwnershipSnapshot:
     i_mode: str | None
     quality: str = "causal_full"
     constraint_flags: tuple[str, ...] = ()
+    i_hold_source: str | None = None
 
 
 @dataclass(frozen=True)

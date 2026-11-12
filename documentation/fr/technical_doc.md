@@ -730,7 +730,16 @@ L'observateur causal aligne une seconde timeline, pondérée dans le temps, de
 la propriété des termes de commande avec celle de la puissance physique. Une
 fenêtre stricte en deadband peut ainsi séparer le biais intégral stable
 $J=mean(K_i integral)$ du déficit physique
-$D=H-mean(u_{applied})$. Après trois fenêtres indépendantes cohérentes, une
+$D=H-mean(u_{applied})$. Une fenêtre stricte en deadband exige le régime
+`DEAD_BAND` avec une intégrale qui ne bouge pas : gelée dans le cœur de la
+deadband, ou maintenue dans la bordure d'hystérésis de la deadband (source de
+maintien `deadband_hysteresis_shell`). Tout autre maintien de l'intégrale
+(fenêtre, délestage, capteur invalide, sécurité) n'est pas éligible. Dans la
+bordure, la pièce est écartée de la consigne : le transfert n'y exige pas une
+erreur moyenne dans la résolution du capteur (la borne d'erreur par échantillon
+et les contrôles de stationnarité restent appliqués) et prend $D=0$ : le déficit
+dû à l'écart appartient à la boucle, seule la part intégrale se déplace et la
+commande reste inchangée. Après trois fenêtres indépendantes cohérentes, une
 transaction bornée applique
 `delta_trim = alpha * lambda * (J + D)` et
 `delta_u_i = -alpha * lambda * J`, donc

@@ -42,6 +42,7 @@ from .ff_trim import (
     FFTrimPersistentResult,
     FFTrimThermalSample,
     FFTrimWindowProposal,
+    is_deadband_neutral_integral,
     prepare_bumpless_transfer,
 )
 from .valve_curve import applied_output_deviates
@@ -231,6 +232,13 @@ class FFTrimCoordinator:
             flags.append("ff3")
         return tuple(sorted(set(flags)))
 
+    def _integral_hold_source(self) -> str | None:
+        """Return why the integral is held, only while it is held plainly."""
+        ctl = self._spi.ctl
+        if ctl.last_i_mode != "I:HOLD":
+            return None
+        return ctl.last_integral_hold_source
+
     def build_command_snapshot(
         self,
         hvac_mode: VThermHvacMode,
@@ -259,6 +267,7 @@ class FFTrimCoordinator:
             regime=spi.gov.regime,
             i_mode=spi.ctl.last_i_mode,
             constraint_flags=self._constraint_flags(actual_ff3),
+            i_hold_source=self._integral_hold_source(),
         )
 
     @staticmethod
@@ -287,6 +296,7 @@ class FFTrimCoordinator:
             i_mode=snapshot.i_mode,
             quality=quality,
             constraint_flags=snapshot.constraint_flags,
+            i_hold_source=snapshot.i_hold_source,
         )
 
     def deadtime_context(
@@ -416,7 +426,12 @@ class FFTrimCoordinator:
         proposal = FFTrimWindowProposal(
             correction=float(correction),
             mean_ff1=float(mean_ff1),
-            physical_power_deficit=result.physical_power_deficit,
+            physical_power_deficit=(
+                result.transfer_power_deficit
+                if result.transfer_eligible
+                and result.transfer_power_deficit is not None
+                else result.physical_power_deficit
+            ),
             integral_bias=result.mean_i_power,
             transfer_eligible=result.transfer_eligible,
             transfer_reason=result.transfer_reason,
@@ -609,7 +624,9 @@ class FFTrimCoordinator:
         spi = self._spi
         if spi.gov.regime != GovernanceRegime.DEAD_BAND:
             return "application_not_deadband"
-        if spi.ctl.last_i_mode != "I:FREEZE(deadband)":
+        if not is_deadband_neutral_integral(
+            spi.ctl.last_i_mode, self._integral_hold_source()
+        ):
             return "application_i_not_frozen"
         if spi.ctl.last_sat != "NO_SAT":
             return "application_saturated"
@@ -756,6 +773,7 @@ class FFTrimCoordinator:
             regime=spi.gov.regime,
             i_mode=spi.ctl.last_i_mode,
             u_pi=spi.ctl.u_pi,
+            i_hold_source=self._integral_hold_source(),
             hvac_mode=mode,
             saturated=spi.ctl.last_sat != "NO_SAT",
             trajectory_active=spi.sp_mgr.trajectory_active,

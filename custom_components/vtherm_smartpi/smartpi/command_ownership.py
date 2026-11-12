@@ -53,6 +53,7 @@ class CommandOwnershipSnapshot:
     regime: str | None
     i_mode: str | None
     constraint_flags: tuple[str, ...] = ()
+    i_hold_source: str | None = None
 
 
 @dataclass(frozen=True)

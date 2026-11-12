@@ -785,7 +785,15 @@ self._ab_confidence = ABConfidence()
 The causal observer aligns a second, time-weighted control-ownership timeline
 with the physical-power timeline. A strict deadband window can therefore
 separate the stable integral bias $J=mean(K_i integral)$ from the physical
-deficit $D=H-mean(u_{applied})$. After three independent coherent windows, one
+deficit $D=H-mean(u_{applied})$. A strict deadband window requires the
+`DEAD_BAND` regime with an integral that does not move: frozen in the core
+deadband, or held in the deadband hysteresis shell (`deadband_hysteresis_shell`
+hold source). Any other integral hold (window, load shedding, invalid sensor,
+safety) is not eligible. In the shell the room sits off the setpoint, so the
+transfer there does not require the mean error to be within the sensor
+resolution (the per-sample error bound and the stationarity checks still
+apply) and takes $D=0$: the offset deficit belongs to the loop, only the
+integral share moves, and the command is unchanged. After three independent coherent windows, one
 bounded transaction applies
 `delta_trim = alpha * lambda * (J + D)` and
 `delta_u_i = -alpha * lambda * J`, hence
