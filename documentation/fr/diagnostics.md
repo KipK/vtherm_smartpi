@@ -160,7 +160,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `pending_steps` | Montées de confort en attente de leur réponse de 2 h |
 | `data_invalid_reason` | Raison pour laquelle les données actuelles sont exclues (par exemple `window open`, `temperature jump`, `hvac not heating`), `null` lorsqu'elles sont valides |
 | `history_h` | Heures de signaux conservées |
-| `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |
+| `last_error` | Raison de l'échec du dernier calcul (`the calculation failed, see the log` ; le détail est dans le journal), `null` lorsqu'il n'y en a pas |
 
 ### Modèle de pièce
 
@@ -189,7 +189,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `energy_balance_day` | Jour où les valeurs en vigueur ont été calculées, `null` avant une première valeur acceptée |
 | `energy_balance_refusal_reason` | Raison pour laquelle le dernier bilan thermique quotidien n'a donné aucune nouvelle valeur (`not enough recorded days yet`, `heating response not known yet`, `too few usable days (missing data or no heating)`, `indoor-outdoor temperature difference too small`, `too little heating`, `free heat gains detected; the outdoor temperature has not varied enough yet to separate them from the losses`, `the heating need varies too much from one day to the next`, `the heating need is still drifting from day to day (walls storing or releasing heat)`, `value out of the plausible range` ou `computation failed`), `null` lorsqu'il en a donné une |
 | `sensor_resolution_c` | Plus petit pas de la sonde de température observé dans l'historique enregistré (°C) |
-| `last_error` | Dernière erreur de calcul, `null` lorsqu'il n'y en a pas |
+| `last_error` | Raison de l'échec du dernier calcul (`the calculation failed, see the log` ; le détail est dans le journal), `null` lorsqu'il n'y en a pas |
 
 ### Feed-forward
 

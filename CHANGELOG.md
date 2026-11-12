@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Restart bridge: a setpoint changed during the stop is now seen as a setpoint change at the first tick.
+- Learning histories and room model observer: a clock that goes back starts a new origin instead of freezing the recording.
 - Emitter delay learning: no fixed hour any more. It learns on quiet periods
   found in the data: no sun (computed from the home position in Home
   Assistant), a constant low setpoint from the setback to the next rise or

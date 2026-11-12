@@ -19,6 +19,7 @@ from custom_components.vtherm_smartpi.smartpi.room_model.observer import (
     HEALTH_OK,
     HEALTH_PAUSED,
     HEALTH_SETTLING,
+    HEALTH_WAITING,
     RoomObserver,
 )
 from custom_components.vtherm_smartpi.smartpi.room_model.scoring import ForecastScore
@@ -335,3 +336,20 @@ def test_scoring_records_one_error_per_horizon_and_round_trips() -> None:
     for _ in range(RM_SCORE_KEEP + 10):
         s._push(s.errors[0], 0.1)
     assert len(s.errors[0]) == RM_SCORE_KEEP
+
+
+def test_observer_restarts_tracking_when_the_clock_goes_back(mass_run) -> None:
+    ob = _observer(rsim.MASS)
+    _replay(ob, mass_run, rsim.T0 + 600.0, rsim.T0 + 2 * 86400.0)
+    assert ob.health() == HEALTH_OK
+    t_old = ob.t
+    back = t_old - 3600.0
+    ob.observe(back, temp=ob.y_last, meas_key=None, meas_t=None, ext=ob.te, active=False)
+    assert ob.x is None
+    assert ob.health() == HEALTH_WAITING
+    assert ob.wall_extra() is None
+    ob.observe(back + 60.0, temp=ob.y_last, meas_key=None, meas_t=None, ext=ob.te, active=True)
+    assert ob.t == back + 60.0
+    assert ob.health() == HEALTH_SETTLING
+    ob.observe(back + 660.0, temp=ob.y_last, meas_key=None, meas_t=None, ext=ob.te, active=True)
+    assert ob.t > back + 600.0

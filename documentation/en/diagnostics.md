@@ -161,7 +161,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `pending_steps` | Comfort steps waiting for their 2 h response |
 | `data_invalid_reason` | Why the current data are excluded (for example `window open`, `temperature jump`, `hvac not heating`), `null` when they are valid |
 | `history_h` | Hours of signals kept |
-| `last_error` | Last computation error, `null` when none |
+| `last_error` | Why the last computation failed (`the calculation failed, see the log`; the details are in the log), `null` when none |
 
 ### Room model
 
@@ -190,7 +190,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `energy_balance_day` | Day the values in force were computed, `null` before a first accepted value |
 | `energy_balance_refusal_reason` | Why the last daily heat balance gave no new value (`not enough recorded days yet`, `heating response not known yet`, `too few usable days (missing data or no heating)`, `indoor-outdoor temperature difference too small`, `too little heating`, `free heat gains detected; the outdoor temperature has not varied enough yet to separate them from the losses`, `the heating need varies too much from one day to the next`, `the heating need is still drifting from day to day (walls storing or releasing heat)`, `value out of the plausible range` or `computation failed`), `null` when it gave one |
 | `sensor_resolution_c` | Smallest step of the temperature sensor seen in the recorded history (°C) |
-| `last_error` | Last computation error, `null` when none |
+| `last_error` | Why the last computation failed (`the calculation failed, see the log`; the details are in the log), `null` when none |
 
 ### Feed-forward
 

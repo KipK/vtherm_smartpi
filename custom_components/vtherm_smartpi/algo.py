@@ -42,6 +42,7 @@ The output is a power command between 0 and 1 (0-100%).
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import replace
 from datetime import datetime
@@ -1495,6 +1496,11 @@ class SmartPI:
         self._last_calculate_time = wall_to_monotonic_ts(saved.get("calc_wall"))
         self._startup_grace_period = False
         self._bridge_first_tick = True
+        # The setpoint before the stop: a change during the stop is then detected
+        # at the first tick like any other setpoint change.
+        target = saved.get("target")
+        if isinstance(target, (int, float)) and not isinstance(target, bool) and math.isfinite(target):
+            self._last_target_temp = float(target)
 
     def _hysteresis_output_context(self) -> dict | None:
         """Return the bootstrap on/off output to resume after a restart."""
@@ -2283,6 +2289,7 @@ class SmartPI:
                 temp=current_temp,
                 cycle=self._restart_cycle(),
                 excluded=self._calc_exclusion(power_shedding),
+                target=target_temp,
             )
 
         # The saved bootstrap output only applies to the first calculation.

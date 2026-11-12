@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from custom_components.vtherm_smartpi.smartpi import quiet_periods as qp
+from custom_components.vtherm_smartpi.smartpi.quiet_periods import solar
 from custom_components.vtherm_smartpi.smartpi.quiet_periods.const import (
     DARK_ELEVATION_DEG,
     DARK_TIME_MARGIN_S,
@@ -375,3 +376,25 @@ def test_identification_keeps_the_dark_response_to_the_rise() -> None:
                              hist["on"], hist["temps"], [])
     last = [e for e in part if e["rise_t"]][-1]
     assert last["closed"] and not last["settled"]
+
+
+def test_polar_night_search_is_bounded_and_not_repeated(monkeypatch) -> None:
+    real_h = solar._h
+    calls = []
+
+    def counting(pos, t):
+        calls.append(t)
+        return real_h(pos, t)
+
+    solar._day_samples.cache_clear()
+    solar._dark_days.cache_clear()
+    monkeypatch.setattr(solar, "_h", counting)
+    svalbard = qp.Position(78.0, 15.0)
+    t0 = _utc(2026, 12, 10)
+    qp.dark_intervals(svalbard, t0, t0 + 86400.0)
+    cold = len(calls)
+    assert cold < 60000
+    # The next day finds the days already sampled: only the new day and the crossings are computed
+    calls.clear()
+    qp.dark_intervals(svalbard, t0 + 86400.0, t0 + 2 * 86400.0)
+    assert len(calls) < cold / 20

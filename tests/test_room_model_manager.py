@@ -6,11 +6,13 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import threading
 
 import pytest
 
 import room_model_sim as rsim
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.smartpi import job_abort
 from custom_components.vtherm_smartpi.smartpi.room_model import energy_balance as eb_mod
 from custom_components.vtherm_smartpi.smartpi.room_model import gates, public
 from custom_components.vtherm_smartpi.smartpi.room_model import manager as manager_mod
@@ -340,7 +342,7 @@ async def test_failed_computation_and_missing_packages(monkeypatch) -> None:
     await m.async_run(_SyncHass(), now=now)
     diag = m.diagnostics()
     assert diag["status"] == "not identified: computation failed"
-    assert diag["last_error"] == "bad fit"
+    assert diag["last_error"] == "the calculation failed, see the log"
     assert diag["energy_balance_loss_per_c"] is None
     assert diag["energy_balance_refusal_reason"] == "computation failed"
     # A window is computed once, failed or not; the next one waits for the cadence
@@ -575,3 +577,78 @@ def test_room_model_exclusion_names_the_window_that_turns_the_heater_off() -> No
                                window_manager=SimpleNamespace(is_window_detected=False),
                                is_overpowering_detected=True))
     assert SmartPIHandler._room_model_exclusion(t, algo) == "power shedding"
+
+
+class _ResetDuringJob:
+    """Executor stand-in: the manager is reset while the job runs."""
+
+    def __init__(self, manager: RoomModelManager) -> None:
+        self.manager = manager
+
+    async def async_add_executor_job(self, func, *args):
+        result = func(*args)
+        self.manager.reset()
+        return result
+
+
+async def test_results_arriving_after_a_reset_are_dropped(monkeypatch) -> None:
+    data = rsim.simulate(rsim.NO_MASS, 5.0)
+    m = RoomModelManager("room", "UTC", _tar(data))
+    m._emitter = (600.0, 120.0)
+    calls = _fake_jobs(monkeypatch)
+    await m.async_run(_ResetDuringJob(m), now=rsim.T0 + 4 * 86400.0 + 9 * 3600.0)
+    assert calls
+    assert m.records == [] and m.windows == {} and m.eb_run_day is None and m.eb_reason is None
+
+
+async def test_failure_after_a_reset_publishes_nothing(monkeypatch) -> None:
+    data = rsim.simulate(rsim.NO_MASS, 5.0)
+    m = RoomModelManager("room", "UTC", _tar(data))
+    m._emitter = (600.0, 120.0)
+
+    def boom(kind, snap):
+        m.reset()  # the learning is reset while the failing fit runs
+        raise RuntimeError("bad fit")
+
+    monkeypatch.setattr(manager_mod, "_run_job", boom)
+    await m.async_run(_SyncHass(), now=rsim.T0 + 4 * 86400.0 + 9 * 3600.0)
+    assert m.last_error is None and m.records == []
+
+
+async def test_a_stopped_manager_starts_no_computation(monkeypatch) -> None:
+    data = rsim.simulate(rsim.NO_MASS, 5.0)
+    m = RoomModelManager("room", "UTC", _tar(data))
+    m._emitter = (600.0, 120.0)
+    calls = _fake_jobs(monkeypatch)
+    m.stop()
+    await m.async_run(_SyncHass(), now=rsim.T0 + 4 * 86400.0 + 9 * 3600.0)
+    assert calls == [] and m.last_error is None
+
+
+async def test_a_stop_ends_the_running_computation_without_an_error(monkeypatch) -> None:
+    data = rsim.simulate(rsim.NO_MASS, 5.0)
+    m = RoomModelManager("room", "UTC", _tar(data))
+    m._emitter = (600.0, 120.0)
+
+    def job(kind, snap):
+        m.stop()  # the thermostat is removed while the fit runs
+        job_abort.check()
+        raise AssertionError("the job went on after the stop")
+
+    monkeypatch.setattr(manager_mod, "_run_job", job)
+    await m.async_run(_SyncHass(), now=rsim.T0 + 4 * 86400.0 + 9 * 3600.0)
+    assert m.last_error is None and m.records == []
+    assert not m._running
+
+
+def test_the_abort_of_one_job_does_not_reach_another_thread() -> None:
+    stopped = threading.Event()
+    stopped.set()
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(job_abort.check()))
+    with pytest.raises(job_abort.JobAborted):
+        job_abort.run(stopped, lambda: None)
+    worker.start()
+    worker.join()
+    assert seen == [None]
+    job_abort.check()  # nothing attached to this thread any more

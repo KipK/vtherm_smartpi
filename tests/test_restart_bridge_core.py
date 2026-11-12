@@ -237,6 +237,31 @@ def test_bridged_restart_has_no_learning_freeze() -> None:
     assert run.algo.est.learn_last_reason != "skip: governance (perturbed)"
 
 
+def test_setpoint_changed_during_a_bridged_restart_is_detected_at_the_first_tick(caplog) -> None:
+    run = _to_heating_episode()
+    run.stop()
+    assert run.saved["restart"]["target"] == pytest.approx(20.0)
+    run.setpoint = 21.0  # changed during the stop
+    run.tick()
+    caplog.set_level("INFO")
+    caplog.clear()
+    run.start()
+    assert run.algo.restart.decision.bridged is True
+    assert "Target change detected (20.00 -> 21.00)" in caplog.text
+    assert run.algo._last_target_temp == pytest.approx(21.0)
+
+
+def test_unchanged_setpoint_across_a_bridged_restart_is_no_target_change(caplog) -> None:
+    run = _to_heating_episode()
+    run.stop()
+    run.tick()
+    caplog.set_level("INFO")
+    caplog.clear()
+    run.start()
+    assert run.algo.restart.decision.bridged is True
+    assert "Target change detected" not in caplog.text
+
+
 @pytest.mark.parametrize("gap_ticks, legacy", [(int(RESTART_BRIDGE_MAX_GAP_S / TICK_S) + 1, False), (1, True)])
 def test_long_or_unknown_restart_behaves_as_before(gap_ticks: int, legacy: bool) -> None:
     run = _to_heating_episode()

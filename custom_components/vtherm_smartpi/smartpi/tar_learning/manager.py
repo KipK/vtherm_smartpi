@@ -21,10 +21,12 @@ from __future__ import annotations
 import bisect
 import logging
 import math
+import threading
 import time
 from typing import Any
 
 from ...hvac_mode import VThermHvacMode_HEAT
+from ..job_abort import JobAborted, run as run_abortable
 from ..quiet_periods import (
     WHY_NO_POSITION,
     Position,
@@ -78,6 +80,10 @@ _CATALOGUE_EVERY_S = 600.0
 _POSITION_TOL_DEG = 1e-3
 # Shortest response left before sunrise for a comfort step
 _RESPONSE_MIN_S = 600.0
+
+
+# Published when a computation fails (the exception is in the log)
+_FAILURE_TEXT = "the calculation failed, see the log"
 
 
 def _run_job(kind: str, snap: dict) -> dict:
@@ -137,6 +143,10 @@ class TarLearningManager:
         self.reference_heat_s: float | None = None
         # Results of a computation started before a reset or a change of position are dropped
         self._generation = 0
+        # Set at a stop: the computation running in the executor ends as soon as it can
+        self._abort = threading.Event()
+        # (position, UTC day) of the last sun scan done in the executor
+        self._sun_scanned: tuple[Position, int] | None = None
         self._reset_results()
 
     def _reset_results(self) -> None:
@@ -218,6 +228,28 @@ class TarLearningManager:
     @property
     def public_status(self) -> str:
         return self.status if self.supported else STATUS_UNSUPPORTED
+
+    def stop(self) -> None:
+        """End the computation in progress and start no other (removal, reload)."""
+        self._abort.set()
+
+    async def warm_sun(self, hass, now: float) -> None:
+        """Scan the sun over the history in the executor, once a day: the catalogue then finds it in the cache.
+
+        A polar night can take about a second to search; it must not run in the event loop.
+        """
+        h = self.history
+        if self.position is None or h.first_t is None:
+            return
+        key = (self.position, int(now // 86400.0))
+        if key == self._sun_scanned:
+            return
+        self._sun_scanned = key
+        await hass.async_add_executor_job(dark_intervals, self.position, float(h.first_t), float(max(now, h.first_t)))
+
+    def _in_executor(self, hass, kind: str, snap: dict):
+        """Run a job in the executor; a stop ends it."""
+        return hass.async_add_executor_job(run_abortable, self._abort, _run_job, kind, snap)
 
     def reset(self) -> None:
         """Forget the history and every learned value."""
@@ -548,10 +580,11 @@ class TarLearningManager:
 
     async def async_run(self, hass, now: float | None = None) -> None:
         """Run the due computations in the executor, one at a time."""
-        if self._running or not self.active:
+        if self._running or not self.active or self._abort.is_set():
             return
         self._running = True
         try:
+            await self.warm_sun(hass, time.time() if now is None else now)
             while True:
                 job = self._next_job(time.time() if now is None else now)
                 if job is None:
@@ -559,16 +592,18 @@ class TarLearningManager:
                 kind, snap, ctx = job
                 gen = self._generation
                 try:
-                    result = await hass.async_add_executor_job(_run_job, kind, snap)
+                    result = await self._in_executor(hass, kind, snap)
+                except JobAborted:
+                    return
                 except ImportError as err:
                     _LOGGER.warning("%s - T_ar learning: %s", self._name, err)
                     self.set_dependencies(False)
                     return
-                except Exception as err:  # noqa: BLE001 - a failed fit must never stop the regulation
+                except Exception:  # noqa: BLE001 - a failed fit must never stop the regulation
                     _LOGGER.exception("%s - T_ar learning: %s computation failed", self._name, kind)
                     if gen != self._generation:
                         continue
-                    self.last_error = f"{kind}: {err}"
+                    self.last_error = _FAILURE_TEXT
                     self._mark_failed(kind, ctx)
                     continue
                 if gen != self._generation:
@@ -621,14 +656,16 @@ class TarLearningManager:
                 "nights": {n: self.rnights.get(n) for n in ids}, "evals": list(self.evals)}
         gen = self._generation
         try:
-            res = await hass.async_add_executor_job(_run_job, "evaluate", snap)
+            res = await self._in_executor(hass, "evaluate", snap)
+        except JobAborted:
+            return
         except ImportError as err:
             _LOGGER.warning("%s - T_ar learning: %s", self._name, err)
             self.set_dependencies(False)
             return
-        except Exception as err:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             _LOGGER.exception("%s - T_ar learning: evaluation failed", self._name)
-            self.last_error = f"evaluate: {err}"
+            self.last_error = _FAILURE_TEXT
             return
         if gen != self._generation:
             return

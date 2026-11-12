@@ -188,7 +188,7 @@ class RestartBridge:
     # Live ticks
     # ------------------------------------------------------------------
     def note_tick(self, now: float, *, hvac_mode: Any, temp: float | None, cycle: tuple,
-                  excluded: str | None) -> None:
+                  excluded: str | None, target: float | None = None) -> None:
         """Record the context of a regulation tick (wall-clock time)."""
         prev = self._tick
         temp_v = _finite(temp)
@@ -202,6 +202,7 @@ class RestartBridge:
             "excluded": excluded or self._excluded_vt,
             "temp": temp_v,
             "temp_since": since,
+            "target": _finite(target),
         }
 
     def note_exclusion(self, excluded: str | None) -> None:

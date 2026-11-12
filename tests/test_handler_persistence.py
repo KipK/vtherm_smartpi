@@ -219,3 +219,24 @@ async def test_async_added_to_hass_loads_state_into_algorithm():
     await handler.async_added_to_hass()
 
     thermostat.prop_algorithm.load_state.assert_called_once_with({"k": 1})
+
+
+def test_remove_stops_the_learning_computations_and_cancels_their_tasks():
+    """The executor jobs are told to stop and the background tasks are cancelled."""
+    handler, thermostat, store = _build_handler()
+    algo = thermostat.prop_algorithm
+    algo.tar_learning = MagicMock()
+    algo.room_model = MagicMock()
+    tar_task, room_task = MagicMock(), MagicMock()
+    tar_task.done.return_value = room_task.done.return_value = False
+    handler._tar_task, handler._room_task = tar_task, room_task
+
+    handler.remove()
+
+    algo.tar_learning.stop.assert_called_once_with()
+    algo.room_model.stop.assert_called_once_with()
+    tar_task.cancel.assert_called_once_with()
+    room_task.cancel.assert_called_once_with()
+    assert handler._tar_task is None and handler._room_task is None
+    for call in thermostat.hass.async_create_task.call_args_list:
+        call.args[0].close()

@@ -45,10 +45,12 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import math
+import threading
 import time
 from typing import Any
 
 from ...hvac_mode import VThermHvacMode_HEAT
+from ..job_abort import JobAborted, run as run_abortable
 from ..tar_learning.clock import LocalClock
 from ..tar_learning.manager import STATUS_UNAVAILABLE
 from . import gates, public, periods
@@ -76,6 +78,10 @@ _EB_DELAY_S = 1200.0
 
 KIND_IDENTIFY = "identify"
 KIND_BALANCE = "balance"
+
+
+# Published when a computation fails (the exception is in the log)
+_FAILURE_TEXT = "the calculation failed, see the log"
 
 
 def _run_job(kind: str, snap: dict) -> dict:
@@ -129,9 +135,14 @@ class RoomModelManager:
         self._last_t: float | None = None
         self._restart_saved: dict[str, float | None] | None = None
         self._restart_pending = False
+        # Results of a computation started before a reset are dropped
+        self._generation = 0
+        # Set at a stop: the computation running in the executor ends as soon as it can
+        self._abort = threading.Event()
         self._reset_results()
 
     def _reset_results(self) -> None:
+        self._generation += 1
         self.observer = RoomObserver()
         self._restart_saved = None
         self._restart_pending = False
@@ -154,6 +165,10 @@ class RoomModelManager:
         # Last day whose energy balance was computed (None: none yet); time of the last identification job
         self.eb_run_day: int | None = None
         self.last_job_t: float | None = None
+
+    def stop(self) -> None:
+        """End the computation in progress and start no other (removal, reload)."""
+        self._abort.set()
 
     def reset(self) -> None:
         """Forget the identified parameters and the observer state."""
@@ -325,10 +340,12 @@ class RoomModelManager:
 
     async def async_run(self, hass, now: float | None = None) -> None:
         """Run the due computations in the executor, one at a time."""
-        if self._running or not self.active:
+        if self._running or not self.active or self._abort.is_set():
             return
         self._running = True
         try:
+            if self._tar is not None:
+                await self._tar.warm_sun(hass, time.time() if now is None else now)
             while True:
                 t = time.time() if now is None else now
                 job = self._next_job(t)
@@ -337,16 +354,25 @@ class RoomModelManager:
                 kind, snap = job
                 if kind == KIND_IDENTIFY:
                     self.last_job_t = t
+                gen = self._generation
                 try:
-                    result = await hass.async_add_executor_job(_run_job, kind, snap)
+                    result = await hass.async_add_executor_job(run_abortable, self._abort, _run_job, kind, snap)
+                except JobAborted:
+                    return
                 except ImportError as err:
                     _LOGGER.warning("%s - room model: %s", self._name, err)
                     self._tar.set_dependencies(False)
                     return
-                except Exception as err:  # noqa: BLE001 - a failed fit must never stop the regulation
+                except Exception:  # noqa: BLE001 - a failed fit must never stop the regulation
                     _LOGGER.exception("%s - room model: %s computation failed", self._name, kind)
-                    self.last_error = str(err)
+                    if gen != self._generation:
+                        return
+                    self.last_error = _FAILURE_TEXT
                     result = self._failed(kind, snap)
+                if gen != self._generation:
+                    # Reset while it ran: the result belongs to forgotten evidence;
+                    # the next run starts again from the reset state
+                    return
                 if kind == KIND_BALANCE:
                     self.eb_run_day = int(snap["day"])
                     self.apply_energy_balance(int(snap["day"]), result.get("eb"))

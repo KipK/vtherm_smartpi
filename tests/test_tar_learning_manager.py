@@ -284,7 +284,7 @@ async def test_a_failed_computation_is_skipped(monkeypatch) -> None:
     await m.async_run(_SyncHass(), W + 1 * 86400.0 + MORNING_EVAL_DELAY_S + 60.0)
     assert m.status == "active"
     assert m.mornings[-1]["why"] == "computation failed"
-    assert m.last_error.endswith("fit diverged")
+    assert m.last_error == "the calculation failed, see the log"
 
 
 async def test_learning_store_round_trip(hass) -> None:
@@ -360,3 +360,31 @@ async def test_keys_survive_pruning_and_do_not_depend_on_the_time_zone() -> None
     m.history.prune(W + 12 * 86400.0 - 3 * 86400.0 + 3600.0)
     m._refresh(W + 12 * 86400.0 + 7200.0, force=True)
     assert [e["id"] for e in m.episodes] == ids
+
+
+class _RecordingHass(_SyncHass):
+    def __init__(self) -> None:
+        self.funcs: list = []
+
+    async def async_add_executor_job(self, func, *args):
+        self.funcs.append(func)
+        return func(*args)
+
+
+async def test_the_sun_is_scanned_in_the_executor_once_a_day() -> None:
+    m, _ = _feed("pr_d5n3")
+    hass = _RecordingHass()
+    now = W + 1 * 86400.0 + MORNING_EVAL_DELAY_S + 60.0
+    await m.async_run(hass, now)
+    await m.async_run(hass, now + 600.0)
+    assert hass.funcs.count(manager_mod.dark_intervals) == 1
+    await m.async_run(hass, now + 86400.0)
+    assert hass.funcs.count(manager_mod.dark_intervals) == 2
+
+
+async def test_a_stopped_manager_runs_nothing() -> None:
+    m, _ = _feed("pr_d5n3")
+    hass = _RecordingHass()
+    m.stop()
+    await m.async_run(hass, W + 1 * 86400.0 + MORNING_EVAL_DELAY_S + 60.0)
+    assert hass.funcs == []

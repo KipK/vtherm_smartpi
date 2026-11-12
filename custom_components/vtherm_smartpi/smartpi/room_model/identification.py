@@ -54,6 +54,7 @@ from scipy.linalg import expm
 from scipy.optimize import minimize, minimize_scalar
 from scipy.signal import lfilter
 
+from ..job_abort import check
 from ..tar_learning.signals import Anchors, duty_bins, level_bins
 from .const import (
     H,
@@ -273,6 +274,7 @@ class Problem:
         return out
 
     def solve(self, x, a_fixed: float | None = None, detail: bool = False):
+        check()
         q = self.params(x)
         if not self.in_domain(q):
             return math.inf, None

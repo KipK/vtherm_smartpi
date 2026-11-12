@@ -90,12 +90,25 @@ def _refine(pos: Position, a: float, b: float) -> float:
     return 0.5 * (a + b)
 
 
+@lru_cache(maxsize=1024)
+def _day_samples(pos: Position, day: float) -> tuple[bool, ...]:
+    """Darkness at the samples of one UTC day (day = its start): kept, so that a scan never samples a day twice,
+    including the long searches of a polar night."""
+    return tuple(_h(pos, day + k * SUN_SAMPLE_S) < 0.0 for k in range(int(86400.0 / SUN_SAMPLE_S)))
+
+
+def _dark_at(pos: Position, t: float) -> bool:
+    """Darkness at a sample time (a multiple of SUN_SAMPLE_S)."""
+    day = math.floor(t / 86400.0) * 86400.0
+    return _day_samples(pos, day)[int(round((t - day) / SUN_SAMPLE_S))]
+
+
 def _scan(pos: Position, t0: float, t1: float) -> list[list]:
     """Dark runs [start, end, start_is_crossing, end_is_crossing] on the sample grid covering [t0, t1]."""
     g0 = math.floor(t0 / SUN_SAMPLE_S) * SUN_SAMPLE_S
     n = int(math.ceil((t1 - g0) / SUN_SAMPLE_S)) + 1
     ts = [g0 + k * SUN_SAMPLE_S for k in range(n)]
-    dark = [_h(pos, t) < 0.0 for t in ts]
+    dark = [_dark_at(pos, t) for t in ts]
     runs: list[list] = []
     cur = None
     for k, d in enumerate(dark):

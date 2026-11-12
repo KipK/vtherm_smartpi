@@ -4,12 +4,14 @@ information of a fit."""
 from __future__ import annotations
 
 import math
+import threading
 import time
 
 import numpy as np
 import pytest
 
 import room_model_sim as rsim
+from custom_components.vtherm_smartpi.smartpi import job_abort
 from custom_components.vtherm_smartpi.smartpi.room_model import gates, jobs, public
 from custom_components.vtherm_smartpi.smartpi.room_model import energy_balance
 from custom_components.vtherm_smartpi.smartpi.room_model import identification
@@ -750,3 +752,19 @@ def test_candidate_must_agree_with_the_energy_balance() -> None:
     g2 = gates._coords(dec2["candidate"])[1]
     assert gates.decide(cur2, prev2, {"reduced": _GOOD}, True, eb=g2 * 1.03) == dec2
     assert gates.decide(cur2, prev2, {"reduced": _GOOD}, True, eb=g2 * 1.10)["why"] == gates.WHY_EB
+
+
+def test_a_stop_ends_the_fit_at_its_next_evaluation(mass_data) -> None:
+    p = rsim.MASS
+    snap = rsim.snapshot(mass_data, D0 + 4, tau_e=p["tau_e"], L=p["L"], a_per_min=p["a"] * 60.0)
+    w = snap["window"]
+    per = [(a, b, n) for (a, b), n in zip(w["intervals"], w["nights"])]
+    pb = identification.Problem(identification.WindowData(snap, per, p["tau_e"], p["L"]), True)
+    stop = threading.Event()
+
+    def fit_after_stop():
+        stop.set()
+        return identification.fit(pb)
+
+    with pytest.raises(job_abort.JobAborted):
+        job_abort.run(stop, fit_after_stop)

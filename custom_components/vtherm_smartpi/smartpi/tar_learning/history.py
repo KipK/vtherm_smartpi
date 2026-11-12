@@ -157,7 +157,7 @@ class TarHistory:
         excluded: why SmartPI is not in control (None when it is).
         """
         if self.last_t is not None and t < self.last_t:
-            return None
+            self._rewind(t)
         self._advance(t)
         self._touch(t)
         reasons: list[str] = []
@@ -199,6 +199,49 @@ class TarHistory:
             self.params.append((round(t, _TIME_DIGITS), *p))
             _cap(self.params, TAR_HISTORY_MAX_EVENTS)
         return prev_sp
+
+    def _rewind(self, t: float) -> None:
+        """The clock went back: what was recorded after t is dropped and t starts a new origin.
+
+        The interval between the last kept observation and t holds no data and is
+        invalid; the heater state is closed at t.
+        """
+        def keep(times: list[float]) -> int:
+            return bisect.bisect_right(times, t)
+
+        n = keep(self.temp_t)
+        del self.temp_t[n:], self.temp_v[n:]
+        n = keep(self.ext_t)
+        del self.ext_t[n:], self.ext_v[n:]
+        n = keep(self.pw_t)
+        del self.pw_t[n:], self.pw_v[n:]
+        del self.on[keep(self.on):], self.off[keep(self.off):]
+        for lst in (self.setpoints, self.phases, self.params):
+            del lst[bisect.bisect_right([x[0] for x in lst], t):]
+        self.gaps = [(a, min(b, t)) for a, b in self.gaps if a < t]
+        self.restarts = [r for r in self.restarts if r[1] <= t]
+        if self.invalid_since is not None and self.invalid_since > t:
+            self.invalid_since = self.invalid_reason = None
+        self._spike = []
+        # The heater state is unknown from the last kept edge: closed at t.
+        if self.valve:
+            if self.pw_v and self.pw_v[-1] > 0.0:
+                self.pw_t.append(round(t, _TIME_DIGITS))
+                self.pw_v.append(0.0)
+                self.off.append(round(t, _TIME_DIGITS))
+        elif len(self.on) > len(self.off):
+            self.off.append(round(t, _TIME_DIGITS))
+        self._heater_on = False
+        self._off_due = None
+        self._cycle_start = None
+        self._level = 0.0
+        self.last_t = self.temp_t[-1] if self.temp_t else None
+        if self.last_t is None:
+            self.first_t = None
+        elif self.first_t is not None:
+            self.first_t = min(self.first_t, self.last_t)
+        if self.last_t is not None and t - self.last_t <= TAR_GAP_S:
+            self._invalid(self.last_t, t)  # a longer one is marked by the next observation
 
     def _record_temperature(self, t: float, temp: float) -> bool:
         """Keep a valid temperature at each change of value; False for a rejected jump."""

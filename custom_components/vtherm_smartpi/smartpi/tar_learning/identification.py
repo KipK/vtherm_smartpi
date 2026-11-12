@@ -33,6 +33,7 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.signal import lfilter
 
+from ..job_abort import check
 from .const import (
     H,
     ID_DBIC_MASS,
@@ -237,6 +238,7 @@ class NightProblem:
         return np.column_stack([X[:, :3], col, X[:, 3:]]), off
 
     def solve(self, lam: float, tau_w: float | None, tau_e: float = 0.0):
+        check()
         # bounded domain: tau_w >= 1 h excludes the degenerate observer solution (tau_w -> 0, k -> inf)
         # where the measured-air wall drags the simulated air onto the measurement
         if (not (0.0 <= tau_e <= ID_TE_MAX) or not (LAM_LO * 0.999 <= lam <= LAM_HI * 1.001)

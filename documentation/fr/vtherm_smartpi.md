@@ -423,7 +423,7 @@ Un redémarrage est ponté lorsque toutes ces conditions sont réunies :
 - la température intérieure n'a pas sauté pendant l'arrêt ;
 - les données stockées sont récentes (un plantage qui a perdu les dernières écritures fait paraître l'arrêt long).
 
-Après un redémarrage ponté, les mesures en cours reprennent (temps mort, fenêtres d'apprentissage, retard de l'émetteur), le chauffage est considéré comme inchangé pendant l'arrêt, rien n'est exclu de l'apprentissage du retard de l'émetteur ni du modèle de pièce (tous deux en chauffage uniquement), et l'apprentissage n'est pas suspendu. Après tout autre redémarrage, SmartPI repart avec prudence : les mesures en cours sont abandonnées, l'apprentissage est suspendu pendant un cycle, et seul l'arrêt lui-même est exclu des données d'apprentissage.
+Après un redémarrage ponté, les mesures en cours reprennent (temps mort, fenêtres d'apprentissage, retard de l'émetteur), le chauffage est considéré comme inchangé pendant l'arrêt, rien n'est exclu de l'apprentissage du retard de l'émetteur ni du modèle de pièce (tous deux en chauffage uniquement), et l'apprentissage n'est pas suspendu. Une consigne modifiée pendant l'arrêt est traitée au premier tick comme tout changement de consigne. Après tout autre redémarrage, SmartPI repart avec prudence : les mesures en cours sont abandonnées, l'apprentissage est suspendu pendant un cycle, et seul l'arrêt lui-même est exclu des données d'apprentissage.
 
 Le capteur de diagnostic affiche le dernier redémarrage dans `control.last_restart`.
 

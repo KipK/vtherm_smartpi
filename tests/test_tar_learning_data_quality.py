@@ -172,3 +172,29 @@ def test_manager_records_hvac_off_as_invalid_and_rejects_the_morning() -> None:
     assert len(m.pending) == 1
     assert m._next_job(t) is None or m._next_job(t)[0] != "morning"
     assert m.mornings[-1]["why"] == "data gap around the step"
+
+
+def test_clock_going_back_starts_a_new_origin_without_data_on_the_interval() -> None:
+    h = TarHistory()
+    _clean(h, 3600.0, 7200.0)
+    # The clock goes back by one hour: the observations are not frozen until it catches up.
+    _clean(h, 5400.0, 5400.0 + 1800.0, start=21.0)
+    assert h.last_t == 5400.0 + 1800.0
+    assert h.temp_t == sorted(h.temp_t)
+    assert max(h.temp_t) <= h.last_t
+    assert h.temp_v[-1] > 21.2
+    # Back before the first observation: nothing of the old origin is kept.
+    _clean(h, 600.0, 1200.0, start=19.0)
+    assert h.first_t == 600.0 and h.last_t == 1200.0
+    assert min(h.temp_t) >= 600.0 and max(h.temp_t) <= 1200.0
+    assert h.invalid_intervals() == []
+
+
+def test_clock_going_back_closes_the_heater_state() -> None:
+    h = TarHistory()
+    _clean(h, 0.0, 600.0)
+    h.applied_cycle(600.0, 1.0, 600.0, True)
+    _clean(h, 660.0, 1200.0, start=20.7)
+    _obs(h, 300.0, temp=21.0)
+    assert h.on == [] and h.off == []
+    assert h._heater_on is False

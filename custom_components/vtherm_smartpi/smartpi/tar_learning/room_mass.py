@@ -26,6 +26,7 @@ import numpy as np
 from scipy.optimize import minimize, minimize_scalar
 from scipy.signal import lfilter
 
+from ..job_abort import check
 from .const import (
     LONG_NIGHT_H,
     MIN_FIT_S,
@@ -122,12 +123,14 @@ class Segment:
         return c
 
     def sse1(self, tau: float):
+        check()
         F, A = self.cols(tau)
         r = self.ya - self.te0 - F
         X = float(np.dot(A, r) / np.dot(A, A))
         return float(np.sum((r - X * A) ** 2)), X
 
     def sse2(self, t1: float, t2: float):
+        check()
         F1, A1 = self.cols(t1)
         F2, A2 = self.cols(t2)
         B = np.vstack([F1 - F2, A1, A2]).T

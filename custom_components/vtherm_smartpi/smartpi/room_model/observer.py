@@ -204,6 +204,10 @@ class RoomObserver:
                 self.reinit(now, float(temp), float(ext))
             return
         if now < self.t:
+            # The clock went back: the state cannot be propagated, tracking starts again.
+            self._drop_tracking()
+            if active:
+                self.reinit(now, float(temp), float(ext))
             return
         if now - self.t > RM_RESUME_MAX_S:
             if active:
@@ -241,6 +245,20 @@ class RoomObserver:
             self._reopen()
         if active and self.health() == HEALTH_OK:
             self.score.maybe_start(self.t, self.x, self.y_last)
+
+    def _drop_tracking(self) -> None:
+        """Forget the tracked state and the times kept with it (no wall share until tracking resumes)."""
+        self.x = self.P = self.t = None
+        self.paused_since = None
+        self.pause_window = False
+        self.settle_until = None
+        self._pending = None
+        self._resumed = False
+        self._fc_cache = None
+        self._reset_innovations()
+        self.d_sat_s = 0.0
+        self.score.drop_pending()
+        self.steps, self.attached_t = [], None
 
     def _pause(self, now: float, window: bool = False) -> None:
         if self.paused_since is None:

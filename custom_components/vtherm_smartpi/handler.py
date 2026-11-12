@@ -342,9 +342,21 @@ class SmartPIHandler:
             except Exception as e:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
+        self._stop_learning_tasks()
         self._stop_recalc_timer()
         self._remove_receipt_callback()
         clear_valve_config_issues(t)
+
+    def _stop_learning_tasks(self) -> None:
+        """Stop the learning computations: the executor jobs end early, the tasks are cancelled."""
+        algo = self._thermostat.prop_algorithm
+        for manager in (getattr(algo, "tar_learning", None), getattr(algo, "room_model", None)):
+            if manager is not None:
+                manager.stop()
+        for task in (self._tar_task, self._room_task):
+            if task is not None and not task.done():
+                task.cancel()
+        self._tar_task = self._room_task = None
 
     def _remove_receipt_callback(self) -> None:
         """Unregister the applied-command receipt callback, if any."""
