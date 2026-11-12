@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Regulation: the heating dead time no longer shrinks after a start in a room
+  that was warming slightly before the heater started, or when the course
+  before the start is too short to judge. Such a measurement is ignored when
+  it is shorter than the current dead time and kept when it is at least as
+  long.
+
 ## [0.6.3]
 
 - Regulation: the heating dead time no longer shrinks in a room that is

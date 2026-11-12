@@ -231,7 +231,7 @@ The first thing SmartPI needs to learn is **how long the room takes to react** a
 
 Dead times depend on the emitter type, room size, and sensor placement. They must be measured before SmartPI can interpret heating and cooling observations correctly.
 
-SmartPI keeps measuring the heating dead time at each heating start that follows a long enough stop, and publishes the median of the last measurements. A room that is already warming before the heater starts, for example when people get up, would make the heating seem to act sooner than it does. SmartPI therefore compares the temperature with the course it followed before the start. When that course is too steep or too irregular to tell the heating apart, the measurement is dropped and the previous dead time is kept.
+SmartPI keeps measuring the heating dead time at each heating start that follows a long enough stop, and publishes the median of the last measurements. A room that is already warming before the heater starts, for example when people get up, would make the heating seem to act sooner than it does. SmartPI therefore compares the temperature with the course it followed before the start. When that course is too steep or too irregular to tell the heating apart, the measurement is dropped and the previous dead time is kept. A room that was warming before the start, or a start that follows too short a stop to judge its course, never shortens the dead time: only a measurement at least as long as the current value is kept.
 
 #### Step 2 — Learning heat loss (`b`)
 

@@ -15,6 +15,7 @@ from custom_components.vtherm_smartpi.smartpi import deadtime_estimator
 from custom_components.vtherm_smartpi.smartpi.deadtime_estimator import DeadTimeEstimator
 from custom_components.vtherm_smartpi.smartpi.deadtime_trend import (
     NO_TREND,
+    WINDOW_TOO_SHORT,
     prestart_trend,
 )
 from custom_components.vtherm_smartpi.smartpi.tint_filter import AdaptiveTintFilter
@@ -250,11 +251,11 @@ def test_prestart_trend_flat_and_short_windows() -> None:
     kwargs = {"start_ts": START_TS, "off_since_ts": None, "direction": 1.0, "detection_threshold_c": 0.05}
     assert prestart_trend(_history([20.0] * 31), **kwargs) == NO_TREND
     rising = [20.0 + 0.01 * i for i in range(10)]
-    assert prestart_trend(_history(rising), **kwargs) == NO_TREND
+    assert prestart_trend(_history(rising), **kwargs) == WINDOW_TOO_SHORT
     # The OFF period bounds the window.
     long_rising = [20.0 + 0.005 * i for i in range(31)]
     bounded = dict(kwargs, off_since_ts=START_TS - 600.0)
-    assert prestart_trend(_history(long_rising), **bounded) == NO_TREND
+    assert prestart_trend(_history(long_rising), **bounded) == WINDOW_TOO_SHORT
     assert prestart_trend(_history(long_rising), **kwargs).slope_c_per_s > 0.0
 
 
@@ -263,3 +264,89 @@ def test_prestart_trend_within_one_sensor_step_is_flat() -> None:
     kwargs = {"start_ts": START_TS, "off_since_ts": None, "direction": 1.0, "detection_threshold_c": 0.05}
     dither = [20.0 + (0.01 if i in (24, 27, 29) else 0.0) for i in range(31)]
     assert prestart_trend(_history(dither), **kwargs) == NO_TREND
+
+
+def test_prestart_trend_flags_a_clear_move_towards_the_response() -> None:
+    """A slight warming is removed and flagged; a one-step change is neither."""
+    kwargs = {"start_ts": START_TS, "off_since_ts": None, "direction": 1.0, "detection_threshold_c": 0.05}
+    slight = [20.0 + 0.002 * i for i in range(31)]  # 0.06 degC over 30 min
+    trend = prestart_trend(_history(slight), **kwargs)
+    assert trend.slope_c_per_s > 0.0
+    assert trend.toward_response and not trend.window_too_short
+    one_step = [20.0 + 0.0004 * i for i in range(31)]  # 0.012 degC over 30 min
+    trend = prestart_trend(_history(one_step), **kwargs)
+    assert not trend.toward_response
+    assert prestart_trend(_history(slight), **dict(kwargs, direction=-1.0)) == NO_TREND
+
+
+def _measure_with_value(value_s: float, **kwargs) -> DeadTimeEstimator:
+    est = DeadTimeEstimator()
+    est._add_sample_heat(value_s)
+    _drive(est, **kwargs)
+    return est
+
+
+def test_shorter_measure_after_a_rise_is_ignored() -> None:
+    """A room warming before the start never lowers the published dead time."""
+    est = _measure_with_value(250.0, pre_c_per_h=0.2, deadtime_s=100.0)
+
+    assert est._weak_evidence
+    assert est.last_outcome["heat"] == "ignored"
+    assert list(est._history_heat) == [250.0]
+    assert est.deadtime_heat_s == 250.0
+    assert est.state == "HEATING"
+
+
+def test_longer_measure_after_a_rise_is_accepted() -> None:
+    est = _measure_with_value(100.0, pre_c_per_h=0.2, deadtime_s=300.0)
+
+    assert est.last_outcome["heat"] == "detected"
+    assert len(est._history_heat) == 2
+    assert est._history_heat[-1] > 100.0
+    assert est.deadtime_heat_s > 100.0
+
+
+def test_shorter_measure_with_a_too_short_window_is_ignored() -> None:
+    """Without a window to evaluate the trend, a shorter measure is not trusted."""
+    est = _measure_with_value(250.0, off_min=6.0, deadtime_s=100.0)
+
+    assert est._weak_evidence
+    assert est.last_outcome["heat"] == "ignored"
+    assert est.deadtime_heat_s == 250.0
+
+
+def test_longer_measure_with_a_too_short_window_is_accepted() -> None:
+    est = _measure_with_value(100.0, off_min=6.0, deadtime_s=300.0)
+
+    assert est.last_outcome["heat"] == "detected"
+    assert est.deadtime_heat_s > 100.0
+
+
+def test_shorter_measure_on_a_flat_room_is_accepted() -> None:
+    """A flat room with an evaluable window follows the usual rules."""
+    est = _measure_with_value(250.0, deadtime_s=100.0)
+
+    assert not est._weak_evidence
+    assert est.last_outcome["heat"] == "detected"
+    assert est.deadtime_heat_s < 250.0
+
+
+@pytest.mark.parametrize("kwargs", [{"pre_c_per_h": 0.2}, {"off_min": 6.0}])
+def test_first_measure_is_unchanged_without_a_published_value(kwargs) -> None:
+    """Before the first published value the weak evidence does not apply."""
+    est = DeadTimeEstimator()
+    _drive(est, deadtime_s=100.0, **kwargs)
+
+    assert est.last_outcome["heat"] == "detected"
+    assert est.deadtime_heat_s is not None
+
+
+def test_shorter_cool_measure_after_a_fall_is_ignored() -> None:
+    """The rule is mirrored in COOL."""
+    est = DeadTimeEstimator()
+    est._add_sample_cool(250.0)
+    est.model_hvac_mode = str(VThermHvacMode_COOL)
+    _drive(est, pre_c_per_h=0.2, deadtime_s=100.0, hvac_mode=VThermHvacMode_COOL)
+
+    assert est.last_outcome["cool"] == "ignored"
+    assert est.deadtime_cool_s == 250.0

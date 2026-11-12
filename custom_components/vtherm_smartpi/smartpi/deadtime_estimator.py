@@ -70,8 +70,12 @@ class DeadTimeEstimator:
         # active response is waited for; 0.0 for a passive response or a room
         # without a trend in the direction of the response.
         self._trend_slope: float = 0.0
+        # The armed active response follows a temperature already moving in
+        # the direction of the response, or a window too short to evaluate
+        # its trend: weak evidence, which never shortens the published value.
+        self._weak_evidence: bool = False
         # Outcome of the last detection per response ("detected", "timeout",
-        # "aborted", "rejected"), published for diagnostics.
+        # "aborted", "rejected", "ignored"), published for diagnostics.
         self.last_outcome: dict[str, str | None] = {"heat": None, "cool": None}
 
         # Last detections; the published dead time is their median so that a
@@ -135,6 +139,7 @@ class DeadTimeEstimator:
         self._waiting_power_on = None
         self._near_extreme_time = None
         self._trend_slope = 0.0
+        self._weak_evidence = False
         self.last_outcome = {"heat": None, "cool": None}
         self._history_heat.clear()
         self._history_cool.clear()
@@ -153,6 +158,7 @@ class DeadTimeEstimator:
         self._waiting_power_on = None
         self._near_extreme_time = None
         self._trend_slope = 0.0
+        self._weak_evidence = False
         self._tin_history.clear()
         self._tin_lp_history.clear()
 
@@ -231,6 +237,7 @@ class DeadTimeEstimator:
         elif self.state == "WAITING_COOL_RESPONSE":
             self.last_outcome["cool"] = "aborted"
         self._trend_slope = 0.0
+        self._weak_evidence = False
         if power_on:
             trend = prestart_trend(
                 self._tin_history,
@@ -249,6 +256,7 @@ class DeadTimeEstimator:
                 )
                 return
             self._trend_slope = trend.slope_c_per_s
+            self._weak_evidence = trend.toward_response or trend.window_too_short
         self._waiting_power_on = power_on
         self._near_extreme_time = now
         if response == "cool":
@@ -270,6 +278,16 @@ class DeadTimeEstimator:
     def _detrended(self, ts: float, value: float, start: float) -> float:
         """Return the temperature minus the extrapolated free-running trend."""
         return value - self._trend_slope * (ts - start)
+
+    def _would_shorten(self, published_s: float | None, dt: float) -> bool:
+        """Return True when a weakly supported measurement is shorter than the published value.
+
+        A room warming before the start, or a window too short to tell, makes
+        the response look earlier than it is: such a measurement is only kept
+        when it lengthens (or equals) the published value. Before the first
+        published value nothing is shortened and the usual rules apply.
+        """
+        return self._weak_evidence and published_s is not None and dt < published_s
 
     def _trend_dominates(self, response: str, now: float, start: float) -> bool:
         """Return True when the trend accounts for at least the detection threshold.
@@ -427,6 +445,9 @@ class DeadTimeEstimator:
                         if self._trend_dominates("heat", now, start):
                             self.last_outcome["heat"] = "rejected"
                             _LOGGER.debug("DeadTime: Heat detection rejected (trend before the start dominates the rise)")
+                        elif self._would_shorten(self.deadtime_heat_s, dt):
+                            self.last_outcome["heat"] = "ignored"
+                            _LOGGER.debug("DeadTime: Heat detection %.1fs ignored (shorter than %.1fs on weak evidence)", dt, self.deadtime_heat_s)
                         else:
                             self._add_sample_heat(dt)
                             self.last_outcome["heat"] = "detected"
@@ -471,6 +492,9 @@ class DeadTimeEstimator:
                         if self._trend_dominates("cool", now, start):
                             self.last_outcome["cool"] = "rejected"
                             _LOGGER.debug("DeadTime: Cool detection rejected (trend before the start dominates the drop)")
+                        elif self._would_shorten(self.deadtime_cool_s, dt):
+                            self.last_outcome["cool"] = "ignored"
+                            _LOGGER.debug("DeadTime: Cool detection %.1fs ignored (shorter than %.1fs on weak evidence)", dt, self.deadtime_cool_s)
                         else:
                             self._add_sample_cool(dt)
                             self.last_outcome["cool"] = "detected"

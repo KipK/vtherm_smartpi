@@ -364,6 +364,14 @@ DEADTIME_PRESTART_MIN_SPAN_S = 900.0
 DEADTIME_PRESTART_MIN_SAMPLES = 4
 DEADTIME_PRESTART_MIN_HALF_SAMPLES = 3
 DEADTIME_PRESTART_STEP_FLOOR_C = 0.01
+# A trend in the direction of the response counts as rising (or falling, in
+# cool) when its fitted change over the window reaches this many sensor steps.
+# One step may be a single quantisation toggle, two steps is a real move. Such
+# a trend, like a window too short to tell any trend, is weak evidence: a
+# measurement shorter than the published dead time is then ignored instead of
+# lowering it, while a longer one is kept (a room warming before the start can
+# only make the response look earlier, never later).
+DEADTIME_PRESTART_RISE_MIN_STEPS = 2.0
 TIN_HISTORY_MAX_SAMPLES = 1800
 
 

@@ -231,7 +231,7 @@ La première chose que SmartPI doit apprendre est **le temps de réaction de la 
 
 Les temps morts dépendent du type d'émetteur, de la taille de la pièce et du placement du capteur. Ils doivent être mesurés avant que SmartPI puisse interpréter correctement les observations de chauffe et de refroidissement.
 
-SmartPI continue de mesurer le temps mort de chauffe à chaque démarrage de chauffe qui suit un arrêt assez long, et publie la médiane des dernières mesures. Une pièce qui se réchauffe déjà avant le démarrage du chauffage, par exemple au lever des occupants, ferait paraître la chauffe plus réactive qu'elle ne l'est. SmartPI compare donc la température à l'évolution qu'elle suivait avant le démarrage. Lorsque cette évolution est trop forte ou trop irrégulière pour distinguer la chauffe, la mesure est écartée et le temps mort précédent est conservé.
+SmartPI continue de mesurer le temps mort de chauffe à chaque démarrage de chauffe qui suit un arrêt assez long, et publie la médiane des dernières mesures. Une pièce qui se réchauffe déjà avant le démarrage du chauffage, par exemple au lever des occupants, ferait paraître la chauffe plus réactive qu'elle ne l'est. SmartPI compare donc la température à l'évolution qu'elle suivait avant le démarrage. Lorsque cette évolution est trop forte ou trop irrégulière pour distinguer la chauffe, la mesure est écartée et le temps mort précédent est conservé. Une pièce qui se réchauffait avant le démarrage, ou un démarrage qui suit un arrêt trop court pour juger de son évolution, ne raccourcit jamais le temps mort : seule une mesure au moins aussi longue que la valeur en vigueur est retenue.
 
 #### Étape 2 — Apprentissage des déperditions (`b`)
 
