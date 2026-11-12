@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6.5]
 
 - Regulation: the slow feed-forward correction is now also learned when the
   room stays in the border of the deadband (for example 0.04 °C above the
