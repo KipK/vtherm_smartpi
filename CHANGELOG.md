@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.6.4]
+## [Unreleased]
 
 - Restart bridge: a setpoint changed during the stop is now seen as a setpoint change at the first tick.
 - Learning histories and room model observer: a clock that goes back starts a new origin instead of freezing the recording.
@@ -87,6 +87,8 @@ All notable changes to this project will be documented in this file.
   measurements and learning in progress resume, and nothing is excluded from the
   learning data. Another restart excludes only its downtime, without the
   10-minute margins. `control.last_restart` shows the last decision.
+## [0.6.4]
+
 - Regulation: the heating dead time no longer shrinks after a start in a room
   that was warming slightly before the heater started, or when the course
   before the start is too short to judge. Such a measurement is ignored when
