@@ -43,8 +43,10 @@ is checked against the energy-balance slope in force: a candidate that
 differs from it by more than RM_EB_AGREE_TOL is refused, its dynamics do not
 explain the measured heat balance. Both carry a constant free gain (the
 intercept of the balance, the constant heat input of a fit window), so the
-gain does not bias the comparison. Without a qualified slope there is no such
-check.
+gain does not bias the comparison. That check is the only one of b_eq / a that
+does not come from the fits themselves: without a qualified slope in force
+nothing is published (WHY_NO_EB), and the manager checks the published value
+again against the slope in force when it publishes (eb_check).
 """
 from __future__ import annotations
 
@@ -90,6 +92,7 @@ WHY_FAILED = "failed"
 WHY_EMITTER_EDGE = "emitter edge"
 WHY_A_ONLINE = "a online"
 WHY_EB = "energy balance"
+WHY_NO_EB = "no energy balance"
 WHY_INFO = "information"
 
 WALL_COARSE = "coarse sensor"
@@ -201,14 +204,21 @@ def a_consistent(a: float | None, a_online: float | None) -> bool:
 
 
 def eb_agrees(p: dict, eb: float | None) -> bool:
-    """The static gain b_eq / a of a parameter set agrees with the energy-balance slope in force (none: no
-    check)."""
-    if eb is None or eb <= 0.0:
-        return True
+    """The static gain b_eq / a of a parameter set agrees with the energy-balance slope in force (False
+    without a qualified slope: nothing to check it against)."""
+    if eb is None or not eb > 0.0:
+        return False
     c = _coords(p)
     if c is None:
         return False
     return abs(math.log(c[1] / eb)) <= RM_EB_AGREE_TOL
+
+
+def eb_check(p: dict, eb: float | None) -> str | None:
+    """Why a parameter set cannot be published against the energy balance in force, None when it can."""
+    if eb is None or not eb > 0.0:
+        return WHY_NO_EB
+    return None if eb_agrees(p, eb) else WHY_EB
 
 
 def _coords(p: dict) -> tuple[float, float, float, float] | None:
@@ -252,7 +262,7 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: fl
     """Decision of a window: {"struct", "candidate", "wall"} or {"why", "wall"}.
 
     a_online: heating response of the online estimate (per second), None when unknown.
-    eb: energy-balance slope in force (b_eq / a units), None before a first qualified value.
+    eb: energy-balance slope in force (b_eq / a units), None before a first qualified value (no publication).
     """
     if cur.get("why"):
         return {"why": cur["why"], "wall": None}
@@ -283,8 +293,8 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: fl
         wall, full_why = WALL_NOT_BETTER, None
     elif not a_consistent((cand := combine(p_full["params"], full["params"]))["a"], a_online):
         wall, full_why = WALL_NOT_CONFIRMED, WHY_A_ONLINE
-    elif not eb_agrees(cand, eb):
-        wall, full_why = WALL_NOT_CONFIRMED, WHY_EB
+    elif (eb_why := eb_check(cand, eb)) is not None:
+        wall, full_why = WALL_NOT_CONFIRMED, eb_why
     else:
         return {"struct": STRUCT_FULL, "candidate": cand, "wall": None}
     if not red.get("ok"):
@@ -299,8 +309,8 @@ def decide(cur: dict, prev: dict | None, held: dict, precise: bool, a_online: fl
         why = WHY_HELDOUT
     elif not a_consistent((cand := combine(p_red["params"], red["params"]))["a"], a_online):
         why = WHY_A_ONLINE
-    elif not eb_agrees(cand, eb):
-        why = WHY_EB
+    elif (eb_why := eb_check(cand, eb)) is not None:
+        why = eb_why
     else:
         return {"struct": STRUCT_REDUCED, "candidate": cand, "wall": wall}
     return {"why": why, "wall": wall}

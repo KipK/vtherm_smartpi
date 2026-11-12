@@ -2,10 +2,12 @@
 
 Each comfort step (setpoint rise at t_sp that ends a quiet period) is a step
 response of the emitter. The response windows end at the latest at the end of
-the darkness (fit_end): data after sunrise are never fitted, and the gates
-below judge the truncated windows (a window cut by sunrise also has to hold
-the longest delay known before the step, cut_refusal). Its record keeps the
-name "morning". The response fit (response.py) needs a baseline, the
+the darkness (fit_end): data after sunrise are never fitted. A window cut by
+sunrise is a censored observation (cut_censored): it gives an estimate only
+when it holds TAR_CUT_ESTIMATE_WINDOW_T x the largest of the fitted value and
+the shortest delay known before the step; otherwise, once every other gate
+passes, it gives a lower bound of the delay (TAR_CUT_BOUND_FACTOR x the fitted
+value), never a value. Its record keeps the name "morning". The response fit (response.py) needs a baseline, the
 trajectory the room would have followed without the step, and a room response:
 
 - passive night (no heater start in the 2 h before the step t_s, the first
@@ -47,6 +49,8 @@ from .const import (
     R_SPAN_S,
     RULES,
     RULES_R,
+    TAR_CUT_BOUND_FACTOR,
+    TAR_CUT_ESTIMATE_WINDOW_T,
 )
 from .response import DT, KernelCache, fit_windows, window_rise, z_all
 from .room_mass import (
@@ -65,6 +69,7 @@ WINDOWS = ("W45", "Wsp", "W2h")
 # Shortest response window left before sunrise for a fit
 RESPONSE_MIN_S = 600.0
 CUT_REASON = "excitation: cut by sunrise"
+CUT_BOUND_REASON = "excitation: cut by sunrise, lower bound"
 # Decision paths: night-class baseline (night without heating or regulated night),
 # regulated night with the night-class baseline, regulated branch
 PATH_NIGHT = "night"
@@ -120,22 +125,21 @@ class MorningInputs:
         return u_on_grid(self.on, self.off, t0, t1)
 
 
-def cut_refusal(cut: dict | None, T: float, win: float) -> str | None:
-    """Why a response window cut by sunrise cannot give a value, None when it can (or is not cut).
+def cut_censored(cut: dict | None, T: float, win: float) -> bool:
+    """A response window cut by sunrise is too short to give an estimate (False when not cut).
 
     The window Wsp is cut when sunrise comes before the room reaches the new
-    setpoint. A short window lets a slow emitter fit a short delay, and that short
-    value then satisfies its own window rule (window >= exc_window_T x T). A cut
-    window must therefore pass the rule for the largest delay known before the
-    step (MorningInputs.t_floor) as well as for the fitted one. Without any such
-    reference the window cannot be checked and gives nothing.
+    setpoint. A truncated response fits a delay that is mostly too short, and a
+    short value then satisfies its own window rule. A cut window gives an
+    estimate only when it holds TAR_CUT_ESTIMATE_WINDOW_T x the largest of the
+    fitted value and the shortest delay known before the step
+    (MorningInputs.t_floor); otherwise it is censored: a lower bound at most.
     """
     if cut is None:
-        return None
+        return False
     floor = cut.get("floor")
-    if floor is None or win < RULES["exc_window_T"] * max(T, floor):
-        return CUT_REASON
-    return None
+    ref = T if floor is None else max(T, float(floor))
+    return win < TAR_CUT_ESTIMATE_WINDOW_T * ref
 
 
 # ---------------------------------------------------------------------------
@@ -424,19 +428,23 @@ def gate_night_class(r: dict) -> tuple[bool, str]:
         return False, "fit invalid"
     if x["rms"] > max(RULES["fit_rms_c"], RULES["fit_rms_q"] * q):
         return False, "fit rms"
-    why = cut_refusal(r.get("cut"), T, r["win_s"]["Wsp"])
-    if why is not None:
-        return False, why
-    if r["win_s"]["Wsp"] < RULES["exc_window_T"] * T:
-        return False, "excitation: window"
-    if r["energy_s"]["Wsp"] < max(RULES["exc_energy_T"] * T, RULES["exc_energy_min_s"]):
-        return False, "excitation: energy"
-    rise = r["fit"]["rise"].get("Wsp")
+    return _gate_excitation(T, q, r["win_s"]["Wsp"], r["energy_s"]["Wsp"], r["fit"]["rise"].get("Wsp"),
+                            r.get("sensor_period_s"), r.get("cut"))
+
+
+def _gate_excitation(T, q, win, energy, rise, period, cut: dict | None) -> tuple[bool, str]:
+    """Excitation and sensor gates of a fitted delay T; a censored cut window ends as a lower bound."""
+    censored = cut_censored(cut, T, win)
+    if win < RULES["exc_window_T"] * T:
+        return False, CUT_REASON if censored else "excitation: window"
+    if energy < max(RULES["exc_energy_T"] * T, RULES["exc_energy_min_s"]):
+        return False, CUT_REASON if censored else "excitation: energy"
     if rise is None or rise < max(RULES["exc_rise_c"], RULES["exc_rise_q"] * q):
-        return False, "excitation: rise"
-    p = r.get("sensor_period_s")
-    if p is None or T < RULES["sensor_T_factor"] * p:
-        return False, "sensor period"
+        return False, CUT_REASON if censored else "excitation: rise"
+    if period is None or T < RULES["sensor_T_factor"] * period:
+        return False, CUT_REASON if censored else "sensor period"
+    if censored:
+        return False, CUT_BOUND_REASON
     return True, "accepted"
 
 
@@ -463,18 +471,7 @@ def _gate_fit(x, q, win, energy, rise, period, cut: dict | None = None) -> tuple
         return False, "fit invalid"
     if x["rms"] > max(RULES["fit_rms_c"], RULES["fit_rms_q"] * q):
         return False, "fit rms"
-    why = cut_refusal(cut, T, win)
-    if why is not None:
-        return False, why
-    if win < RULES["exc_window_T"] * T:
-        return False, "excitation: window"
-    if energy < max(RULES["exc_energy_T"] * T, RULES["exc_energy_min_s"]):
-        return False, "excitation: energy"
-    if rise is None or rise < max(RULES["exc_rise_c"], RULES["exc_rise_q"] * q):
-        return False, "excitation: rise"
-    if period is None or T < RULES["sensor_T_factor"] * period:
-        return False, "sensor period"
-    return True, "accepted"
+    return _gate_excitation(T, q, win, energy, rise, period, cut)
 
 
 def gate_r(r: dict) -> tuple[bool, str]:
@@ -515,7 +512,12 @@ def decide(r: dict) -> dict:
     else:
         ok, why = gate_night_class(r)
         x = (r.get("fit") or {}).get(FW) or {}
-    return {"path": p, "acc": bool(ok), "why": why, "T": x.get("T") if ok else None}
+    out = {"path": p, "acc": bool(ok), "why": why, "T": x.get("T") if ok else None}
+    if why == CUT_BOUND_REASON:
+        # Censored observation: the fitted value and the lower bound it gives
+        out["cut_T"] = x["T"]
+        out["bound"] = TAR_CUT_BOUND_FACTOR * x["T"]
+    return out
 
 
 def _with_wall_fit(r: dict, wall_fit: dict | None) -> dict:
@@ -604,5 +606,7 @@ def evaluate_morning(inp: MorningInputs, t_sp: float, eco: float | None, sp_to: 
         "cls": dec["cls"],
         "term": dec["term"],
         "ref": dec["ref"],
+        "cut_T": dec.get("cut_T"),
+        "bound_s": dec.get("bound"),
     }
     return out

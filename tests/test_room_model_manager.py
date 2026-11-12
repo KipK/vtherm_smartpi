@@ -82,8 +82,14 @@ def mass_manager():
     # static gain is sensitive to the emitter shape and must agree with the energy balance within 5 %.
     tar.te_pub = {"value": rsim.MASS["tau_e"]}
     m = RoomModelManager("room", "UTC", tar)
+    # A qualified heat balance is in force from the start (the true static gain): nothing is published without one
+    m.apply_energy_balance(D0 - 1, {"value": _true_beq_a(rsim.MASS), "gain": 0.0, "days": 4})
     _drive(m, data, rsim.MASS, rsim.T0 + 600.0, rsim.T0 + DAYS * 86400.0)
     return m, data
+
+
+def _true_beq_a(p: dict) -> float:
+    return (p["alpha"] - p["c"]) / p["a"]
 
 
 def test_end_to_end_identification_and_observation(mass_manager) -> None:
@@ -98,10 +104,10 @@ def test_end_to_end_identification_and_observation(mass_manager) -> None:
     assert all(why == gates.WHY_NO_PREVIOUS for _, why, _ in outcomes[:3])
     assert all(s == "full" for d, _, s in outcomes if d >= 6)
     # The energy balance runs on its own, once per finished day. Here the walls release the heat of the start of
-    # the simulation (wall time 80 h): the daily balances drift and the balance is refused, so no agreement
-    # check applies and the fits publish on their own checks.
+    # the simulation (wall time 80 h): the daily balances drift and are refused, so the balance in force stays the
+    # one given at the start, and every publication is checked against it.
     assert m.eb_run_day == D0 + DAYS - 1 and m.eb_reason == eb_mod.REASON_DRIFT
-    assert all(r["eb"] is None for r in m.records)
+    assert all(r["eb"] == pytest.approx(_true_beq_a(rsim.MASS)) for r in m.records)
     diag = m.diagnostics()
     assert set(diag) == DIAG_KEYS
     assert diag["status"] == "identified"
@@ -121,8 +127,9 @@ def test_end_to_end_identification_and_observation(mass_manager) -> None:
     assert diag["last_refusal_reason"] is None
     assert diag["sensor_resolution_c"] == 0.01
     # The walls still release the heat of the start of the simulation (wall time 80 h): the heating need drifts
-    # from day to day and no heat balance is in force yet
-    assert diag["energy_balance_loss_per_c"] is None and diag["energy_balance_day"] is None
+    # from day to day and the balance given at the start stays in force
+    assert diag["energy_balance_loss_per_c"] == pytest.approx(_true_beq_a(rsim.MASS), abs=1e-6)
+    assert diag["energy_balance_day"] == (dt.date.fromordinal(D0 - 1)).isoformat()
     assert diag["energy_balance_refusal_reason"] == public.energy_balance_reason(eb_mod.REASON_DRIFT)
     json.dumps(diag)
 
@@ -150,6 +157,49 @@ def test_diagnostics_hold_plain_values_only(mass_manager) -> None:
         assert public.energy_balance_reason(code) not in eb_codes | codes
     assert public.energy_balance_reason(None) is None
     assert public.reason(gates.WHY_EB) == "the model's heat loss disagrees with the measured heat balance"
+
+
+def test_no_publication_without_a_qualified_energy_balance(mass_manager) -> None:
+    """The energy balance is the only check of b_eq / a that does not come from the fits: without one in force,
+    a window that passes every other check publishes nothing, and the published median is checked again
+    against the balance in force when it is published."""
+    m, _ = mass_manager
+    truth = _true_beq_a(rsim.MASS)
+    last = m.records[-1]
+    cur = dict(m.windows[last["id"]], why=None)
+    prev = m.windows[cur["prev"]]
+    ok = gates.decide(cur, prev, last["held"], True, eb=truth)
+    assert ok.get("candidate") is not None
+    none = gates.decide(cur, prev, last["held"], True, eb=None)
+    assert none.get("candidate") is None and none["why"] == gates.WHY_NO_EB
+    far = gates.decide(cur, prev, last["held"], True, eb=truth * 1.10)
+    assert far.get("candidate") is None and far["why"] == gates.WHY_EB
+    assert gates.eb_check(ok["candidate"], None) == gates.WHY_NO_EB
+    assert not gates.eb_agrees(ok["candidate"], None)
+    assert public.reason(gates.WHY_NO_EB) == "waiting for a qualified heat balance to check the model's heat loss"
+    assert public.status(None, gates.WHY_NO_EB, True) == "learning"
+
+    # At publication time: a candidate decided against a balance that is no longer the one in force
+    def fresh(eb):
+        x = RoomModelManager("room", "UTC", m._tar)
+        x.eb_slope = eb
+        return x
+
+    rec = {"id": "q9:1:1", "day": D0 + DAYS, "t_end": rsim.T0 + DAYS * 86400.0, "nights": [], "prev_id": None,
+           "q": 0.01, "decision": ok, "eb": truth}
+    for eb, why in ((None, gates.WHY_NO_EB), (truth * 1.10, gates.WHY_EB)):
+        x = fresh(eb)
+        x._apply(dict(rec))
+        assert x.params is None and x.records[-1]["why"] == why
+        assert x.diagnostics()["last_refusal_reason"] == public.reason(why)
+    x = fresh(truth)
+    x._apply(dict(rec))
+    assert x.params is not None and x.records[-1]["why"] is None
+    # A model already published stays in force when a later median disagrees with the balance in force
+    x.eb_slope = truth * 1.10
+    params = x.params
+    x._apply(dict(rec, id="q9:1:2"))
+    assert x.params == params and x.records[-1]["why"] == gates.WHY_EB
 
 
 def test_energy_balance_in_force_keeps_the_last_qualified_value() -> None:

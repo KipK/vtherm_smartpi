@@ -35,6 +35,7 @@ _REASONS = {
     gates.WHY_EMITTER_EDGE: "the heating response delay does not match the measured temperature",
     gates.WHY_A_ONLINE: "the heating response differs too much from the one measured by the regulation",
     gates.WHY_EB: "the model's heat loss disagrees with the measured heat balance",
+    gates.WHY_NO_EB: "waiting for a qualified heat balance to check the model's heat loss",
     REASON_VALVE: "valve heaters are not supported yet",
     REASON_DEPENDENCIES: "numerical libraries unavailable",
 }
@@ -55,7 +56,7 @@ _EB_REASONS = {
 }
 
 # Learning outcomes that are only a matter of time
-_WAITING = (gates.WHY_HISTORY, gates.WHY_NO_PREVIOUS)
+_WAITING = (gates.WHY_HISTORY, gates.WHY_NO_PREVIOUS, gates.WHY_NO_EB)
 
 _WALLS = {
     gates.WALL_COARSE: "not identified: temperature sensor too coarse",

@@ -32,13 +32,19 @@ def _slim(rec: dict) -> dict:
     return {k: rec.get(k) for k in ("day", "why", "q", "precise", "full", "reduced")}
 
 
+def _true_beq_a(plant: dict) -> float:
+    return (plant["alpha"] - plant["c"]) / plant["a"]
+
+
 def _two_windows(data: dict, plant: dict, days=(4, 7)) -> tuple[dict, dict, float]:
-    """Job records of two disjoint windows (the second checked against the first) and the longest job time."""
+    """Job records of two disjoint windows (the second checked against the first, with the true static gain as
+    the energy balance in force) and the longest job time."""
     prev = None
     recs = []
     worst = 0.0
     for d in days:
         snap = rsim.snapshot(data, D0 + d, prev=prev, tau_e=plant["tau_e"], L=plant["L"], a_per_min=plant["a"] * 60.0)
+        snap["eb"] = _true_beq_a(plant)
         t = time.perf_counter()
         rec = jobs.identify_job(snap)
         worst = max(worst, time.perf_counter() - t)
@@ -208,28 +214,35 @@ def _rec(struct, a=1e-3, alpha=1e-4, beta=5e-6, c=6e-5, ok=True):
     return {"params": params, "ok": ok, "why": None if ok else gates.WHY_RESIDUALS}
 
 
+# Static gain b_eq / a of the default records of _rec (full and reduced): the energy balance in force
+EB = 0.04
+
+
 def test_decide_paths() -> None:
     cur = {"q": 0.01, "full": _rec("full"), "reduced": _rec("reduced", alpha=4e-5, ok=False)}
     prev = {"q": 0.01, "full": _rec("full", a=1.05e-3), "reduced": _rec("reduced", alpha=4e-5, ok=False)}
     held = {"full": _GOOD}
-    dec = gates.decide(cur, prev, held, precise=True)
+    dec = gates.decide(cur, prev, held, precise=True, eb=EB)
     assert dec["struct"] == "full" and dec["candidate"]["a"] == pytest.approx((1e-3 * 1.05e-3) ** 0.5)
     # Disagreeing windows
     prev_far = dict(prev, full=_rec("full", a=2e-3))
-    assert gates.decide(cur, prev_far, held, True) == {"why": gates.WHY_DISAGREE, "wall": gates.WALL_NOT_CONFIRMED}
+    assert gates.decide(cur, prev_far, held, True, eb=EB) == {"why": gates.WHY_DISAGREE,
+                                                              "wall": gates.WALL_NOT_CONFIRMED}
     # Bad held-out residuals
-    assert gates.decide(cur, prev, {"full": dict(_GOOD, mean=0.2)}, True)["why"] == gates.WHY_HELDOUT
+    assert gates.decide(cur, prev, {"full": dict(_GOOD, mean=0.2)}, True, eb=EB)["why"] == gates.WHY_HELDOUT
+    # Without a qualified energy balance in force nothing is published
+    assert gates.decide(cur, prev, held, True) == {"why": gates.WHY_NO_EB, "wall": gates.WALL_NOT_CONFIRMED}
     # Full model no better than the reduced one on held-out data: reduced if it passes
     cur2 = dict(cur, reduced=_rec("reduced", alpha=4e-5))
     prev2 = dict(prev, reduced=_rec("reduced", alpha=4.2e-5))
     held2 = {"full": _GOOD, "reduced": dict(_GOOD, rms=0.02)}
-    dec = gates.decide(cur2, prev2, held2, True)
+    dec = gates.decide(cur2, prev2, held2, True, eb=EB)
     assert dec["struct"] == "reduced" and dec["wall"] == gates.WALL_NOT_BETTER
     # Small wall share: reduced model
     cur3 = dict(cur2, full=_rec("full", c=5e-6))
-    assert gates.decide(cur3, prev2, held2, True)["wall"] == gates.WALL_SMALL
+    assert gates.decide(cur3, prev2, held2, True, eb=EB)["wall"] == gates.WALL_SMALL
     # Coarse sensor: never the full model
-    assert gates.decide(cur2, prev2, held2, False)["wall"] == gates.WALL_COARSE
+    assert gates.decide(cur2, prev2, held2, False, eb=EB)["wall"] == gates.WALL_COARSE
     # A refusal before the fit passes through
     assert gates.decide({"why": gates.WHY_HEAT}, prev, {}, True) == {"why": gates.WHY_HEAT, "wall": None}
 
@@ -374,13 +387,14 @@ def test_daily_energy_balance_covers_the_whole_days_before_the_day(no_mass_data)
 
 
 def test_job_checks_the_candidate_against_the_energy_balance_in_force(mass_data) -> None:
-    """The slope in force for the decision is the one of the snapshot (None before a first qualified value)."""
+    """The slope in force for the decision is the one of the snapshot; without one nothing is published."""
     p = rsim.MASS
     first, second, _ = _two_windows(mass_data, p)
     snap = rsim.snapshot(mass_data, D0 + 7, prev=_slim(first), tau_e=p["tau_e"], L=p["L"],
                          a_per_min=p["a"] * 60.0)
     assert jobs.eb_in_force(dict(snap, eb=0.021)) == 0.021
-    assert jobs.eb_in_force(snap) is None and second["eb"] is None
+    assert jobs.eb_in_force(snap) is None and second["eb"] == pytest.approx(_true_beq_a(p))
+    assert jobs._done(dict(second), snap)["decision"] == {"why": gates.WHY_NO_EB, "wall": gates.WALL_NOT_CONFIRMED}
     gain = gates._coords(second["decision"]["candidate"])[1]
     far = jobs._done(dict(second), dict(snap, eb=gain * 1.10))
     assert far["decision"] == {"why": gates.WHY_EB, "wall": gates.WALL_NOT_CONFIRMED}
@@ -503,15 +517,17 @@ def test_a_lumped_simple_model_is_refused() -> None:
     prev = {"q": 0.01, "full": _rec("full", c=1e-6), "reduced": lumped_prev}
     held = {"reduced": _GOOD}
     # Without the online estimate the windows agree and the simple model would be published
-    assert gates.decide(cur, prev, held, True)["struct"] == "reduced"
-    dec = gates.decide(cur, prev, held, True, a_online=a_online)
+    eb_lumped = (1.0e-6 / (a_online / 14.0) * 1.04e-6 / (a_online / 14.5)) ** 0.5
+    assert gates.decide(cur, prev, held, True, eb=eb_lumped)["struct"] == "reduced"
+    dec = gates.decide(cur, prev, held, True, a_online=a_online, eb=eb_lumped)
     assert dec == {"why": gates.WHY_A_ONLINE, "wall": gates.WALL_SMALL}
     # Refused already on the first window, before waiting for a second one
     assert gates.decide(cur, None, {}, True, a_online=a_online)["why"] == gates.WHY_A_ONLINE
     # Within a factor 2 of the online estimate: published
     near = dict(cur, reduced=dict(_rec("reduced", a=a_online / 1.8, alpha=4e-5), ok=True))
     near_prev = dict(prev, reduced=dict(_rec("reduced", a=a_online / 1.75, alpha=4.1e-5), ok=True))
-    assert gates.decide(near, near_prev, held, True, a_online=a_online)["struct"] == "reduced"
+    eb_near = (4e-5 / (a_online / 1.8) * 4.1e-5 / (a_online / 1.75)) ** 0.5
+    assert gates.decide(near, near_prev, held, True, a_online=a_online, eb=eb_near)["struct"] == "reduced"
     assert public.reason(gates.WHY_A_ONLINE) == (
         "the heating response differs too much from the one measured by the regulation")
 
@@ -520,12 +536,14 @@ def test_a_lumped_wall_model_falls_back_to_the_simple_model() -> None:
     cur = {"q": 0.01, "full": _rec("full", a=3e-4), "reduced": _rec("reduced", alpha=4e-5)}
     prev = {"q": 0.01, "full": _rec("full", a=3.1e-4), "reduced": _rec("reduced", alpha=4.1e-5)}
     held = {"full": _GOOD, "reduced": dict(_GOOD, rms=0.05)}
-    assert gates.decide(cur, prev, held, True)["struct"] == "full"
-    dec = gates.decide(cur, prev, held, True, a_online=1e-3)
+    eb_full = (4e-5 / 3e-4 * 4e-5 / 3.1e-4) ** 0.5
+    assert gates.decide(cur, prev, held, True, eb=eb_full)["struct"] == "full"
+    eb_reduced = (4e-5 / 1e-3 * 4.1e-5 / 1e-3) ** 0.5
+    dec = gates.decide(cur, prev, held, True, a_online=1e-3, eb=eb_reduced)
     assert dec["struct"] == "reduced" and dec["wall"] == gates.WALL_NOT_CONFIRMED
     cur_bad = dict(cur, reduced=_rec("reduced", alpha=4e-5, ok=False))
-    assert gates.decide(cur_bad, prev, held, True, a_online=1e-3) == {"why": gates.WHY_A_ONLINE,
-                                                                         "wall": gates.WALL_NOT_CONFIRMED}
+    assert gates.decide(cur_bad, prev, held, True, a_online=1e-3, eb=eb_reduced) == {
+        "why": gates.WHY_A_ONLINE, "wall": gates.WALL_NOT_CONFIRMED}
 
 
 # ---------------------------------------------------------------------------
@@ -712,11 +730,11 @@ def test_candidate_must_agree_with_the_energy_balance() -> None:
     cur = {"q": 0.01, "full": _rec("full"), "reduced": _rec("reduced", alpha=4e-5, ok=False)}
     prev = {"q": 0.01, "full": _rec("full", a=1.05e-3), "reduced": _rec("reduced", alpha=4e-5, ok=False)}
     held = {"full": _GOOD}
-    dec = gates.decide(cur, prev, held, precise=True)
+    dec = gates.decide(cur, prev, held, precise=True, eb=EB)
     assert dec["struct"] == "full"
     gain = gates._coords(dec["candidate"])[1]
-    # No qualified ratio, or one within 5 %: unchanged
-    assert gates.decide(cur, prev, held, True, eb=None) == dec
+    # No qualified ratio: nothing published; one within 5 %: unchanged
+    assert gates.decide(cur, prev, held, True, eb=None) == {"why": gates.WHY_NO_EB, "wall": gates.WALL_NOT_CONFIRMED}
     for f in (1.03, 1 / 1.03, 1.049, 1 / 1.049):
         assert gates.decide(cur, prev, held, True, eb=gain * f) == dec
     # 10 % off either way: refused with the plain reason
@@ -727,7 +745,7 @@ def test_candidate_must_agree_with_the_energy_balance() -> None:
     # The simple model is checked the same way
     cur2 = dict(cur, full=_rec("full", ok=False), reduced=_rec("reduced", alpha=4e-5))
     prev2 = dict(prev, reduced=_rec("reduced", alpha=4.2e-5))
-    dec2 = gates.decide(cur2, prev2, {"reduced": _GOOD}, True)
+    dec2 = gates.decide(cur2, prev2, {"reduced": _GOOD}, True, eb=EB)
     assert dec2["struct"] == "reduced"
     g2 = gates._coords(dec2["candidate"])[1]
     assert gates.decide(cur2, prev2, {"reduced": _GOOD}, True, eb=g2 * 1.03) == dec2

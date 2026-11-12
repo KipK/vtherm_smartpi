@@ -22,7 +22,9 @@ constant free gain, whatever the quiet periods. A qualified model comes into
 force; a refused day keeps the model in force and records why. The model in
 force gives the static part of the feed-forward once a room model is
 published, and its slope is the reference that the fits must agree with to be
-published.
+published: nothing is published before a first qualified balance, and the
+published value is checked again against the slope in force when it is
+published. A model published by an earlier version stays in force.
 
 Emitter: the first moment of the emitter response is the HEAT dead time in
 force (learned T_ar or bootstrap); its first-order part tau_e is the refined
@@ -398,7 +400,15 @@ class RoomModelManager:
             return
         self.candidates.append(dict(dec["candidate"], struct=dec["struct"], day=day, id=key))
         del self.candidates[:-RM_PUB_LAST * 3]
-        params = RoomParams.from_dict(gates.published(self.candidates))
+        pub = gates.published(self.candidates)
+        # The value published is a median of candidates: it must agree with the balance in force now
+        why = None if pub is None else gates.eb_check(pub, self.eb_slope)
+        if why is not None:
+            self.records[-1]["why"] = why
+            if self.params is None:
+                self.wall_code = dec.get("wall")
+            return
+        params = RoomParams.from_dict(pub)
         if params is None:
             return
         self.params = params

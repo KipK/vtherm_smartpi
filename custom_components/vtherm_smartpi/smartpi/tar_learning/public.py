@@ -5,6 +5,8 @@ into plain values that a user can read without knowing the methods.
 """
 from __future__ import annotations
 
+from .const import LIMIT_LONG, LIMIT_SHORT
+
 ROOM_THERMAL_MASS = "thermal_mass"
 ROOM_NO_THERMAL_MASS = "no_thermal_mass"
 ROOM_UNDETERMINED = "undetermined"
@@ -24,6 +26,8 @@ _MORNING_REASONS = {
         "low setpoint not held in the dark with valid data for the 2 hours before the comfort step",
     "sunrise too close to the comfort step": "sunrise too soon after the comfort step",
     "excitation: cut by sunrise": "comfort step cut by sunrise before its response could be measured",
+    "excitation: cut by sunrise, lower bound":
+        "comfort step cut by sunrise: kept as a lower bound of the delay, not as a value",
     "setpoint restored after a restart": "setpoint restored after a restart, not a comfort step",
     "no published b": "heat loss b not learned yet",
     "no heater start after the comfort step": "no heating start after the comfort step",
@@ -57,6 +61,13 @@ _UNCONFIRMED = {
         "at least 1 hour without heating while the room was regulated at its low setpoint before the comfort step",
     "no regulated start": "the room did not reach its low setpoint before the comfort step",
     "regulated part too short": "the room was regulated at its low setpoint for less than 4 hours before the comfort step",
+}
+
+# Why the learned value is not used as it is
+_LIMITS = {
+    LIMIT_SHORT: "learned delay shorter than the reference: the gains keep the reference dead time",
+    LIMIT_LONG: ("learned delay above twice the reference and not confirmed by a second method: "
+                 "the gains use twice the reference dead time"),
 }
 
 # Why no quiet period can be found
@@ -93,3 +104,10 @@ def period_reason(code: str | None) -> str | None:
     if code is None:
         return None
     return _PERIOD_REASONS.get(code, code)
+
+
+def limit_reason(code: str | None) -> str | None:
+    """Plain reason why the learned value is not used as it is, None when it is (or without one)."""
+    if code is None:
+        return None
+    return _LIMITS.get(code, code)

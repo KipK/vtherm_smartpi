@@ -427,7 +427,7 @@ when the history is pruned, and a period found again gets the same key.
 | Rule | Data |
 |---|---|
 | Comfort step | a rise of at least 1 °C after a low setpoint held 2 h (in the history), not within 300 s after a restart; evaluated when it ends an episode and the component that ends at the rise covers the 2 h before it |
-| Fit window of a step | every response window ends at the end of the darkness; the excitation rules (`exc_window_T`, energy, rise, sensor period) judge the truncated window; less than 600 s left gives no fit. A window `Wsp` cut by the darkness must also pass `exc_window_T` for the largest of the fitted value, the refined value in force, the published fast value and twice the bootstrap dead time (the first moment of a first-order emitter is about twice the apparent dead time the bootstrap measures); without any of them the step is refused |
+| Fit window of a step | every response window ends at the end of the darkness; the excitation rules (`exc_window_T`, energy, rise, sensor period) judge the truncated window; less than 600 s left gives no fit. A window `Wsp` cut by the darkness is a censored observation: it gives an estimate only when it lasts at least `TAR_CUT_ESTIMATE_WINDOW_T = 3` times the largest of the fitted value $T$ and the floor (the refined value in force, the published fast value, the lower bound in force and twice the bootstrap dead time: the first moment of a first-order emitter is about twice the apparent dead time the bootstrap measures). Otherwise, once the other rules pass, it gives the lower bound `TAR_CUT_BOUND_FACTOR` $\cdot T = 0.6\,T$ (the margin covers the noise of a short fit), confirmed by the same gate as a value; a cut window that fails another rule is refused as cut |
 | Night indicator | passive spans intersected with the quiet components of the episode of the step, on the 600 s grid of the segment |
 | G1 / GT4 | longest span without a heater start in `[regulated start, t_ref)`; no regulated start, or a regulated part under 4 h, is an unknown observable and leaves the step unconfirmed |
 | Regulated night | `[regulated start, end of the episode)` of the selected component, at least 4 h, valid to its end; then the existing quarter, temperature, power-slope and residual rules |
@@ -478,6 +478,34 @@ is not advanced by the near-band taper. The periodic FF-trim window rejects a
 window that spans several generations (`periodic_gains_changed`).
 
 The active dead time is `deadtime_heat` in HEAT and `deadtime_cool` in COOL.
+
+With the emitter delay learning, the HEAT dead time $L$ of the gain rule comes
+from `tar_learning/policy.applied_value`. The learned value $T$ is the refined
+value when published, else the fast value, raised to the lower bound in force
+(the median of the last 5 confirmed bounds) when that is larger. It is a first
+moment, about twice the apparent dead time that the bootstrap measures, so the
+rule works on $L_T = T/2$ (`TAR_GAIN_DEADTIME_FACTOR = 0.5`) against the
+reference $L_b = \max(L_{b,0}, L_{boot})$, with $L_{b,0}$ the first reliable
+bootstrap dead time seen since the learning started (persisted, never lowered)
+and $L_{boot}$ the current one:
+
+| Case | $L$ of the gains | Other consumers |
+|---|---|---|
+| no learned value | $L_{boot}$ | $L_{boot}$ |
+| $L_T < L_b$ | $L_b$ | $L_{boot}$ |
+| $L_b \le L_T \le 2 L_b$ (`TAR_APPLY_LONG_FACTOR`) | $L_T$ | $T$ |
+| $L_T > 2 L_b$, fast value and window value agree, $T$ not a lower bound | $L_T$ | $T$ |
+| $L_T > 2 L_b$ otherwise | $2 L_b$ | $L_{boot}$ |
+
+The window value is the refined value when published, else the `τe` of the
+latest evaluation whose two windows agree (a diagnostic when its nights are not
+regulated). The two agree when $|\ln(T_{fast}/T_{window})| \le \ln 1.25$
+(`TAR_AGREE_TOL`). An $L$ that is too short leaves the recommended robustness
+range of the loop, and much too short makes a slow emitter unstable; an $L$
+that is too long costs integrated error, never stability. A learned value
+alone therefore never shortens $L$ below $L_b$, and only a value confirmed by
+two methods lengthens it beyond $2 L_b$. The other consumers (near band,
+integral hold, FF3, thermal twin) use $T$ only when the gains use $L_T$.
 
 Important:
 
@@ -659,8 +687,14 @@ with walls or simple model) is published only if its own $b_{eq}/a$ agrees
 with $s_{EB}$ within 5 % ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$);
 otherwise the window publishes nothing (`the model's heat loss disagrees with
 the measured heat balance`). The model in force is the last qualified one at
-the time of the job. Without a qualified model there is no such check, but
-the room model gives no holding power either.
+the time of the job. It is the only check of $b_{eq}/a$ that does not come
+from the fits: without a qualified model in force nothing is published
+(`waiting for a qualified heat balance to check the model's heat loss`, shown
+with the status `learning`). The published value, the median of the last
+candidates, is checked again against the model in force when it is published;
+on a disagreement the publication in force is kept. A room model published by
+an earlier version stays in force; the holding power still requires the
+agreement with the heat balance in force (4.2).
 
 **Emitter search.** The emitter first moment of the fits is searched on a
 fixed grid, independent of the dead time in force: 13 values log-spaced from
@@ -1172,11 +1206,14 @@ The control loop schedules at most one delayed write of this payload per five-mi
 
 Past event timestamps (temperature histories, calibration start, passive period and episode of the response lag) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
 
-The emitter delay learning keeps its own store (state version 2): history,
+The emitter delay learning keeps its own store (state version 3): history,
 pending comfort steps, catalogue of quiet periods with their keys, night
 entries, regulated-period decisions, windows, evaluations, confirmed values
-keyed by period, publications and the home position the evidence was found
-with. A version 1 store keeps only its history and its pending rises: its
+and lower bounds keyed by period, publications, the reference bootstrap dead
+time frozen at the start of the learning and the home position the evidence
+was found with. A version 2 store is read whole; its reference starts from the
+last reliable bootstrap dead time it recorded, and it has no lower bound. A
+version 1 store keeps only its history and its pending rises: its
 nights, windows, evaluations, confirmations and published values were selected
 by local hours without a solar check and are dropped, then found again from the
 history. A change of the home position forgets the evidence of the periods. A

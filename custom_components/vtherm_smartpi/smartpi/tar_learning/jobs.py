@@ -63,12 +63,13 @@ def _power(snap: dict):
     return np.asarray(pw[0], dtype=float), np.asarray(pw[1], dtype=float)
 
 
-def delay_floor(te_pub: dict | None, fast_s: float | None, bootstrap_s: float | None) -> float | None:
+def delay_floor(te_pub: dict | None, fast_s: float | None, bootstrap_s: float | None,
+                bound_s: float | None = None) -> float | None:
     """Shortest first moment of the emitter known before a step: the largest of the refined value in force,
-    the published fast value and twice the bootstrap dead time. The bootstrap measures an apparent dead
-    time; the first moment of a first-order emitter is about twice that (the factor the gain rule undoes,
-    TAR_GAIN_DEADTIME_FACTOR). None without any of them."""
-    vals = [te_pub["value"] if te_pub else None, fast_s,
+    the published fast value, the lower bound in force and twice the bootstrap dead time. The bootstrap
+    measures an apparent dead time; the first moment of a first-order emitter is about twice that (the
+    factor the gain rule undoes, TAR_GAIN_DEADTIME_FACTOR). None without any of them."""
+    vals = [te_pub["value"] if te_pub else None, fast_s, bound_s,
             None if bootstrap_s is None else TAR_BOOTSTRAP_MOMENT_FACTOR * bootstrap_s]
     vals = [float(v) for v in vals if v is not None and v > 0.0]
     return max(vals) if vals else None
@@ -99,7 +100,8 @@ def morning_job(snap: dict[str, Any]) -> dict[str, Any]:
         spans=room_mass.passive_spans(on, off, snap["t_last"]), params_at=params_at, phase_at=phase_at,
         quiet=[tuple(x) for x in snap["quiet"]], cycle_s=float(snap["cycle_s"]), b_pub=float(snap["b_pub"]),
         valid_until=_valid_until(snap["gaps"]), power=_power(snap), fit_end=snap.get("fit_end"),
-        t_floor=delay_floor(identification.te_in_force(evals, t_sp), snap.get("fast_s"), snap.get("bootstrap_s")),
+        t_floor=delay_floor(identification.te_in_force(evals, t_sp), snap.get("fast_s"), snap.get("bootstrap_s"),
+                            snap.get("bound_s")),
     )
     nid = snap["night_id"]
     # One entry per night: a night evaluated again replaces its entry before the room class is computed

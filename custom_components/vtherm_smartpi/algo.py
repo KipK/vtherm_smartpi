@@ -1182,8 +1182,8 @@ class SmartPI:
     def regulation_dead_time(self, hvac_mode: VThermHvacMode | None = None):
         """Dead-time source of the regulation.
 
-        It is the dead-time estimator itself, unless the T_ar
-        learning applies a learned HEAT active dead time; the estimator values
+        It is the dead-time estimator itself, unless the gains of the T_ar
+        learning use a learned HEAT active dead time; the estimator values
         are never modified.
         """
         if self.tar_learning is None:
@@ -1194,8 +1194,9 @@ class SmartPI:
     def gain_dead_time(self, hvac_mode: VThermHvacMode | None = None):
         """Dead-time source of the gain rule.
 
-        The rule expects an effective dead time: a learned HEAT value is applied
-        as its effective equivalent, the other consumers use it as learned.
+        The rule expects an effective dead time: with the T_ar learning it is
+        the one of its apply rule (tar_learning/policy.py), the other consumers
+        use regulation_dead_time.
         """
         if self.tar_learning is None:
             return self.dt_est

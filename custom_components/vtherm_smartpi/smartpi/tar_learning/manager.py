@@ -5,7 +5,10 @@ quiet periods of that history (quiet_periods: no sun, constant setpoint, valid
 data), detects the comfort steps, schedules the computations (jobs.py, run in
 an executor), keeps their results and gives the regulation the HEAT active
 dead time to use (policy.applied_value). It never modifies the
-bootstrap/calibration dead time.
+bootstrap/calibration dead time. The reference of the apply rule is the
+larger of the first reliable bootstrap HEAT dead time seen since the learning
+started (frozen and stored, so a bootstrap that later falls never lowers it)
+and the current one.
 
 The catalogue holds the closed and complete quiet periods with their keys and
 origins, so a period keeps its key when the history is pruned. Every piece of
@@ -49,7 +52,6 @@ from .const import (
     STEP_MIN_RISE_C,
     STEP_RESTART_GUARD_S,
     TAR_FAST_GATE,
-    TAR_GAIN_DEADTIME_FACTOR,
     TAR_MAX_EVALUATIONS,
     TAR_MAX_MORNINGS,
     TAR_MAX_NIGHTS,
@@ -57,7 +59,7 @@ from .const import (
     TAR_VALVE_MODE_SUPPORTED,
 )
 from .history import TarHistory
-from .policy import AppliedValue, RegulationDeadTime, applied_value, fast_publication
+from .policy import AppliedValue, RegulationDeadTime, applied_value, bound_publication, fast_publication
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,7 +69,8 @@ STATUS_UNAVAILABLE = "dependencies_unavailable"
 STATUS_UNSUPPORTED = "valve_mode_not_supported"
 
 # 2: quiet periods (keys by period, catalogue of periods, position of the evidence)
-STATE_VERSION = 2
+# 3: frozen reference of the apply rule, lower bounds of the comfort steps cut by sunrise
+STATE_VERSION = 3
 _PRUNE_EVERY_S = 3600.0
 # The catalogue of the quiet periods is rebuilt at most this often
 _CATALOGUE_EVERY_S = 600.0
@@ -97,6 +100,13 @@ def _per_min(x: float | None) -> float | None:
     return None if x is None else round(float(x) * 60.0, 6)
 
 
+def _positive_or_none(x) -> float | None:
+    """A stored positive duration, None when missing or not valid."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or x <= 0:
+        return None
+    return float(x)
+
+
 def _moved(a: Position, b: Position) -> bool:
     return (abs(a.latitude - b.latitude) > _POSITION_TOL_DEG
             or abs(a.longitude - b.longitude) > _POSITION_TOL_DEG)
@@ -123,6 +133,8 @@ class TarLearningManager:
         self._evidence_position: Position | None = None
         # Last reliable bootstrap HEAT dead time seen (reference of the steps cut by sunrise)
         self.bootstrap_heat_s: float | None = None
+        # First reliable bootstrap HEAT dead time seen since the learning started (reference of the apply rule)
+        self.reference_heat_s: float | None = None
         # Results of a computation started before a reset or a change of position are dropped
         self._generation = 0
         self._reset_results()
@@ -143,6 +155,10 @@ class TarLearningManager:
         self.fast_ids: list[str] = []
         self.fast_count = 0
         self.fast_pub: dict | None = None
+        # Lower bounds of the confirmed comfort steps cut by sunrise [period key, bound], one per period
+        self.bound_values: list[list] = []
+        self.bound_ids: list[str] = []
+        self.bound_count = 0
         self.te_pub: dict | None = None
         self.refined_cls = "unknown"
         self.refined_wall: dict | None = None
@@ -208,6 +224,7 @@ class TarLearningManager:
         self.history = TarHistory()
         self._reset_results()
         self._evidence_position = None
+        self.reference_heat_s = None
         self.dirty = True
 
     # ------------------------------------------------------------------
@@ -313,19 +330,46 @@ class TarLearningManager:
     # Value used by the regulation
     # ------------------------------------------------------------------
     def applied(self, bootstrap_s: float | None, bootstrap_reliable: bool) -> AppliedValue:
-        if bootstrap_reliable and bootstrap_s is not None and math.isfinite(bootstrap_s) and bootstrap_s > 0.0:
+        valid = bool(bootstrap_reliable) and bootstrap_s is not None and math.isfinite(bootstrap_s) and bootstrap_s > 0.0
+        if valid:
             self.bootstrap_heat_s = float(bootstrap_s)
         if not self.active:
-            return AppliedValue(bootstrap_s, SOURCE_BOOTSTRAP, None, None, False)
+            return AppliedValue(bootstrap_s, SOURCE_BOOTSTRAP, None, None, False, bootstrap_s)
+        if valid and self.reference_heat_s is None:
+            self.reference_heat_s = float(bootstrap_s)
+            self.dirty = True
+        ref = self.reference_heat_s
+        if ref is not None and valid:
+            ref = max(ref, float(bootstrap_s))
         return applied_value(
             bootstrap_s,
             bootstrap_reliable,
             self.fast_pub["value_s"] if self.fast_pub else None,
             self.te_pub["value"] if self.te_pub else None,
+            reference_s=ref,
+            window_s=self.window_value(),
+            bound_s=self.bound_value(),
         )
 
+    def bound_value(self) -> float | None:
+        """Lower bound in force from the comfort steps cut by sunrise, None without any."""
+        return bound_publication([v[1] for v in self.bound_values])
+
+    def window_value(self) -> float | None:
+        """Window value that may confirm the fast value: the refined value, else the emitter time constant of
+        the latest evaluation whose two windows agree (kept as a diagnostic when its nights are not
+        regulated)."""
+        if self.te_pub:
+            return float(self.te_pub["value"])
+        for e in reversed(self.evals):
+            if e.get("te_ok") and e.get("te"):
+                return float(e["te"])
+            if e.get("te_ok_raw") and e.get("te_raw"):
+                return float(e["te_raw"])
+        return None
+
     def regulation_dead_time(self, dt_est, hvac_mode):
-        """Dead-time source of the regulation: dt_est itself unless a learned HEAT value applies."""
+        """Dead-time source of the regulation: dt_est itself unless the gains use a learned HEAT value."""
         if hvac_mode != VThermHvacMode_HEAT or not self.active:
             return dt_est
         ap = self.applied(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
@@ -334,11 +378,13 @@ class TarLearningManager:
         return RegulationDeadTime(dt_est, ap.value_s)
 
     def gain_dead_time(self, dt_est, hvac_mode):
-        """Dead-time source of the gain rule: the learned value as an effective dead time."""
-        view = self.regulation_dead_time(dt_est, hvac_mode)
-        if view is dt_est:
+        """Dead-time source of the gain rule: the effective dead time of the apply rule."""
+        if hvac_mode != VThermHvacMode_HEAT or not self.active:
             return dt_est
-        return RegulationDeadTime(dt_est, TAR_GAIN_DEADTIME_FACTOR * view.deadtime_heat_s)
+        ap = self.applied(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
+        if ap.gains_s is None or (ap.source == SOURCE_BOOTSTRAP and ap.gains_s == dt_est.deadtime_heat_s):
+            return dt_est
+        return RegulationDeadTime(dt_est, ap.gains_s)
 
     # ------------------------------------------------------------------
     # Scheduling
@@ -475,7 +521,8 @@ class TarLearningManager:
         snap.update(t_sp=t_sp, eco=step["eco"], sp_to=step["sp_to"], b_pub=b_pub, nights=list(self.nights),
                     evals=list(self.evals), night_id=ep["id"], quiet=[list(x) for x in quiet_intervals(ep)],
                     fit_end=ep["dark_end"], regulated_start=comp[4],
-                    fast_s=self.fast_pub["value_s"] if self.fast_pub else None, bootstrap_s=self.bootstrap_heat_s)
+                    fast_s=self.fast_pub["value_s"] if self.fast_pub else None, bootstrap_s=self.bootstrap_heat_s,
+                    bound_s=self.bound_value())
         return "morning", snap, step
 
     def _window_job(self, k: int, now: float):
@@ -596,7 +643,8 @@ class TarLearningManager:
             self.pending.remove(step)
         nid = res.get("night_id")
         rec = {k: res.get(k) for k in ("t_sp", "t_s", "accepted", "T", "why", "path", "cls", "term", "ref",
-                                        "night", "night_cls", "room_class", "sel", "b_fit_rel", "night_id")}
+                                        "night", "night_cls", "room_class", "sel", "b_fit_rel", "night_id",
+                                        "bound_s")}
         rec["day"] = self._clock.day_of(step["t_sp"])
         learned = res.get("learned")
         rec["k_per_s"] = learned.get("k_per_s") if learned else None
@@ -618,6 +666,19 @@ class TarLearningManager:
                 pub = fast_publication([v[1] for v in self.fast_values])
                 if pub is not None:
                     self.fast_pub = {"value_s": float(pub), "day": rec["day"]}
+        elif res.get("bound_s"):
+            # Cut by sunrise too early for an estimate: a lower bound, confirmed by the same gate
+            why = gates.unconfirmed(self.gate, res.get("gate_obs") or {}, res.get("cut_T"), res.get("b_fit_rel"))
+            rec["confirmed"] = why is None
+            rec["unconfirmed_why"] = why
+            if why is None:
+                self.bound_values = ([v for v in self.bound_values if v[0] != nid]
+                                     + [[nid, float(res["bound_s"])]])
+                del self.bound_values[:-PUB_LAST]
+                if nid not in self.bound_ids:
+                    self.bound_ids.append(nid)
+                    del self.bound_ids[:-TAR_MAX_MORNINGS]
+                    self.bound_count += 1
         self.mornings.append(rec)
         del self.mornings[:-TAR_MAX_MORNINGS]
         self.nights = [n for n in self.nights if n.get("night_id") != nid] + [res["night_summary"]]
@@ -643,19 +704,23 @@ class TarLearningManager:
         last_eval = self.evals[-1] if self.evals else None
         wall = self.refined_wall
         last_room = next((m for m in reversed(self.mornings) if m.get("room_class")), None)
+        bound = self.bound_value()
         return {
             "status": self.public_status,
             "applied_s": _r(ap.value_s),
-            "gains_s": _r(ap.value_s if ap.source == SOURCE_BOOTSTRAP or ap.value_s is None
-                          else TAR_GAIN_DEADTIME_FACTOR * ap.value_s),
+            "gains_s": _r(ap.gains_s),
             "source": ap.source,
             "bootstrap_s": _r(bootstrap_s),
+            "reference_s": _r(ap.reference_s) if self.active else None,
             "in_force_s": _r(ap.in_force_s),
             "in_force_source": ap.in_force_source,
             "out_of_bound": ap.out_of_bound,
+            "limit_reason": public.limit_reason(ap.limit),
             "fast": {
                 "value_s": _r(self.fast_pub["value_s"]) if self.fast_pub else None,
                 "confirmed_mornings": self.fast_count,
+                "lower_bound_s": _r(bound),
+                "lower_bound_mornings": self.bound_count,
                 "last_value_s": _r(last_acc.get("T")) if last_acc else None,
                 "last_status": fast_status,
                 "last_unconfirmed_reason": public.unconfirmed_reason(last_acc.get("unconfirmed_why")) if last_acc else None,
@@ -723,21 +788,59 @@ class TarLearningManager:
             "fast_values": self.fast_values,
             "fast_count": self.fast_count,
             "fast_pub": self.fast_pub,
+            "bound_values": self.bound_values,
+            "bound_ids": self.bound_ids,
+            "bound_count": self.bound_count,
+            "reference_heat_s": self.reference_heat_s,
             "te_pub": self.te_pub,
             "refined_cls": self.refined_cls,
             "refined_wall": self.refined_wall,
         }
 
     def load_state(self, state: dict[str, Any] | None) -> None:
-        """Load a saved state; an earlier format keeps only its raw data, a later one is ignored."""
+        """Load a saved state; an earlier format is read by its own reader, a later one is ignored."""
         if not isinstance(state, dict):
             return
         version = state.get("version")
         if version == 1:
             self._load_v1(state)
             return
+        if version == 2:
+            self._load_v2(state)
+            return
         if version != STATE_VERSION:
             return
+        if not self._load_evidence(state):
+            return
+        self.reference_heat_s = _positive_or_none(state.get("reference_heat_s"))
+        try:
+            self.bound_values = [[str(k), float(v)] for k, v in state.get("bound_values") or []]
+            if not all(math.isfinite(v) and v > 0.0 for _, v in self.bound_values):
+                raise ValueError("lower bound not finite")
+            self.bound_ids = [str(x) for x in state.get("bound_ids") or []]
+            self.bound_count = int(state.get("bound_count") or 0)
+        except (TypeError, ValueError) as err:
+            _LOGGER.warning("%s - T_ar learning: lower bounds ignored: %s", self._name, err)
+            self.bound_values, self.bound_ids, self.bound_count = [], [], 0
+        self._after_load()
+
+    def _load_v2(self, state: dict[str, Any]) -> None:
+        """State before the frozen reference and the lower bounds: everything is kept.
+
+        The reference of the apply rule was not stored; the last reliable bootstrap
+        dead time of that state takes its place. Its fast values were accepted under
+        the earlier rule for the comfort steps cut by sunrise and stay as they are.
+        """
+        if not self._load_evidence(state):
+            return
+        self.reference_heat_s = self.bootstrap_heat_s
+        self.dirty = True
+        self._after_load()
+        _LOGGER.info("%s - T_ar learning: earlier state format, the reference dead time starts from its last "
+                     "bootstrap value", self._name)
+
+    def _load_evidence(self, state: dict[str, Any]) -> bool:
+        """Fields shared by the formats 2 and 3; False (and a reset) when the state is not valid."""
         try:
             self.history = TarHistory.from_dict(state.get("history"))
             self.pending = [dict(x) for x in state.get("pending") or []]
@@ -756,8 +859,7 @@ class TarLearningManager:
             self.te_pub = state.get("te_pub")
             self.refined_cls = state.get("refined_cls") or "unknown"
             self.refined_wall = state.get("refined_wall")
-            bh = state.get("bootstrap_heat_s")
-            self.bootstrap_heat_s = float(bh) if isinstance(bh, (int, float)) and math.isfinite(bh) and bh > 0 else None
+            self.bootstrap_heat_s = _positive_or_none(state.get("bootstrap_heat_s"))
             pos = state.get("position")
             self._evidence_position = validate_position(*pos) if isinstance(pos, list) and len(pos) == 2 else None
             for e in self.episodes:
@@ -769,7 +871,10 @@ class TarLearningManager:
             self.history = TarHistory()
             self._reset_results()
             self._evidence_position = None
-            return
+            return False
+        return True
+
+    def _after_load(self) -> None:
         self._cat_t = None
         self._check_position()
 

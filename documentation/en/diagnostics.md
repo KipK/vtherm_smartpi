@@ -134,18 +134,22 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | Field | Meaning |
 |---|---|
 | `status` | `active`, `checking_dependencies` (until the thermostat has started), `dependencies_unavailable` (numpy/scipy cannot be loaded: bootstrap value in use) or `valve_mode_not_supported` |
-| `applied_s` | HEAT active dead time used by the regulation, in seconds |
-| `source` | Origin of `applied_s`: `bootstrap`, `fast` or `refined` |
-| `gains_s` | Dead time used by the gains, in seconds: half of `applied_s` for a learned value, `applied_s` itself for the bootstrap value |
+| `applied_s` | HEAT active dead time used by the regulation (near band, integral hold, FF3, thermal twin), in seconds: the learned value when the gains use it, else `bootstrap_s` |
+| `source` | Origin of `applied_s` and `gains_s`: `bootstrap`, `fast`, `refined` or `lower_bound` (a lower bound from comfort steps cut by sunrise) |
+| `gains_s` | Dead time used by the gains, in seconds: half of `applied_s` for a learned value; otherwise `reference_s` when a learned value is shorter, twice `reference_s` when a learned value is longer and not confirmed, `bootstrap_s` without a learned value |
 | `bootstrap_s` | Bootstrap/calibration dead time (`model.deadtime_heat_s`), never modified |
+| `reference_s` | Reference of the gains, in seconds: the larger of the first `bootstrap_s` measured since the learning started (kept) and the current one; `null` until a bootstrap value is measured |
 | `in_force_s` / `in_force_source` | Learned value in force (refined, else fast) and its origin, `null` before any publication |
-| `out_of_bound` | `true` when the value in force lies outside 0.5 to 2 times `bootstrap_s` and is therefore not applied |
+| `out_of_bound` | `true` when a learned value exists and the gains do not use it as it is (see `limit_reason`) |
+| `limit_reason` | Why the gains do not use the learned value as it is (`learned delay shorter than the reference: the gains keep the reference dead time`, or `learned delay above twice the reference and not confirmed by a second method: the gains use twice the reference dead time`), `null` otherwise |
 | `fast.value_s` | Published fast value (confirmed comfort steps), `null` before 3 confirmed steps |
 | `fast.confirmed_mornings` | Number of accepted and confirmed comfort steps, one per quiet period at most |
+| `fast.lower_bound_s` | Lower bound in force: median of the last 5 confirmed comfort steps cut by sunrise too early for a value, `null` without any |
+| `fast.lower_bound_mornings` | Number of confirmed comfort steps cut by sunrise that gave a lower bound, one per quiet period at most |
 | `fast.last_value_s` | Value of the last accepted comfort step |
 | `fast.last_status` | `confirmed`, `unconfirmed` or `none` for the last accepted comfort step |
 | `fast.last_unconfirmed_reason` | Why the last accepted comfort step is unconfirmed (for example `the room did not reach its low setpoint before the comfort step`, or at least 1 hour without heating while the room was regulated at its low setpoint) |
-| `fast.last_morning` | Last evaluated comfort step, at any hour: `day`, `accepted`, `reason` (`accepted`, or why the step gave no value, for example `temperature rise too small`, `comfort step in daylight`, `sunrise too soon after the comfort step` or `comfort step cut by sunrise before its response could be measured`), `room_class` |
+| `fast.last_morning` | Last evaluated comfort step, at any hour: `day`, `accepted`, `reason` (`accepted`, or why the step gave no value, for example `temperature rise too small`, `comfort step in daylight`, `sunrise too soon after the comfort step`, `comfort step cut by sunrise before its response could be measured` or `comfort step cut by sunrise: kept as a lower bound of the delay, not as a value`), `room_class` |
 | `refined.tau_e_s` | Published refined value `τe`, `null` before a publication |
 | `refined.class` | Type of room in force from the identification: `thermal_mass`, `no_thermal_mass` or `undetermined` |
 | `refined.k_per_s`, `refined.tau_w_h` | Air-wall coupling and wall time constant in force (room with `thermal_mass`) |
@@ -169,7 +173,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `tracking` | State of the room tracking: `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` or `wall state implausible` |
 | `walls` | `identified`, or why the walls are not in the model: `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model`; `null` before any result |
 | `a` | Heating response at full power, in the units of `model.a` (°C per minute) |
-| `b_eq` | Static loss of the model, in the units of `model.b` (per minute). The holding power does not use it: its static part comes from the heat balance (`energy_balance_loss_per_c` and `energy_balance_free_gain_percent`), and `b_eq / a` must agree with `energy_balance_loss_per_c` within 5 % for a publication |
+| `b_eq` | Static loss of the model, in the units of `model.b` (per minute). The holding power does not use it: its static part comes from the heat balance (`energy_balance_loss_per_c` and `energy_balance_free_gain_percent`), and `b_eq / a` must agree with `energy_balance_loss_per_c` within 5 % for a publication (nothing is published before a first heat balance) |
 | `b_air` | Total loss rate of the air, to the outside and to the walls (per minute); `null` for the simple model |
 | `b_wall` | Steady share of that loss that goes through the walls (per minute), with `b_eq` = `b_air` − `b_wall`; `null` for the simple model |
 | `forecast_c` | Forecast room temperature in `1h`, `2h`, `6h` and `12h` if the current heating power were kept (°C); `null` while the tracking is not running |
@@ -179,7 +183,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `wall_extra_power_percent` | Extra power the walls currently absorb beyond their steady share, in % of full power (negative when they give heat back); `null` without identified walls, without a precise sensor or while the tracking is not `ok` |
 | `identified_day` | Day of the values in use (the day their last quiet period ended), `null` before a publication |
 | `last_identification_day` | Day of the last identification (the day its last quiet period ended) |
-| `last_refusal_reason` | Why the last identification published nothing (for example `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation` or `the model's heat loss disagrees with the measured heat balance`), `null` when it published |
+| `last_refusal_reason` | Why the last identification published nothing (for example `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation`, `the model's heat loss disagrees with the measured heat balance` or `waiting for a qualified heat balance to check the model's heat loss`), `null` when it published |
 | `energy_balance_loss_per_c` | Heat loss of the heat balance in force: the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. It is the slope of a straight line through the daily heat balances of the whole days kept (up to 7), computed once a day. Once a model is published, the static part of the holding power is `energy_balance_loss_per_c` × (setpoint − outdoor temperature) − the free gain. A day whose heat balance is refused keeps the previous values; `null` before a first accepted value |
 | `energy_balance_free_gain_percent` | Constant free heat gain of the heat balance in force, in % of full power: heat from a warmer room next door or from steady occupants, negative for a loss to a colder room. `0` while the indoor-outdoor difference has not varied enough between the days to tell a gain apart from the losses (and the days show none); `null` before a first accepted value |
 | `energy_balance_days` | Number of days used by the heat balance in force, `null` before a first accepted value |

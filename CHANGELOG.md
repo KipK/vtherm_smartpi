@@ -11,8 +11,7 @@ All notable changes to this project will be documented in this file.
   in `tar_learning.quiet_periods`.
 - Emitter delay learning: a comfort step is any rise of at least 1 °C before
   sunrise after 2 hours at the low setpoint; its fit stops at sunrise. A
-  window cut by sunrise must also hold the longest delay known before the
-  step. A setpoint restored after a restart is not a step.
+  setpoint restored after a restart is not a step.
 - Emitter delay learning: the confirmation and the regulated-night rule start
   when the room regulates at its low setpoint and need 4 hours of it; an
   unknown no longer confirms a step.
@@ -21,6 +20,15 @@ All notable changes to this project will be documented in this file.
   and the confirmed values.
 - Emitter delay learning: values learned with the former fixed hours are
   dropped once and learned again from the kept history.
+- Emitter delay learning: the gains compare half the learned delay with a
+  reference (the bootstrap dead time kept from the start of the learning, or
+  the current one if larger). A shorter value keeps the reference; up to twice
+  the reference it is used; above, only when the comfort-step and
+  identification values agree within x1.25, else twice the reference.
+  New diagnostics `reference_s` and `limit_reason`.
+- Emitter delay learning: a comfort step cut by sunrise gives a value only
+  when the fitted part lasts 3 times the delay; a shorter one gives a lower
+  bound (`fast.lower_bound_s`), never a value. The store moves to version 3.
 
 - Room model (heating, PWM heaters): SmartPI identifies a model of the room
   with its air, walls and emitter, follows the room state and publishes
@@ -30,6 +38,9 @@ All notable changes to this project will be documented in this file.
   with the three before; no fixed hour.
 - Room model: a fit is kept only when the periods determine its values
   precisely enough, judged from the fit itself; no minimum number of hours.
+- Room model: nothing is published before a qualified heat balance is in
+  force, and the published value is checked against it when published. A
+  model already published stays in force.
 - Room model: the heat balance runs once per finished day, quiet periods or
   not.
 - Room model: windows learned with the former fixed hours are dropped once;

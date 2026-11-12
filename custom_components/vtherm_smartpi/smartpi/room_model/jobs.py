@@ -7,7 +7,8 @@ Energy balance (balance_job): the static model of the whole local days before
 the day of the snapshot (energy_balance.py), computed once a day whatever the
 quiet periods. Identification (identify_job): the window of three closed quiet
 periods of the snapshot (periods.py); a candidate's b_eq / a must agree with
-the slope in force (snap["eb"], None before a first qualified value; gates.py).
+the slope in force (snap["eb"]); before a first qualified value there is no
+candidate (gates.py).
 
 Emitter search: the full model is fitted with the emitter first moment on the
 fixed grid RM_EMITTER_GRID_S, split into tau_e and L like the manager does;

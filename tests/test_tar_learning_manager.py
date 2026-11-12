@@ -261,7 +261,7 @@ def test_restoration_after_a_restart_is_not_a_step(sequence) -> None:
 
 async def test_missing_numerical_packages_fall_back_to_bootstrap(monkeypatch) -> None:
     m, _ = _feed("pr_d5n3")
-    m.fast_pub = {"value_s": 300.0, "day": 0}
+    m.fast_pub = {"value_s": 1500.0, "day": 0}
     assert m.applied(480.0, True).source == "fast"
 
     def boom(kind, snap):
@@ -300,31 +300,41 @@ async def test_learning_store_round_trip(hass) -> None:
 
 
 async def test_response_windows_stop_at_sunrise() -> None:
-    """The fit window ends at the end of the darkness; a cut window must also hold the largest known delay."""
+    """The fit window ends at the end of the darkness; a cut window gives a value only when it holds three
+    times the largest of its fit and the longest known delay, else at most a lower bound."""
+    cut, bound = "excitation: cut by sunrise", "excitation: cut by sunrise, lower bound"
     # 35 E: the darkness ends about 30 min after the 06:00 UTC step. A 300 s emitter whose bootstrap dead time
     # is 150 s (first moment about 300 s) is still measured.
     m, _ = _feed("m2_d9n6", position=False)
     m.set_position(LAT, 35.0)
     m.bootstrap_heat_s = 150.0
     await _run_days(m)
-    assert all(r["accepted"] for r in m.mornings)
+    assert all(r["accepted"] for r in m.mornings[:9])
+    # Once the fast value is published (about 340 s) the shorter windows of the later mornings do not hold
+    # three times it: lower bounds below the true 300 s
+    assert m.fast_pub is not None
+    assert all(r["accepted"] or (r["why"] == bound and r["bound_s"] < 300.0) for r in m.mornings)
     # Same cut, but the bootstrap says the emitter is slow (first moment about 2300 s): 30 min cannot hold it
     m, _ = _feed("m2_d9n6", position=False)
     m.set_position(LAT, 35.0)
     m.bootstrap_heat_s = 1150.0
     await _run_days(m)
-    assert {r["why"] for r in m.mornings} == {"excitation: cut by sunrise"}
-    # Cut late (20 E: about 1 h 40 left): even the slow reference fits in the window
+    assert not any(r["accepted"] for r in m.mornings)
+    assert {r["why"] for r in m.mornings} <= {cut, bound}
+    # Cut late (20 E: about 1 h 40 left), still under three times the slow reference: lower bounds only,
+    # 0.6 times a fit near the true 300 s, never a value
     m, _ = _feed("m2_d9n6", position=False)
     m.set_position(LAT, 20.0)
     m.bootstrap_heat_s = 1150.0
     await _run_days(m)
-    assert all(r["accepted"] for r in m.mornings)
-    # Without any reference a cut window cannot be checked
+    assert {r["why"] for r in m.mornings} == {bound}
+    assert all(100.0 < r["bound_s"] < 300.0 for r in m.mornings)
+    assert m.fast_values == [] and m.fast_pub is None
+    # Without any reference, the 30 min window holds three times the fitted value: an estimate
     m, _ = _feed("m2_d9n6", position=False)
     m.set_position(LAT, 35.0)
     await _run_days(m)
-    assert m.mornings[0]["why"] == "excitation: cut by sunrise"
+    assert all(r["accepted"] for r in m.mornings[:9])
     # 40 E: about 10 min left, then none: refused, never fitted on sunlit data
     m, _ = _feed("m2_d9n6", position=False)
     m.set_position(LAT, 40.0)
@@ -332,7 +342,7 @@ async def test_response_windows_stop_at_sunrise() -> None:
     await _run_days(m)
     whys = {r["why"] for r in m.mornings}
     assert not any(r["accepted"] for r in m.mornings)
-    assert whys <= {"excitation: energy", "excitation: window", "excitation: cut by sunrise",
+    assert whys <= {"excitation: energy", "excitation: window", cut, bound,
                     "sunrise too close to the comfort step", "comfort step in daylight"}
     assert "comfort step in daylight" in whys
 
