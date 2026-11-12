@@ -13,7 +13,9 @@ date the response too early.
 period before the start. Only a trend in the direction of the response is
 returned: the detector then follows the temperature minus its extrapolation.
 A trend too irregular to be extrapolated, or bending towards the response,
-rejects the detection.
+rejects the detection. A trend that is clearly in the direction of the
+response, or a window too short to evaluate any trend, is flagged so that the
+estimator never lets such a measurement shorten its published value.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ from .const import (
     DEADTIME_PRESTART_MIN_HALF_SAMPLES,
     DEADTIME_PRESTART_MIN_SAMPLES,
     DEADTIME_PRESTART_MIN_SPAN_S,
+    DEADTIME_PRESTART_RISE_MIN_STEPS,
     DEADTIME_PRESTART_STEP_FLOOR_C,
     DEADTIME_PRESTART_WINDOW_S,
 )
@@ -35,9 +38,15 @@ class PrestartTrend:
 
     slope_c_per_s: float = 0.0
     rejected: bool = False
+    # The temperature clearly moved in the direction of the response before
+    # the start (even when slight enough to be removed rather than rejected).
+    toward_response: bool = False
+    # The window before the start is too short to evaluate a trend.
+    window_too_short: bool = False
 
 
 NO_TREND = PrestartTrend()
+WINDOW_TOO_SHORT = PrestartTrend(window_too_short=True)
 
 
 def _ols(samples: list[tuple[float, float]]) -> tuple[float, float] | None:
@@ -75,7 +84,7 @@ def prestart_trend(
 
     The window covers the last ``DEADTIME_PRESTART_WINDOW_S`` of the OFF
     period. Without ``DEADTIME_PRESTART_MIN_SPAN_S`` of samples no trend can be
-    told apart and none is removed. A trend whose fitted change stays within
+    told apart and none is removed (``window_too_short``). A trend whose fitted change stays within
     one sensor step, or that goes against the response, is left to the trough
     (or peak) tracking: nothing is removed.
 
@@ -93,10 +102,10 @@ def prestart_trend(
         earliest = max(earliest, off_since_ts)
     samples = [(t, v) for t, v in history if earliest <= t <= start_ts]
     if len(samples) < DEADTIME_PRESTART_MIN_SAMPLES:
-        return NO_TREND
+        return WINDOW_TOO_SHORT
     span = samples[-1][0] - samples[0][0]
     if span < DEADTIME_PRESTART_MIN_SPAN_S:
-        return NO_TREND
+        return WINDOW_TOO_SHORT
 
     steps = [abs(b - a) for (_, a), (_, b) in zip(samples, samples[1:]) if b != a]
     if not steps:
@@ -118,14 +127,21 @@ def prestart_trend(
     adverse = [s for s, s_span in candidates if direction * s * s_span >= step_c]
     if not adverse:
         return NO_TREND
+    toward = any(
+        direction * s * s_span >= DEADTIME_PRESTART_RISE_MIN_STEPS * step_c
+        for s, s_span in candidates
+    )
 
     if rms > max(detection_threshold_c / 2.0, step_c):
-        return PrestartTrend(rejected=True)
+        return PrestartTrend(rejected=True, toward_response=toward)
     if early is not None and recent is not None:
         bend = direction * (recent[0] - early[0]) * span / 2.0
         if bend > detection_threshold_c:
-            return PrestartTrend(rejected=True)
-    return PrestartTrend(slope_c_per_s=max(adverse, key=lambda s: direction * s))
+            return PrestartTrend(rejected=True, toward_response=toward)
+    return PrestartTrend(
+        slope_c_per_s=max(adverse, key=lambda s: direction * s),
+        toward_response=toward,
+    )
 
 
 def _half_slope(samples: list[tuple[float, float]]) -> tuple[float, float] | None:
