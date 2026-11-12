@@ -31,6 +31,7 @@ from .causal_power_trace import (
 from .const import (
     FF_TRIM_PERIODIC_ALLOWED_REGIMES,
     GovernanceRegime,
+    INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL,
     clamp,
     FF_TRIM_RHO,
     FF_TRIM_LAMBDA,
@@ -105,6 +106,7 @@ class FFTrimThermalSample:
     outside_temperature: float | None = None
     trim_frozen_reason: str | None = None
     saturation_state: str = "NO_SAT"
+    i_hold_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +132,7 @@ class CausalFFTrimResult:
     mean_visible_ff_power: float | None = None
     mean_delivery_residual: float | None = None
     physical_power_deficit: float | None = None
+    transfer_power_deficit: float | None = None
     decomposed_correction: float | None = None
     transfer_eligible: bool = False
     transfer_reason: str = "ownership_unavailable"
@@ -230,6 +233,7 @@ class _OwnershipStats:
     i_sign_persistent: bool
     regimes: frozenset[GovernanceRegime | str | None]
     i_modes: frozenset[str | None]
+    i_hold_sources: frozenset[str | None]
     constraint_flags: frozenset[str]
     gain_generations: frozenset[int]
     quality: str
@@ -659,6 +663,7 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
         target_trim = observed_hold_power - mean_ff1
         correction = target_trim - current_trim
         physical_power_deficit = observed_hold_power - mean_power
+        transfer_power_deficit = None
         decomposed_correction = None
         transfer_eligible = False
         transfer_reason = "ownership_not_covered"
@@ -674,7 +679,17 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             mean_delivery_residual = mean_power - ownership_stats.mean_model_power
             transfer_quality = ownership_stats.quality
             if observation_mode == "stationary":
-                decomposed_correction = physical_power_deficit + mean_i_power
+                # In the deadband hysteresis shell the room sits off the
+                # setpoint, so the deficit measured against the setpoint is the
+                # offset the loop still owns, not a feed-forward error: only the
+                # integral share moves and the net command stays unchanged.
+                transfer_power_deficit = (
+                    0.0
+                    if INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL
+                    in ownership_stats.i_hold_sources
+                    else physical_power_deficit
+                )
+                decomposed_correction = transfer_power_deficit + mean_i_power
                 transfer_reason = self._transfer_rejection_reason(
                     samples=samples,
                     stats=ownership_stats,
@@ -729,6 +744,7 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             mean_visible_ff_power=mean_visible_ff_power,
             mean_delivery_residual=mean_delivery_residual,
             physical_power_deficit=physical_power_deficit,
+            transfer_power_deficit=transfer_power_deficit,
             decomposed_correction=decomposed_correction,
             transfer_eligible=transfer_eligible,
             transfer_reason=transfer_reason,
@@ -904,6 +920,7 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             sample.regime,
             sample.i_mode,
             sample.u_pi,
+            i_hold_source=sample.i_hold_source,
         )
         if not pi_eligibility.admissible:
             return pi_eligibility.reason
@@ -982,6 +999,7 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
         pwm_deltas: list[float] = []
         regimes: set[GovernanceRegime | str | None] = set()
         i_modes: set[str | None] = set()
+        i_hold_sources: set[str | None] = set()
         flags: set[str] = set()
         generations: set[int] = set()
         qualities: set[str] = set()
@@ -1034,6 +1052,7 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             pwm_deltas.append(abs(item.u_limited - item.linear_committed_power))
             regimes.add(item.regime)
             i_modes.add(item.i_mode)
+            i_hold_sources.add(item.i_hold_source)
             flags.update(item.constraint_flags)
             generations.add(item.gain_generation)
             qualities.add(item.quality)
@@ -1080,6 +1099,7 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             i_sign_persistent=i_sign_persistent,
             regimes=frozenset(regimes),
             i_modes=frozenset(i_modes),
+            i_hold_sources=frozenset(i_hold_sources),
             constraint_flags=frozenset(flags),
             gain_generations=frozenset(generations),
             quality=quality,
@@ -1099,7 +1119,13 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
         """Return why ownership transfer is unsafe for this accepted window."""
         if stats.regimes != frozenset({GovernanceRegime.DEAD_BAND}):
             return "transfer_not_deadband"
-        if stats.i_modes != frozenset({"I:FREEZE(deadband)"}):
+        if not all(
+            is_deadband_neutral_integral(mode, source)
+            for mode in stats.i_modes
+            for source in (
+                stats.i_hold_sources if mode == "I:HOLD" else frozenset({None})
+            )
+        ):
             return "transfer_i_not_frozen"
         if stats.constraint_flags:
             return f"transfer_constraint_{sorted(stats.constraint_flags)[0]}"
@@ -1144,7 +1170,11 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             or epsilon_slope > FF_TRIM_TRANSFER_MAX_SLOPE_H
         ):
             return "transfer_temperature_noise"
-        if abs(mean_error) > epsilon_error:
+        # The room may sit anywhere in the hysteresis shell, where the integral
+        # is held: the offset is then bounded by the per-sample limit below and
+        # the transfer keeps the net command unchanged.
+        in_shell = INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL in stats.i_hold_sources
+        if not in_shell and abs(mean_error) > epsilon_error:
             return "transfer_mean_error"
         if max(abs(value) for value in errors) > FF_TRIM_TRANSFER_MAX_ERROR_C:
             return "transfer_sample_error"
@@ -1242,15 +1272,37 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             power_coverage_ratio=0.0,
         )
 
+def is_deadband_neutral_integral(
+    i_mode: str | None,
+    i_hold_source: str | None = None,
+) -> bool:
+    """Return True when the integral does not move for a deadband reason.
+
+    This is the deadband freeze, or the plain hold applied while the room is in
+    the deadband hysteresis shell. Every other hold keeps its own meaning
+    (window, load shedding, invalid sensor, safety, ...) and is not neutral.
+    """
+    if i_mode == "I:FREEZE(deadband)":
+        return True
+    return (
+        i_mode == "I:HOLD"
+        and i_hold_source == INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL
+    )
+
+
 def evaluate_pi_eligibility_for_trim(
     regime: GovernanceRegime | str | None,
     i_mode: str | None,
     u_pi: float | None,
+    *,
+    i_hold_source: str | None = None,
 ) -> FFTrimPIEligibility:
     """Validate that PI is neutral enough for trim learning."""
     if regime == GovernanceRegime.DEAD_BAND:
         if i_mode == "I:FREEZE(deadband)":
             return FFTrimPIEligibility(True, "pi_deadband_freeze")
+        if is_deadband_neutral_integral(i_mode, i_hold_source):
+            return FFTrimPIEligibility(True, "pi_deadband_shell_hold")
         return FFTrimPIEligibility(False, f"pi_mode_{i_mode}")
 
     if regime != GovernanceRegime.NEAR_BAND:

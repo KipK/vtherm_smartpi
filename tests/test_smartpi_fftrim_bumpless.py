@@ -12,6 +12,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
 from custom_components.vtherm_smartpi.smartpi.controller import SmartPIController
 from custom_components.vtherm_smartpi.smartpi.feedforward import FFResult
 from custom_components.vtherm_smartpi.smartpi.ff_trim import (
+    CausalFFTrimResult,
     FFTrim,
     FFTrimPersistentResult,
     FFTrimWindowProposal,
@@ -464,3 +465,117 @@ def test_valve_rounded_transfer_moves_only_the_physical_share() -> None:
     assert algo.fftrim_coord.net_command_delta == pytest.approx(0.0, abs=1e-12)
     assert command_after == pytest.approx(command_before, abs=1e-12)
     assert _vt_rounded_position(algo.valve_curve, algo.ctl.u_cmd) == pytest.approx(0.50)
+
+
+def _shell_hold_algo(source: str) -> SmartPI:
+    algo = _deadband_transfer_algo(False, False, 0.5)
+    algo.ctl.last_i_mode = "I:HOLD"
+    algo.ctl.last_integral_hold_source = source
+    return algo
+
+
+def test_shell_hold_keeps_bumpless_transfer_applicable_at_unchanged_command() -> None:
+    """Inside the deadband shell the transfer applies and the net command is unchanged."""
+    algo = _shell_hold_algo("deadband_hysteresis_shell")
+    assert algo.fftrim_coord.current_bumpless_context_rejection() is None
+    persistent = FFTrimPersistentResult(
+        ready=True,
+        reason="persistent_ready",
+        pending_count=3,
+        median_correction=0.10,
+        median_ff1=0.4,
+        median_physical_power_deficit=0.0,
+        median_integral_bias=0.10,
+        transfer_eligible=True,
+        transfer_reason="quasi_equilibrium",
+    )
+    command_before = algo._ff_trim.u_ff_trim + 0.4 + algo.Ki * algo.ctl.integral
+
+    assert algo.fftrim_coord.apply_bumpless_persistent_result(
+        persistent=persistent,
+        quality="switch_cycle_equivalent",
+    )
+
+    command_after = algo._ff_trim.u_ff_trim + 0.4 + algo.Ki * algo.ctl.integral
+    assert algo.fftrim_coord.applied_i_transfer > 0.0
+    assert algo.fftrim_coord.net_command_delta == pytest.approx(0.0, abs=1e-12)
+    assert command_after == pytest.approx(command_before, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ("deadtime", "governance_sensor_invalid", "vt_safety", "none"),
+)
+def test_other_holds_still_reject_bumpless_transfer(source: str) -> None:
+    algo = _shell_hold_algo(source)
+
+    assert algo.fftrim_coord.current_bumpless_context_rejection() == "application_i_not_frozen"
+
+
+def test_shell_hold_source_is_only_reported_for_plain_hold() -> None:
+    algo = _shell_hold_algo("deadband_hysteresis_shell")
+    assert algo.fftrim_coord._integral_hold_source() == "deadband_hysteresis_shell"
+    algo.ctl.last_i_mode = "I:FREEZE(deadband)"
+    assert algo.fftrim_coord._integral_hold_source() is None
+
+
+def _shell_window_result(physical_deficit: float) -> CausalFFTrimResult:
+    """Admissible shell window: the transfer share excludes the offset deficit."""
+    return CausalFFTrimResult(
+        admissible=True,
+        reason="causal_window_ready",
+        correction=0.1 + physical_deficit,
+        target_trim=0.1 + physical_deficit,
+        mean_causal_power=0.5,
+        mean_ff1=0.4,
+        mean_temperature=20.06,
+        mean_error=-0.06,
+        mean_slope_h=0.0,
+        observed_hold_power=0.5 + physical_deficit,
+        duration_s=1800.0,
+        measurement_count=4,
+        alignment_delay_s=120.0,
+        power_coverage_ratio=1.0,
+        mean_i_power=0.1,
+        physical_power_deficit=physical_deficit,
+        transfer_power_deficit=0.0,
+        decomposed_correction=0.1,
+        transfer_eligible=True,
+        transfer_reason="quasi_equilibrium",
+        transfer_quality="switch_cycle_equivalent",
+    )
+
+
+def test_shell_window_routes_integral_share_with_unchanged_net_command() -> None:
+    """Three shell windows off the setpoint apply the transfer, net command unchanged."""
+    algo = _shell_hold_algo("deadband_hysteresis_shell")
+    command_before = algo._ff_trim.u_ff_trim + 0.4 + algo.Ki * algo.ctl.integral
+
+    for _ in range(3):
+        algo.fftrim_coord.apply_observer_result(
+            _shell_window_result(-0.003),
+            count_window=True,
+            allow_bumpless=True,
+        )
+
+    command_after = algo._ff_trim.u_ff_trim + 0.4 + algo.Ki * algo.ctl.integral
+    assert algo.fftrim_coord.transfer_state == "applied"
+    assert algo.fftrim_coord.applied_i_transfer > 0.0
+    assert algo.fftrim_coord.net_command_delta == pytest.approx(0.0, abs=1e-12)
+    assert command_after == pytest.approx(command_before, abs=1e-12)
+
+
+@pytest.mark.parametrize("source", ("deadtime", "governance_sensor_invalid", "vt_safety"))
+def test_other_holds_refuse_the_routed_transfer(source: str) -> None:
+    algo = _shell_hold_algo(source)
+
+    for _ in range(3):
+        algo.fftrim_coord.apply_observer_result(
+            _shell_window_result(-0.003),
+            count_window=True,
+            allow_bumpless=True,
+        )
+
+    assert algo.fftrim_coord.transfer_state == "rejected"
+    assert algo.fftrim_coord.transfer_reason == "application_i_not_frozen"
+    assert algo.fftrim_coord.applied_i_transfer == 0.0

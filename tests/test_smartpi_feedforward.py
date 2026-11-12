@@ -383,6 +383,61 @@ class TestFFResult:
         assert result.admissible is True
         assert result.reason == "pi_deadband_freeze"
 
+    def test_trim_pi_eligibility_accepts_deadband_shell_hold(self):
+        result = evaluate_pi_eligibility_for_trim(
+            regime=GovernanceRegime.DEAD_BAND,
+            i_mode="I:HOLD",
+            u_pi=0.08,
+            i_hold_source="deadband_hysteresis_shell",
+        )
+
+        assert result.admissible is True
+        assert result.reason == "pi_deadband_shell_hold"
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            None,
+            "none",
+            "deadtime",
+            "governance_sensor_invalid",
+            "vt_safety",
+            "external",
+        ),
+    )
+    def test_trim_pi_eligibility_rejects_other_holds_in_deadband(self, source):
+        result = evaluate_pi_eligibility_for_trim(
+            regime=GovernanceRegime.DEAD_BAND,
+            i_mode="I:HOLD",
+            u_pi=0.08,
+            i_hold_source=source,
+        )
+
+        assert result.admissible is False
+        assert result.reason == "pi_mode_I:HOLD"
+
+    @pytest.mark.parametrize("mode", ("I:HOLD(window_resume)", "I:RUN", "I:GUARD(x)"))
+    def test_trim_pi_eligibility_rejects_other_modes_in_deadband(self, mode):
+        result = evaluate_pi_eligibility_for_trim(
+            regime=GovernanceRegime.DEAD_BAND,
+            i_mode=mode,
+            u_pi=0.08,
+            i_hold_source="deadband_hysteresis_shell",
+        )
+
+        assert result.admissible is False
+
+    def test_trim_pi_eligibility_near_band_ignores_shell_hold(self):
+        result = evaluate_pi_eligibility_for_trim(
+            regime=GovernanceRegime.NEAR_BAND,
+            i_mode="I:HOLD",
+            u_pi=0.2,
+            i_hold_source="deadband_hysteresis_shell",
+        )
+
+        assert result.admissible is False
+        assert result.reason == "pi_mode_I:HOLD"
+
     def test_trim_pi_eligibility_accepts_stable_near_band(self):
         result = evaluate_pi_eligibility_for_trim(
             regime=GovernanceRegime.NEAR_BAND,

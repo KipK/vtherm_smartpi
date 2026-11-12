@@ -168,6 +168,10 @@ HYST_LOWER_C = 0.3  # OFF -> ON threshold (°C below setpoint)
 # Default deadband around setpoint (°C)
 DEFAULT_DEADBAND_C = 0.05
 
+# Source reported by the controller when the integral is held because the room
+# is inside the deadband hysteresis shell (inside the deadband but not in its core)
+INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL = "deadband_hysteresis_shell"
+
 # Absolute hysteresis for deadband exit (reduces oscillations at boundary)
 # Enter deadband at |e| < deadband_c, exit only when |e| > deadband_c + hysteresis
 # Using absolute value (not multiplicative) ensures consistent behavior across

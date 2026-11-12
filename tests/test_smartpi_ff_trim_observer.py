@@ -28,6 +28,7 @@ def _sample(
     hvac_mode: str = "heat",
     ff1: float = 0.5,
     outside_temperature: float | None = 10.0,
+    i_hold_source: str | None = None,
 ) -> FFTrimThermalSample:
     """Build one admissible mono-mode thermal measurement."""
     return FFTrimThermalSample(
@@ -47,6 +48,7 @@ def _sample(
         outside_temperature_available=True,
         model_reliable=True,
         outside_temperature=outside_temperature,
+        i_hold_source=i_hold_source,
     )
 
 
@@ -94,6 +96,7 @@ def _ownership(
     committed: float = 0.5,
     hvac_regime: GovernanceRegime = GovernanceRegime.DEAD_BAND,
     i_mode: str = "I:FREEZE(deadband)",
+    i_hold_source: str | None = None,
 ) -> ControlOwnershipSnapshot:
     """Build one internally consistent committed-command ownership snapshot."""
     visible_ff = ff1
@@ -113,6 +116,7 @@ def _ownership(
         regime=hvac_regime,
         i_mode=i_mode,
         quality="switch_cycle_equivalent",
+        i_hold_source=i_hold_source,
     )
 
 
@@ -698,3 +702,148 @@ def test_causal_observer_keeps_accepting_legacy_gap_fill() -> None:
 
     assert result is not None
     assert result.admissible is True
+
+
+def _shell_hold_window(source: str, temperature: float = 20.0):
+    """Complete one owned window whose integral is held with the given source."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    _record_owned_switch_window(
+        observer,
+        _ownership(i_mode="I:HOLD", i_hold_source=source),
+    )
+    for timestamp in (120.0, 720.0, 1320.0, 1920.0):
+        observer.record_thermal_sample(
+            _sample(
+                timestamp,
+                temperature,
+                i_mode="I:HOLD",
+                ff1=0.4,
+                i_hold_source=source,
+            ),
+            deadtime_s=120.0,
+            deadtime_reliable=True,
+        )
+    result = observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+    return observer, result
+
+
+def test_causal_observer_accepts_deadband_shell_hold_and_transfers() -> None:
+    """The hysteresis-shell hold does not move the integral, as the freeze."""
+    _, result = _shell_hold_window("deadband_hysteresis_shell")
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.transfer_eligible is True
+    assert result.mean_i_power == pytest.approx(0.1)
+    assert result.physical_power_deficit == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "source", ("deadtime", "governance_sensor_invalid", "vt_safety")
+)
+def test_causal_observer_rejects_other_holds(source: str) -> None:
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    observer.record_thermal_sample(
+        _sample(
+            120.0,
+            20.0,
+            i_mode="I:HOLD",
+            ff1=0.4,
+            i_hold_source=source,
+        ),
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+    )
+
+    assert observer.last_reject_reason == "pi_mode_I:HOLD"
+
+
+def _hold_window(
+    source: str | None,
+    temperatures: tuple[float, ...],
+    *,
+    i_mode: str = "I:HOLD",
+):
+    """Complete one owned window with the given integral mode over the given readings."""
+    observer = CausalFFTrimObserver(cycle_min=5.0)
+    _record_owned_switch_window(
+        observer,
+        _ownership(i_mode=i_mode, i_hold_source=source),
+    )
+    for timestamp, temperature in zip((120.0, 720.0, 1320.0, 1920.0), temperatures):
+        observer.record_thermal_sample(
+            _sample(
+                timestamp,
+                temperature,
+                i_mode=i_mode,
+                ff1=0.4,
+                i_hold_source=source,
+            ),
+            deadtime_s=120.0,
+            deadtime_reliable=True,
+        )
+    return observer.try_complete_window(
+        a=0.1,
+        b=0.005,
+        deadtime_s=120.0,
+        deadtime_reliable=True,
+        current_trim=0.0,
+    )
+
+
+@pytest.mark.parametrize("temperature", (20.06, 19.94))
+def test_shell_hold_offset_transfers_integral_share_only(temperature: float) -> None:
+    """Off the setpoint in the shell, the integral moves and the net command does not."""
+    result = _hold_window("deadband_hysteresis_shell", (temperature,) * 4)
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.transfer_eligible is True
+    assert result.transfer_reason == "quasi_equilibrium"
+    # The offset deficit is measured but left to the loop
+    assert abs(result.physical_power_deficit) > 1e-3
+    assert result.transfer_power_deficit == 0.0
+    assert result.decomposed_correction == pytest.approx(result.mean_i_power)
+
+
+def test_deadband_freeze_offset_keeps_its_error_tolerance() -> None:
+    """The deadband freeze is unchanged: an offset window is not transferable."""
+    result = _hold_window(None, (20.06,) * 4, i_mode="I:FREEZE(deadband)")
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.transfer_eligible is False
+    assert result.transfer_reason == "transfer_mean_error"
+
+
+def test_deadband_freeze_transfers_the_measured_deficit() -> None:
+    result = _hold_window(None, (20.0,) * 4, i_mode="I:FREEZE(deadband)")
+
+    assert result is not None
+    assert result.transfer_eligible is True
+    assert result.transfer_power_deficit == pytest.approx(result.physical_power_deficit)
+
+
+def test_shell_hold_keeps_the_per_sample_error_bound() -> None:
+    result = _hold_window("deadband_hysteresis_shell", (20.12,) * 4)
+
+    assert result is not None
+    assert result.admissible is True
+    assert result.transfer_eligible is False
+    assert result.transfer_reason == "transfer_sample_error"
+
+
+def test_shell_hold_keeps_the_stationarity_requirement() -> None:
+    result = _hold_window(
+        "deadband_hysteresis_shell", (20.05, 20.055, 20.06, 20.065)
+    )
+
+    assert result is not None
+    assert result.transfer_eligible is False
+    assert result.transfer_reason == "transfer_slope"

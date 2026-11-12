@@ -88,6 +88,13 @@ All notable changes to this project will be documented in this file.
   learning data. Another restart excludes only its downtime, without the
   10-minute margins. `control.last_restart` shows the last decision.
 
+## [0.6.5]
+
+- Regulation: the slow feed-forward correction is now also learned when the
+  room stays in the border of the deadband (for example 0.04 °C above the
+  setpoint). Before, it was never applied there and the integral stayed large;
+  now the integral moves into the correction without changing the command.
+
 ## [0.6.4]
 
 - Regulation: the heating dead time no longer shrinks after a start in a room

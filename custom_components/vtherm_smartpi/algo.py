@@ -73,6 +73,7 @@ from .smartpi.const import (
     HYST_UPPER_C,
     HYST_LOWER_C,
     DEFAULT_DEADBAND_C,
+    INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL,
     AB_MIN_SAMPLES_A,
     AB_MIN_SAMPLES_B,
     DEFAULT_NEAR_BAND_DEG,
@@ -2599,7 +2600,7 @@ class SmartPI:
         )
         # After the deadtime hold: deadband shell, then no outdoor value yet; a dropout freezes gains/learning only
         if not integrator_hold and self.deadband_mgr.in_deadband and not in_core_deadband:
-            integrator_hold, integrator_hold_source = True, "deadband_hysteresis_shell"
+            integrator_hold, integrator_hold_source = True, INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL
         elif not integrator_hold and self._ext_control is None:
             integrator_hold, integrator_hold_source = True, "governance_sensor_invalid"
         if self.vt_safety_override:  # the PI does not drive the actuator
