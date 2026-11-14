@@ -529,6 +529,47 @@ class TestTrajectoryProgression:
         assert manager.trajectory_phase == TrajectoryPhase.RELEASE
         assert manager.trajectory_bumpless_ready is None
 
+    @staticmethod
+    def _release_at_target(manager):
+        manager.load_state(
+            {
+                "filtered_setpoint": 18.0,
+                "effective_setpoint": 18.0,
+                "trajectory_active": True,
+                "trajectory_phase": TrajectoryPhase.RELEASE.value,
+                "trajectory_start_setpoint": 17.8,
+                "trajectory_target_setpoint": 18.0,
+                "trajectory_tau_ref_min": 5.0,
+                "trajectory_current_setpoint": 18.0,
+                "trajectory_elapsed_s": 600.0,
+                "trajectory_source": "setpoint",
+            }
+        )
+
+    def test_setpoint_release_at_target_ends_when_the_room_stalls_just_short(self):
+        manager = _make_manager()
+        self._release_at_target(manager)
+        ended_at = None
+        for k in range(1, 6 * 60):  # one tick per minute, up to 6 h at 0.08 C below the target
+            result = _filter(manager, target=18.0, current=17.92, now=60.0 * k)
+            assert result == pytest.approx(18.0)  # the P reference stays on the target
+            if not manager.trajectory_active:
+                ended_at = k
+                break
+        assert ended_at is not None and ended_at <= 4 * 60
+        assert manager.disturbance_retrigger_blocked is True
+        # No new trajectory while the room stays in the trigger zone
+        _filter(manager, target=18.0, current=17.92, now=60.0 * (ended_at + 1))
+        assert manager.trajectory_active is False
+
+    def test_setpoint_release_at_target_stays_while_the_room_still_rises(self):
+        manager = _make_manager()
+        self._release_at_target(manager)
+        for k in range(1, 90):  # 1.5 h rising from 17.80 to about 17.93
+            current = round(17.80 + 0.0015 * k, 3)
+            _filter(manager, target=18.0, current=current, now=60.0 * k)
+            assert manager.trajectory_active is True
+
     def test_active_tracking_keeps_small_braking_window_margin_without_flipping_to_release(self):
         manager = _make_manager()
         manager.load_state(

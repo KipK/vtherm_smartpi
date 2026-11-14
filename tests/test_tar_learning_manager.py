@@ -209,7 +209,7 @@ def test_state_of_the_fixed_hour_selection_keeps_only_raw_data() -> None:
     assert bad.history.is_empty() and bad.fast_values == []
 
 
-def _tick(m: TarLearningManager, t: float, sp: float, temp: float = 19.0) -> None:
+def _tick(m: TarLearningManager, t: float, sp: float, temp: float = 16.5) -> None:
     m.observe(t, hvac_mode=VThermHvacMode_HEAT, temp=temp, ext=2.0, setpoint=sp, phase="Stable", b=0.002,
               dtc=900.0, dtc_reliable=True, lag=300.0, cycle_min=10.0)
 
@@ -219,15 +219,17 @@ def test_comfort_step_detection() -> None:
     m = TarLearningManager("steps", "Europe/Paris")
     day = dt.datetime(2026, 1, 6, tzinfo=dt.timezone.utc)
     at = lambda h: (day + dt.timedelta(hours=h)).timestamp()  # noqa: E731 - UTC hour
-    _tick(m, at(1.0), 17.0)
-    _tick(m, at(4.5), 18.5)   # rise 1.5 C after 3.5 h at 17 C
-    _tick(m, at(4.6), 19.5)   # merged (6 min later)
-    _tick(m, at(10.0), 17.0)
-    _tick(m, at(13.0), 20.0)  # an afternoon rise is a step too (the sun is checked later)
-    _tick(m, at(13.5), 17.0)
-    _tick(m, at(14.5), 19.0)  # low setpoint held 1 h only: not a step
-    _tick(m, at(25.0), 19.0)
-    _tick(m, at(29.0), 19.5)  # rise of 0.5 C only
+    _tick(m, at(1.0), 17.0, 17.0)
+    _tick(m, at(4.5), 18.5, 17.0)   # rise 1.5 C after 3.5 h at 17 C
+    _tick(m, at(4.6), 19.5, 17.0)   # merged (6 min later)
+    _tick(m, at(10.0), 17.0, 17.0)
+    _tick(m, at(13.0), 20.0, 17.0)  # an afternoon rise is a step too (the sun is checked later)
+    _tick(m, at(13.5), 17.0, 17.0)
+    _tick(m, at(14.5), 19.0, 17.0)  # low setpoint held 1 h only: not a step
+    _tick(m, at(25.0), 19.0, 17.0)
+    _tick(m, at(29.0), 19.5, 17.0)  # rise of 0.5 C only
+    _tick(m, at(31.0), 16.0, 17.5)
+    _tick(m, at(34.0), 17.0, 17.4)  # room still above the new setpoint: no heat called, not a step
     assert m.pending == [{"t_sp": round(at(4.5), 1), "eco": 17.0, "sp_to": 19.5},
                          {"t_sp": round(at(13.0), 1), "eco": 17.0, "sp_to": 20.0}]
 

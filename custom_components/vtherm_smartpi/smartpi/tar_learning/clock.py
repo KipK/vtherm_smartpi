@@ -39,6 +39,10 @@ class LocalClock:
         """Local date ordinal of t."""
         return self._local(t).date().toordinal()
 
+    def day_label(self, day: int | None) -> str | None:
+        """Local date of the day `day`, as YYYY-MM-DD."""
+        return None if day is None else dt.date.fromordinal(int(day)).isoformat()
+
     def at(self, day: int, hour: float) -> float:
         """Epoch time of the local hour `hour` of the day `day` (date ordinal)."""
         extra_days = math.floor(hour / 24.0)
@@ -66,6 +70,10 @@ class OffsetClock:
 
     def day_of(self, t: float) -> int:
         return int(math.floor((t + self._origin_h * H) / DAY))
+
+    def day_label(self, day: int | None) -> int | None:
+        """Day index: this axis has no calendar."""
+        return None if day is None else int(day)
 
     def at(self, day: int, hour: float) -> float:
         return day * DAY + (hour - self._origin_h) * H

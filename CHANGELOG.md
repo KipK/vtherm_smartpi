@@ -4,89 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Restart bridge: a setpoint changed during the stop is now seen as a setpoint change at the first tick.
-- Learning histories and room model observer: a clock that goes back starts a new origin instead of freezing the recording.
-- Emitter delay learning: no fixed hour any more. It learns on quiet periods
-  found in the data: no sun (computed from the home position in Home
-  Assistant), a constant low setpoint from the setback to the next rise or
-  sunrise, valid data. Without a home position it stays silent and says why
-  in `tar_learning.quiet_periods`.
-- Emitter delay learning: a comfort step is any rise of at least 1 °C before
-  sunrise after 2 hours at the low setpoint; its fit stops at sunrise. A
-  setpoint restored after a restart is not a step.
-- Emitter delay learning: the confirmation and the regulated-night rule start
-  when the room regulates at its low setpoint and need 4 hours of it; an
-  unknown no longer confirms a step.
-- Emitter delay learning: identification over the last three quiet periods,
-  compared with the three before; each period counts once for the room class
-  and the confirmed values.
-- Emitter delay learning: values learned with the former fixed hours are
-  dropped once and learned again from the kept history.
-- Emitter delay learning: the gains compare half the learned delay with a
-  reference (the bootstrap dead time kept from the start of the learning, or
-  the current one if larger). A shorter value keeps the reference; up to twice
-  the reference it is used; above, only when the comfort-step and
-  identification values agree within x1.25, else twice the reference.
-  New diagnostics `reference_s` and `limit_reason`.
-- Emitter delay learning: a comfort step cut by sunrise gives a value only
-  when the fitted part lasts 3 times the delay; a shorter one gives a lower
-  bound (`fast.lower_bound_s`), never a value. The store moves to version 3.
-
+- Emitter delay learning (heating, PWM heaters, always on): SmartPI learns how
+  long the heater takes to warm the room, from the morning comfort steps and
+  from a multi-day model of the room, and uses it for the gains. A learned
+  value never makes the gains more aggressive than the bootstrap dead time;
+  above twice that dead time it is used only when both methods agree. The
+  bootstrap value is kept. Shown in `tar_learning`.
+- Quiet periods: these learnings use only stretches without sun (computed from
+  the home position set in Home Assistant), at a constant setpoint, with valid
+  data. No hour is fixed and nothing has to be declared. Without a home
+  position, nothing is learned and the diagnostics say why.
 - Room model (heating, PWM heaters): SmartPI identifies a model of the room
-  with its air, walls and emitter, follows the room state and publishes
-  temperature forecasts and their errors in the `room_model` diagnostics.
-- Room model: identified on the same quiet periods as the emitter delay
-  learning, each time a period ends, over the last three periods compared
-  with the three before; no fixed hour.
-- Room model: a fit is kept only when the periods determine its values
-  precisely enough, judged from the fit itself; no minimum number of hours.
-- Room model: nothing is published before a qualified heat balance is in
-  force, and the published value is checked against it when published. A
-  model already published stays in force.
-- Room model: the heat balance runs once per finished day, quiet periods or
-  not.
-- Room model: windows learned with the former fixed hours are dropped once;
-  the published model and its tracking are kept.
-- Room model heat balance: each day SmartPI fits a straight line through the
-  heat balances of the whole days it keeps (up to 7): the power needed per
-  degree of indoor-outdoor difference, and a constant free heat gain (a warmer
-  room next door, steady occupants). It keeps them only when the days
-  determine them within 5 % and do not drift. `room_model.energy_balance_loss_per_c`,
-  `energy_balance_free_gain_percent` and `energy_balance_days` show the values
-  in force, `energy_balance_refusal_reason` why the last day gave none.
-- Room model holding power: once the room model is published and a heat
-  balance is in force, they give the feed-forward holding power: the static
-  loss from the heat balance, plus the extra power of cold walls after a
-  setback from the model, so the morning rise no longer stalls below the
-  setpoint. The static loss includes the free gain, so the integral does not
-  carry it. The room model acts only while its own static loss agrees with
-  the heat balance in force within 5 %. Changes of the static loss are bumpless through the integral; the
-  wall extra power is never moved into the integral and moves over 30 minutes
-  when it starts, stops or changes. `feedforward.source` shows the model in
-  use and `feedforward.wall_power_percent` the wall power applied.
-- Room model: the wall state no longer drifts after an open window, and the
-  wall extra power comes back over 30 minutes after it closes; power shedding
-  is tracked instead of paused. The identification searches the emitter time
-  on a fixed scale from 1 minute to 1 hour and refuses a day only when the
-  best value is at an end of the scale and clearly so; it checks the heating
-  response `a`, tests runs of the error on hourly means, takes the free gain
-  of the heat balance as a known input and, before publishing, checks that
-  the model's static loss agrees with the heat balance within 5 %.
-- Diagnostics: the recorded history also keeps the feed-forward source and
-  its wall part, the room model's `a`, `b_eq` and 1 h / 12 h forecast errors,
-  and the dead time in force.
-- Emitter delay learning (heating, always on): SmartPI learns the heating
-  response delay from the morning comfort steps and, over regulated nights,
-  from a multi-day model of the room, and uses it in place of the bootstrap
-  value within 0.5 to 2 times that value. The bootstrap value is kept. The gains
-  use half of the learned value, as an apparent dead time. Requires `numpy` and
-  `scipy`. PWM heaters only: in valve mode nothing is learned or applied.
-- Restarts: a short restart of Home Assistant or of the integration in the same
-  mode, heating or cooling (at most 10 minutes, SmartPI in control before and
-  after) is bridged: the
-  measurements and learning in progress resume, and nothing is excluded from the
-  learning data. Another restart excludes only its downtime, without the
-  10-minute margins. `control.last_restart` shows the last decision.
+  with its air, walls and emitter, follows its state and publishes temperature
+  forecasts and their errors in `room_model`. A daily heat balance measures the
+  power needed per degree of indoor-outdoor difference and the steady free
+  gains. The model is published only once a qualified heat balance confirms it;
+  it then gives the feed-forward holding power, including the extra power of
+  cold walls after a night setback. With short setbacks and heavy walls it
+  usually stays unpublished and changes nothing.
+- Restarts: a restart of up to 10 minutes in the same mode, with SmartPI in
+  control before and after, is bridged: measurements and learning resume and
+  nothing is excluded from the learning data. `control.last_restart` shows the
+  last decision.
+- Quiet periods: a night setpoint raised while the room is still above the new
+  value calls for no heat and no longer ends the night; such a rise is not a
+  comfort step either.
+- Regulation: after a setpoint rise, a room that stays just short of the
+  setpoint (cold walls) no longer keeps the slow feed-forward correction and
+  FF3 blocked for hours.
+- Restarts: a bridged restart also keeps the windows already counted by the
+  slow feed-forward correction.
+- Diagnostics: the recorded history also keeps the feed-forward source and its
+  wall part, the room model's `a`, `b_eq` and 1 h / 12 h forecast errors, and
+  the dead time in force.
+- Requirements: `numpy` and `scipy` are installed with the integration. If they
+  cannot be loaded, nothing is learned and the bootstrap value stays in use.
 
 ## [0.6.5]
 

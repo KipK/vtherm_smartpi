@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from math import isfinite, sqrt
 from statistics import median
@@ -489,6 +489,27 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
     def last_admissible_result(self) -> CausalFFTrimResult | None:
         """Return the latest admissible completed result across all modes."""
         return self._last_admissible_result
+
+    def save_admissible_result(self) -> dict | None:
+        """Latest admissible result, kept across restarts for the diagnostics only."""
+        result = self._last_admissible_result
+        return None if result is None else asdict(result)
+
+    def load_admissible_result(self, state: dict | None) -> None:
+        """Restore the latest admissible result; a malformed one is ignored.
+
+        It is shown in the diagnostics only: no learning reads it back.
+        """
+        if not isinstance(state, dict):
+            return
+        names = {f.name for f in fields(CausalFFTrimResult)}
+        try:
+            result = CausalFFTrimResult(**{k: v for k, v in state.items() if k in names})
+        except TypeError:
+            return
+        if not result.admissible:
+            return
+        self._last_admissible_result = result
 
     @property
     def physical_trace(self) -> CausalPowerTrace:
@@ -1509,6 +1530,8 @@ class FFTrim:
         self._periodic_pending_proposals: Deque[FFTrimWindowProposal] = deque(
             maxlen=FF_TRIM_BUFFER_SIZE
         )
+        # Pending windows of the loaded state, until the restart is decided
+        self._restored_pending: dict[str, list[FFTrimWindowProposal]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -1828,9 +1851,55 @@ class FFTrim:
     # ------------------------------------------------------------------
 
     def save_state(self) -> dict:
-        return {"u_ff_trim": self.u_ff_trim}
+        state: dict = {"u_ff_trim": self.u_ff_trim}
+        # Before the restart is decided, the windows restored from the last save are still the pending ones
+        pending = {
+            mode: [asdict(p) for p in (self._pending_buffer(mode) or self._restored_pending.get(mode, []))]
+            for mode in ("stationary", "periodic")
+        }
+        if any(pending.values()):
+            # Windows waiting for the persistence rule, resumed by a bridged restart only
+            state["pending"] = pending
+        return state
 
     def load_state(self, state: dict) -> None:
         self.u_ff_trim = float(state.get("u_ff_trim", 0.0))
         self.clear_pending()
         self.clear_last_transaction()
+        self._restored_pending = self._load_pending(state.get("pending"))
+
+    @staticmethod
+    def _load_pending(value: object) -> dict[str, list[FFTrimWindowProposal]]:
+        """Validated pending windows of a saved state; a malformed entry drops its mode."""
+        out: dict[str, list[FFTrimWindowProposal]] = {}
+        if not isinstance(value, dict):
+            return out
+        names = {f.name for f in fields(FFTrimWindowProposal)}
+        for mode in ("stationary", "periodic"):
+            items = value.get(mode)
+            if not isinstance(items, list):
+                continue
+            proposals = []
+            try:
+                for item in items[-FF_TRIM_BUFFER_SIZE:]:
+                    if not isinstance(item, dict):
+                        raise TypeError("pending window")
+                    proposal = FFTrimWindowProposal(**{k: v for k, v in item.items() if k in names})
+                    if proposal.observation_mode != mode or not isfinite(float(proposal.correction)):
+                        raise ValueError("pending window")
+                    proposals.append(proposal)
+            except (TypeError, ValueError):
+                continue
+            out[mode] = proposals
+        return out
+
+    def resume_pending_after_restart(self, bridged: bool) -> None:
+        """Restore the saved pending windows after a bridged restart; drop them otherwise."""
+        restored = self._restored_pending
+        self._restored_pending = {}
+        if not bridged:
+            return
+        for mode, proposals in restored.items():
+            buffer = self._pending_buffer(mode)
+            buffer.clear()
+            buffer.extend(proposals)

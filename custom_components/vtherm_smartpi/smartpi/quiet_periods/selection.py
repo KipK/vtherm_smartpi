@@ -4,7 +4,10 @@ Objects, all on the epoch axis in seconds, as half-open intervals [start, end):
 
 - plateau: a maximal interval of constant setpoint;
 - setback run: from a setpoint drop to the next rise (further drops stay in the
-  run); a rise always ends it;
+  run). A rise ends it, except a rise that stays below the setpoint before the
+  drop while the room is still above the new setpoint: it calls for no heat, so
+  the room goes on cooling freely and the run goes on (its plateau is a further
+  piece of the run);
 - darkness: an interval of certified darkness (solar.py);
 - episode: at most one per darkness, the part of a setback run inside it, or
   the whole darkness when the setpoint does not change inside it at all (held
@@ -95,8 +98,13 @@ def plateaus(setpoints: list) -> list[dict]:
     return out
 
 
-def setback_runs(pls: list[dict]) -> list[dict]:
-    """Setback runs: from a drop to the next rise."""
+def setback_runs(pls: list[dict], temps=None) -> list[dict]:
+    """Setback runs: from a drop to the next rise that calls for heat.
+
+    temps: (times, values) of the indoor temperature. A rise to a setpoint still
+    below the one before the drop, with the room strictly above the new setpoint
+    at the rise, does not end the run. Without temperatures every rise ends it.
+    """
     runs: list[dict] = []
     cur = None
     for p in pls:
@@ -104,12 +112,16 @@ def setback_runs(pls: list[dict]) -> list[dict]:
             continue
         if p["sp"] < p["prev"] - SP_EPS:
             if cur is None:
-                cur = {"start": p["start"], "end": INF}
+                cur = {"start": p["start"], "end": INF, "high": p["prev"]}
                 runs.append(cur)
         elif p["sp"] > p["prev"] + SP_EPS and cur is not None:
+            if temps is not None and p["sp"] < cur["high"] - SP_EPS:
+                temp = _temp_at(temps, p["start"])
+                if temp is not None and temp > p["sp"]:
+                    continue
             cur["end"] = p["start"]
             cur = None
-    return runs
+    return [{"start": r["start"], "end": r["end"]} for r in runs]
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +261,7 @@ def build_episodes(pos: Position | None, setpoints: list, valid: list, first_t: 
     pls = plateaus(setpoints)
     if not pls:
         return []
-    runs = setback_runs(pls)
+    runs = setback_runs(pls, temps)
     out = []
     for d0, d1 in dark_intervals(pos, float(first_t), float(last_t)):
         cands = []

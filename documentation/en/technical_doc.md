@@ -393,6 +393,9 @@ stay silent and `quiet_periods.reason` says why.
 
 **Periods.** A plateau is a maximal interval of constant setpoint. A setback
 run goes from a setpoint drop to the next rise (further drops stay in the run).
+A rise to a setpoint still below the one before the drop, with the room
+strictly above the new setpoint at the rise, calls for no heat: it does not end
+the run, and its plateau is a further piece of it.
 A darkness holds at most one episode: the longest part of a setback run inside
 it, or the whole darkness when the setpoint does not change inside it (held
 setpoint). The episode ends at the rise that ends the run, or at the end of the
@@ -428,7 +431,7 @@ when the history is pruned, and a period found again gets the same key.
 
 | Rule | Data |
 |---|---|
-| Comfort step | a rise of at least 1 °C after a low setpoint held 2 h (in the history), not within 300 s after a restart; evaluated when it ends an episode and the component that ends at the rise covers the 2 h before it |
+| Comfort step | a rise of at least 1 °C after a low setpoint held 2 h (in the history), to a setpoint not below the last indoor temperature, not within 300 s after a restart; evaluated when it ends an episode and the component that ends at the rise covers the 2 h before it |
 | Fit window of a step | every response window ends at the end of the darkness; the excitation rules (`exc_window_T`, energy, rise, sensor period) judge the truncated window; less than 600 s left gives no fit. A window `Wsp` cut by the darkness is a censored observation: it gives an estimate only when it lasts at least `TAR_CUT_ESTIMATE_WINDOW_T = 3` times the largest of the fitted value $T$ and the floor (the refined value in force, the published fast value, the lower bound in force and twice the bootstrap dead time: the first moment of a first-order emitter is about twice the apparent dead time the bootstrap measures). Otherwise, once the other rules pass, it gives the lower bound `TAR_CUT_BOUND_FACTOR` $\cdot T = 0.6\,T$ (the margin covers the noise of a short fit), confirmed by the same gate as a value; a cut window that fails another rule is refused as cut |
 | Night indicator | passive spans intersected with the quiet components of the episode of the step, on the 600 s grid of the segment |
 | G1 / GT4 | longest span without a heater start in `[regulated start, t_ref)`; no regulated start, or a regulated part under 4 h, is an unknown observable and leaves the step unconfirmed |
@@ -856,7 +859,7 @@ The principle is:
 - when braking is no longer needed, the filtered reference returns progressively to the raw target before the trajectory stops,
 - for a trajectory triggered by a setpoint change, entering the `release` phase keeps that phase locked until the trajectory ends, with no return to `tracking`,
 - during `release`, the P reference stays on the demand side of the measured room temperature without crossing the raw target: it never exceeds the target in HEAT and never falls below it in COOL,
-- the trajectory ends once it is in `release`, the P reference and the room are both within `0.05 °C` of the target, and switching P back to the raw target changes the proportional command by at most `0.03`,
+- the trajectory ends once it is in `release`, the P reference and the room are both within `0.05 °C` of the target, and switching P back to the raw target changes the proportional command by at most `0.03`; once the P reference is within `0.05 °C` of the target, a room that stays on a plateau short of it (the plateau test below, with `0.05 °C` as its floor) also ends the trajectory, which then blocks a new disturbance trajectory like a disturbance plateau,
 - the trajectory also ends as soon as the room reaches or crosses the target in the demand direction, or on any real setpoint change; the P branch then uses the raw target again,
 - `trajectory_active` indicates whether the analytical trajectory is running.
 
@@ -1204,6 +1207,7 @@ The current payload from `SmartPI.save_state()` notably contains:
     "ac_state": {...},
     "ff_v2_trim": {...},
     "ff_trim_delta": ...,
+    "ff_trim_last_result": {...},  # last admissible trim window, for the diagnostics only
     "ff_source": {...},  # holding power source the integral complements
     "ff_wall": {...},  # applied wall part and its blend
     "tint_filter_state": {...},
@@ -1282,6 +1286,7 @@ until the decision.
 | Integral guard | restored | reset |
 | Dead time detection | the detection in progress resumes (3.6) | dropped, minimum OFF time from the load |
 | a/b learning window | the window in progress resumes with its accumulators; its integral balance segment starts again | cleared |
+| Feed-forward trim | the windows waiting for the persistence rule (`FF_TRIM_PERSISTENCE`) are restored and the trim is not frozen; the observation window in progress starts again | pending windows dropped, trim frozen for `FF_TRIM_REBOOT_FREEZE_CYCLES = 3` ticks |
 | Response lag | passive period or episode resumed (3.7) | episode counted as interrupted |
 | Bootstrap on/off output | resumed inside the band (3.1) | starts at 0 |
 | T_ar history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |

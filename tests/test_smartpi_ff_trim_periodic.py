@@ -418,6 +418,29 @@ def test_admissible_result_survives_stationary_collection_and_rejection() -> Non
     assert rejected["last_result"]["mean_causal_power"] == pytest.approx(0.04)
     assert rejected["last_result"]["correction"] == pytest.approx(-0.01)
 
+    # A restart keeps the last admissible result in the diagnostics
+    saved = algo.save_state()
+    reloaded = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="FF trim diagnostics reloaded",
+    )
+    reloaded.load_state(saved)
+    restored = build_published_diagnostics(reloaded)["feedforward"]["fftrim"]
+    assert restored["last_result"] == rejected["last_result"]
+    # A malformed stored result is ignored
+    broken = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="FF trim diagnostics broken",
+    )
+    broken.load_state(dict(saved, ff_trim_last_result={"admissible": True, "unknown": 1}))
+    assert build_published_diagnostics(broken)["feedforward"]["fftrim"]["last_result"] is None
+
     algo._fftrim_observer.reset_runtime()
 
     reset = build_published_diagnostics(algo)["feedforward"]["fftrim"]
@@ -648,3 +671,50 @@ def test_periodic_sample_tolerates_only_the_saturated_freeze() -> None:
 
     assert periodic.diagnostics["measurement_count"] == 0
     assert periodic.last_reject_reason == "frozen_ff_warmup"
+
+
+def test_pending_windows_survive_a_bridged_restart_only() -> None:
+    """The windows waiting for the persistence rule resume after a bridged restart, not after another one."""
+    trim = FFTrim()
+    trim.collect_persistent(_stationary_proposal())
+    trim.collect_persistent(_stationary_proposal())
+    trim.collect_persistent(_periodic_proposal())
+    saved = trim.save_state()
+    assert len(saved["pending"]["stationary"]) == 2 and len(saved["pending"]["periodic"]) == 1
+
+    bridged = FFTrim()
+    bridged.load_state(saved)
+    assert bridged.save_state() == saved  # saved again before the restart is decided: kept
+    bridged.resume_pending_after_restart(True)
+    result = bridged.collect_persistent(_stationary_proposal())
+    assert result.pending_count == 3  # the third window completes the persistence rule
+    assert len(bridged._pending_buffer("periodic")) == 1
+
+    cold = FFTrim()
+    cold.load_state(saved)
+    cold.resume_pending_after_restart(False)
+    assert cold.collect_persistent(_stationary_proposal()).pending_count == 1
+    assert "pending" not in FFTrim().save_state()
+
+    broken = FFTrim()
+    broken.load_state({"u_ff_trim": 0.0, "pending": {"stationary": [{"correction": "x"}], "periodic": "bad"}})
+    broken.resume_pending_after_restart(True)
+    assert not broken._pending_buffer("stationary") and not broken._pending_buffer("periodic")
+
+
+def test_bridged_restart_lifts_the_reboot_freeze() -> None:
+    algo = SmartPI(
+        hass=MagicMock(),
+        cycle_min=2.0,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="FF trim bridged restart",
+    )
+    algo.fftrim_coord.freeze_after_reboot()
+    assert algo._ff_trim.frozen and algo._ff_trim.freeze_reason == "reboot"
+    algo.fftrim_coord.resume_after_restart(True)
+    assert not algo._ff_trim.frozen and algo.fftrim_coord.reboot_freeze_remaining == 0
+
+    algo.fftrim_coord.freeze_after_reboot()
+    algo.fftrim_coord.resume_after_restart(False)
+    assert algo._ff_trim.frozen and algo.fftrim_coord.reboot_freeze_remaining > 0

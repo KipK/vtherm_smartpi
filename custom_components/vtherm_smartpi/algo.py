@@ -1371,6 +1371,7 @@ class SmartPI:
             # FFv2 components
             "ff_v2_trim": self._ff_trim.save_state(),
             "ff_trim_delta": self.fftrim_coord.last_ff_trim_delta,
+            "ff_trim_last_result": self._fftrim_observer.save_admissible_result(),
             # Holding power source the restored integral complements
             "ff_source": self._ff_holding.save(),
             "ff_wall": self._ff_holding.save_wall(),
@@ -1472,6 +1473,7 @@ class SmartPI:
         bridged = decision.bridged
         self.dt_est.resume_after_restart(bridged)
         self.learn_win.resume_after_restart(bridged)
+        self.fftrim_coord.resume_after_restart(bridged)
         # The learning histories are HEAT-only: in COOL they keep their handling outside heating.
         if self.tar_learning is not None:
             self.tar_learning.on_restart(decision.heat_bridged, decision.t_resume)
@@ -1621,6 +1623,7 @@ class SmartPI:
         # Load FF trim state; freeze for a few cycles after reboot
         self._ff_trim.load_state(state.get("ff_v2_trim", {}))
         self.fftrim_coord.last_ff_trim_delta = float(state.get("ff_trim_delta", 0.0))
+        self._fftrim_observer.load_admissible_result(state.get("ff_trim_last_result"))
         # The restored integral complements this holding power source: a different
         # source at the first cycle is transferred like any change of source.
         self._ff_holding.load(state.get("ff_source"), state.get("ff_wall"))

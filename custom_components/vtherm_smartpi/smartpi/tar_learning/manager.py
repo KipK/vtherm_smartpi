@@ -349,6 +349,10 @@ class TarLearningManager:
         t = round(float(t), 1)
         if self._after_restart(t):
             return
+        h = self.history
+        if h.temp_v and h.temp_t[-1] <= t and h.temp_v[-1] > new:
+            # The room is still above the new setpoint: the rise calls for no heat and shows no emitter
+            return
         if self.pending and t - self.pending[-1]["t_sp"] <= STEP_MERGE_S:
             self.pending[-1]["sp_to"] = max(self.pending[-1]["sp_to"], new)
             return
@@ -762,8 +766,10 @@ class TarLearningManager:
                 "last_status": fast_status,
                 "last_unconfirmed_reason": public.unconfirmed_reason(last_acc.get("unconfirmed_why")) if last_acc else None,
                 "last_morning": None if last is None else {
-                    "day": last.get("day"), "accepted": last.get("accepted"),
+                    "day": self._clock.day_label(last.get("day")), "accepted": last.get("accepted"),
                     "reason": public.morning_reason(last.get("why")), "room_class": public.room_class(last.get("cls")),
+                    "confirmed": last.get("confirmed"),
+                    "unconfirmed_reason": public.unconfirmed_reason(last.get("unconfirmed_why")),
                 },
             },
             "refined": {
@@ -772,7 +778,7 @@ class TarLearningManager:
                 "k_per_s": None if wall is None else float(f"{wall['k_per_s']:.4g}"),
                 "tau_w_h": None if wall is None else _r(wall["tau_w_s"] / 3600.0, 2),
                 "last_evaluation": None if last_eval is None else {
-                    "day": last_eval.get("day"),
+                    "day": self._clock.day_label(last_eval.get("day")),
                     "regulated_nights": bool(last_eval.get("regulated")),
                     "class": public.room_class(last_eval.get("cls_raw", last_eval.get("cls"))),
                     "tau_e_s": _r(last_eval.get("te_raw", last_eval.get("te"))),

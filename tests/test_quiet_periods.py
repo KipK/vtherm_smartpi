@@ -271,6 +271,45 @@ def test_two_drops_in_one_setback_keep_the_longest_plateau() -> None:
         assert dt.datetime.fromtimestamp(e["origin"], TZ).hour == 22
 
 
+def _two_stage_eco(room_at_rise: float):
+    """18 C, 16 C from midnight, 17 C from 00:45 with the room at room_at_rise, 18 C at 07:10."""
+    def sp(t, h):
+        if h < 0.75:
+            return 16.0
+        if h < 7.0 + 10.0 / 60.0:
+            return 17.0
+        return 18.0
+
+    def temp(t, sp_now):
+        h = (dt.datetime.fromtimestamp(t, TZ).hour + dt.datetime.fromtimestamp(t, TZ).minute / 60.0)
+        if h < 0.75:
+            return round(18.0 - (18.0 - room_at_rise) * h / 0.75, 2)
+        if h < 7.0 + 10.0 / 60.0:
+            return max(17.0, round(room_at_rise - 0.2 * (h - 0.75), 2))
+        return 18.0
+
+    return sp, temp
+
+
+def test_a_rise_that_calls_for_no_heat_does_not_end_the_setback() -> None:
+    sp, temp = _two_stage_eco(17.6)
+    eps = [e for e in _episodes(_history(3, sp, temp_fn=temp)) if e["closed"] and e["complete"]]
+    assert eps
+    for e in eps:
+        assert dt.datetime.fromtimestamp(e["origin"], TZ).strftime("%H:%M") == "00:00"
+        assert dt.datetime.fromtimestamp(e["rise_t"], TZ).strftime("%H:%M") == "07:10"
+        assert len(e["pieces"]) == 2 and e["sp"] == 17.0  # the longest plateau is kept
+        assert dt.datetime.fromtimestamp(e["quiet"][0], TZ).strftime("%H:%M") == "00:45"
+        assert qp.step_component(e, e["rise_t"]) is not None
+
+
+def test_a_rise_that_calls_for_heat_ends_the_setback() -> None:
+    sp, temp = _two_stage_eco(16.6)  # the room is below the new setpoint at the rise
+    eps = [e for e in _episodes(_history(3, sp, temp_fn=temp)) if e["closed"] and e["complete"]]
+    assert all(dt.datetime.fromtimestamp(e["rise_t"], TZ).strftime("%H:%M") != "07:10" for e in eps
+               if e["rise_t"] is not None)
+
+
 # ---------------------------------------------------------------------------
 # Regulated start, G1 and the regulated night on whole episodes
 # ---------------------------------------------------------------------------

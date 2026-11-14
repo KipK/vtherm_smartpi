@@ -457,7 +457,7 @@ def test_confirmed_steps_cut_by_sunrise_give_lower_bounds_only() -> None:
     diag = m.diagnostics(500.0, True)
     assert diag["fast"]["lower_bound_s"] == 1500.0 and diag["fast"]["lower_bound_mornings"] == 2
     assert diag["fast"]["last_morning"]["reason"] == (
-        "comfort step cut by sunrise: kept as a lower bound of the delay, not as a value")
+        "comfort step cut by sunrise: gives only a lower bound of the delay, not a value")
     # 1500 s raises the gains to 750 s, within twice the 500 s reference
     assert (diag["source"], diag["gains_s"], diag["applied_s"]) == ("lower_bound", 750.0, 1500.0)
 

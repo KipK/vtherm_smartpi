@@ -27,7 +27,7 @@ _MORNING_REASONS = {
     "sunrise too close to the comfort step": "sunrise too soon after the comfort step",
     "excitation: cut by sunrise": "comfort step cut by sunrise before its response could be measured",
     "excitation: cut by sunrise, lower bound":
-        "comfort step cut by sunrise: kept as a lower bound of the delay, not as a value",
+        "comfort step cut by sunrise: gives only a lower bound of the delay, not a value",
     "setpoint restored after a restart": "setpoint restored after a restart, not a comfort step",
     "no published b": "heat loss b not learned yet",
     "no heater start after the comfort step": "no heating start after the comfort step",

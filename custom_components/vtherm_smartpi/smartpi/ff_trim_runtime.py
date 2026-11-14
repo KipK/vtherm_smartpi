@@ -92,6 +92,19 @@ class FFTrimCoordinator:
         self._spi._ff_trim.freeze("reboot")
         self.reboot_freeze_remaining = FF_TRIM_REBOOT_FREEZE_CYCLES
 
+    def resume_after_restart(self, bridged: bool) -> None:
+        """Resume the trim learning after a bridged restart, without the reboot freeze.
+
+        The pending windows of the persistence rule are restored; any other
+        restart drops them and keeps the reboot freeze.
+        """
+        spi = self._spi
+        spi._ff_trim.resume_pending_after_restart(bridged)
+        if bridged and self.reboot_freeze_remaining > 0:
+            self.reboot_freeze_remaining = 0
+            if spi._ff_trim.freeze_reason == "reboot":
+                spi._ff_trim.unfreeze()
+
     def update_trim_freeze(self, regime: GovernanceRegime) -> None:
         """Count down the reboot freeze, then freeze or release the trim for this tick."""
         spi = self._spi

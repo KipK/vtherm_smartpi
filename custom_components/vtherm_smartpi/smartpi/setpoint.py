@@ -181,14 +181,33 @@ class SmartPISetpointManager:
         cycle_min: float,
         deadband_c: float,
     ) -> bool:
-        """Feed the plateau test of an active disturbance trajectory.
+        """Feed the plateau test of an active trajectory that can no longer finish.
 
-        The trajectory brakes the P path because the model predicts that the
-        committed power closes the error. A recovery whose mean signed error
-        no longer moves above the integral-guard release error shows that
+        A disturbance trajectory brakes the P path because the model predicts
+        that the committed power closes the error. A recovery whose mean signed
+        error no longer moves above the integral-guard release error shows that
         this prediction does not hold.
+
+        A setpoint trajectory in release whose P reference has reached the
+        target no longer shapes the command; it still waits for the room to
+        come within TRAJECTORY_COMPLETE_EPS_C of the target. A room that stays
+        on a plateau just short of it (walls still cold after a setback) would
+        keep it active for hours, with FF3 and the feed-forward trim held, so
+        it ends on the same test, above TRAJECTORY_COMPLETE_EPS_C.
         """
-        if not (self.trajectory_active and self._trajectory_source == "disturbance"):
+        if not self.trajectory_active:
+            return False
+        if self._trajectory_source == "disturbance":
+            floor_c = integral_guard_release_error_threshold(deadband_c)
+        elif (
+            self._trajectory_source == "setpoint"
+            and self.trajectory_phase == TrajectoryPhase.RELEASE
+            and self.effective_setpoint is not None
+            and self._last_user_target_temp is not None
+            and abs(self._last_user_target_temp - self.effective_setpoint) <= TRAJECTORY_COMPLETE_EPS_C
+        ):
+            floor_c = TRAJECTORY_COMPLETE_EPS_C
+        else:
             return False
         last_ts = self._disturbance_plateau_ts
         self._disturbance_plateau_ts = now_monotonic
@@ -200,7 +219,7 @@ class SmartPISetpointManager:
             error=signed_error,
             dt_min=dt_min,
             block_min=plateau_block_min(cycle_min),
-            floor_c=integral_guard_release_error_threshold(deadband_c),
+            floor_c=floor_c,
         )
 
     def _clear_pending_target_change_braking(self) -> None:
