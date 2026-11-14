@@ -24,8 +24,10 @@ Confirmation of the fast value. A sleeper leaving during the fit window bends
 the rise and shortens the apparent delay; a period that stays without heating
 while the room should regulate at its low setpoint is the observable sign of
 that risk. Without a regulated start, or with a regulated part shorter than
-4 h, nothing can be observed: the morning is unconfirmed (an unknown is never
-taken as a favourable zero).
+1.5 h, nothing can be observed: the morning is unconfirmed (an unknown is never
+taken as a favourable zero). The confirmation looks for one idle hour, which a
+short span can show; the regulated night above fits a trend of the heater
+input, which needs its longer span.
   G1  : at least 1 h without heater start in [regulated start, t_ref), or the
         regulated part unknown or too short -> unconfirmed;
   GT4 : G1 and (T < 900 s, or the fitted exponential baseline b below 0.6 x the
@@ -37,6 +39,7 @@ from __future__ import annotations
 from ..quiet_periods.const import REGULATED_MIN_S
 from .const import (
     GATE_IDLE_MIN_H,
+    GATE_REGULATED_MIN_S,
     GT4_BFIT_REL_MIN,
     GT4_T_MIN_S,
     H,
@@ -180,7 +183,7 @@ def gate_observables(on, t_sp: float, t_s: float | None, regulated_start: float 
     t_ref = t_s or t_sp
     reg_h = None if regulated_start is None else max(0.0, t_ref - regulated_start) / H
     idle = None
-    if reg_h is not None and reg_h * H >= REGULATED_MIN_S:
+    if reg_h is not None and reg_h * H >= GATE_REGULATED_MIN_S:
         idle = max_idle_h(on, regulated_start, t_ref)
     return {"regulated_start": regulated_start, "regulated_h": reg_h, "max_idle_h": idle,
             "passive_2h": not any(t_ref - 2 * H <= x < t_ref - 30.0 for x in on)}
@@ -191,7 +194,7 @@ def _idle_reason(obs: dict) -> str | None:
     if obs.get("regulated_start") is None:
         return "no regulated start"
     reg_h = obs.get("regulated_h")
-    if reg_h is None or reg_h * H < REGULATED_MIN_S:
+    if reg_h is None or reg_h * H < GATE_REGULATED_MIN_S:
         return "regulated part too short"
     idle = obs.get("max_idle_h")
     if idle is None:

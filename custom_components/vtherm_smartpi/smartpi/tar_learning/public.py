@@ -60,7 +60,7 @@ _UNCONFIRMED = {
     "idle in the regulated part":
         "at least 1 hour without heating while the room was regulated at its low setpoint before the comfort step",
     "no regulated start": "the room did not reach its low setpoint before the comfort step",
-    "regulated part too short": "the room was regulated at its low setpoint for less than 4 hours before the comfort step",
+    "regulated part too short": "the room was regulated at its low setpoint for less than 1.5 hours before the comfort step",
 }
 
 # Why the learned value is not used as it is

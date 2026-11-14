@@ -233,15 +233,19 @@ def test_g1_and_gt4() -> None:
 
 
 def test_g1_never_takes_an_unknown_as_a_favourable_zero() -> None:
-    """No regulated start (room never at its low setpoint), or a regulated part under 4 h: unconfirmed."""
+    """No regulated start (room never at its low setpoint), or a regulated part under 1.5 h: unconfirmed."""
     t_sp = 2 * 86400.0
     starts = [t_sp - 3 * 3600.0 + 600.0 * i for i in range(18)]
     obs = gates.gate_observables(starts, t_sp, None, None)
     assert obs["max_idle_h"] is None and obs["regulated_h"] is None
     assert gates.unconfirmed("G1", obs, 300.0, None) == "no regulated start"
-    obs = gates.gate_observables(starts, t_sp, None, t_sp - 3 * 3600.0)
-    assert obs["max_idle_h"] is None and obs["regulated_h"] == pytest.approx(3.0)
+    obs = gates.gate_observables(starts, t_sp, None, t_sp - 1.0 * 3600.0)
+    assert obs["max_idle_h"] is None and obs["regulated_h"] == pytest.approx(1.0)
     assert gates.unconfirmed("G1", obs, 300.0, None) == "regulated part too short"
+    # 1.5 h of regular heater starts is enough to rule out an idle hour
+    obs = gates.gate_observables(starts, t_sp, None, t_sp - 1.5 * 3600.0)
+    assert obs["regulated_h"] == pytest.approx(1.5) and obs["max_idle_h"] < 1.0
+    assert gates.unconfirmed("G1", obs, 300.0, None) is None
     # An observable missing from a record is unknown, never zero
     assert gates.unconfirmed("G1", {}, 300.0, None) is not None
     assert gates.unconfirmed("G1", {"regulated_start": 0.0, "regulated_h": 5.0}, 300.0, None) is not None

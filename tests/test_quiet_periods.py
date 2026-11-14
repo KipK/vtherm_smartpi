@@ -17,6 +17,7 @@ from custom_components.vtherm_smartpi.smartpi.quiet_periods.const import (
     SUN_STANDARD_HORIZON_DEG,
 )
 from custom_components.vtherm_smartpi.smartpi.tar_learning import gates
+from custom_components.vtherm_smartpi.smartpi.tar_learning.const import GATE_REGULATED_MIN_S
 
 H = 3600.0
 PARIS = qp.Position(48.85, 2.35)
@@ -361,9 +362,17 @@ def test_room_that_never_reaches_eco_stays_unconfirmed() -> None:
     assert gates.unconfirmed("G1", obs, 400.0, None) == "no regulated start"
 
 
-def test_late_regulation_is_too_short() -> None:
+def test_late_regulation_confirms_the_morning_but_is_no_regulated_night() -> None:
+    """About 2.5 h of regulation: enough to see an idle hour, too short to fit the trend of a regulated night."""
     e, c, obs, why, rn = _decide(True, 5.0)
-    assert (e["end"] - c[4]) < REGULATED_MIN_S
+    assert GATE_REGULATED_MIN_S <= (e["end"] - c[4]) < REGULATED_MIN_S
+    assert why == qp.WHY_REGULATED_SHORT
+    assert gates.unconfirmed("G1", obs, 400.0, None) is None
+
+
+def test_very_late_regulation_is_too_short() -> None:
+    e, c, obs, why, rn = _decide(True, 6.6)
+    assert (e["end"] - c[4]) < GATE_REGULATED_MIN_S
     assert why == qp.WHY_REGULATED_SHORT
     assert gates.unconfirmed("G1", obs, 400.0, None) == "regulated part too short"
 

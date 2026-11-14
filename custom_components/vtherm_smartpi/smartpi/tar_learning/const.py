@@ -174,6 +174,8 @@ PUB_MAD_REL = 0.25
 
 # Occupant gates of the fast value (over the regulated part of the period)
 GATE_IDLE_MIN_H = 1.0
+# Shortest regulated part before the step on which the gates can confirm the fast value
+GATE_REGULATED_MIN_S = 1.5 * H
 GT4_T_MIN_S = 900.0
 GT4_BFIT_REL_MIN = 0.6
 

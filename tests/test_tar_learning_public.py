@@ -43,7 +43,7 @@ def test_phase_and_unconfirmed_reasons() -> None:
     assert public.unconfirmed_reason("no regulated start") == (
         "the room did not reach its low setpoint before the comfort step")
     assert public.unconfirmed_reason("regulated part too short") == (
-        "the room was regulated at its low setpoint for less than 4 hours before the comfort step")
+        "the room was regulated at its low setpoint for less than 1.5 hours before the comfort step")
     assert public.period_reason("home position unknown") == (
         "home position unknown: the absence of sun cannot be checked")
 
