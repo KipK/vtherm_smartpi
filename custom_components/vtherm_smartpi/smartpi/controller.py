@@ -9,11 +9,10 @@ from .const import (
     clamp
 )
 from .deadband_output import ProportionalState
-from .integral_guard import constrain_guarded_integral_delta
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
 
 # Integral modes in which the PI drives the actuator, so its integral tracks output limits.
-_TRACKED_I_MODES = ("I:RUN", "I:SKIP", "I:GUARD", "I:CLAMP")
+_TRACKED_I_MODES = ("I:RUN", "I:SKIP", "I:CLAMP")
 
 
 @dataclass(frozen=True)
@@ -173,15 +172,10 @@ class SmartPIController:
         integrator_hold: bool,
         deadband_c: float,
         core_deadband: bool | None = None,
-        block_positive_integral: bool = False,
-        block_negative_integral: bool = False,
-        positive_integral_guard_mode: str = "recovery_guard",
-        allow_guard_unwind: bool = True,
         deadband_allow_p: bool = False,
         integrator_hold_source: str = "external",
         u_max: float = 1.0,
         unwind_band_c: float | None = None,
-        integral_scale: float = 1.0,
     ) -> float:
         """
         Main PID Calculation logic.
@@ -195,8 +189,6 @@ class SmartPIController:
         still lets the integral unwind toward zero there, so that a quantized
         measurement does not freeze a steady offset (deadband on one level,
         saturation on the next).
-        `integral_scale` multiplies the integral update (soft release of a
-        stalled recovery).
         """
         self.last_integral_hold_source = "none"
         self.sat_i = False
@@ -285,7 +277,7 @@ class SmartPIController:
                     u_pi = u_pi_pre
                     self.sat_i = True
                 else:
-                    d_integral = error * dt_min * integral_scale
+                    d_integral = error * dt_min
                     self.last_i_mode = "I:RUN"
                     if unwind_only:
                         d_integral = (
@@ -294,18 +286,6 @@ class SmartPIController:
                             else min(d_integral, -self.integral)
                         )
                         self.last_i_mode = f"I:UNWIND({sat})"
-
-                    d_integral, guard_delta_mode = constrain_guarded_integral_delta(
-                        integral=self.integral,
-                        requested_delta=d_integral,
-                        block_positive=block_positive_integral,
-                        block_negative=block_negative_integral,
-                        allow_unwind=allow_guard_unwind,
-                    )
-                    if guard_delta_mode == "blocked":
-                        self.last_i_mode = f"I:GUARD({positive_integral_guard_mode})"
-                    elif guard_delta_mode == "unwind":
-                        self.last_i_mode = f"I:GUARD_UNWIND({positive_integral_guard_mode})"
 
                     # Signed overshoot clamp — once the signed error is near/beyond
                     # zero we do not allow the integral to grow further.

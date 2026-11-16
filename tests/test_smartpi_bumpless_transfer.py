@@ -29,36 +29,6 @@ def test_positive_integral_growth_remains_available_below_target():
     assert ctl.last_i_mode == "I:RUN"
 
 
-def test_positive_guard_unwinds_negative_integral_before_blocking_growth():
-    """Setpoint recovery may neutralize opposing memory without crossing zero."""
-    ctl = SmartPIController("test")
-    ctl.integral = -0.4
-
-    common = {
-        "error": 0.7,
-        "error_p": 0.7,
-        "kp": 0.1,
-        "ki": 0.01,
-        "u_ff": 0.3,
-        "dt_min": 1.0,
-        "in_deadband": False,
-        "integrator_hold": False,
-        "deadband_c": 0.05,
-        "block_positive_integral": True,
-        "positive_integral_guard_mode": "setpoint_change",
-    }
-
-    ctl.compute_pwm(**common)
-
-    assert ctl.integral == 0.0
-    assert ctl.last_i_mode == "I:GUARD_UNWIND(setpoint_change)"
-
-    ctl.compute_pwm(**common)
-
-    assert ctl.integral == 0.0
-    assert ctl.last_i_mode == "I:GUARD(setpoint_change)"
-
-
 def test_deadband_u_hold_and_u_cmd_from_nominal():
     """In core deadband, P must be frozen and only FF plus frozen I remain.
 
@@ -293,43 +263,8 @@ def test_core_deadband_unfreezes_integral_outside_latched_deadband_shell():
     assert ctl.last_i_mode == "I:RUN"
 
 
-def test_negative_guard_unwinds_positive_integral_after_setpoint_reduction():
-    """A setpoint reduction guard must neutralize opposing integral memory."""
-    ctl = SmartPIController("test")
-    ctl.integral = 3.0
-
-    common = {
-        "error": -0.2,
-        "error_p": -0.2,
-        "kp": 1.0,
-        "ki": 0.1,
-        "u_ff": 0.2,
-        "dt_min": 10.0,
-        "in_deadband": False,
-        "integrator_hold": False,
-        "deadband_c": 0.05,
-        "block_negative_integral": True,
-        "positive_integral_guard_mode": "setpoint_change",
-    }
-
-    ctl.compute_pwm(**common)
-
-    assert ctl.integral == pytest.approx(1.0)
-    assert ctl.last_i_mode == "I:GUARD_UNWIND(setpoint_change)"
-
-    ctl.compute_pwm(**common)
-
-    assert ctl.integral == pytest.approx(0.0)
-    assert ctl.last_i_mode == "I:GUARD_UNWIND(setpoint_change)"
-
-    ctl.compute_pwm(**common)
-
-    assert ctl.integral == pytest.approx(0.0)
-    assert ctl.last_i_mode == "I:GUARD(setpoint_change)"
-
-
-def test_negative_guard_prevents_hold_bleed_after_setpoint_reduction():
-    """A protected setpoint reduction must not bleed the integral during a temporary hold."""
+def test_hold_keeps_the_integral_after_setpoint_reduction():
+    """A temporary hold keeps the integral after a setpoint reduction."""
     ctl = SmartPIController("test")
     ctl.integral = 3.0
 
@@ -343,8 +278,6 @@ def test_negative_guard_prevents_hold_bleed_after_setpoint_reduction():
         in_deadband=False,
         integrator_hold=True,
         deadband_c=0.05,
-        block_negative_integral=True,
-        positive_integral_guard_mode="setpoint_change",
     )
 
     assert ctl.integral == pytest.approx(3.0)

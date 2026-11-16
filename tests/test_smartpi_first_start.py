@@ -12,7 +12,6 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     AB_MIN_SAMPLES_A,
     AB_MIN_SAMPLES_B,
 )
-from custom_components.vtherm_smartpi.smartpi.integral_guard import IntegralGuardSource
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 
 
@@ -158,7 +157,7 @@ class TestSmartPIHysteresisPhase:
         assert control["mode"] == "hysteresis"
         assert "hysteresis_state" in control
 
-    def test_reboot_clears_transient_guard_and_trajectory_state(self):
+    def test_reboot_clears_transient_hold_and_trajectory_state(self):
         """A reboot must not restore active transient SmartPI recovery states."""
         smartpi1 = SmartPI(
             hass=MagicMock(),
@@ -167,7 +166,6 @@ class TestSmartPIHysteresisPhase:
             minimal_deactivation_delay=0,
             name="TestSmartPI_RebootTransient",
         )
-        smartpi1.integral_guard.arm(IntegralGuardSource.SETPOINT_CHANGE)
         smartpi1.sp_mgr.filtered_setpoint = 19.0
         smartpi1.sp_mgr.effective_setpoint = 18.9
         smartpi1.sp_mgr._pending_target_change_braking = True
@@ -191,7 +189,6 @@ class TestSmartPIHysteresisPhase:
             saved_state=saved_state,
         )
 
-        assert smartpi2.integral_guard.active is False
         assert smartpi2.sp_mgr.trajectory_active is False
         assert smartpi2.sp_mgr.trajectory_source == "none"
         assert smartpi2.ctl.integral_hold_mode == "none"

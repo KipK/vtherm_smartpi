@@ -394,8 +394,6 @@ async def test_timing_quantization_is_not_tracked():
     [
         ("I:RUN", True),
         ("I:SKIP(SAT_HI)", True),
-        ("I:GUARD(setpoint_change)", True),
-        ("I:GUARD_UNWIND(setpoint_change)", True),
         ("I:CLAMP(near_ovr)", True),
         ("I:FREEZE(deadband)", False),
         ("I:HOLD", False),

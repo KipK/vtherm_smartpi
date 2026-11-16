@@ -479,104 +479,52 @@ Le même payload dans les deux modes expose les détails de trajectoire dans
 
 Le façonnage de référence est limité à la branche P, ce qui laisse la consigne brute intacte côté intégrale. Aucun plafond de commande n'est appliqué après le calcul PI : la commande PI passe directement par les contraintes douces (limiteur de pente, `max_on_percent`) puis par les contraintes de temporisation.
 
-Le code actuel applique aussi une garde explicite sur la croissance positive de l'intégrale pendant les phases de rattrapage :
+Après un changement de consigne ou une reprise, l'intégrale suit l'erreur brute
+à la consigne sans règle de rattrapage supplémentaire : seuls l'anti-windup
+(ci-dessous), les modes de deadband et de near-band, le clamp de dépassement et
+la coupure de surchauffe la limitent. La trajectoire de consigne ne freine que
+la branche proportionnelle.
 
-- après un changement de consigne significatif,
-- après une reprise suivant `hvac_off`,
-- après une reprise suivant détection d'ouverture,
-- après une reprise suivant power shedding,
-- pendant une trajectoire de récupération de perturbation.
-
-Cette garde n'empêche pas la décharge de l'intégrale. Une intégrale qui s'oppose
-déjà au rattrapage demandé porte en général le biais du modèle (erreur du
-feed-forward), toujours valable à la nouvelle consigne : la garde la conserve
-tant que le rattrapage progresse. Quand le rattrapage cale, avec une erreur de
-release encore au-delà de son seuil et une pente signée de rapprochement
-inférieure ou égale à la pente de release pendant `INTEGRAL_GUARD_STALL_CYCLES = 3`
-cycles, la garde autorise la résorption de cette mémoire jusqu'à zéro. Elle
-continue d'interdire toute nouvelle accumulation au-delà de zéro dans la
-direction protégée. Une intégrale négative héritée de l'ancienne consigne ne
-peut donc pas maintenir la pièce sous une nouvelle consigne plus élevée, et un
-changement de consigne n'efface pas le biais qui évite le dépassement à la
-nouvelle consigne.
-
-Après un changement de consigne ou une reprise, les actions proportionnelle et
-feed-forward peuvent se stabiliser avant la cible, au-delà du seuil de release,
-et seule l'intégrale peut alors refermer l'écart restant. Quand le rattrapage
-reste calé pendant `INTEGRAL_GUARD_RELEASE_STALL_RATIO = 2` fois la durée de
-calage de la résorption, la garde est relâchée. Ce relâchement est progressif :
-l'intégrale avance à `INTEGRAL_GUARD_SOFT_RELEASE_SCALE = 0.20` de sa vitesse
-jusqu'à ce que l'erreur atteigne la bande morte centrale ou change de signe,
-pour ne pas dépasser la puissance de maintien pendant qu'une pièce lente est en
-retard sur elle (`soft_release` dans le mode de la garde de l'intégrale). Une
-reprise après fenêtre, délestage ou OFF dans le même sens conserve le compteur
-de calage, ou le relâchement progressif en cours, au lieu de repartir de zéro ;
-rattraper le creux de l'interruption ne compte comme un progrès qu'une fois
-l'erreur redescendue de `INTEGRAL_GUARD_RESUME_PROGRESS_C = 0.05 °C` sous son
-niveau d'avant l'interruption. Une récupération de perturbation garde sa propre
-sortie sur palier, décrite ci-dessous.
-
-Une trajectoire de récupération de perturbation freine la branche P parce que
-le modèle prédit que la puissance engagée suffit à refermer l'écart. Quand ce
-modèle est biaisé, la pièce peut se stabiliser sur un palier sous la consigne :
-la trajectoire ne se termine jamais et la garde bloque l'intégrale qui seule
-pourrait refermer l'écart. Un test de palier termine alors la trajectoire :
+Une trajectoire de récupération de perturbation freine la branche P parce que le
+modèle prédit que la puissance engagée suffit à combler l'écart. Quand ce modèle
+est biaisé, la pièce peut se stabiliser sur un plateau sous la consigne et la
+trajectoire ne se termine jamais. Un test de plateau termine alors la
+trajectoire :
 
 - l'erreur signée est moyennée par blocs de
-  `INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES = 3` cycles,
-- un bloc est stationnaire si sa moyenne reste au-dessus de l'erreur de release
-  et ne varie pas de plus que la pente de release appliquée sur un bloc,
-- il faut `INTEGRAL_GUARD_PLATEAU_BLOCKS = 2` blocs stationnaires consécutifs,
-- et aucun progrès net sur `INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS = 4` blocs :
+  `RECOVERY_PLATEAU_BLOCK_CYCLES = 3` cycles,
+- un bloc est stationnaire si sa moyenne reste au-dessus du plancher d'erreur
+  résiduelle (le plus grand de `RECOVERY_ERROR_FLOOR_DEADBAND_RATIO = 2` fois la
+  deadband et de la deadband augmentée de son hystérésis) et ne varie pas de plus
+  de `RECOVERY_PLATEAU_SLOPE_ABS_H = 0.12 °C/h` appliqué sur un bloc,
+- il faut `RECOVERY_PLATEAU_BLOCKS = 2` blocs stationnaires consécutifs,
+- et aucun progrès net sur `RECOVERY_PLATEAU_PROGRESS_BLOCKS = 4` blocs :
   la moyenne ne doit pas avoir baissé de plus de
-  `INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C = 0.03 °C`. Une queue de récupération
-  lente, vue par une sonde quantifiée, n'est donc pas prise pour un palier.
+  `RECOVERY_PLATEAU_PROGRESS_MIN_C = 0.03 °C`. Une queue de récupération lente,
+  vue à travers une sonde quantifiée, n'est donc pas prise pour un plateau.
 
-À la détection, la trajectoire repasse en passthrough et la garde de
-récupération de perturbation est relâchée. Aucune nouvelle trajectoire de
-perturbation ne démarre tant que l'erreur n'est pas redescendue sous le seuil
-de déclenchement moins l'hystérésis de suivi, ou jusqu'à un changement de
-consigne ou une réinitialisation. Une nouvelle perturbation reste donc freinée
-et gardée normalement.
+À la détection, la trajectoire repasse en passthrough. Aucune nouvelle
+trajectoire de perturbation ne démarre tant que l'erreur n'est pas redescendue
+sous le seuil de déclenchement diminué de l'hystérésis de suivi, ou jusqu'à un
+changement de consigne ou une remise à zéro. Une nouvelle perturbation reste
+donc freinée normalement.
 
-La garde est relâchée seulement quand deux conditions sont réunies :
+Les reprises suivant détection d'ouverture et power shedding gèlent l'intégrale
+pendant le temps mort en chauffage :
 
-- l'erreur de release est revenue proche de l'échelle de la deadband configurée,
-- la pente signée de rapprochement est devenue faible de manière persistante.
-
-Le test de pente combine deux critères :
-
-- un seuil relatif à la pente maximale observée pendant le rattrapage,
-- un plancher absolu en `°C/h` pour éviter qu'un pic très faible ne rende la release trop permissive.
-
-Le signal utilisé pour cette erreur de release dépend du contexte servo :
-
-- pendant une trajectoire de consigne active, la release se base sur `error_p`, donc l'erreur de la consigne filtrée réellement suivie par la branche proportionnelle,
-- hors trajectoire, la release se base sur `error_i`, donc l'erreur brute de consigne.
-
-Cette séparation évite de garder la garde active alors que la trajectoire a déjà convergé vers sa référence filtrée et que le système est physiquement stabilisé sous la consigne brute.
-
-L'erreur brute signée reste néanmoins la référence de sécurité : si `error_i <= 0`, la garde est relâchée immédiatement.
-
-Cette pente est traitée symétriquement :
-
-- en chauffage, une pente positive correspond à un rapprochement vers la consigne,
-- en refroidissement, la pente est inversée logiquement pour conserver la même lecture physique.
-
-Les reprises suivant détection d'ouverture et power shedding ajoutent une étape supplémentaire en chauffage :
-
-- à la reprise, SmartPI arme d'abord un `I:HOLD` explicite,
+- à la reprise, SmartPI arme un `I:HOLD` explicite (`window_resume` ou
+  `power_shedding_resume`),
 - ce hold reste actif tant que la réaction de chauffe est encore dans la fenêtre exploitable de `deadtime_heat`,
-- à la sortie de cette phase, SmartPI réévalue l'erreur résiduelle signée,
-- il n'arme ensuite la garde positive que si cette erreur reste assez grande pour caractériser un vrai rattrapage,
-- sinon la branche I revient directement à son fonctionnement normal.
+- à la fin de cette fenêtre, l'intégrale reprend son fonctionnement normal,
+- une reprise dont l'erreur résiduelle signée est déjà sous le plancher
+  d'erreur résiduelle termine le hold avant le début de la fenêtre de temps mort,
+- sans temps mort de chauffe fiable, aucun hold n'est appliqué.
 
 Cette séquence évite de faire apprendre à l'intégrale une dynamique de reprise encore dominée par le temps mort de chauffe.
 
 Les états transitoires de rattrapage ne sont pas restaurés après reboot :
 
 - la trajectoire analytique active est purgée,
-- la garde intégrale est remise à zéro,
 - tout `integral_hold_mode` temporaire est effacé.
 
 Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer des états servo transitoires qui ne sont plus physiquement valides hors de leur session d'origine. Le timestamp mural de la dernière régulation active valide est persisté et n'est pas rafraîchi lorsque le mode HVAC est OFF. Si l'inactivité dépasse 96 heures, la mémoire PI du contrôleur est purgée à la reprise tandis que le modèle A/B appris reste disponible. Si le mode HVAC après un redémarrage diffère du mode du modèle persisté (HEAT versus COOL), l'intégrale est effacée. Lorsqu'une itération de régulation est ignorée parce que le capteur de température est absent ou que `guard_cut` est actif, le suivi du temps repart comme après un passage en OFF, afin que l'erreur ne soit pas intégrée sur la période ignorée.
@@ -594,7 +542,6 @@ Les protections complémentaires actuellement présentes sont :
 
 - `SmartPIGuards` (chauffage uniquement, hors bootstrap et calibration) : `guard_cut` force la sortie à 0 lorsque la température mesurée dépasse `setpoint + near_band_above` pendant que le chauffage est actif, jusqu'à ce qu'elle redescende à ce seuil diminué du plus grand de `NEAR_BAND_HYSTERESIS_C = 0.05°C` et de `GUARD_CUT_RESET_STEPS = 1.5` pas de capteur observés (sans quoi une mesure qui oscille entre deux paliers autour du seuil relancerait la coupure, et le cycle, à chaque mesure). Pendant une coupure, la sortie reste à 0 (`I:OVERRIDE(guard_cut)`). Tant que le PI demande encore de la puissance, une intégrale positive suit les 0 % imposés par back-calculation, `d(Ki·I)/dt = −v/Ti` avec `v` la demande du PI et `Ti = Kp/Ki`, au plus un cycle par itération. Sa vitesse suit la demande, pas le dépassement : une intégrale qui porte plus que le besoin de chauffe redescend en quelques coupures, même quand la pièce dépasse à peine le seuil. Elle redescend jusqu'au point où elle seule maintiendrait la pièce au seuil de coupure diminué de `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`) ; en dessous, elle est conservée, de même que le besoin de chauffe qui reste après une baisse de consigne. Sans cela, un biais de l'intégrale restituait le même excès de puissance à chaque fin de coupure, et la pièce cyclait entre coupure et reprise. Le filtre de température, le détecteur de temps mort, la température publiée et l'apprentissage continuent de suivre la pièce. La pièce refroidit alors sans chauffage, par exemple pendant toute la descente qui suit une baisse de consigne : c'est une fenêtre passive pour `b` et pour la ligne de base du retard de réponse. La gouvernance y voit une commande nulle hors de toute bande, et les fenêtres `a` sont bloquées (`skip: guard cut`). L'apprentissage reste contigu à la fin de la coupure ; `guard_kick` relance le cycle lorsque, dans la near-band, la température descend sous `setpoint - near_band_below` alors que la commande est inférieure à 99 %. En refroidissement, aucune des deux gardes n'agit et la near-band n'est pas calculée automatiquement. Pendant le bootstrap, le chauffage fonctionne entre ses propres seuils d'hystérésis et une garde en cours est relâchée,
 - anti-windup à chaque tick sur la limite haute applicable (voir ci-dessous),
-- garde intégrale signée pendant les reprises, rattrapages et changements de consigne,
 - `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,
 - `I:HOLD` avec source `vt_safety` pendant que le mode sécurité de Versatile Thermostat applique sa puissance par défaut à la place de la commande SmartPI,
 - `I:HOLD` avec source `deadband_hysteresis_shell` tant que l'état de deadband hystérétique est actif et que l'erreur est hors de la deadband centrale,
@@ -604,7 +551,7 @@ Les protections complémentaires actuellement présentes sont :
 L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse. Il comporte deux parties :
 
 - intégration conditionnelle : l'intégrale cesse de croître lorsque la demande non contrainte dépasse la limite haute applicable. À moins de `NEAR_SETPOINT_UNWIND_STEPS = 1.5` pas de capteur observés de la consigne, une sortie saturée par rapport à l'erreur laisse tout de même l'intégrale revenir vers zéro, sans le franchir (`I:UNWIND(SAT_HI|SAT_LO)`), à condition que la sortie sans le terme proportionnel (`u_ff + Ki·I`) reste dans ses limites : avec un capteur quantifié, une mesure à un pas de la consigne sature la sortie par le seul terme proportionnel, et une intégrale bloquée combinée au gel de deadband maintiendrait un écart permanent. Une sortie tenue à sa limite par `u_ff + Ki·I` (par exemple à `max_on_percent`) conserve l'intégrale, qui porte alors le biais du modèle ;
-- rétro-calculation : à chaque tick dont le mode intégral est `I:RUN`, `I:SKIP`, `I:GUARD` ou `I:CLAMP`, l'excès de la sortie PI (`u_ff + u_pi`, bornée à `[0, 1]`) au-delà de l'image linéaire de `max_on_percent` corrige l'intégrale de `beta * excès / Ki`, avec `beta = dt / max(Kp/Ki, dt)` (constante de temps de poursuite égale à `Ti = Kp/Ki`). La correction ne déplace l'intégrale que vers zéro et s'arrête à zéro : un excès porté par le seul terme proportionnel n'entraîne jamais l'intégrale dans l'autre sens. L'intégrale reste bornée à `±2/Ki`. Seule l'intégrale change : `u_pi` conserve la décomposition qui a produit la commande.
+- rétro-calculation : à chaque tick dont le mode intégral est `I:RUN`, `I:SKIP` ou `I:CLAMP`, l'excès de la sortie PI (`u_ff + u_pi`, bornée à `[0, 1]`) au-delà de l'image linéaire de `max_on_percent` corrige l'intégrale de `beta * excès / Ki`, avec `beta = dt / max(Kp/Ki, dt)` (constante de temps de poursuite égale à `Ti = Kp/Ki`). La correction ne déplace l'intégrale que vers zéro et s'arrête à zéro : un excès porté par le seul terme proportionnel n'entraîne jamais l'intégrale dans l'autre sens. L'intégrale reste bornée à `±2/Ki`. Seule l'intégrale change : `u_pi` conserve la décomposition qui a produit la commande.
 
 Ne sont pas traités comme une saturation : la quantification de Versatile Thermostat et la rétention de vanne (`dpercent`, période), les durées minimales on/off et le limiteur de pente. Le comportement est symétrique en HEAT et COOL, n'utilise pas les accusés de commande de Versatile Thermostat et est identique avec les anciennes versions de Versatile Thermostat. Le diagnostic `aw_du` est la correction (excès, `<= 0`) appliquée au dernier tick.
 
@@ -677,7 +624,8 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
 | `deadband.py`          | deadband et near-band                                    |
 | `setpoint.py`          | trajectoire analytique de la référence P                    |
-| `integral_guard.py`    | garde directionnelle de l'intégrale et maintien I:HOLD après reprise de fenêtre ou de délestage |
+| `resume_hold.py`       | maintien I:HOLD pendant le temps mort après reprise de fenêtre ou de délestage |
+| `recovery_plateau.py`  | test de plateau d'une trajectoire de récupération de perturbation |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`, gain FF signé `b/a` et facteur de montée en charge |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
 | `ff_trim_runtime.py`   | `FFTrimCoordinator` : décomposition de commande figée des requêtes du scheduler, routage des résultats des observateurs de trim, transactions bumpless trim/intégrale à la frontière de cycle, état de transfert |
@@ -709,7 +657,6 @@ self.deadband_mgr = DeadbandManager(name, near_band_deg)
 self.calibration_mgr = CalibrationManager(name)
 self.gain_scheduler = GainScheduler(name)
 self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
-self.integral_guard = SmartPIIntegralGuard(name)
 self.resume_hold = ResumeDeadtimeHold()
 self.dt_est = DeadTimeEstimator()
 self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
@@ -937,14 +884,12 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `KI_SAFE`                     | `0.010` |
 | `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
 | `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
-| `INTEGRAL_GUARD_STALL_CYCLES` | `3`     |
-| `INTEGRAL_GUARD_RELEASE_STALL_RATIO` | `2.0` |
-| `INTEGRAL_GUARD_SOFT_RELEASE_SCALE` | `0.20` |
-| `INTEGRAL_GUARD_RESUME_PROGRESS_C` | `0.05` |
-| `INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES` | `3` |
-| `INTEGRAL_GUARD_PLATEAU_BLOCKS` | `2` |
-| `INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS` | `4` |
-| `INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C` | `0.03` |
+| `RECOVERY_ERROR_FLOOR_DEADBAND_RATIO` | `2.0` |
+| `RECOVERY_PLATEAU_SLOPE_ABS_H` | `0.12` |
+| `RECOVERY_PLATEAU_BLOCK_CYCLES` | `3` |
+| `RECOVERY_PLATEAU_BLOCKS` | `2` |
+| `RECOVERY_PLATEAU_PROGRESS_BLOCKS` | `4` |
+| `RECOVERY_PLATEAU_PROGRESS_MIN_C` | `0.03` |
 | `GUARD_CUT_RESET_STEPS`       | `1.5`   |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |
