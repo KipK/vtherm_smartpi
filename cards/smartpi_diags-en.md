@@ -49,7 +49,6 @@
 {% set integral_mode = temp.get('integral_mode', temp.get('integral_hold_mode', 'none')) %}
 {% set hold_mode = temp.get('integral_hold_mode', 'none') %}
 {% set hold_source = temp.get('integral_hold_source', 'none') %}
-{% set integral_guard_source_pub = temp.get('integral_guard_source', 'none') %}
 
 {% set current_cycle = power.get('current_cycle_percent', 0) | float(0) %}
 {% set next_cycle = power.get('next_cycle_percent', 0) | float(0) %}
@@ -218,15 +217,6 @@
   'disturbance_recovery': 'disturbance recovery'
 }.get(hold_mode, hold_mode) %}
 
-{% set integral_guard_label = {
-  'none': 'none',
-  'setpoint_change': 'setpoint change',
-  'off_resume': 'off resume',
-  'window_resume': 'window resume',
-  'power_shedding_resume': 'power shedding resume',
-  'disturbance_recovery': 'disturbance recovery'
-}.get(integral_guard_source_pub, integral_guard_source_pub) %}
-
 {% set trajectory_source_label = {
   'none': 'none',
   'setpoint': 'setpoint',
@@ -260,9 +250,6 @@
 {% set boost = setpoint.get('boost_active', false) %}
 {% set hyst_guard = false %}
 {% set integral_hold_active = hold_mode != 'none' %}
-{% set integral_guard_active = integral_guard_source_pub != 'none' %}
-{% set integral_guard_source = integral_guard_source_pub %}
-{% set integral_guard_mode = analysis_control.get('integral_guard_mode', '—') %}
 {% set core_db_active = analysis_control.get('in_core_deadband', false) %}
 {% set nb_src = analysis_control.get('near_band_source', 'unknown') %}
 {% set tau_s = model.get('tau_min') %}
@@ -435,15 +422,6 @@
   'power_shedding': 'power shedding'
 }.get(restart_reason, restart_reason) %}
 
-{% set analysis_integral_guard_label = {
-  'none': 'none',
-  'setpoint_change': 'setpoint change',
-  'off_resume': 'off resume',
-  'window_resume': 'window resume',
-  'power_shedding_resume': 'power shedding resume',
-  'disturbance_recovery': 'disturbance recovery'
-}.get(integral_guard_source, integral_guard_source) %}
-
 {% set analysis_trajectory_source_label = {
   'none': 'none',
   'setpoint': 'setpoint',
@@ -475,7 +453,6 @@
 | Integral | {% if integral_error is not none %}{{ integral_error | float | round(4) }}{% else %}—{% endif %} |
 | Mode I | `{{ integral_mode }}` |
 | I hold source | `{{ hold_source }}` |
-| Guard I | `{{ integral_guard_label }}` |
 {% if has_analysis -%}
 | Near-band | {{ nb_status }} · `{{ nb_src }}` |
 {% endif %}
@@ -667,9 +644,6 @@
 
 | Signal | Value |
 |---|---|
-| Guard active | {% if integral_guard_active %}yes{% else %}no{% endif %} |
-| Guard source | `{{ analysis_integral_guard_label }}` |
-| Guard mode | `{{ integral_guard_mode }}` |
 | Restart cycle | `{{ restart_reason_label }}` |
 | Deadband | {% if db_active %}yes{% else %}no{% endif %} |
 | Core deadband | {% if core_db_active %}yes{% else %}no{% endif %} |

@@ -106,7 +106,6 @@ def _build_temperature(algo: SmartPI) -> Dict[str, Any]:
         "integral_mode": algo.last_i_mode,
         "integral_hold_mode": algo.ctl.integral_hold_mode,
         "integral_hold_source": algo.ctl.last_integral_hold_source,
-        "integral_guard_source": algo.integral_guard.source.value,
     }
 
 
@@ -511,7 +510,6 @@ def _build_analysis_control(algo: SmartPI) -> Dict[str, Any]:
         "error_p": round(algo.error_p, 4),
         "aw_du": round(algo.aw_du, 6),
         "forced_by_timing": algo.forced_by_timing,
-        "integral_guard_mode": algo._last_integral_guard_mode,
         "in_core_deadband": (
             algo._tau_reliable and abs(algo.error) < max(algo.deadband_c, 0.0)
         ),

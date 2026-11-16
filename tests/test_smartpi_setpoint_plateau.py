@@ -1,19 +1,15 @@
 """Tests for the plateau end of disturbance trajectories."""
 
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
-from custom_components.vtherm_smartpi.smartpi.integral_guard import IntegralGuardSource
 from custom_components.vtherm_smartpi.smartpi.recovery_plateau import (
     RecoveryPlateauDetector,
     plateau_block_min,
     plateau_tolerance_c,
 )
 from custom_components.vtherm_smartpi.smartpi.setpoint import SmartPISetpointManager
-from helpers import force_smartpi_stable_mode
 
 TARGET = 21.0
 
@@ -39,6 +35,16 @@ def _filter(manager: SmartPISetpointManager, current: float, now: float, target:
 
 def _disturbance_manager() -> SmartPISetpointManager:
     manager = SmartPISetpointManager(name="test")
+    # Count the plateau ends seen by the trajectory.
+    manager.plateau_ends = 0
+    reached = manager._disturbance_plateau_reached
+
+    def _counting(**kwargs):
+        result = reached(**kwargs)
+        manager.plateau_ends += int(result)
+        return result
+
+    manager._disturbance_plateau_reached = _counting
     _filter(manager, current=TARGET, now=0.0)
     _filter(manager, current=20.6, now=60.0)
     assert manager.trajectory_active is True
@@ -75,8 +81,8 @@ def test_disturbance_trajectory_stuck_on_a_plateau_ends():
     # stationary blocks and no net progress over four blocks.
     assert 150 <= ended_at <= 152
     assert manager.effective_setpoint == pytest.approx(TARGET)
-    assert manager.consume_disturbance_plateau_end() is True
-    assert manager.consume_disturbance_plateau_end() is False
+    assert manager.plateau_ends == 1
+    assert manager.disturbance_retrigger_blocked is True
 
 
 def test_slow_quantized_tail_is_not_a_plateau():
@@ -85,7 +91,7 @@ def test_slow_quantized_tail_is_not_a_plateau():
     errors = [0.35] * 30 + [0.27] * 30 + [0.2] * 90 + [0.12] * 60
     for minute, error in enumerate(errors, start=2):
         _filter(manager, current=round(TARGET - error, 2), now=60.0 * minute)
-    assert manager.consume_disturbance_plateau_end() is False
+    assert manager.plateau_ends == 0
 
 
 def test_recovering_disturbance_trajectory_is_kept():
@@ -93,7 +99,7 @@ def test_recovering_disturbance_trajectory_is_kept():
     for minute in range(2, 120):
         current = 20.6 + 0.3 * minute / 60.0 * 0.5  # 0.15 C/h toward the target
         _filter(manager, current=min(current, 20.9), now=60.0 * minute)
-    assert manager.consume_disturbance_plateau_end() is False
+    assert manager.plateau_ends == 0
 
 
 def test_no_new_disturbance_trajectory_while_the_error_stays_in_the_trigger_zone():
@@ -125,16 +131,4 @@ def test_reset_lifts_the_retrigger_block():
     _hold(manager, current=20.6, start_min=2, minutes=200)
     manager.clear_runtime_transients()
     assert manager.disturbance_retrigger_blocked is False
-    assert manager.consume_disturbance_plateau_end() is False
 
-
-def test_algo_releases_the_disturbance_guard_when_its_trajectory_ends_on_a_plateau():
-    pi = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0,
-                 minimal_deactivation_delay=0, name="TestTrajectoryPlateau", deadband_c=0.05)
-    force_smartpi_stable_mode(pi)
-    pi.calculate(TARGET, 20.6, 5.0, 0.0, VThermHvacMode_HEAT)
-    pi.integral_guard.arm(IntegralGuardSource.DISTURBANCE_RECOVERY)
-    with patch.object(pi.sp_mgr, "consume_disturbance_plateau_end", return_value=True):
-        pi.calculate(TARGET, 20.6, 5.0, 0.0, VThermHvacMode_HEAT)
-    assert pi.integral_guard.active is False
-    assert pi.integral_guard._last_release_reason == "disturbance_plateau"

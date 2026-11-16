@@ -203,18 +203,12 @@ TRAJECTORY_BRAKE_GAIN = 1.20             # Safety factor applied to the predicte
 TRAJECTORY_BRAKE_RELEASE_HYST_C = 0.10   # Extra signed-error margin to keep an active trajectory in tracking
 TRAJECTORY_RELEASE_TAU_FACTOR = 0.5      # Make the return to the raw target faster than braking while staying smooth
 TRAJECTORY_BUMPLESS_MAX_U_DELTA = 0.03   # Maximum allowed proportional command step when releasing trajectory
-INTEGRAL_GUARD_RELEASE_ERROR_RATIO = 2.0 # Release positive-I guard only once the residual error is close to deadband scale
-INTEGRAL_GUARD_RELEASE_SLOPE_RATIO = 0.35 # Release positive-I guard when the signed recovery slope has collapsed enough
-INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H = 0.12 # Absolute signed-slope floor (°C/h) below which stabilization may be accepted
-INTEGRAL_GUARD_RELEASE_PERSISTENCE = 3    # Consecutive evaluations required before re-enabling positive integral growth
-INTEGRAL_GUARD_STALL_CYCLES = 3.0  # Stalled recovery (cycles) before opposing integral memory may unwind
-INTEGRAL_GUARD_RELEASE_STALL_RATIO = 2.0  # Stalled recovery, in multiples of the unwind stall, after which the guard releases
-INTEGRAL_GUARD_RESUME_PROGRESS_C = 0.05  # Error fall below the error before an interruption that counts as recovery progress
-INTEGRAL_GUARD_SOFT_RELEASE_SCALE = 0.20  # Integral rate factor after a stalled release, until the core deadband
-INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES = 3.0  # Block length (cycles) of the mean-error test that detects a stuck recovery
-INTEGRAL_GUARD_PLATEAU_BLOCKS = 2  # Consecutive stationary blocks before a disturbance recovery counts as stuck
-INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS = 4  # Look-back (blocks) of the net-progress test of a plateau
-INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C = 0.03  # Net fall of the mean error over the look-back that still counts as a recovering tail
+RECOVERY_ERROR_FLOOR_DEADBAND_RATIO = 2.0  # Residual error (multiples of the deadband) under which a recovery counts as closed
+RECOVERY_PLATEAU_SLOPE_ABS_H = 0.12  # Mean-error change (°C/h) under which a recovery block counts as stationary
+RECOVERY_PLATEAU_BLOCK_CYCLES = 3.0  # Block length (cycles) of the mean-error test that detects a stuck recovery
+RECOVERY_PLATEAU_BLOCKS = 2  # Consecutive stationary blocks before a disturbance recovery counts as stuck
+RECOVERY_PLATEAU_PROGRESS_BLOCKS = 4  # Look-back (blocks) of the net-progress test of a plateau
+RECOVERY_PLATEAU_PROGRESS_MIN_C = 0.03  # Net fall of the mean error over the look-back that still counts as a recovering tail
 # Error filter time constant
 ERROR_FILTER_TAU = 25.0 # Minutes (matches alpha ~0.35 at 10min)
 

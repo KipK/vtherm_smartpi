@@ -5,7 +5,7 @@ no command to the heater at the stop, and none at the start in HEAT before its
 first cycle: over a short stop the heater keeps its last commanded state. Such a
 stop is then only a gap of a few samples in the observations, and the work in
 progress (heater state of the learning histories, measurements, learning
-windows, integral guard) can go on as if there had been no restart.
+windows) can go on as if there had been no restart.
 
 ``decide`` compares what was saved before the stop (``RestartBefore``) with what
 is seen at the first tick after it (``RestartAfter``) and returns one

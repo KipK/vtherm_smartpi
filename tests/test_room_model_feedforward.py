@@ -723,11 +723,11 @@ def test_closed_loop_heavy_room_switch_is_bumpless_and_mornings_reach_the_setpoi
     (tracking settling), walls 3 h later. Bounds:
     - each switch moves FF + I by less than 0.01 while the holding power itself steps by more than 0.03
       (what moves is the integral of one tick);
-    - with the walls in force, every morning rise (17 -> 20 C at 06:00) reaches 19.9 C within 3 h, against
-      none within 8 h with the learned holding power (it stays more than 0.2 C short all day);
-    - overshoot below 0.2 C (four times the deadband; the wall term of both signs costs about 0.1 C here), and
-      the room stays within 0.2 C of the setpoint from 4 h after the step to 22:00 (the learned run stays
-      0.4 C short).
+    - with the walls in force, every morning rise (17 -> 20 C at 06:00) reaches 19.9 C within 3 h;
+    - overshoot below 0.3 C (the integral is not held during the rise), and the room stays within 0.3 C of the
+      setpoint from 4 h after the step to 22:00 (the end of the overshoot falls at 4 h);
+    - from 4 h after the step to 22:00, the mean gap to the setpoint stays below 0.15 C with the walls in force
+      and with the learned holding power alike (the integral closes the remaining gap).
     """
     caplog.set_level(logging.WARNING)
     p = dict(rsim.MASS)
@@ -781,13 +781,13 @@ def test_closed_loop_heavy_room_switch_is_bumpless_and_mornings_reach_the_setpoi
                         np.mean(sp[day] - ta[day])))
         return res
 
-    for reach, peak, dev, _ in mornings(out):
+    for reach, peak, dev, mean_short in mornings(out):
         assert reach is not None and reach < 3.0
-        assert peak < 20.2
-        assert dev < 0.2
-    for reach, _, _, mean_short in mornings(ref):
-        assert reach is None
-        assert mean_short > 0.2
+        assert peak < 20.3
+        assert dev < 0.3
+        assert abs(mean_short) < 0.15
+    for _, _, _, mean_short in mornings(ref):
+        assert abs(mean_short) < 0.15
     assert all(s == SOURCE_WALLS for s, tt in zip(src, t) if tt >= rsim.T0 + rsim.DAY)
 
 

@@ -9,7 +9,7 @@ from custom_components.vtherm_smartpi.smartpi.controller import SmartPIControlle
 from custom_components.vtherm_smartpi.smartpi.diagnostics import (
     build_published_diagnostics,
 )
-from custom_components.vtherm_smartpi.smartpi.integral_guard import IntegralGuardSource
+from custom_components.vtherm_smartpi.smartpi.resume_hold import ResumeHoldSource
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 
 
@@ -129,8 +129,8 @@ class TestIntegralHoldDuringDeadtime:
             f"Deadtime must not set integrator_hold before governance when outside window, got {hold_at_governance_entry}"
         )
 
-    def test_window_resume_uses_hold_then_promotes_to_guard_only_if_needed(self):
-        """A window resume must hold during heating deadtime, then arm guard only for a large residual."""
+    def test_window_resume_holds_during_the_deadtime_then_releases(self):
+        """A window resume holds the integral during the heating deadtime, then lets it run."""
         pi = make_smartpi()
         _force_stable_phase(pi)
         pi.dt_est.deadtime_heat_s = 300.0
@@ -146,10 +146,9 @@ class TestIntegralHoldDuringDeadtime:
             slope=0.0,
         )
 
-        assert pi.ctl.integral_hold_mode == IntegralGuardSource.WINDOW_RESUME.value
+        assert pi.ctl.integral_hold_mode == ResumeHoldSource.WINDOW_RESUME.value
         assert pi.ctl.last_i_mode == "I:HOLD(window_resume)"
-        assert pi.integral_guard.active is False
-        assert pi.resume_hold.source == IntegralGuardSource.WINDOW_RESUME
+        assert pi.resume_hold.source == ResumeHoldSource.WINDOW_RESUME
 
         pi._t_heat_episode_start = time.monotonic()
         pi.calculate(
@@ -160,7 +159,7 @@ class TestIntegralHoldDuringDeadtime:
             slope=0.0,
         )
 
-        assert pi.ctl.integral_hold_mode == IntegralGuardSource.WINDOW_RESUME.value
+        assert pi.ctl.integral_hold_mode == ResumeHoldSource.WINDOW_RESUME.value
         assert pi.ctl.last_i_mode == "I:HOLD(window_resume)"
         assert pi.resume_hold.started is True
 
@@ -174,13 +173,12 @@ class TestIntegralHoldDuringDeadtime:
         )
 
         assert pi.ctl.integral_hold_mode == "none"
-        assert pi.integral_guard.active is True
-        assert pi.integral_guard.source == IntegralGuardSource.WINDOW_RESUME
-        assert pi.resume_hold.source == IntegralGuardSource.NONE
+        assert not pi.ctl.last_i_mode.startswith("I:HOLD")
+        assert pi.resume_hold.source == ResumeHoldSource.NONE
         assert pi.resume_hold.started is False
 
-    def test_window_resume_skips_guard_when_residual_error_is_already_small(self):
-        """A small residual after deadtime must release the hold without arming the guard."""
+    def test_window_resume_with_a_small_residual_releases_after_the_deadtime(self):
+        """A small residual after the deadtime releases the hold the same way."""
         pi = make_smartpi()
         _force_stable_phase(pi)
         pi.dt_est.deadtime_heat_s = 300.0
@@ -215,8 +213,7 @@ class TestIntegralHoldDuringDeadtime:
         )
 
         assert pi.ctl.integral_hold_mode == "none"
-        assert pi.integral_guard.active is False
-        assert pi.resume_hold.source == IntegralGuardSource.NONE
+        assert pi.resume_hold.source == ResumeHoldSource.NONE
         assert pi.resume_hold.started is False
 
     def test_power_shedding_resume_uses_same_deadtime_hold_policy(self):
@@ -248,8 +245,8 @@ class TestIntegralHoldDuringDeadtime:
         )
 
         assert pi.ctl.integral_hold_mode == "none"
-        assert pi.integral_guard.active is True
-        assert pi.integral_guard.source == IntegralGuardSource.POWER_SHEDDING_RESUME
+        assert pi.resume_hold.source == ResumeHoldSource.NONE
+        assert not pi.ctl.last_i_mode.startswith("I:HOLD")
 
 
 def test_controller_reports_effective_hold_source_and_clears_it_next_cycle() -> None:
@@ -443,3 +440,46 @@ def test_deadband_shell_holds_during_a_regime_transition() -> None:
     assert pi.ctl.last_i_mode == "I:HOLD"
     assert pi.ctl.last_integral_hold_source == "deadband_hysteresis_shell"
     assert pi.ctl.integral == before
+
+
+def _resume_hold_update(hold, ctl, error_i: float, *, in_window: bool) -> None:
+    dt_est = MagicMock()
+    dt_est.active_deadtime.return_value = (300.0, True)
+    hold.update(
+        error_i=error_i,
+        in_core_deadband=False,
+        deadband_c=0.05,
+        hvac_mode=VThermHvacMode_HEAT,
+        dt_est=dt_est,
+        ctl=ctl,
+        in_deadtime_window=lambda: in_window,
+    )
+
+
+def test_resume_hold_with_a_small_residual_ends_before_the_deadtime_window() -> None:
+    """A resume already close to the target does not wait for the deadtime window."""
+    from custom_components.vtherm_smartpi.smartpi.resume_hold import ResumeDeadtimeHold
+
+    ctl = SmartPIController("test")
+    hold = ResumeDeadtimeHold()
+    hold.start(ResumeHoldSource.POWER_SHEDDING_RESUME)
+    _resume_hold_update(hold, ctl, error_i=0.05, in_window=False)
+    assert hold.active is False
+    assert ctl.integral_hold_mode == "none"
+
+
+def test_resume_hold_with_a_large_residual_waits_for_the_deadtime_window() -> None:
+    """A large residual keeps the hold until the deadtime window has passed."""
+    from custom_components.vtherm_smartpi.smartpi.resume_hold import ResumeDeadtimeHold
+
+    ctl = SmartPIController("test")
+    hold = ResumeDeadtimeHold()
+    hold.start(ResumeHoldSource.WINDOW_RESUME)
+    _resume_hold_update(hold, ctl, error_i=0.6, in_window=False)
+    assert hold.active is True
+    assert ctl.integral_hold_mode == "window_resume"
+    _resume_hold_update(hold, ctl, error_i=0.6, in_window=True)
+    assert hold.started is True
+    _resume_hold_update(hold, ctl, error_i=0.6, in_window=False)
+    assert hold.active is False
+    assert ctl.integral_hold_mode == "none"

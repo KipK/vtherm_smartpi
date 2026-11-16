@@ -17,8 +17,11 @@ from .const import (
     TRAJECTORY_MIN_P_ERROR_RATIO,
     TRAJECTORY_RELEASE_TAU_FACTOR as DEFAULT_RELEASE_TAU_FACTOR,
 )
-from .integral_guard import integral_guard_release_error_threshold
-from .recovery_plateau import RecoveryPlateauDetector, plateau_block_min
+from .recovery_plateau import (
+    RecoveryPlateauDetector,
+    plateau_block_min,
+    recovery_error_floor_c,
+)
 from .trajectory import SmartPITrajectoryGenerator
 from .thermal_model import propagate_1r1c
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
@@ -74,7 +77,6 @@ class SmartPISetpointManager:
         self._disturbance_plateau = RecoveryPlateauDetector()
         self._disturbance_plateau_ts: float | None = None
         self._disturbance_retrigger_blocked: bool = False
-        self._disturbance_plateau_ended: bool = False
 
     @property
     def trajectory_active(self) -> bool:
@@ -154,9 +156,8 @@ class SmartPISetpointManager:
         self._disturbance_plateau_ts = None
 
     def _clear_disturbance_plateau_latch(self) -> None:
-        """Allow disturbance trajectories again and drop an unread plateau end."""
+        """Allow disturbance trajectories again."""
         self._disturbance_retrigger_blocked = False
-        self._disturbance_plateau_ended = False
 
     @property
     def disturbance_retrigger_blocked(self) -> bool:
@@ -166,12 +167,6 @@ class SmartPISetpointManager:
         threshold minus the tracking hysteresis, a target change or a reset.
         """
         return self._disturbance_retrigger_blocked
-
-    def consume_disturbance_plateau_end(self) -> bool:
-        """Return True once after a disturbance trajectory ended on a plateau."""
-        ended = self._disturbance_plateau_ended
-        self._disturbance_plateau_ended = False
-        return ended
 
     def _disturbance_plateau_reached(
         self,
@@ -185,7 +180,7 @@ class SmartPISetpointManager:
 
         A disturbance trajectory brakes the P path because the model predicts
         that the committed power closes the error. A recovery whose mean signed
-        error no longer moves above the integral-guard release error shows that
+        error no longer moves above the residual error floor shows that
         this prediction does not hold.
 
         A setpoint trajectory in release whose P reference has reached the
@@ -198,7 +193,7 @@ class SmartPISetpointManager:
         if not self.trajectory_active:
             return False
         if self._trajectory_source == "disturbance":
-            floor_c = integral_guard_release_error_threshold(deadband_c)
+            floor_c = recovery_error_floor_c(deadband_c)
         elif (
             self._trajectory_source == "setpoint"
             and self.trajectory_phase == TrajectoryPhase.RELEASE
@@ -568,7 +563,7 @@ class SmartPISetpointManager:
             return target_temp
 
         # The room has left the trigger zone: a new crossing of the trigger
-        # threshold is a new disturbance, which must be braked and guarded.
+        # threshold is a new disturbance, which must be braked.
         if signed_error < TRAJECTORY_ENABLE_ERROR_THRESHOLD - TRAJECTORY_BRAKE_RELEASE_HYST_C:
             self._disturbance_retrigger_blocked = False
 
@@ -579,7 +574,6 @@ class SmartPISetpointManager:
             deadband_c=deadband_c,
         ):
             self._disturbance_retrigger_blocked = True
-            self._disturbance_plateau_ended = True
             self._clear_pending_target_change_braking()
             self.set_passthrough(target_temp)
             return target_temp

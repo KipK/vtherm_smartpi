@@ -32,7 +32,7 @@ Key features (v2)
 
 4. Comfort & Protections:
    - Setpoint Boost: Faster reaction to manual setpoint increases (>0.3°C).
-   - Directional Integral Guard: Protects integral memory during transitions.
+   - Integral hold during the dead time after a window or power-shedding resume.
    - Analytical Setpoint Trajectory: Shapes the proportional reference toward the target.
    - Anti-windup: Conditional integration + Tracking anti-windup.
 
@@ -63,7 +63,6 @@ from .smartpi.const import (
     GovernanceRegime,
     GovernanceDecision,
     SmartPICalibrationPhase,
-    TrajectoryPhase,
     MAX_STEP_PER_MINUTE,
     SETPOINT_BOOST_RATE,
     SETPOINT_MODE_DELTA_C,
@@ -82,7 +81,6 @@ from .smartpi.const import (
     TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     NEAR_SETPOINT_UNWIND_STEPS,
     NEAR_BAND_HYSTERESIS_C,
-    INTEGRAL_GUARD_STALL_CYCLES,
     RESTART_BRIDGE_MAX_GAP_S,
     clamp,
 )
@@ -126,12 +124,7 @@ from .smartpi.command_ownership import (
     CommandOwnershipTracker,
 )
 from .smartpi.tint_filter import AdaptiveTintFilter
-from .smartpi.integral_guard import (
-    IntegralGuardSource,
-    ResumeDeadtimeHold,
-    SmartPIIntegralGuard,
-    signed_recovery_slope_h,
-)
+from .smartpi.resume_hold import ResumeDeadtimeHold, ResumeHoldSource
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.tar_learning.manager import TarLearningManager
 from .smartpi.room_model.feedforward import HoldingTransfer, select_source, static_model
@@ -241,7 +234,6 @@ class SmartPI:
         self.calibration_mgr = CalibrationManager(name)
         self.gain_scheduler = GainScheduler(name)
         self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
-        self.integral_guard = SmartPIIntegralGuard(name)
 
         self._e_filt: Optional[float] = None
 
@@ -268,7 +260,6 @@ class SmartPI:
         self._current_cycle_start_monotonic: float | None = None
 
         self._tau_reliable: bool = False
-        self._last_integral_guard_mode: str = "off"
 
         # Track last time calculate() was executed for dt-based integration
         self._last_calculate_time: Optional[float] = None
@@ -462,13 +453,11 @@ class SmartPI:
         self.deadband_mgr.reset()
         self.calibration_mgr.reset()
         self.gain_scheduler.reset()
-        self.integral_guard.reset()
         self._ff_trim.reset()
         self.fftrim_coord.reset_observation_runtime()
         self._ab_confidence.reset()
         self._last_restart_reason = "none"
         self.resume_hold.clear()
-        self._last_integral_guard_mode = "off"
 
         _LOGGER.info("%s - SmartPI learning and history reset", self._name)
 
@@ -568,37 +557,6 @@ class SmartPI:
             "%s - SmartPI learning %s",
             self._name,
             "enabled" if enabled else "paused",
-        )
-
-    def _update_integral_guard(
-        self,
-        *,
-        error_i: float,
-        error_p: float,
-        hvac_mode: VThermHvacMode,
-        slope_h: float | None,
-        in_core_deadband: bool,
-        trajectory_active: bool,
-        dt_min: float = 0.0,
-    ) -> tuple[bool, bool, str, bool, float]:
-        """Return the blocked integral directions, whether opposing memory may unwind, and the integral rate factor."""
-        release_error = error_p if trajectory_active else error_i
-        decision = self.integral_guard.decide(
-            raw_error=error_i,
-            release_error=release_error,
-            deadband_c=self.deadband_c,
-            in_core_deadband=in_core_deadband,
-            signed_recovery_slope_h=signed_recovery_slope_h(slope_h, hvac_mode),
-            dt_min=dt_min,
-            stall_min=INTEGRAL_GUARD_STALL_CYCLES * self._cycle_min,
-        )
-        self._last_integral_guard_mode = decision.mode_suffix
-        return (
-            decision.block_positive,
-            decision.block_negative,
-            decision.mode_suffix,
-            decision.allow_unwind,
-            decision.integral_scale,
         )
 
     def update_learning(
@@ -1400,8 +1358,6 @@ class SmartPI:
             calc_wall=monotonic_to_wall_ts(self._last_calculate_time),
             heat_episode_wall=monotonic_to_wall_ts(self._t_heat_episode_start),
             cool_episode_wall=monotonic_to_wall_ts(self._t_cool_episode_start),
-            integral_guard=self.integral_guard.save_state(),
-            integral_guard_mode=self._last_integral_guard_mode,
         )
         return context
 
@@ -1492,9 +1448,6 @@ class SmartPI:
         self.u_prev = linear
         self._t_heat_episode_start = wall_to_monotonic_ts(saved.get("heat_episode_wall"))
         self._t_cool_episode_start = wall_to_monotonic_ts(saved.get("cool_episode_wall"))
-        if self.integral_guard.restore(saved.get("integral_guard")):
-            mode = saved.get("integral_guard_mode")
-            self._last_integral_guard_mode = mode if isinstance(mode, str) else "off"
         # The first tick spans the stop, without the learning freeze of a startup.
         self._last_calculate_time = wall_to_monotonic_ts(saved.get("calc_wall"))
         self._startup_grace_period = False
@@ -1584,7 +1537,6 @@ class SmartPI:
         self.deadband_mgr.load_state(state.get("db_state", {}))
         self.calibration_mgr.load_state(state.get("cal_state", {}))
         self.gain_scheduler.load_state(state.get("gs_state", {}))
-        self.integral_guard.reset()
         self.sp_mgr.clear_runtime_transients()
         self.ctl.clear_integral_hold()
 
@@ -1595,7 +1547,6 @@ class SmartPI:
         self._last_u_applied = 0.0
         self._last_restart_reason = "none"
         self.resume_hold.clear()
-        self._last_integral_guard_mode = "reboot_reset"
         self.twin.load_state(state.get("twin_state", {}))
         self._hysteresis_restore = self._load_hysteresis_output(state.get("hysteresis_output"))
         # The restart is decided at the first tick (resolve_restart); until then
@@ -1744,16 +1695,16 @@ class SmartPI:
 
         return False
 
-    def _update_time_tracking(self, now: float) -> tuple[float, bool, bool, IntegralGuardSource]:
+    def _update_time_tracking(self, now: float) -> tuple[float, bool, bool, ResumeHoldSource]:
         """Update dt_min and handles first-run logic.
 
         Returns:
-            Tuple of (dt_min, resumed_from_off, startup_first_run, resume_guard_source).
+            Tuple of (dt_min, resumed_from_off, startup_first_run, resume_hold_source).
         """
         dt_min = 0.0
         resumed_from_off = False
         startup_first_run = False
-        resume_guard_source = IntegralGuardSource.NONE
+        resume_hold_source = ResumeHoldSource.NONE
         bridge_tick, self._bridge_first_tick = self._bridge_first_tick, False
         if self._last_calculate_time is None:
             first_run = True
@@ -1778,11 +1729,9 @@ class SmartPI:
             elif self._last_restart_reason in {"off", "window", "power_shedding"}:
                 resumed_from_off = True
                 if self._last_restart_reason == "window":
-                    resume_guard_source = IntegralGuardSource.WINDOW_RESUME
+                    resume_hold_source = ResumeHoldSource.WINDOW_RESUME
                 elif self._last_restart_reason == "power_shedding":
-                    resume_guard_source = IntegralGuardSource.POWER_SHEDDING_RESUME
-                else:
-                    resume_guard_source = IntegralGuardSource.OFF_RESUME
+                    resume_hold_source = ResumeHoldSource.POWER_SHEDDING_RESUME
                 self._last_restart_reason = "none"
                 # Resume from window/OFF -> Pause learning to let system stabilize
                 self.learn_win.set_learning_resume_ts(now + (LEARNING_PAUSE_RESUME_MIN * 60.0))
@@ -1798,7 +1747,7 @@ class SmartPI:
             max_dt_min = max(max_dt_min, RESTART_BRIDGE_MAX_GAP_S / 60.0)
         dt_min = min(dt_min, max_dt_min)
 
-        return dt_min, resumed_from_off, startup_first_run, resume_guard_source
+        return dt_min, resumed_from_off, startup_first_run, resume_hold_source
 
     def _refresh_active_timestamp_and_expire_controller_memory(self) -> bool:
         """Refresh active wall time and purge PI memory after prolonged inactivity."""
@@ -2352,7 +2301,7 @@ class SmartPI:
             t_int_clean = current_temp
 
         # --- 2. Update Time Tracking ---
-        dt_min, resumed_from_off, startup_first_run, resume_guard_source = self._update_time_tracking(now)
+        dt_min, resumed_from_off, startup_first_run, resume_hold_source = self._update_time_tracking(now)
 
         # --- 2. Predict Cycle Trigger ---
         # Evaluate if we need to cross a cycle boundary (bridged from on_cycle_completed or forced).
@@ -2378,13 +2327,6 @@ class SmartPI:
 
         # Clear cycle regimes on setpoint change to prevent REGIME_TRANSITION freeze
         if setpoint_changed:
-            signed_sp_delta = target_temp - old_target_temp if old_target_temp is not None else 0.0
-            if hvac_mode == VThermHvacMode_COOL:
-                signed_sp_delta = -signed_sp_delta
-            self.integral_guard.arm(
-                IntegralGuardSource.SETPOINT_CHANGE,
-                block_positive=(signed_sp_delta >= 0.0),
-            )
             self.gov.on_cycle_start()
             self.resume_hold.clear()
             # Large changes restart the error history; the integral is preserved.
@@ -2396,16 +2338,8 @@ class SmartPI:
                     self._e_filt = new_error
                     self._last_error = new_error
                     self._last_error_p = new_error
-        elif resume_guard_source != IntegralGuardSource.NONE:
-            if resume_guard_source in {
-                IntegralGuardSource.WINDOW_RESUME,
-                IntegralGuardSource.POWER_SHEDDING_RESUME,
-            }:
-                self.integral_guard.suspend()
-                self._last_integral_guard_mode = "resume_pending"
-                self.resume_hold.start(resume_guard_source)
-            else:
-                self.integral_guard.arm(resume_guard_source)
+        elif resume_hold_source != ResumeHoldSource.NONE:
+            self.resume_hold.start(resume_hold_source)
 
         # --- 4. Learning & Calibration ---
         if (
@@ -2531,39 +2465,7 @@ class SmartPI:
             hvac_mode=hvac_mode,
             dt_est=self.regulation_dead_time(hvac_mode),
             ctl=self.ctl,
-            guard=self.integral_guard,
             in_deadtime_window=lambda: self.in_deadtime_window,
-        )
-        if (
-            self.sp_mgr.consume_disturbance_plateau_end()
-            and self.integral_guard.source == IntegralGuardSource.DISTURBANCE_RECOVERY
-        ):
-            # The disturbance trajectory ended on a plateau: only the
-            # integral can still close the residual error.
-            self.integral_guard.clear("disturbance_plateau")
-        if (
-            self.sp_mgr.trajectory_active
-            and self.sp_mgr.trajectory_source == "disturbance"
-        ):
-            self.integral_guard.arm(IntegralGuardSource.DISTURBANCE_RECOVERY)
-        trajectory_i_active = (
-            self.sp_mgr.trajectory_active
-            and self.sp_mgr.trajectory_phase in (TrajectoryPhase.TRACKING, TrajectoryPhase.RELEASE)
-        )
-        (
-            block_positive_integral,
-            block_negative_integral,
-            positive_integral_guard_mode,
-            allow_guard_unwind,
-            integral_scale,
-        ) = self._update_integral_guard(
-            error_i=error_i,
-            error_p=e_p,
-            hvac_mode=hvac_mode,
-            slope_h=slope,
-            in_core_deadband=in_core_deadband,
-            trajectory_active=trajectory_i_active,
-            dt_min=dt_min,
         )
         if in_deadband_now and not cycle_boundary:
             self._disable_ff3_for_next_cycle_in_deadband()
@@ -2632,15 +2534,10 @@ class SmartPI:
             integrator_hold,
             deadband_c=self.deadband_c,
             core_deadband=in_core_deadband,
-            block_positive_integral=block_positive_integral,
-            block_negative_integral=block_negative_integral,
-            positive_integral_guard_mode=positive_integral_guard_mode,
-            allow_guard_unwind=allow_guard_unwind,
             deadband_allow_p=self._deadband_allow_p,
             integrator_hold_source=integrator_hold_source,
             u_max=u_max,
             unwind_band_c=NEAR_SETPOINT_UNWIND_STEPS * self.learn_win.balance.resolution_c,
-            integral_scale=integral_scale,
         )
 
         # Anti-windup on the limit known at this tick (max_on_percent).

@@ -416,7 +416,7 @@ class TestFFResult:
         assert result.admissible is False
         assert result.reason == "pi_mode_I:HOLD"
 
-    @pytest.mark.parametrize("mode", ("I:HOLD(window_resume)", "I:RUN", "I:GUARD(x)"))
+    @pytest.mark.parametrize("mode", ("I:HOLD(window_resume)", "I:RUN", "I:SKIP(SAT_HI)"))
     def test_trim_pi_eligibility_rejects_other_modes_in_deadband(self, mode):
         result = evaluate_pi_eligibility_for_trim(
             regime=GovernanceRegime.DEAD_BAND,

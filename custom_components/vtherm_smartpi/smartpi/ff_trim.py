@@ -1334,7 +1334,6 @@ def evaluate_pi_eligibility_for_trim(
         return FFTrimPIEligibility(False, "pi_missing_mode")
 
     blocked_prefixes = (
-        "I:GUARD",
         "I:CLAMP",
         "I:SKIP",
         "I:RESET",

@@ -14,7 +14,6 @@ from custom_components.vtherm_smartpi.handler import SmartPIHandler
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.const import RESTART_BRIDGE_MAX_GAP_S, SmartPIPhase
 from custom_components.vtherm_smartpi.smartpi.deadtime_estimator import DeadTimeEstimator
-from custom_components.vtherm_smartpi.smartpi.integral_guard import IntegralGuardSource
 
 A_PER_S = 0.03 / 60.0  # full-power heating rate (C/s)
 B_PER_S = 1.0e-3 / 60.0  # loss coefficient (1/s)
@@ -203,13 +202,11 @@ def test_response_lag_episode_is_interrupted_by_a_long_restart() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Committed power, integral guard, learning freeze
+# Committed power, learning freeze
 # ---------------------------------------------------------------------------
-def test_bridged_restart_restores_the_committed_power_and_the_integral_guard() -> None:
+def test_bridged_restart_restores_the_committed_power() -> None:
     run = _to_heating_episode()
     algo = run.algo
-    algo.integral_guard.arm(IntegralGuardSource.SETPOINT_CHANGE, block_positive=True)
-    algo.integral_guard._stall_min = 7.0
     committed = algo.committed_on_percent
     assert committed > 0.0
     run.stop()
@@ -222,10 +219,24 @@ def test_bridged_restart_restores_the_committed_power_and_the_integral_guard() -
     assert decision.downtime_s == pytest.approx(TICK_S, abs=1.0)
     assert restored.committed_on_percent == pytest.approx(committed)
     assert restored.u_prev == pytest.approx(committed)
-    assert restored.integral_guard.source == IntegralGuardSource.SETPOINT_CHANGE
-    assert restored.integral_guard._stall_min == 7.0
     diag = restored.get_published_diagnostics()["control"]["last_restart"]
     assert diag == {"bridged": True, "downtime_s": 60, "reason": None}
+
+
+def test_a_restart_context_with_obsolete_integral_guard_keys_still_bridges() -> None:
+    """A context saved by an earlier version still loads: its integral guard keys are ignored."""
+    run = _to_heating_episode()
+    committed = run.algo.committed_on_percent
+    run.stop()
+    run.saved["restart"]["integral_guard"] = {"source": "setpoint_change", "stall_min": 7.0}
+    run.saved["restart"]["integral_guard_mode"] = "setpoint_change"
+    run.tick()
+    with _clocks(run.clock):
+        restored = _smartpi(run.saved)
+        decision = restored.resolve_restart(VThermHvacMode_HEAT, run.room.reading)
+    assert decision.bridged
+    assert restored.committed_on_percent == pytest.approx(committed)
+    assert not hasattr(restored, "integral_guard")
 
 
 def test_bridged_restart_has_no_learning_freeze() -> None:
@@ -265,7 +276,6 @@ def test_unchanged_setpoint_across_a_bridged_restart_is_no_target_change(caplog)
 @pytest.mark.parametrize("gap_ticks, legacy", [(int(RESTART_BRIDGE_MAX_GAP_S / TICK_S) + 1, False), (1, True)])
 def test_long_or_unknown_restart_behaves_as_before(gap_ticks: int, legacy: bool) -> None:
     run = _to_heating_episode()
-    run.algo.integral_guard.arm(IntegralGuardSource.SETPOINT_CHANGE, block_positive=True)
     run.stop()
     if legacy:
         run.saved.pop("restart")  # a state saved without the heater state
@@ -276,7 +286,6 @@ def test_long_or_unknown_restart_behaves_as_before(gap_ticks: int, legacy: bool)
                            slope=0, hvac_mode=VThermHvacMode_HEAT)
     assert restored.restart.decision.bridged is False
     assert restored.committed_on_percent == 0.0
-    assert restored.integral_guard.source == IntegralGuardSource.NONE
     assert restored.learn_win.learning_resume_ts is not None  # learning frozen for one cycle
     assert not restored.learn_win.active
     assert restored.dt_est.state == "OFF"

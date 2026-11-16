@@ -1,33 +1,43 @@
-"""Plateau detection for a guarded recovery that no longer progresses."""
+"""Plateau detection for a recovery that no longer progresses."""
 from __future__ import annotations
 
 from collections import deque
 
 from .const import (
-    INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES,
-    INTEGRAL_GUARD_PLATEAU_BLOCKS,
-    INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS,
-    INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C,
-    INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H,
+    DEADBAND_HYSTERESIS,
+    RECOVERY_ERROR_FLOOR_DEADBAND_RATIO,
+    RECOVERY_PLATEAU_BLOCK_CYCLES,
+    RECOVERY_PLATEAU_BLOCKS,
+    RECOVERY_PLATEAU_PROGRESS_BLOCKS,
+    RECOVERY_PLATEAU_PROGRESS_MIN_C,
+    RECOVERY_PLATEAU_SLOPE_ABS_H,
 )
+
+
+def recovery_error_floor_c(deadband_c: float) -> float:
+    """Return the residual error (°C) under which a recovery counts as closed."""
+    return max(
+        max(deadband_c, 0.0) * RECOVERY_ERROR_FLOOR_DEADBAND_RATIO,
+        max(deadband_c, 0.0) + max(DEADBAND_HYSTERESIS, 0.0),
+    )
 
 
 def plateau_block_min(cycle_min: float) -> float:
     """Return the block length (minutes) of the plateau test for a PWM cycle."""
-    return max(float(cycle_min), 0.0) * INTEGRAL_GUARD_PLATEAU_BLOCK_CYCLES
+    return max(float(cycle_min), 0.0) * RECOVERY_PLATEAU_BLOCK_CYCLES
 
 
 def plateau_tolerance_c(block_min: float) -> float:
     """Return the largest block-to-block change of the mean error on a plateau.
 
-    It is the release slope floor applied over one block: a mean error that
+    It is the stationary slope applied over one block: a mean error that
     moves less than this per block neither recovers nor diverges.
     """
-    return INTEGRAL_GUARD_RELEASE_SLOPE_ABS_H * max(float(block_min), 0.0) / 60.0
+    return RECOVERY_PLATEAU_SLOPE_ABS_H * max(float(block_min), 0.0) / 60.0
 
 
 class RecoveryPlateauDetector:
-    """Detect a recovery stuck on a plateau above its release error.
+    """Detect a recovery stuck on a plateau above its residual error floor.
 
     The signed error (positive toward the demand) is averaged over consecutive
     blocks of ``block_min`` minutes. Comparing block means rather than
@@ -35,15 +45,15 @@ class RecoveryPlateauDetector:
     cycle around a quantized measurement or an actuator step. A block is
     stationary when its mean stays above ``floor_c`` and differs from the mean
     of the previous block by at most ``tolerance_c``: the room neither
-    recovers nor diverges. ``INTEGRAL_GUARD_PLATEAU_BLOCKS`` consecutive
+    recovers nor diverges. ``RECOVERY_PLATEAU_BLOCKS`` consecutive
     stationary blocks make a plateau. A transient disturbance (the error rises
     then falls) never gives stationary blocks.
 
     A slow recovery tail measured by a quantized sensor also gives flat block
     means for a while (the reading stays on one step). The plateau therefore
-    also needs no net progress over ``INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS``
+    also needs no net progress over ``RECOVERY_PLATEAU_PROGRESS_BLOCKS``
     blocks: the current mean must not have fallen by more than
-    ``INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C`` below the mean of that many
+    ``RECOVERY_PLATEAU_PROGRESS_MIN_C`` below the mean of that many
     blocks earlier.
     """
 
@@ -56,7 +66,7 @@ class RecoveryPlateauDetector:
         self._duration_min = 0.0
         self._last_mean: float | None = None
         self._stationary_blocks = 0
-        self._means: deque[float] = deque(maxlen=INTEGRAL_GUARD_PLATEAU_PROGRESS_BLOCKS + 1)
+        self._means: deque[float] = deque(maxlen=RECOVERY_PLATEAU_PROGRESS_BLOCKS + 1)
         self._detected = False
 
     @property
@@ -95,7 +105,7 @@ class RecoveryPlateauDetector:
             self._stationary_blocks = 0
         no_net_progress = (
             len(self._means) == self._means.maxlen
-            and mean - self._means[0] > -INTEGRAL_GUARD_PLATEAU_PROGRESS_MIN_C
+            and mean - self._means[0] > -RECOVERY_PLATEAU_PROGRESS_MIN_C
         )
-        self._detected = self._stationary_blocks >= INTEGRAL_GUARD_PLATEAU_BLOCKS and no_net_progress
+        self._detected = self._stationary_blocks >= RECOVERY_PLATEAU_BLOCKS and no_net_progress
         return self._detected
