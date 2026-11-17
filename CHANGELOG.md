@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.6.7]
 
 - Calibration: whether a calibration can be completed is decided from the
   measured outdoor temperature only, no longer from the thermal twin. A
