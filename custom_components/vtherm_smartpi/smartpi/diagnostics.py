@@ -232,6 +232,7 @@ def _build_learning(algo: SmartPI, tau_reliable: bool) -> Dict[str, Any]:
     samples_b = int(est.learn_ok_count_b)
     return {
         "enabled": algo.learning_enabled,
+        "boiler_paused": algo.boiler_learning_paused,
         "stage": _build_ab_learning_stage(algo, samples_a, samples_b, tau_reliable),
         "bootstrap_progress_percent": _bootstrap_progress(algo),
         "bootstrap_status": _bootstrap_state(algo),
@@ -669,6 +670,7 @@ def _build_analysis(algo: SmartPI, twin_diag: Dict[str, Any]) -> Dict[str, Any]:
             "state": algo.dt_est.state,
             "last_power": algo.dt_est.last_power,
             "waiting_elapsed_s": _round_optional(algo.dt_est.waiting_elapsed_s, 0),
+            "active_elapsed_s": _round_optional(algo.dt_est.active_elapsed_s, 0),
             "heat_last_outcome": algo.dt_est.last_outcome["heat"],
             "cool_last_outcome": algo.dt_est.last_outcome["cool"],
         },

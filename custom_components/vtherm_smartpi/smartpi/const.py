@@ -372,6 +372,19 @@ DEADTIME_PRESTART_STEP_FLOOR_C = 0.01
 # lowering it, while a longer one is kept (a room warming before the start can
 # only make the response look earlier, never later).
 DEADTIME_PRESTART_RISE_MIN_STEPS = 2.0
+# While a response is waited for, a step of the raw reading counts for the
+# trough/peak tracking and the detection only once it is confirmed: held for two
+# of SmartPI's periodic calculations, followed by a second step the same way, or
+# going on with a move confirmed less than this time before. As above, one step
+# may be a single quantisation toggle, a second step is a real move; a toggle
+# that comes back within this time is the sensor's noise, and the filtered
+# temperature's rise and fall with it is not the room's response. The instant of
+# the response is still taken from the history, so confirming a step delays its
+# detection, not its dating. Waiting for a change to hold before acting on it is
+# an alarm's delay timer (Adnan 2013, PhD thesis, University of Alberta, 3.3,
+# p. 30); the value, two calculation periods, is chosen by this reasoning and
+# checked in a synthetic test, not taken from a publication.
+DEADTIME_RAW_CONFIRM_S = 120.0
 TIN_HISTORY_MAX_SAMPLES = 1800
 
 

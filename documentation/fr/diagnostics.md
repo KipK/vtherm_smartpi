@@ -54,7 +54,7 @@ Le bloc `live` est organisé par responsabilité :
 | `power` | Puissances du cycle courant et suivant, PI/FF, limites et puissance appliquée |
 | `temperature` | Températures intérieure/extérieure, erreurs et état de l'intégrale |
 | `model` | Modèle A/B, confiance, constante de temps et temps morts |
-| `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive |
+| `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive ; `enabled` (réglage de l'utilisateur) et `boiler_paused` (pause pendant que la chaudière centrale est arrêtée) |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
 | `feedforward` | État FF3, source de bande morte et diagnostics FFTrim canoniques |
 | `setpoint` | Consigne filtrée, trajectoire et résumé du boost |
@@ -72,9 +72,10 @@ est disponible, `twin`.
 | Champ | Signification |
 |---|---|
 | `state` | État du détecteur (`WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`) |
-| `last_power` | Dernière puissance vue par le détecteur |
+| `last_power` | Dernière puissance vue par le détecteur ; pour un thermostat que compte la chaudière centrale de Versatile Thermostat, 0 tant que la chaudière ne donne pas de chaleur à la pièce telle que SmartPI la suit ; pendant un arrêt court maintenu comme chaleur et la partie éteinte propre d'un relais, elle reste la commande ([documentation technique, 3.8](technical_doc.md#38-chaudière-centrale--pause-dapprentissage-et-chaleur-que-donne-la-chaudière)) |
 | `waiting_elapsed_s` | Âge de la réponse attendue en secondes, `null` quand aucune détection n'est armée |
-| `heat_last_outcome` / `cool_last_outcome` | Issue de la dernière attente d'une réponse montante / descendante : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger), `null` avant la première |
+| `active_elapsed_s` | Âge de la période active en cours en secondes, depuis le dernier démarrage de puissance vu par le détecteur ; `null` quand la puissance est coupée ou avant un démarrage |
+| `heat_last_outcome` / `cool_last_outcome` | Issue de la dernière attente d'une réponse montante / descendante : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger, ou, pour une pièce sur relais, parce que la mesure a commencé en retard, après une coupure trouvée seulement à la partie allumée suivante du relais), `null` avant la première |
 
 `analysis.learning.response_lag` décrit le retard de réponse utilisé par l'apprentissage de `a` :
 

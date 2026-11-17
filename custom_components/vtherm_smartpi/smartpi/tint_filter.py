@@ -43,6 +43,11 @@ class AdaptiveTintFilter:
         self._last_update_was_publish: bool = True
         self._hold_start_ts: float | None = None
 
+    @property
+    def t_int_lp(self) -> float | None:
+        """The last low-pass value (None before the first update)."""
+        return self._t_int_lp
+
     # ------------------------------------------------------------------
     # Main update
     # ------------------------------------------------------------------

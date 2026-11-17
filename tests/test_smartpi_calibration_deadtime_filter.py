@@ -92,11 +92,14 @@ def _heat_deadtime(*, filtered: bool) -> float | None:
     return dt_est.deadtime_heat_s
 
 
-def test_flickering_sensor_gives_a_zero_dead_time_on_the_raw_reading():
+def test_flickering_sensor_keeps_the_true_dead_time_on_the_raw_reading_too():
+    """A one-step toggle is no move of the room for the estimator either (it counts a raw step
+    once held two calculations or followed by a second step the same way): on the raw reading,
+    the flicker no longer gives a dead time of about 0 s."""
     dead_time = _heat_deadtime(filtered=False)
 
     assert dead_time is not None
-    assert dead_time <= 120.0
+    assert 15 * 60.0 <= dead_time <= 25 * 60.0
 
 
 def test_flickering_sensor_keeps_the_true_dead_time_on_the_filtered_reading():
