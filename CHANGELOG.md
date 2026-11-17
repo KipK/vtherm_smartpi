@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.6]
+
+- Bootstrap: the initial learning ends sooner when the response lag of the
+  emitter cannot be measured. It then stops waiting after 4 heating phases
+  instead of 7, with the same heating rate `a` as before. In rooms that heat
+  once or twice a day (mild weather, well-insulated rooms, setpoint schedules),
+  this shortens the bootstrap by one to two days.
+- Bootstrap: heating phases are counted, not on/off switches. Heating runs
+  separated by less than 10 minutes without heating count as one phase, so a
+  burst of short interruptions no longer ends the bootstrap early.
+- Restart during the bootstrap: when the temperature sensor is not yet
+  available right after a Home Assistant restart, the heating phase in progress
+  resumes once the temperature is back (within 10 minutes), instead of being
+  cut until the room cools down to the lower threshold.
+- Diagnostics: `learning.bootstrap_status` reads `heating phases K/4` while it
+  waits for the response lag, and `analysis.learning.response_lag.episodes`
+  counts heating phases.
+- Regulation: after a setpoint increase or a resume, the room no longer
+  lingers below the setpoint after the rise. The integral now works during the
+  whole recovery, so the remaining gap usually closes within half an hour
+  instead of one to three hours. The integral hold during the heating dead time after a window
+  or power-shedding resume, the anti-windup and the overheat cut are unchanged.
+- Slow emitters (floor heating, heavy radiators) may overshoot the setpoint
+  more after a large setpoint increase, and rooms with slow emitters may see
+  more overheat cuts, until a tuning dedicated to slow emitters arrives.
+- Diagnostics: `integral_guard_source` and `integral_guard_mode` are removed,
+  and the integral modes `I:GUARD(...)` and `I:GUARD_UNWIND(...)` no longer
+  appear.
+
 ## [0.6.5]
 
 - Regulation: the slow feed-forward correction is now also learned when the
