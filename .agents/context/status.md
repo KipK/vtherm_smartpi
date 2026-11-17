@@ -8,6 +8,8 @@ Already in the code: restart bridge, restart hold of the previous command while 
 
 Shipped in 0.6.6 and present in both lines: integral guard removal, bootstrap ending after four heating phases when the response lag cannot be measured (heating phases merged when the cut is short), saved bootstrap output waiting for the indoor temperature after a restart.
 
+On `master` after 0.6.6, not released yet, and present in both lines: calibration reachability judged on the measured outdoor temperature only.
+
 ## Work sequence (agreed order)
 
 1. Integral guard removal - done (0.6.6).
@@ -38,7 +40,6 @@ Shipped in 0.6.6 and present in both lines: integral guard removal, bootstrap en
 - Drop exit-on-balance for good (see 3).
 - Port of the restart hold to 0.6.x: recommended against; not decided.
 - A heat-need observer replacing the error integral: study on hold until the anticipation result is in.
-- Calibration reachability from the outdoor temperature only (uncommitted on this branch): port to 0.6.x or not; the twin-based check is in 0.6.6.
 
 ## Process notes for this line
 
