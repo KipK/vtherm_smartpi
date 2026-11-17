@@ -372,6 +372,54 @@ The lag is learned on constant-power episodes, which the hysteresis bootstrap
 provides. In PWM regulation the duty cycle changes from cycle to cycle, so an
 installation already out of the bootstrap rarely provides one.
 
+#### Heating balance (observation only)
+
+`HeatingBalance` (`heating_balance.py`) measures, on each heating phase followed
+by a stop, the heating rate `a` (°C/min at full power) and the emitter lag from
+an energy balance of the room. It is published for observation: no regulation or
+learning reads its results. It works in heating mode only, from the same
+observations as the response lag.
+
+A phase starts at the first interval with a power above 1 % and ends after its
+cut. Heating runs separated by less than `HEATING_BALANCE_PHASE_MIN_OFF_S`
+(10 minutes) without heating belong to the same phase. Before the phase, the
+rest (heater off) must last at least `HEATING_BALANCE_MIN_REST_S = 1800 s`. A
+baseline, the least-squares line of the temperature samples over the rest tail
+(at most `HEATING_BALANCE_BASELINE_SPAN_S = 3600 s`, at least 4 samples),
+stands for the passive trajectory: $T_0(t) = T_0 + s\,(t - t_{start})$. During
+the phase the estimator accumulates the full-power time $t_{on}$ (the sum of
+power × interval) and the area $A$ of $T - T_0(t)$ in °C·min.
+
+After the cut it looks for the temperature peak: the samples are grouped in
+consecutive bins of `HEATING_BALANCE_PEAK_BIN_S = 300 s` from the cut, and the
+bin with the highest mean is the peak, confirmed when a bin closes at least
+`HEATING_BALANCE_PEAK_CONFIRM_S = 1800 s` after its start. The phase ends without
+a measurement when the heating restarts while the best bin is the last one
+holding samples, or when `HEATING_BALANCE_PEAK_MAX_S = 4 h` elapse without a
+confirmed peak. With $\Delta_p = T_{peak} - T_0(t_{peak})$, $A_p$ the area at
+the peak, $b$ the published loss rate (0 when unknown) and $t_{on}$ in minutes:
+
+$$a = \frac{\Delta_p + b\,A_p}{t_{on}}$$
+
+The measurement is kept when $t_{on} \ge$ `HEATING_BALANCE_MIN_ON_S = 600 s` and
+$\Delta_p \ge$ `HEATING_BALANCE_MIN_RISE_C = 0.3 °C`. The last
+`HEATING_BALANCE_HISTORY = 7` measurements are kept; the published `a` and lag
+are their medians.
+
+For a phase at constant power (its mean power $u_0 = t_{on}/D$ is at least
+`1 - RESPONSE_LAG_U_TOL` times its highest interval power), the heat still
+missing at the cut gives the lag. With
+$\Delta_c = T_{cut} - T_0(t_{cut})$ ($T_{cut}$ is the mean of the samples within
+±150 s of the cut), $A_c$ the area at the cut and $D$ the phase duration, the
+delivery deficit is $\delta = \left(t_{on} - 60\,(\Delta_c + b\,A_c)/a\right)/u_0$
+in seconds. A first-order emitter of time constant $\tau$ gives
+$\delta = \tau\,(1 - e^{-D/\tau})$, solved for $\tau$ by bisection; the lag is 0
+when $\delta \le 0$ and unknown when $\delta \ge 0.98\,D$.
+
+The state is published in `analysis.learning.heating_balance` and persisted with
+the learning state. The measurements are restored after a restart; the phase in
+progress resumes after a bridged restart and is dropped otherwise.
+
 ### 3.8 Quiet periods of the emitter delay learning
 
 The emitter delay learning (`smartpi/tar_learning/`) and the room model select their data with
@@ -1043,6 +1091,7 @@ Before and during each phase the manager checks, with the thermal twin, that the
 | `learning_window.py`   | learning-window management and guardrails                   |
 | `ab_window_balance.py` | integral balance of windows without a robust slope and `a/b` pools |
 | `response_lag.py`      | `ResponseLagEstimator`: response lag, settling gates and delivered power model |
+| `heating_balance.py`   | `HeatingBalance`: heating rate and emitter lag measured on heating phases (observation only) |
 | `learning_outcomes.py` | bounded counters of learning-window outcomes                |
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis, integral transfers |
@@ -1255,6 +1304,7 @@ until the decision.
 | a/b learning window | the window in progress resumes with its accumulators; its integral balance segment starts again | cleared |
 | Feed-forward trim | the windows waiting for the persistence rule (`FF_TRIM_PERSISTENCE`) are restored and the trim is not frozen; the observation window in progress starts again | pending windows dropped, trim frozen for `FF_TRIM_REBOOT_FREEZE_CYCLES = 3` ticks |
 | Response lag | passive period or episode resumed (3.7) | episode counted as interrupted |
+| Heating balance | rest or phase in progress resumed (3.7, heating balance) | phase dropped, measurements kept |
 | Bootstrap on/off output | resumed inside the band (3.1) | starts at 0 |
 | T_ar history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |
 | Room model (HEAT only; in COOL as another restart) | the command applied at the stop is held over the downtime; the state is propagated through it and the forecasts in progress go on | the heater is taken as stopped from the saved state, the uncertainty is reopened and the forecasts in progress are dropped |

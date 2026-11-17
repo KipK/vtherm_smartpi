@@ -306,6 +306,22 @@ L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`,
 
 Le retard est appris sur des épisodes à puissance constante, que fournit le bootstrap par hystérésis. En régulation PWM, le rapport cyclique change d'un cycle à l'autre : une installation déjà sortie du bootstrap en fournit donc rarement.
 
+#### Bilan de chauffe (observation seule)
+
+`HeatingBalance` (`heating_balance.py`) mesure, sur chaque phase de chauffe suivie d'un arrêt, la vitesse de chauffe `a` (°C/min à pleine puissance) et le retard de l'émetteur à partir d'un bilan énergétique de la pièce. Il est publié pour observation : aucune régulation ni aucun apprentissage ne lit ses résultats. Il ne fonctionne qu'en mode chauffage, à partir des mêmes observations que le retard de réponse.
+
+Une phase commence au premier intervalle où la puissance dépasse 1 % et se termine après sa coupure. Les chauffes séparées de moins de `HEATING_BALANCE_PHASE_MIN_OFF_S` (10 minutes) sans chauffage appartiennent à la même phase. Avant la phase, le repos (chauffage éteint) doit durer au moins `HEATING_BALANCE_MIN_REST_S = 1800 s`. Une référence, la droite des moindres carrés des échantillons de température sur la fin du repos (au plus `HEATING_BALANCE_BASELINE_SPAN_S = 3600 s`, au moins 4 échantillons), tient lieu de trajectoire passive : $T_0(t) = T_0 + s\,(t - t_{start})$. Pendant la phase, l'estimateur cumule le temps à pleine puissance $t_{on}$ (somme de la puissance × intervalle) et l'aire $A$ de $T - T_0(t)$ en °C·min.
+
+Après la coupure, il cherche le pic de température : les échantillons sont regroupés en tranches consécutives de `HEATING_BALANCE_PEAK_BIN_S = 300 s` à partir de la coupure, et la tranche à la moyenne la plus élevée est le pic, confirmé lorsqu'une tranche se ferme au moins `HEATING_BALANCE_PEAK_CONFIRM_S = 1800 s` après son début. La phase se termine sans mesure lorsque la chauffe reprend alors que la meilleure tranche est la dernière à contenir des échantillons, ou lorsque `HEATING_BALANCE_PEAK_MAX_S = 4 h` s'écoulent sans pic confirmé. Avec $\Delta_p = T_{peak} - T_0(t_{peak})$, $A_p$ l'aire au pic, $b$ le taux de perte publié (0 lorsqu'il est inconnu) et $t_{on}$ en minutes :
+
+$$a = \frac{\Delta_p + b\,A_p}{t_{on}}$$
+
+La mesure est retenue lorsque $t_{on} \ge$ `HEATING_BALANCE_MIN_ON_S = 600 s` et $\Delta_p \ge$ `HEATING_BALANCE_MIN_RISE_C = 0.3 °C`. Les `HEATING_BALANCE_HISTORY = 7` dernières mesures sont conservées ; les valeurs publiées de `a` et du retard sont leurs médianes.
+
+Pour une phase à puissance constante (sa puissance moyenne $u_0 = t_{on}/D$ vaut au moins `1 - RESPONSE_LAG_U_TOL` fois sa puissance la plus haute par intervalle), la chaleur encore manquante à la coupure donne le retard. Avec $\Delta_c = T_{cut} - T_0(t_{cut})$ ($T_{cut}$ est la moyenne des échantillons à ±150 s de la coupure), $A_c$ l'aire à la coupure et $D$ la durée de la phase, le déficit de livraison vaut $\delta = \left(t_{on} - 60\,(\Delta_c + b\,A_c)/a\right)/u_0$ en secondes. Un émetteur du premier ordre de constante de temps $\tau$ donne $\delta = \tau\,(1 - e^{-D/\tau})$, résolue en $\tau$ par dichotomie ; le retard vaut 0 lorsque $\delta \le 0$ et est inconnu lorsque $\delta \ge 0.98\,D$.
+
+L'état est publié dans `analysis.learning.heating_balance` et persisté avec l'état d'apprentissage. Les mesures sont restaurées après un redémarrage ; la phase en cours reprend après un redémarrage ponté et est abandonnée sinon.
+
 ### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur
 
 L'apprentissage du retard de l'émetteur (`smartpi/tar_learning/`) et le modèle de pièce sélectionnent leurs données avec `smartpi/quiet_periods/`, un module Python pur partagé par les méthodes qui ont besoin d'une pièce à l'abri des apports solaires. Aucune heure locale n'intervient dans la sélection ; les temps sont des secondes epoch et des intervalles semi-ouverts `[start, end)`.
@@ -819,6 +835,7 @@ Avant et pendant chaque phase, le manager vérifie, avec le jumeau thermique, qu
 | `learning_window.py`   | gestion des fenêtres d'apprentissage et de leurs gardes  |
 | `ab_window_balance.py` | bilan intégral des fenêtres sans pente robuste et pools `a/b` |
 | `response_lag.py`      | `ResponseLagEstimator` : retard de réponse, portes de stabilisation et modèle de puissance délivrée |
+| `heating_balance.py`   | `HeatingBalance` : vitesse de chauffe et retard de l'émetteur mesurés sur les phases de chauffe (observation seule) |
 | `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis, transferts d'intégrale |
@@ -992,6 +1009,7 @@ Chaque composant consulte cette décision ; aucun ne décide seul. L'état trans
 | Fenêtre d'apprentissage a/b | la fenêtre en cours reprend avec ses accumulateurs ; son segment de bilan intégral recommence | effacée |
 | Correction lente du feed-forward | les fenêtres en attente de la règle de persistance (`FF_TRIM_PERSISTENCE`) sont restaurées et la correction n'est pas gelée ; la fenêtre d'observation en cours recommence | fenêtres en attente abandonnées, correction gelée pendant `FF_TRIM_REBOOT_FREEZE_CYCLES = 3` ticks |
 | Retard de réponse | période passive ou épisode repris (3.7) | épisode compté comme interrompu |
+| Bilan de chauffe | période passive ou phase en cours reprise (3.7, bilan de chauffe) | phase abandonnée, mesures conservées |
 | Sortie tout-ou-rien du bootstrap | reprise dans la bande (3.1) | repart à 0 |
 | Historique de `T_ar` (HEAT uniquement ; en COOL comme un autre redémarrage) | la durée d'arrêt est un échantillon manquant (pas d'intervalle invalide) ; l'état du chauffage à l'arrêt est tenu jusqu'à la première commande qui suit, sans aucun front | la période de chauffe est close au dernier calcul, et seule la durée d'arrêt est invalide |
 | Modèle de pièce (HEAT uniquement ; en COOL comme un autre redémarrage) | la commande appliquée à l'arrêt est tenue pendant la durée d'arrêt ; l'état est propagé à travers elle et les prévisions en cours se poursuivent | le chauffage est considéré comme éteint d'après l'état sauvegardé, l'incertitude est rouverte et les prévisions en cours sont abandonnées |

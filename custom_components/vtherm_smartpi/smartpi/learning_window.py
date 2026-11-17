@@ -26,6 +26,7 @@ from .const import (
 )
 from .ab_window_balance import ABWindowBalance
 from .learning_outcomes import LearningOutcomes
+from .heating_balance import HeatingBalance
 from .response_lag import ResponseLagEstimator
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
@@ -101,6 +102,8 @@ class LearningWindowManager:
         self._outcomes = LearningOutcomes()
         # Response lag after power steps: delivered power and settling gates.
         self._response_lag = ResponseLagEstimator(name)
+        # Heating rate and emitter lag measured on heating phases (observation only).
+        self._heating_balance = HeatingBalance(name)
         # Lag of the power model of the collected a measurements.
         self._lag_model: float | None = None
         # End of the last observed interval (contiguity of the observations).
@@ -163,6 +166,11 @@ class LearningWindowManager:
         """Return the response lag estimator (diagnostics)."""
         return self._response_lag
 
+    @property
+    def heating_balance(self) -> HeatingBalance:
+        """Return the heating balance (diagnostics)."""
+        return self._heating_balance
+
     def outcomes_summary(self, now: float) -> dict[str, list[list]]:
         """Return the most frequent window outcomes of the sliding period."""
         return self._outcomes.summary(now)
@@ -199,6 +207,7 @@ class LearningWindowManager:
         self._balance.clear()
         self._outcomes.clear()
         self._response_lag.clear()
+        self._heating_balance.clear()
         self._lag_model = None
         self._last_update_now = None
         self._T_int_start = 0.0
@@ -274,6 +283,7 @@ class LearningWindowManager:
         self._learning_resume_ts = None
         self._response_lag.load_state(state.get("response_lag"))
         self._lag_model = self._response_lag.lag_s
+        self._heating_balance.load_state(state.get("heating_balance"))
         window = state.get("window")
         self._restart_window = dict(window) if isinstance(window, dict) else None
 
@@ -311,6 +321,7 @@ class LearningWindowManager:
         nothing is resumed (as a window cleared at startup).
         """
         self._response_lag.resolve_restart(bridged)
+        self._heating_balance.resolve_restart(bridged)
         saved, self._restart_window = self._restart_window, None
         if not bridged or not saved:
             return
@@ -360,6 +371,7 @@ class LearningWindowManager:
                 if self._learning_start_date else None
             ),
             "response_lag": self._response_lag.save_state(),
+            "heating_balance": self._heating_balance.save_state(),
             "window": self._window_state(),
         }
 
@@ -406,6 +418,19 @@ class LearningWindowManager:
                 b=_published_b(estimator),
                 tin_history=dt_est.tin_history,
                 deadtime_s=_active_deadtime_s(dt_est, hvac_mode),
+            )
+            self._heating_balance.observe(
+                now=now,
+                dt_s=dt_min * 60.0,
+                u=clamp(u_active, 0.0, 1.0),
+                hvac_mode=hvac_mode,
+                b=_published_b(estimator),
+                tin_history=dt_est.tin_history,
+                context=(
+                    "calibration" if is_calibrating
+                    else "bootstrap" if is_hysteresis
+                    else "regulation"
+                ),
             )
             self._follow_power_model(
                 estimator, _active_deadtime_s(dt_est, hvac_mode), hvac_mode

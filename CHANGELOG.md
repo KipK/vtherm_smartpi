@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Heating balance (heating): SmartPI measures, on each heating phase followed
+  by a stop after a rest, the heating rate at full power and the emitter lag
+  from an energy balance of the room, and publishes them in
+  `analysis.learning.heating_balance`. They are for observation only: nothing
+  in the regulation or the learning uses them.
 - Emitter delay learning (heating, PWM heaters, always on): SmartPI learns how
   long the heater takes to warm the room, from the morning comfort steps and
   from a multi-day model of the room, and uses it for the gains. A learned

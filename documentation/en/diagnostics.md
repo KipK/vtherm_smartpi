@@ -109,6 +109,18 @@ learning:
 | `episode_median_s` | Median duration of the recent active episodes in seconds, `null` with fewer than 3 episodes |
 | `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used). `episode interrupted by restart`: episode in progress at a restart that was not bridged, counted without an estimate. May be empty right after a restart |
 
+`analysis.learning.heating_balance` describes the heating rate and the emitter
+lag measured on heating phases. It is published for observation only:
+
+| Field | Meaning |
+|---|---|
+| `state` | `resting`, `heating` or `waiting for the peak` (after the cut) |
+| `measurements` | Number of retained measurements (at most 7) |
+| `a` | Median heating rate in °C/min at full power (5 decimals), `null` without measurement |
+| `lag_s` | Median emitter lag in seconds, `null` without a measurement that resolves it |
+| `last_reason` | Outcome of the last ended phase: `measured`, or why it gave nothing (`rest before heating too short`, `baseline samples insufficient`, `heating too short`, `temperature rise too small`, `still rising at the next heating`, `no peak within the wait`, `observation gap`, `heating mode left`, `interrupted by restart`). Empty before the first phase |
+| `last` | Last measurement, `null` without one: `heating_min` (full-power heating time in minutes), `rise_c` (temperature rise at the peak above the passive trajectory), `peak_delay_min` (minutes from the cut to the peak), `a`, `lag_s` (`null` when the power was not constant or the lag is not resolved), `constant_power`, `context` (`bootstrap`, `calibration` or `regulation`, at the start of the phase) |
+
 During the bootstrap, `learning.bootstrap_status` describes the current step:
 
 | Value | Meaning |

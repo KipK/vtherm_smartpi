@@ -328,6 +328,17 @@ RESPONSE_LAG_MAX_S = DT_MAX_MIN * 60.0  # Upper bound of an estimate
 # An intercept at or beyond this fraction of its asymptotic limit (infinite
 # lag) cannot be resolved from the episode.
 RESPONSE_LAG_RESOLVABLE_FRAC = 0.9
+# Heating balance (observation only): heating rate and emitter lag measured on
+# a heating phase followed by a stop, from the energy balance of the room.
+HEATING_BALANCE_MIN_REST_S = 1800.0    # Rest before the heating, for a settled baseline
+HEATING_BALANCE_BASELINE_SPAN_S = 3600.0  # Max rest tail used to fit the baseline
+HEATING_BALANCE_MIN_ON_S = 600.0       # Full-power seconds required in a phase
+HEATING_BALANCE_PHASE_MIN_OFF_S = RESPONSE_LAG_PHASE_MIN_OFF_S  # Shorter cut: same phase
+HEATING_BALANCE_PEAK_BIN_S = 300.0     # Width of the bins of the peak search
+HEATING_BALANCE_PEAK_CONFIRM_S = 1800.0  # A bin this long after the best bin confirms the peak
+HEATING_BALANCE_PEAK_MAX_S = 4 * 3600.0  # Longest wait for the peak after the cut
+HEATING_BALANCE_MIN_RISE_C = 0.3       # Smallest temperature rise of a measurement
+HEATING_BALANCE_HISTORY = 7            # Measurements kept (published values: their median)
 # Settling gates, in published lags: the slope deficit after k lags is at most
 # exp(-k) for a single lag, whatever the pure delay share.
 AB_SETTLE_K_ACTIVE = 3.0               # Delivered power model corrects the remainder

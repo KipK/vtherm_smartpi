@@ -548,6 +548,7 @@ def _build_analysis_learning(algo: SmartPI) -> Dict[str, Any]:
             "resolution_c": round(learn_win.balance.resolution_c, 3),
         },
         "response_lag": _response_lag_diag(learn_win.response_lag),
+        "heating_balance": _heating_balance_diag(learn_win.heating_balance),
     }
 
 
@@ -562,6 +563,33 @@ def _response_lag_diag(response_lag) -> Dict[str, Any]:
         "episodes_target": RESPONSE_LAG_RESOLVE_EPISODES,
         "episode_median_s": round(episode) if episode is not None else None,
         "last_reason": response_lag.last_reason,
+    }
+
+
+def _heating_balance_diag(balance) -> Dict[str, Any]:
+    """Return the heating balance measurements (observation only)."""
+    a = balance.a_per_min
+    lag = balance.lag_s
+    results = balance.results
+    last = None
+    if results:
+        r = results[-1]
+        last = {
+            "heating_min": round(r["on_s"] / 60.0, 1),
+            "rise_c": round(r["rise_c"], 3),
+            "peak_delay_min": round(r["peak_delay_s"] / 60.0, 1),
+            "a": round(r["a"], 5),
+            "lag_s": round(r["lag_s"]) if r["lag_s"] is not None else None,
+            "constant_power": r["constant_power"],
+            "context": r["context"],
+        }
+    return {
+        "state": balance.state,
+        "measurements": balance.count,
+        "a": round(a, 5) if a is not None else None,
+        "lag_s": round(lag) if lag is not None else None,
+        "last_reason": balance.last_reason,
+        "last": last,
     }
 
 

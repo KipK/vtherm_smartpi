@@ -108,6 +108,17 @@ est disponible, `twin`.
 | `episode_median_s` | Durée médiane des épisodes actifs récents en secondes, `null` avec moins de 3 épisodes |
 | `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage). `episode interrupted by restart` : épisode en cours lors d'un redémarrage non ponté, non repris, compté sans estimation. Peut être vide juste après un redémarrage |
 
+`analysis.learning.heating_balance` décrit la vitesse de chauffe et le retard de l'émetteur mesurés sur les phases de chauffe. Il est publié pour observation seule :
+
+| Champ | Signification |
+|---|---|
+| `state` | `resting`, `heating` ou `waiting for the peak` (après la coupure) |
+| `measurements` | Nombre de mesures conservées (7 au plus) |
+| `a` | Vitesse de chauffe médiane en °C/min à pleine puissance (5 décimales), `null` sans mesure |
+| `lag_s` | Retard médian de l'émetteur en secondes, `null` sans mesure qui le résout |
+| `last_reason` | Issue de la dernière phase terminée : `measured`, ou la raison pour laquelle elle n'a rien donné (`rest before heating too short`, `baseline samples insufficient`, `heating too short`, `temperature rise too small`, `still rising at the next heating`, `no peak within the wait`, `observation gap`, `heating mode left`, `interrupted by restart`). Vide avant la première phase |
+| `last` | Dernière mesure, `null` sans mesure : `heating_min` (durée de chauffe à pleine puissance en minutes), `rise_c` (hausse de température au pic au-dessus de la trajectoire passive), `peak_delay_min` (minutes entre la coupure et le pic), `a`, `lag_s` (`null` lorsque la puissance n'était pas constante ou que le retard n'est pas résolu), `constant_power`, `context` (`bootstrap`, `calibration` ou `regulation`, au début de la phase) |
+
 Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 
 | Valeur | Signification |
