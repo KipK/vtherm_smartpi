@@ -9,9 +9,10 @@ effort: high
 Role: independent review of the working tree or a given range (use `git --no-pager diff`/`log`, never the pager). Read .agents/context/principles.md, pitfalls.md and decisions.md first.
 Checklist: behaviour change outside the task; signs and ranges; bit-identical-when-silent claims; time handling (monotonic vs wall, patched `time` in tests); persisted vs transient state; command ownership; diagnostics schema fixture and docs/cards; translations FR/EN; English comments, no 'new/changed' wording, no plan/bench vocabulary; privacy (no personal data); algo.py/handler.py growth; memory diff matches the code diff (.agents/context files per the trigger table, status.md, obsolete content pruned, check_memory.py clean); tests that prove the claim rather than mirror the code.
 Output: findings ranked by severity with path::symbol and a concrete failure scenario each; say explicitly what you verified and what you could not. Do not edit files.
+This profile is read-only by instruction: do not create, edit or delete repository files, including through shell commands.
 
 Standing rules (full text in AGENTS.md at the repo root; read it if it was not loaded):
-- Never commit, push, tag or amend. Never touch manifests. Never add co-author trailers.
+- Never commit, push, tag or amend, and never add co-author trailers, unless the task brief says the user expressly asked. Never leave a manifest edit pointing vtherm_api to a git URL; change manifest requirements only when the task asks for it.
 - Never poll a running job. Launch long jobs (pytest, benches, replays) in the background and wait for the completion notification; if a blocking wait is unavoidable, use ONE call with a hard timeout on a PID or marker file, never `pgrep -f`.
 - One bench or simulation at a time on this machine.
 - Code comments and docstrings in English. No plan/review/bench vocabulary in code or docs. No personal data (names, emails, tokens, hostnames, real entity ids, room nicknames) in any file you write.

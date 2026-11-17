@@ -1,14 +1,14 @@
 # Field knowledge (anonymized)
 
-What real installations look like, to calibrate judgement and benches. Figures are orders of magnitude from the maintainer's own rooms; no tester data.
+What real installations look like, to calibrate judgement and benches. Generic orders of magnitude of typical installations; no individual installation or tester data.
 
 ## Rooms
 
-- Open-plan living area, two electric/PWM emitters in one zone, precise 0.01 C sensor mid-room, emitter at maximum pilot-wire level. Fast response, regulation within about +-0.1 C most of the time.
-- Upstairs bedrooms reached through a stairwell, rooms mostly open to each other; a bedroom that is unoccupied at night and worse insulated than the others loses heat faster and sits far from the living-area air.
-- Mild-weather estimates: time constants of 190-365 h (`tau = 1/b`), `a` around 0.05 C per time unit at full power, `a/b` around 1000-1800 C (hold power 1-2 % at a 15 K gap). `b` is likely biased LOW in mild weather (small indoor-outdoor gaps; the 1R1C model has no free-gain term) and should rise in winter. Calibrate benches on winter values. Plants with tau of 1 h do not exist.
+- Typical living area heated by electric/PWM emitters with a precise 0.01 C sensor: fast response, regulation within about +-0.1 C most of the time.
+- Rooms differ in insulation and coupling to their neighbours; a worse insulated or poorly coupled room loses heat faster and tracks a different air temperature.
+- Mild-weather estimates: time constants of hundreds of hours (`tau = 1/b`, typically 190-365 h), `a` around 0.05 C per time unit at full power, `a/b` around 1000-1800 C (hold power 1-2 % at a 15 K gap). `b` is likely biased LOW in mild weather (small indoor-outdoor gaps; the 1R1C model has no free-gain term) and should rise in winter. Calibrate benches on winter values. Plants with tau of 1 h do not exist.
 - Passive (OFF) slopes in such rooms are about 0.05 C/h: noise, quantization and window length dominate identification.
-- A bedroom with one or two sleepers at night: bedtime and wake-up vary by household; do not hard-code any.
+- Occupancy habits (bedtime, wake-up) vary by household: never hard-code any.
 
 ## Sensors
 

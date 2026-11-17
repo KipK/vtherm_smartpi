@@ -19,8 +19,8 @@ Goal: code with cheaper models, keep the strong models for thinking. Profiles ex
 | smartpi-control-researcher | opus / xhigh | gpt-6.1-sol / xhigh | control theory + thermodynamics research |
 | smartpi-fable-consult | fable / high | gpt-6-astra / high | ONLY with the user's explicit approval per use |
 
-Codex model names come from the vendor's current model list and may change: if a profile fails on an unknown model, adjust the `model` line (or remove it to inherit the parent's).
-Codex custom agents inherit the parent's sandbox; "read-only" profiles are read-only by instruction only.
+Codex model names and the `[agents]` key of `.codex/config.toml` were taken from the vendor's documentation and are UNVERIFIED on a live Codex install (they may change): if a profile fails on an unknown model, adjust the `model` line (or remove it to inherit the parent's).
+Codex custom agents inherit the parent's sandbox, and Claude read-only profiles keep a shell tool: "read-only" profiles are read-only by instruction only. Subagents cannot spawn other agents: the orchestrating session chains them (for example docs-writer, then translator). The Fable profiles refuse to start unless the brief states the user's approval.
 
 ## Routing rules
 

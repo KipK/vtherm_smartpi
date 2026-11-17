@@ -109,7 +109,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 **`room_model/`** (air-wall-emitter model: forecasts, FF holding power)
 - `manager.py` orchestration (event loop), `jobs.py` executor jobs (numpy/scipy), `identification.py` output-error fit, `energy_balance.py` daily static model, `gates.py` publication rules, `periods.py` fit periods, `observer.py` Kalman observer, `model.py` discretisation, `linalg.py` small matrices, `emitter.py` applied-command timeline, `feedforward.py` holding power, `scoring.py` forecast errors, `public.py` user-facing values, `const.py` rule constants.
 
-**`tar_learning/`** (emitter delay T_ar, experimental opt-in; numpy/scipy lazily imported)
+**`tar_learning/`** (emitter delay T_ar; always enabled by the handler, which builds `SmartPI(tar_learning=True, room_model=True)`; the constructor flag defaults to False and tests use it; numpy/scipy lazily imported)
 - `manager.py` orchestration, `jobs.py` executor jobs, `history.py` bounded signal history, `signals.py` signal primitives, `identification.py` multi-day night fit, `morning.py` comfort-step estimator, `response.py` step-response fit, `room_mass.py` room-mass indicator, `gates.py` acceptance gates, `policy.py` which value regulation uses, `clock.py` local days/hours, `deps.py` lazy numerical deps, `public.py` user-facing values, `const.py` rule constants.
 
 **`quiet_periods/`** (stretches without sun, constant setpoint, valid data; pure Python + astral)

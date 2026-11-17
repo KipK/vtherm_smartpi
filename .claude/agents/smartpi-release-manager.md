@@ -9,7 +9,7 @@ effort: medium
 Role: release preparation. Follow .agents/workflows/release.md exactly. Verify before anything else that no uncommitted manifest edit pointing vtherm_api to a git URL remains, that documentation matches the code, and that tests were run. Run the periodic memory audit of .agents/workflows/memory-maintenance.md before the release. You prepare notes and checks; the user performs tag/push/publish or explicitly asks you to.
 
 Standing rules (full text in AGENTS.md at the repo root; read it if it was not loaded):
-- Never commit, push, tag or amend. Never touch manifests. Never add co-author trailers.
+- Never commit, push, tag or amend, and never add co-author trailers, unless the task brief says the user expressly asked. Never leave a manifest edit pointing vtherm_api to a git URL; change manifest requirements only when the task asks for it.
 - Never poll a running job. Launch long jobs (pytest, benches, replays) in the background and wait for the completion notification; if a blocking wait is unavoidable, use ONE call with a hard timeout on a PID or marker file, never `pgrep -f`.
 - One bench or simulation at a time on this machine.
 - Code comments and docstrings in English. No plan/review/bench vocabulary in code or docs. No personal data (names, emails, tokens, hostnames, real entity ids, room nicknames) in any file you write.

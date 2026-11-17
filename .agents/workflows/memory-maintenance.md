@@ -6,7 +6,7 @@ The memory is the current truth about the project, not a log. It stays useful on
 
 1. Which row of the trigger table below did my change hit? Update those files in the SAME change as the code.
 2. Update `context/status.md` if a step moved, a verdict arrived, a decision was taken or a question was answered (lifecycle below).
-3. Run `python3 .agents/scripts/check_memory.py` (paths, symbols, size budgets, privacy patterns, profile mirror). Fix every ERROR; treat WARN as a prune request.
+3. Run `python3 .agents/scripts/check_memory.py` (paths, symbols, constants, `live.*` paths, size budgets, privacy patterns, profile parse/mirror). Optionally keep a private word list (names of your rooms, people) in the untracked `.agents/.local-blocklist` or the file named by `SMARTPI_MEMORY_BLOCKLIST`; the check then fails when any of those words appears. Fix every ERROR; treat WARN as a prune request.
 4. Report in your final message: "memory: updated X, Y" or "memory: nothing to update because ...".
 
 Who writes: the agent that implemented the change updates the memory (it knows the facts). Read-only profiles (architect, reviewer, researcher, debugger) do not edit; they list what must be recorded in their report, and the orchestrating session applies it. The reviewer checks that the memory diff matches the code diff.
@@ -24,6 +24,7 @@ Who writes: the agent that implemented the change updates the memory (it knows t
 | Durable trap discovered (cost someone hours; will bite again) | `context/pitfalls.md` |
 | Owner states a rule or preference | `context/principles.md` |
 | New measured field fact (scales, sensors, emitters) | `context/field-knowledge.md` (anonymized) |
+| A constant quoted in the memory changes value or name | the file quoting it (`check_memory.py` flags `NAME` (value) mismatches and unknown constants) |
 | Branch/release/dependency/version facts change | `context/project.md` |
 | Test, bench, release, docs or delegation procedure changes | the matching `workflows/*.md` |
 | Agent profile added, removed or retuned | both `.claude/agents/` and `.codex/agents/`, then the table in `workflows/delegation.md` |

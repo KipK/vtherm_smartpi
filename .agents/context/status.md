@@ -24,7 +24,7 @@ Shipped in 0.6.6 and present in both lines: integral guard removal, bootstrap en
 - Result (frozen bench, simulation): mean overshoot 0.46 -> 0.08 C (mass, mild weather), 0.70 -> 0.38 (mass, cold), 0.35 -> 0.24 (no mass); rise time +5 to +10 min; control cells not degraded; level A passes. The owner approved the approach (a slight overshoot is tolerated). Without the fade-in, overshoot fell 60-100 % in massive slow-emitter rooms but rise time grew 10-35 min (over tolerance).
 - Not adopted yet. Next lots, in order: (a) horizon from what SmartPI already knows (measured dead time or the delay the regulation applies; no plant truth) - the owner agreed to test this known-delay point first; one arm also removes the setpoint trajectory; (b) 0.1 C sensors (slope from value-change instants); (c) full-grid adoption bench; (d) full test suite; (e) docs.
 - Design constraint (owner): ONE mechanism for the landing on the setpoint. If the anticipation is adopted, the late-braking trajectory (`smartpi/setpoint.py`) must be removed rather than kept alongside; any adoption lot includes an arm without the trajectory.
-- The experimental code lives on a separate unmerged branch `slope_anticipation`, not on `dev-0.7`.
+- The experimental code lives on a separate local, unmerged branch of the maintainer (`slope_anticipation`, not pushed), not on `dev-0.7`.
 
 ## Open questions for the owner
 

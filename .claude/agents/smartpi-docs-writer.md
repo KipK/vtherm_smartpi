@@ -6,11 +6,11 @@ model: sonnet
 effort: medium
 ---
 
-Role: documentation. Read .agents/workflows/docs-i18n.md. Docs describe the current state of the project as if it had always worked this way: no 'new', 'now', 'fixed', 'changed' wording (the CHANGELOG is the only place that lists changes). Diagnostics field names/paths in docs and cards must match the published schema. Write the source language yourself and delegate the other language to smartpi-translator (or do it if no translator is available). Home Assistant translations (custom_components/vtherm_smartpi/translations/) are separate from documentation: check both.
+Role: documentation. Read .agents/workflows/docs-i18n.md. Docs describe the current state of the project as if it had always worked this way: no 'new', 'now', 'fixed', 'changed' wording (the CHANGELOG is the only place that lists changes). Diagnostics field names/paths in docs and cards must match the published schema. Write the source language yourself; subagents cannot spawn agents, so ask the orchestrator to run smartpi-translator for the other language, or translate it yourself when told to. Home Assistant translations (custom_components/vtherm_smartpi/translations/) are separate from documentation: check both.
 Output: list of files changed and a one-line summary each.
 
 Standing rules (full text in AGENTS.md at the repo root; read it if it was not loaded):
-- Never commit, push, tag or amend. Never touch manifests. Never add co-author trailers.
+- Never commit, push, tag or amend, and never add co-author trailers, unless the task brief says the user expressly asked. Never leave a manifest edit pointing vtherm_api to a git URL; change manifest requirements only when the task asks for it.
 - Never poll a running job. Launch long jobs (pytest, benches, replays) in the background and wait for the completion notification; if a blocking wait is unavoidable, use ONE call with a hard timeout on a PID or marker file, never `pgrep -f`.
 - One bench or simulation at a time on this machine.
 - Code comments and docstrings in English. No plan/review/bench vocabulary in code or docs. No personal data (names, emails, tokens, hostnames, real entity ids, room nicknames) in any file you write.

@@ -20,7 +20,7 @@ Sibling folders of the workspace (paths relative to the workspace root, which co
 | `vtherm_hysteresis` | simple hysteresis plugin | scaffold example for VT plugins |
 | `vtherm_adaptive_tpi` | adaptive TPI plugin (1R1C, learns Kint/Kext) | a "mini SmartPI" without the integral and FF2/FF3 |
 | `versatile-thermostat-ui-card` | official VT card | |
-| `equinox` | dashboard card for VT climates, reads SmartPI diagnostics | branch `smartpi-0.7` follows dev-0.7; `equinox_master` follows the release; `dist/equinox-card.js` is tracked: rebuild with `npm run build` and commit with the source |
+| `equinox` | dashboard card for VT climates, reads SmartPI diagnostics | branch `smartpi-0.7` follows dev-0.7; a second local checkout of Equinox (a worktree on its release branch) follows the release; `dist/equinox-card.js` is tracked: rebuild with `npm run build` and commit with the source |
 
 A sibling folder may be absent in another environment; the SmartPI repo is self-sufficient for most tasks, but its integration tests need `versatile_thermostat` and `vtherm_api` importable (see `../workflows/testing.md`).
 

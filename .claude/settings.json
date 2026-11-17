@@ -2,8 +2,11 @@
   "permissions": {
     "ask": [
       "Bash(git commit *)",
+      "Bash(git --no-pager commit *)",
       "Bash(git push *)",
+      "Bash(git --no-pager push *)",
       "Bash(git tag *)",
+      "Bash(git --no-pager tag *)",
       "Agent(smartpi-fable-consult)"
     ]
   }

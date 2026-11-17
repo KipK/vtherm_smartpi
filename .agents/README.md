@@ -19,7 +19,7 @@ Versioned, tool-neutral memory of the SmartPI project. `AGENTS.md` (repo root) i
 | `context/decisions.md` | Adopted mechanisms, rejected/removed approaches and why, release timeline, open questions |
 | `context/field-knowledge.md` | Anonymized real-room scales, sensors, emitters, observed behaviours |
 | `workflows/` | memory-maintenance (checklist, triggers, pruning, audit), develop, testing, benchmarking, debugging-user-reports, release, docs-i18n, delegation |
-| `scripts/check_memory.py` | Consistency check: paths/symbols exist, size budgets, privacy patterns, profile mirror |
+| `scripts/check_memory.py` | Consistency check: paths/symbols/constants/`live.*` paths, size budgets, privacy patterns (+ optional local blocklist), profile parse and mirror |
 | `templates/` | bench declaration, diagnostic report |
 
 Agent profiles: `.claude/agents/*.md` (Claude Code) and `.codex/agents/*.toml` (Codex), same names, mirrored. Claude project settings: `.claude/settings.json`; Codex project config: `.codex/config.toml`.

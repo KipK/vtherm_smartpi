@@ -24,8 +24,8 @@ Sources of truth: `smartpi/diagnostics.py::build_published_diagnostics` (one
   longer runs SmartPI; `unknown` before the first publication.
 - Attributes (`diagnostic_history.py::build_diagnostic_attributes`):
   `schema_version` (2), `live` (full tree, section 2), `history` (stable series).
-- `live` is excluded from the Recorder unless the global option "SmartPI debug
-  mode" (`smart_pi_debug`) is on (`SmartPIRecordedDiagnosticSensor`). Debug
+- `live` is excluded from the Recorder unless the debug option `smart_pi_debug` of the entry that creates the sensor (options override data; a dedicated
+  entry carries its own flag, otherwise the global entry applies) is on (`SmartPIRecordedDiagnosticSensor`). Debug
   changes retention only; the tree is identical. Consequence: past states from
   the history API carry only `schema_version` and `history` in normal mode;
   `live` exists only on the current state. Ask the user to enable debug mode
@@ -44,7 +44,7 @@ Sources of truth: `smartpi/diagnostics.py::build_published_diagnostics` (one
 `room_model.b_eq`, `room_model.forecast_error_1h_c`,
 `room_model.forecast_error_12h_c`, `deadtime.applied_s`.
 The feed-forward, room model and dead-time series are always present, null when
-not computed. (The task brief said 11 series; the code publishes 18.)
+not computed.
 No outdoor temperature, regime or integral mode is in `history`: those are
 live-only, so a past incident needs debug mode or logs.
 
@@ -242,3 +242,7 @@ Other enums:
 | Restarts | `control.last_restart`, `restart_reason`, uptime vs incident time |
 | Disturbances | sun, occupants, open windows: `analysis.twin.twin_external_gain/loss`, `window open` in `data_invalid_reason`; exclude disturbed windows rather than fit them |
 | Data quality | which values came from `history` (always there) vs `live` (only current or debug); state "unverified" for anything not seen |
+
+## Schema pin coverage
+
+`tests/fixtures/published_diagnostics_paths.json` pins the `live` tree built by `tests/test_published_diagnostics_schema.py::_representative_smartpi`, which has no `tar_learning` or `room_model` managers: their blocks (`live.tar_learning.*`, `live.room_model.*`, added by `smartpi/diagnostics.py` only when the managers exist) are NOT pinned. Renaming or removing a field there is not caught by the schema test: check `cards/`, the docs and the Equinox card by hand.
