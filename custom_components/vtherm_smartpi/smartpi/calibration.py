@@ -122,76 +122,46 @@ class CalibrationManager:
         target_temp: float,
         current_temp: float | None,
         is_cool: bool,
-        twin_diag: dict | None,
-        max_on_percent: float | None,
+        ext_temp: float | None,
     ) -> str | None:
-        """Name the current phase when the reliable twin cannot reach its threshold.
+        """Name the current phase when the outdoor temperature rules the cycle out.
 
-        A passive phase converges to T_steady_passive. An active phase driven
-        at the allowed power u_max converges to
-        T_steady_passive + u_max * (T_steady_max - T_steady_passive), the 1R1C
-        equilibrium being linear in power (T_steady_max when u_max is 1 or the
-        passive equilibrium is unknown). The threshold is reachable when that
-        equilibrium lies beyond it by CALIBRATION_REACHABILITY_MARGIN_C.
-        Returns None when the measured temperature already reached the
-        threshold, when the twin is not reliable or when the phase is reachable.
-        Without a fresh disturbance estimate, an active phase is not judged and
-        a passive phase is judged on the more favourable of T_steady_passive
-        and the outdoor temperature.
+        A passive phase only brings the room toward the outdoor temperature.
+        The check uses the threshold of the passive phase to come: the current
+        phase when it is passive, else the next passive phase of the cycle
+        (none when no passive phase follows). The cycle is unreachable when the
+        outdoor temperature lies within CALIBRATION_REACHABILITY_MARGIN_C of
+        that threshold, or beyond it. Returns None when the outdoor temperature
+        is unknown, or when the current phase is passive and the measured
+        temperature already reached its threshold.
         """
-        diag = twin_diag or {}
-        if (
-            diag.get("status") != "ok"
-            or diag.get("model_reliable") is not True
-            or diag.get("warming_up") is True
-            or (is_cool and diag.get("cooling_model_available") is not True)
-        ):
+        if ext_temp is None:
             return None
         phase = self._calibration_state
-        going_up = phase == SmartPICalibrationPhase.HEAT_UP
-        threshold = {
-            SmartPICalibrationPhase.COOL_DOWN: target_temp - HYST_LOWER_C,
-            SmartPICalibrationPhase.HEAT_UP: target_temp + HYST_UPPER_C,
-            SmartPICalibrationPhase.COOL_DOWN_FINAL: target_temp,
-        }[phase]
-        if current_temp is not None and (
-            current_temp >= threshold if going_up else current_temp <= threshold
-        ):
-            return None
-        active = not is_cool if going_up else is_cool
-        d_hat_fresh = diag.get("d_hat_fresh") is True
-        # The twin disturbance d_hat is only estimated under power: an active
-        # phase waits until it is fresh before being judged.
-        if active and not d_hat_fresh:
-            return None
-        key = "T_steady_max" if active else "T_steady_passive"
-        level = diag.get(key)
-        if level is None or diag.get(f"{key}_valid") is not True:
-            return None
-        if not active and not d_hat_fresh:
-            # A passive phase sees a d_hat left over from the last heating,
-            # which a small b can turn into an absurd equilibrium. Keep the
-            # equilibrium most favourable to the threshold, with or without it.
-            text = diag.get("Text_used")
-            if text is None:
+        if is_cool:
+            # Passive phase: HEAT_UP; the warm-up threshold is the one to come.
+            if phase == SmartPICalibrationPhase.COOL_DOWN_FINAL:
                 return None
-            level = max(level, text) if going_up else min(level, text)
-        passive = diag.get("T_steady_passive")
-        if (
-            active
-            and max_on_percent is not None
-            and max_on_percent < 1.0
-            and passive is not None
-            and diag.get("T_steady_passive_valid") is True
-        ):
-            level = passive + max(max_on_percent, 0.0) * (level - passive)
-        margin = CALIBRATION_REACHABILITY_MARGIN_C
-        unreachable = level < threshold + margin if going_up else level > threshold - margin
-        if not unreachable:
+            threshold = target_temp + HYST_UPPER_C
+            passive_now = phase == SmartPICalibrationPhase.HEAT_UP
+            reached = current_temp is not None and current_temp >= threshold
+            unreachable = ext_temp < threshold + CALIBRATION_REACHABILITY_MARGIN_C
+        else:
+            # Passive phases: COOL_DOWN and COOL_DOWN_FINAL; the final
+            # cool-down threshold is the one to come during HEAT_UP.
+            threshold = (
+                target_temp - HYST_LOWER_C
+                if phase == SmartPICalibrationPhase.COOL_DOWN
+                else target_temp
+            )
+            passive_now = phase != SmartPICalibrationPhase.HEAT_UP
+            reached = current_temp is not None and current_temp <= threshold
+            unreachable = ext_temp > threshold - CALIBRATION_REACHABILITY_MARGIN_C
+        if (passive_now and reached) or not unreachable:
             return None
         _LOGGER.warning(
-            "%s - Calibration %s unreachable: equilibrium %.2f (%s) for threshold %.2f",
-            self._name, phase.value, level, key, threshold,
+            "%s - Calibration %s unreachable: outdoor temperature %.2f too close to threshold %.2f",
+            self._name, phase.value, ext_temp, threshold,
         )
         return phase.value
 
@@ -242,7 +212,7 @@ class CalibrationManager:
         hvac_mode,  # VThermHvacMode
         dt_est: "DeadTimeEstimator",
         max_on_percent: float | None,
-        twin_diag: dict | None = None,
+        ext_temp: float | None = None,
         filtered_temp: float | None = None,
     ) -> CalibrationResult:
         """
@@ -256,8 +226,8 @@ class CalibrationManager:
             hvac_mode: Current HVAC mode (VThermHvacMode)
             dt_est: DeadTimeEstimator instance for feeding measurements
             max_on_percent: Maximum on_percent allowed
-            twin_diag: Latest thermal twin diagnostics, used to end the cycle
-                with UNREACHABLE when a threshold cannot be reached
+            ext_temp: Measured outdoor temperature, used to end the cycle with
+                UNREACHABLE when it is too close to the passive threshold
 
         Returns:
             CalibrationResult with on_percent (or None if not calibrating)
@@ -289,7 +259,7 @@ class CalibrationManager:
         on_high = 0.0 if is_cool else 1.0
         
         unreachable_phase = self._unreachable_phase(
-            target_temp, current_temp, is_cool, twin_diag, max_on_percent
+            target_temp, current_temp, is_cool, ext_temp
         )
         if unreachable_phase is not None:
             self._calibration_state = SmartPICalibrationPhase.IDLE
