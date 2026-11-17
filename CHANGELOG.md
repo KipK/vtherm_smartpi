@@ -48,6 +48,9 @@ All notable changes to this project will be documented in this file.
   the dead time in force.
 - Requirements: `numpy` and `scipy` are installed with the integration. If they
   cannot be loaded, nothing is learned and the bootstrap value stays in use.
+
+## [0.6.7]
+
 - Calibration: whether a calibration can be completed is decided from the
   measured outdoor temperature only, no longer from the thermal twin. A
   passive phase can only bring the room toward the outdoor temperature, so the
