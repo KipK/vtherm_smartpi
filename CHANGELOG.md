@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- Learning: for a thermostat that Versatile Thermostat counts for its central
+  boiler, SmartPI pauses the learning of its room model and response lag while
+  it calls for heat and the boiler gives it none: otherwise the wait for the
+  boiler would be learned as the room's dead time. The pause starts after one
+  calculation period without heat and ends once the boiler has run 5 s or
+  SmartPI stops calling. The regulation is unchanged and there is no new
+  setting; the pause is shown as `learning.boiler_paused`.
+- Dead time, central boiler: for such a thermostat the dead-time estimator
+  follows the heat the boiler gives, also during a calibration: the boiler's
+  stop is the room's stop, its start the start of the room's heat. A stop while
+  the room's heat flows is held as heat for 120 s, as the water in the radiator
+  goes on heating; a longer one counts from the boiler's stop. A run of the
+  boiler under 5 s, a relay's own off part and a relay held off by its minimal
+  deactivation delay change nothing.
+- Dead time, every thermostat: a room's own start and stop reach the estimator
+  when Versatile Thermostat applies the command, not up to a minute later; a
+  one-step toggle of the sensor is no longer taken for the room's response; a
+  reset of learning starts the minimum time without heat; a passive response is
+  timed only after a settled heating; the age of the heating in progress is
+  published (`analysis.deadtime.active_elapsed_s`).
+- FF trim: for a thermostat counted by the central boiler, the slow feed-forward
+  correction learns from no window in which the boiler withheld the room's heat
+  (`central_boiler_off` in its power trace); a time without heat shorter than
+  59 s is ignored.
 ## [0.6.6]
 
 - Bootstrap: the initial learning ends sooner when the response lag of the

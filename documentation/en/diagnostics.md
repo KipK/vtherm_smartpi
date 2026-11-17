@@ -54,7 +54,7 @@ The `live` block is organized by responsibility:
 | `power` | Current and next-cycle power, PI/FF split, limits and applied power |
 | `temperature` | Indoor/outdoor temperatures, errors and integral state |
 | `model` | A/B model, confidence, time constant and dead times |
-| `learning` | Learning stage, bootstrap progress, accepted updates and drift state |
+| `learning` | Learning stage, bootstrap progress, accepted updates and drift state; `enabled` (the user's setting) and `boiler_paused` (pause while the central boiler is off) |
 | `governance` | Thermal regime and model-update decision |
 | `feedforward` | FF3 status, dead-band source and canonical FFTrim diagnostics |
 | `setpoint` | Filtered setpoint, trajectory and boost summary |
@@ -72,9 +72,10 @@ available, `twin`.
 | Field | Meaning |
 |---|---|
 | `state` | Detector state (`WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`) |
-| `last_power` | Last power seen by the detector |
+| `last_power` | Last power seen by the detector; for a thermostat that Versatile Thermostat's central boiler counts, 0 while the boiler gives the room no heat as SmartPI follows it; through a short stop held as heat and a relay's own off part it stays the command ([technical documentation, 3.8](technical_doc.md#38-central-boiler-learning-pause-and-the-heat-the-boiler-gives)) |
 | `waiting_elapsed_s` | Age of the response being waited for in seconds, `null` when no detection is armed |
-| `heat_last_outcome` / `cool_last_outcome` | Outcome of the last wait for a rising / falling response: `detected`, `timeout`, `aborted` (power transition before a detection), `rejected` (the temperature already moved in the direction of the response before the power start, too steeply or too irregularly to measure it), `ignored` (a measurement shorter than the published dead time, dropped because the temperature was already moving in the direction of the response before the start or the window before the start was too short to tell), `null` before the first one |
+| `active_elapsed_s` | Age of the active period in progress in seconds, from the last power start the detector saw; `null` while the power is off or before a start |
+| `heat_last_outcome` / `cool_last_outcome` | Outcome of the last wait for a rising / falling response: `detected`, `timeout`, `aborted` (power transition before a detection), `rejected` (the temperature already moved in the direction of the response before the power start, too steeply or too irregularly to measure it), `ignored` (a measurement shorter than the published dead time, dropped because the temperature was already moving in the direction of the response before the start or the window before the start was too short to tell, or, for a room on a relay, because the measurement started late, after a cut found only at the relay's next on part), `null` before the first one |
 
 `analysis.learning.response_lag` describes the response lag used by the `a`
 learning:

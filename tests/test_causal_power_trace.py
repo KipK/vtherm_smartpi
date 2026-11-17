@@ -226,3 +226,49 @@ def test_unobserved_power_interval_closes_at_cycle_end_and_clears_on_reset() -> 
     trace.mark_unobserved_power(2000.0, "missing_valve_position")
     trace.reset()
     assert trace.read_window(0.0, 3600.0).discontinuities == ()
+
+
+def test_an_unobserved_interval_ends_early_only_for_its_own_reason() -> None:
+    """Ending an interval early (the central boiler back): only an interval of that reason
+    ends, now; one shorter than the given minimum is dropped."""
+    trace = CausalPowerTrace()
+    trace.start_applied_cycle(now_monotonic=0.0, linear_power=0.5)
+    trace.mark_unobserved_power(100.0, "missing_valve_position")
+    trace.end_unobserved_power(200.0, "central_boiler_off")
+    assert trace._unobserved_since == (100.0, "missing_valve_position")
+    trace.update_applied_power(now_monotonic=300.0, linear_power=0.5)
+
+    trace.mark_unobserved_power(400.0, "central_boiler_off")
+    trace.end_unobserved_power(430.0, "central_boiler_off", 59.0)
+    assert trace._unobserved_since is None
+    trace.mark_unobserved_power(600.0, "central_boiler_off")
+    trace.end_unobserved_power(700.0, "central_boiler_off", 59.0)
+
+    window = trace.read_window(0.0, 1800.0)
+    assert [(d.start_monotonic, d.end_monotonic, d.reason) for d in window.discontinuities] == [
+        (100.0, 300.0, "missing_valve_position"),
+        (600.0, 700.0, "central_boiler_off"),
+    ]
+
+
+def test_an_unobserved_time_is_dropped_as_a_whole_from_its_start() -> None:
+    """Dropping the time of one reason from a moment on: the interval still open and the pieces
+    recorded since (each observed power records one), not earlier ones nor other reasons."""
+    trace = CausalPowerTrace()
+    trace.start_applied_cycle(now_monotonic=0.0, linear_power=0.5)
+    trace.mark_unobserved_power(50.0, "central_boiler_off")
+    trace.update_applied_power(now_monotonic=150.0, linear_power=0.5)
+    trace.mark_unobserved_power(160.0, "missing_valve_position")
+    trace.update_applied_power(now_monotonic=170.0, linear_power=0.5)
+    trace.mark_unobserved_power(200.0, "central_boiler_off")
+    trace.update_applied_power(now_monotonic=220.0, linear_power=0.5)
+    trace.mark_unobserved_power(220.0, "central_boiler_off")
+
+    trace.discard_unobserved_power(200.0, "central_boiler_off")
+
+    assert trace._unobserved_since is None
+    window = trace.read_window(0.0, 1800.0)
+    assert [(d.start_monotonic, d.end_monotonic, d.reason) for d in window.discontinuities] == [
+        (50.0, 150.0, "central_boiler_off"),
+        (160.0, 170.0, "missing_valve_position"),
+    ]

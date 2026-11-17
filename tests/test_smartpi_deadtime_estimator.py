@@ -50,6 +50,9 @@ class TestDeadTimeEstimatorNew:
         # Force state to HEATING (detected or not)
         self.est.state = "HEATING" 
         self.est.last_power = 1.0 # Simulate prev power
+        # The heating has lasted its known dead time: the passive response is timed.
+        self.est.deadtime_heat_s = 60.0
+        self.est.deadtime_heat_reliable = True
         
         # Stop Heat (Power 1 -> 0)
         now += 60
@@ -119,6 +122,10 @@ class TestDeadTimeEstimatorNew:
         self.est.model_hvac_mode = "cool"
         self.est.last_power = 1.0
         self.est.state = "COOLING"
+        # The cooling has lasted its known dead time: the passive response is timed.
+        self.est.deadtime_cool_s = 60.0
+        self.est.deadtime_cool_reliable = True
+        self.est.last_start_time = now - 60.0
         self.est.update(
             now,
             20.0,
@@ -197,10 +204,11 @@ class TestDeadTimeEstimatorNew:
         # Should accept (first run, last_stop_time is None)
         assert self.est.state == "WAITING_HEAT_RESPONSE"
         
-        # OFF (shortly after)
+        # OFF (shortly after): a heating shorter than any known dead time times
+        # no passive response
         now += 60
         self.est.update(now, 20.0, 0.0)
-        assert self.est.state == "WAITING_COOL_RESPONSE"
+        assert self.est.state == "COOLING"
         assert self.est.last_stop_time == now
         stop_time = now
         
@@ -551,7 +559,10 @@ def test_smartpi_routes_raw_temperature_to_tin_history(stable: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def _heat_then_cut(est, cut_at: float) -> float:
-    """Heat at full power from t=0 (after a long OFF), cut at ``cut_at``; return the cut time."""
+    """Heat at full power from t=0 (after a long OFF), cut at ``cut_at``; return the cut time.
+    The room's heating dead time is known and shorter than the heating."""
+    est.deadtime_heat_s = 600.0
+    est.deadtime_heat_reliable = True
     est.update(0.0, 20.0, 0.0)
     est.update(1000.0, 20.0, 1.0)
     t = 1000.0
