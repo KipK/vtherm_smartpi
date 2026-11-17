@@ -20,10 +20,16 @@ Shipped in 0.6.6 and present in both lines: integral guard removal, bootstrap en
 ## Slope anticipation (in progress, not adopted)
 
 - Finding: braking only shapes the P error; at setpoint crossing the command is still 25-70 % (FF + integral grown during the rise); in massive rooms 65-80 % of overshoot is power applied above the setpoint.
-- Mechanism under test: regulate on `T + slope * emitter delay` (derivative on measurement, series PID form; SIMC puts derivative time at the whole emitter inertia, simulations prefer half), faded in only near the setpoint: correction x `clamp(2 - e/c, 0, 1)`, horizon = delay + half the inertia.
-- Result (frozen bench, simulation): mean overshoot 0.46 -> 0.08 C (mass, mild weather), 0.70 -> 0.38 (mass, cold), 0.35 -> 0.24 (no mass); rise time +5 to +10 min; control cells not degraded; level A passes. The owner approved the approach (a slight overshoot is tolerated). Without the fade-in, overshoot fell 60-100 % in massive slow-emitter rooms but rise time grew 10-35 min (over tolerance).
-- Not adopted yet. Next lots, in order: (a) horizon from what SmartPI already knows (measured dead time or the delay the regulation applies; no plant truth) - the owner agreed to test this known-delay point first; one arm also removes the setpoint trajectory; (b) 0.1 C sensors (slope from value-change instants); (c) full-grid adoption bench; (d) full test suite; (e) docs.
-- Design constraint (owner): ONE mechanism for the landing on the setpoint. If the anticipation is adopted, the late-braking trajectory (`smartpi/setpoint.py`) must be removed rather than kept alongside; any adoption lot includes an arm without the trajectory.
+- Mechanism under test: regulate on `T + slope * horizon` (derivative on measurement, series PID form), faded in only near the setpoint: correction x `clamp(2 - e/c, 0, 1)`, correction bounded to 1 C. Without the fade-in the rise time grows 10-35 min (over tolerance): rejected.
+- Owner decision: the late-braking trajectory (`smartpi/setpoint.py`) is removed and replaced by the anticipation (ONE mechanism for the landing). Known cost, accepted: up to about 0.1 C more overshoot in a cold massive room on some draws, equal or slightly better elsewhere. Two frozen benches did not show the trajectory redundant; this is a decision outside the rule.
+- Horizon, frozen benches on slow emitters (simulation, 0.01 C sensors), all without the trajectory, controls never degraded:
+  - the HEAT dead time alone is too short; half the cooling dead time alone is uneven; the two move in opposite directions with the weather;
+  - the longer of the two: mean overshoot about 0.5 -> 0.25 C (mass, mild), 0.7 -> 0.43 (mass, cold), 0.34 -> 0.09 (no mass);
+  - the learned response lag is published in under half of the runs (it then falls back to the longer of the two dead times): retained by the written rule;
+  - the heating-balance lag exists in every room within hours once its measured lags are kept (the kept results are overwritten by regulation heatings, which resolve no lag): better in the mild massive room (0.14 C) and for the time under the setpoint without mass, a little short in the cold massive room (0.43-0.51 C) and without mass (0.15 C). The owner accepts it as the candidate horizon;
+  - the sum of the two dead times brakes most but lengthens the time under the setpoint beyond tolerance;
+  - in massive rooms every measured delay is about 40 % short of the best-braking horizon; the rise after a clean cut divided by the slope at the cut is 2-3 times too short (not a candidate).
+- Next, in order: (a) 0.1 C sensors with the code unchanged (running), a slope from value-change instants only if that fails; (b) full-grid adoption bench with the time under the setpoint as a criterion, balance lag against learned-lag-first; (c) removal of the trajectory code, full test suite, docs.
 - The experimental code lives on a separate local, unmerged branch of the maintainer (`slope_anticipation`, not pushed), not on `dev-0.7`.
 
 ## Open questions for the owner
@@ -32,6 +38,7 @@ Shipped in 0.6.6 and present in both lines: integral guard removal, bootstrap en
 - Drop exit-on-balance for good (see 3).
 - Port of the restart hold to 0.6.x: recommended against; not decided.
 - A heat-need observer replacing the error integral: study on hold until the anticipation result is in.
+- Calibration reachability from the outdoor temperature only (uncommitted on this branch): port to 0.6.x or not; the twin-based check is in 0.6.6.
 
 ## Process notes for this line
 
