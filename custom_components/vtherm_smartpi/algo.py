@@ -130,7 +130,13 @@ from .smartpi.tar_learning.manager import TarLearningManager
 from .smartpi.room_model.feedforward import HoldingTransfer, select_source, static_model
 from .smartpi.room_model.manager import RoomModelManager
 from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING
-from .smartpi.restart_bridge import RestartAfter, RestartBridge, RestartDecision, decide
+from .smartpi.restart_bridge import (
+    RestartAfter,
+    RestartBridge,
+    RestartDecision,
+    command_holdable,
+    decide,
+)
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
 from .smartpi.timestamp_utils import (
     elapsed_wall_minutes,
@@ -363,6 +369,7 @@ class SmartPI:
         self.restart_exclusion_probe = None
         # The next time tracking spans the downtime of a bridged restart.
         self._bridge_first_tick = False
+        self._clear_restart_wait()
 
         # --- Safety-First Governance (Delegated to self.gov) ---
         if saved_state:
@@ -1402,25 +1409,16 @@ class SmartPI:
             return self.restart.decision
         if current_temp is None:
             return None
-        stores = []
-        for manager in (self.tar_learning, self.room_model):
-            context = manager.restart_context() if manager is not None else None
-            if context is not None:
-                stores.append(context)
-        excluded = self._calc_exclusion(power_shedding)
-        probe = self.restart_exclusion_probe
-        if excluded is None and callable(probe):
-            excluded = probe()
+        # A heater cut during the wait did not keep its state over the stop:
+        # the decision is then taken without an indoor temperature.
         decision = decide(
-            self.restart.before(stores),
-            RestartAfter(
-                now=time.time(),
-                hvac_mode=None if hvac_mode is None else str(hvac_mode),
-                cycle=self._restart_cycle(),
-                excluded=excluded,
-                temp=current_temp,
+            self.restart.before(self._restart_stores()),
+            self._restart_after(
+                time.time(), hvac_mode, power_shedding,
+                None if self._restart_wait_cut else current_temp,
             ),
         )
+        self._clear_restart_wait()
         saved = self.restart.saved
         self.restart.resolve(decision)
         self._apply_restart_decision(decision, saved)
@@ -1429,6 +1427,67 @@ class SmartPI:
         else:
             _LOGGER.info("%s - Restart not bridged: %s", self._name, decision.reason)
         return decision
+
+    def _clear_restart_wait(self) -> None:
+        """Forget the wait for the indoor temperature of a pending restart."""
+        # The output was forced to 0 during the wait
+        self._restart_wait_cut = False
+
+    def _restart_stores(self) -> list:
+        """Last tick and heater state of the learning stores that hold data."""
+        stores = []
+        for manager in (self.tar_learning, self.room_model):
+            context = manager.restart_context() if manager is not None else None
+            if context is not None:
+                stores.append(context)
+        return stores
+
+    def _restart_after(
+        self,
+        now_wall: float,
+        hvac_mode: VThermHvacMode | None,
+        power_shedding: bool,
+        temp: float | None,
+    ) -> RestartAfter:
+        """What is seen after the restart, for its decision."""
+        excluded = self._calc_exclusion(power_shedding)
+        probe = self.restart_exclusion_probe
+        if excluded is None and callable(probe):
+            excluded = probe()
+        return RestartAfter(
+            now=now_wall,
+            hvac_mode=None if hvac_mode is None else str(hvac_mode),
+            cycle=self._restart_cycle(),
+            excluded=excluded,
+            temp=temp,
+        )
+
+    def _restart_held_command(
+        self, hvac_mode: VThermHvacMode | None, power_shedding: bool
+    ) -> float | None:
+        """Command of before the stop, kept while a restart waits for the indoor temperature.
+
+        Over a short stop the heater keeps its last commanded state. While the
+        restart is pending for lack of an indoor temperature, the calculation
+        keeps that command instead of cutting the heater, as long as the
+        restart is bridgeable as far as known without the temperature: the
+        stop and the wait together within RESTART_BRIDGE_MAX_GAP_S, same mode
+        and cycle, SmartPI in control. None otherwise, and once the output was
+        forced to 0: the output is 0.
+        """
+        if not self.restart.pending or self._restart_wait_cut:
+            return None
+        saved = self.restart.saved
+        try:
+            linear = clamp(float(saved["committed"][0]), 0.0, 1.0)
+        except (KeyError, IndexError, TypeError, ValueError):
+            return None
+        if not command_holdable(
+            self.restart.before(self._restart_stores()),
+            self._restart_after(time.time(), hvac_mode, power_shedding, None),
+        ):
+            return None
+        return linear
 
     def _apply_restart_decision(self, decision: RestartDecision, saved: dict | None) -> None:
         """Resume the work in progress of every component after a bridged restart, or drop it."""
@@ -1559,6 +1618,7 @@ class SmartPI:
         # the transient state above stays as after a cold start.
         self.restart.load(state.get("restart"))
         self._bridge_first_tick = False
+        self._clear_restart_wait()
 
         # Load main algorithm scalars
         self._deadtime_skip_count_a = int(state.get("deadtime_skip_count_a", 0))
@@ -1662,13 +1722,25 @@ class SmartPI:
             True if calculation should STOP (OFF or invalid).
         """
         if target_temp is None or current_temp is None:
-            _LOGGER.warning("%s - Missing target or current temp, force 0", self._name)
+            held = (
+                None if target_temp is None
+                else self._restart_held_command(hvac_mode, power_shedding)
+            )
+            if held is None:
+                _LOGGER.warning("%s - Missing target or current temp, force 0", self._name)
+                if self.restart.pending:
+                    self._restart_wait_cut = True
+            else:
+                _LOGGER.info(
+                    "%s - No indoor temperature yet after the restart: command of before the stop kept (%.0f %%)",
+                    self._name, 100.0 * held,
+                )
             self.fftrim_coord.invalidate_context(
                 "missing_sensor",
                 now_monotonic=time.monotonic(),
                 hvac_mode=self._last_hvac_mode,
             )
-            self._set_linear_output(0.0)
+            self._set_linear_output(0.0 if held is None else held)
             self._last_u_cmd = 0.0
             self._last_u_pi = 0.0
             self._last_u_limited = 0.0

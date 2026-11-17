@@ -431,7 +431,7 @@ A restart is bridged when all of these hold:
 - the indoor temperature did not jump during the stop;
 - the stored data are recent (a crash that lost the last writes makes the stop look long).
 
-The decision is taken at the first calculation that has the indoor temperature: a sensor that reports a few seconds after the restart does not prevent it, and the stop counts up to that moment.
+The decision is taken at the first calculation that has the indoor temperature: a sensor that reports a few seconds after the restart does not prevent it, and the stop counts up to that moment. While SmartPI waits for that temperature, it keeps the command of before the stop as long as the other conditions above hold; the heating is not interrupted. If the temperature is still missing 10 minutes after the stop, the command goes to 0 until it comes and the restart is not bridged.
 
 After a bridged restart, the measurements in progress resume (dead time, learning windows, emitter delay, the windows already counted by the slow feed-forward correction), the heater is taken as unchanged over the stop, nothing is excluded from the emitter delay learning or the room model (both heating only), and learning is not paused. A setpoint changed during the stop is handled at the first tick like any setpoint change. After any other restart SmartPI starts again carefully: the measurements in progress are dropped, learning pauses for one cycle, and only the stop itself is excluded from the learning data.
 

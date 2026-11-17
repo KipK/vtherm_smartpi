@@ -102,7 +102,8 @@ modulated output left by another phase is not a hysteresis state: it is set to 0
 until the next threshold. The on/off state is persisted with the wall-clock time
 of the last calculation. After a bridged restart (5.4), the first calculation
 that has the indoor temperature resumes it inside the band, as an uninterrupted
-hysteresis would have. Outside the
+hysteresis would have; while it is awaited, the on/off state of before the stop
+is kept as described in Restarts. Outside the
 band, the thresholds decide. After any other restart, and for a state saved
 without it, the output starts at 0. A heating or cooling phase in progress can
 thus resume after a short restart.
@@ -1230,6 +1231,17 @@ All of these must hold:
   than `0.5 °C` at more than `20 °C/h` is not physical) against the last one,
   dated from its last change;
 - the wall clock did not jump (no negative downtime, no store tick in the future).
+
+While the restart is pending because the indoor temperature is missing, a
+calculation with a target keeps the command committed before the stop instead
+of forcing 0: the heater kept that command over the stop, and cutting it for a
+sensor that reports a few seconds later would interrupt the heating. The
+command is kept while every rule above that does not read the indoor temperature
+holds at the current calculation: the stop and the wait together last at most
+`RESTART_BRIDGE_MAX_GAP_S`. Otherwise the output is 0 as for any missing sensor,
+and stays at 0 until the temperature comes. A restart whose output was forced to
+0 during the wait is not bridged (`indoor temperature unknown` when no other
+rule refuses it): the heater did not keep its state.
 
 Every component consults this decision; none decides on its own. The transient
 state each component needs is saved with it (wall-clock times) and stays aside

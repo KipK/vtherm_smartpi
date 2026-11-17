@@ -100,7 +100,8 @@ Dans la bande d'hystérésis, la sortie conserve son état tout-ou-rien précéd
 sortie modulée laissée par une autre phase n'est pas un état d'hystérésis : elle est
 ramenée à 0 jusqu'au prochain seuil. L'état tout-ou-rien est persisté avec l'heure
 murale du dernier calcul. Après un redémarrage ponté (5.4), le premier calcul
-disposant de la température intérieure le reprend dans la bande, comme l'aurait fait une hystérésis jamais interrompue.
+disposant de la température intérieure le reprend dans la bande, comme l'aurait fait une hystérésis jamais interrompue ; en attendant, l'état
+tout-ou-rien d'avant l'arrêt est conservé, comme décrit dans Redémarrages.
 Hors de la bande, les seuils décident. Après tout autre redémarrage, et pour un
 état sauvegardé sans cet état, la sortie repart à 0. Une phase de chauffe ou de
 refroidissement en cours peut ainsi reprendre après un redémarrage court.
@@ -969,6 +970,17 @@ Versatile Thermostat n'envoie aucune commande au chauffage lorsque l'intégratio
 - SmartPI avait la main au dernier calcul et l'a au premier : ni fenêtre ouverte, ni délestage, ni mode sécurité, ni commande remplacée, ni état inconnu (après le redémarrage, l'état de la fenêtre, du délestage et de la sécurité du thermostat est lu avant toute commande) ;
 - la première température intérieure passe la règle de saut de l'historique de `T_ar` (un saut de plus de `0.5 °C` à plus de `20 °C/h` n'est pas physique) par rapport à la dernière, datée de son dernier changement ;
 - l'horloge murale n'a pas sauté (pas de durée d'arrêt négative, pas de dernier calcul d'un stockage dans le futur).
+
+Pendant que le redémarrage attend la température intérieure, un calcul avec une
+consigne garde la commande engagée avant l'arrêt au lieu de forcer 0 : le chauffage
+a conservé cette commande pendant l'arrêt, et la couper pour une sonde qui rapporte
+quelques secondes plus tard interromprait la chauffe. La commande est gardée tant que
+chaque règle ci-dessus qui ne lit pas la température intérieure est remplie au
+calcul courant : l'arrêt et l'attente ensemble durent `RESTART_BRIDGE_MAX_GAP_S` au plus.
+Sinon, la sortie vaut 0 comme pour tout capteur absent, et reste à 0 jusqu'à l'arrivée
+de la température. Un redémarrage dont la sortie a été forcée à 0 pendant l'attente
+n'est pas ponté (`indoor temperature unknown` lorsqu'aucune autre règle ne le refuse) :
+le chauffage n'a pas conservé son état.
 
 Chaque composant consulte cette décision ; aucun ne décide seul. L'état transitoire dont chaque composant a besoin est sauvegardé avec elle (en temps mural) et reste en attente jusqu'à la décision.
 

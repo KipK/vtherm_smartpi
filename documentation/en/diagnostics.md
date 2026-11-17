@@ -82,7 +82,7 @@ and for a thermostat that starts without saved data.
 |---|---|
 | `bridged` | `true` when the restart was bridged: the measurements in progress resumed and nothing was excluded from the learning data. `false` when SmartPI started again carefully |
 | `downtime_s` | Duration of the stop, in seconds; `null` when it cannot be measured (clock jump, no saved data) |
-| `reason` | Why the restart was not bridged, `null` when it was: `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown`, `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, or an exclusion before the stop or after the restart (for example `window open before the stop`, `safety mode after the restart`) |
+| `reason` | Why the restart was not bridged, `null` when it was: `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (also when the command went to 0 while the temperature was awaited), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, or an exclusion before the stop or after the restart (for example `window open before the stop`, `safety mode after the restart`) |
 
 `analysis` groups the advanced live values into `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` and, when

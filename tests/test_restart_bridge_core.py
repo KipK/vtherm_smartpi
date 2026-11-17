@@ -11,7 +11,7 @@ import pytest
 
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
-from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.const import RESTART_BRIDGE_MAX_GAP_S, SmartPIPhase
 from custom_components.vtherm_smartpi.smartpi.deadtime_estimator import DeadTimeEstimator
 
@@ -274,6 +274,111 @@ def test_restart_is_not_bridged_when_the_indoor_temperature_comes_back_too_late(
     assert decision.bridged is False
     assert decision.reason == "stop too long"
     assert decision.downtime_s > RESTART_BRIDGE_MAX_GAP_S
+
+
+def _calc_without_temperature(algo: SmartPI, run: _Run, **kw) -> float:
+    args = dict(target_temp=run.setpoint, current_temp=None, ext_current_temp=T_EXT, slope=0,
+                hvac_mode=VThermHvacMode_HEAT)
+    args.update(kw)
+    algo.calculate(**args)
+    return algo.on_percent
+
+
+def test_restart_keeps_the_command_while_it_waits_for_the_indoor_temperature() -> None:
+    run = _to_heating_episode()
+    committed = run.algo.committed_on_percent
+    assert committed > 0.0
+    run.stop()
+    run.tick()
+    with _clocks(run.clock):
+        algo = _restored_without_temperature(run)
+        assert algo.on_percent == pytest.approx(committed)
+        # Up to the longest bridged stop, the wait included.
+        run.clock.t += RESTART_BRIDGE_MAX_GAP_S - TICK_S - 1.0
+        assert _calc_without_temperature(algo, run) == pytest.approx(committed)
+        assert algo.restart.pending
+        # The heater kept its command: the stop is bridged when the temperature comes.
+        decision = algo.resolve_restart(VThermHvacMode_HEAT, run.room.reading)
+    assert decision.bridged
+    assert algo.committed_on_percent == pytest.approx(committed)
+
+
+def test_restart_cuts_the_command_after_the_wait_and_is_then_not_bridged() -> None:
+    run = _to_heating_episode()
+    run.stop()
+    run.tick()
+    with _clocks(run.clock):
+        algo = _restored_without_temperature(run)
+        assert algo.on_percent > 0.0
+        run.clock.t += RESTART_BRIDGE_MAX_GAP_S
+        assert _calc_without_temperature(algo, run) == 0.0
+        run.clock.t += 5.0
+        decision = algo.resolve_restart(VThermHvacMode_HEAT, run.room.reading)
+    assert decision.bridged is False
+    assert decision.reason == "stop too long"
+
+
+def test_a_command_cut_during_the_wait_is_not_kept_again_and_the_restart_is_not_bridged() -> None:
+    run = _to_heating_episode()
+    run.stop()
+    run.tick()
+    with _clocks(run.clock):
+        algo = _restored_without_temperature(run)
+        assert algo.on_percent > 0.0
+        # Power shedding cuts the heater during the wait.
+        assert _calc_without_temperature(algo, run, power_shedding=True) == 0.0
+        run.clock.t += 5.0
+        assert _calc_without_temperature(algo, run) == 0.0
+        decision = algo.resolve_restart(VThermHvacMode_HEAT, run.room.reading)
+    assert decision.bridged is False
+    assert decision.reason == "indoor temperature unknown"
+    assert decision.downtime_s < RESTART_BRIDGE_MAX_GAP_S
+
+
+def test_restart_does_not_keep_the_command_after_a_long_stop() -> None:
+    run = _to_heating_episode()
+    run.stop()
+    run.ticks(int(RESTART_BRIDGE_MAX_GAP_S / TICK_S) + 1)
+    with _clocks(run.clock):
+        algo = _smartpi(run.saved)
+        assert _calc_without_temperature(algo, run) == 0.0
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"target_temp": None},
+        {"hvac_mode": VThermHvacMode_COOL},
+        {"power_shedding": True},
+    ],
+)
+def test_restart_does_not_keep_the_command_when_smartpi_is_not_in_control(kw) -> None:
+    run = _to_heating_episode()
+    run.stop()
+    run.tick()
+    with _clocks(run.clock):
+        algo = _smartpi(run.saved)
+        assert _calc_without_temperature(algo, run, **kw) == 0.0
+
+
+def test_restart_does_not_keep_the_command_in_safety_mode_or_with_an_open_window() -> None:
+    run = _to_heating_episode()
+    run.stop()
+    run.tick()
+    with _clocks(run.clock):
+        algo = _smartpi(run.saved)
+        algo.vt_safety_override = True
+        assert _calc_without_temperature(algo, run) == 0.0
+        algo = _smartpi(run.saved)
+        algo.restart_exclusion_probe = lambda: "window open"
+        assert _calc_without_temperature(algo, run) == 0.0
+
+
+def test_no_command_is_kept_without_a_restart_in_progress() -> None:
+    run = _to_heating_episode()
+    with _clocks(run.clock):
+        assert run.algo.committed_on_percent > 0.0
+        assert _calc_without_temperature(run.algo, run) == 0.0
 
 
 def test_a_restart_context_with_obsolete_integral_guard_keys_still_bridges() -> None:

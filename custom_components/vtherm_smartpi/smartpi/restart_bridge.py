@@ -31,6 +31,12 @@ bridge only to a restart in HEAT (``RestartDecision.heat_bridged``).
 Every component consults the decision; none decides on its own. Otherwise the
 components keep their conservative restart handling.
 
+The decision waits for the first indoor temperature. Meanwhile ``command_holdable``
+tells whether the stop is still bridgeable as far as known without it: the
+regulation then keeps the command of before the stop instead of cutting the
+heater, which kept that command over the stop. A heater cut during the wait did
+not keep its state: the stop is then not bridged.
+
 ``RestartBridge`` keeps the context of the last tick for the next save and the
 decision of the current session (diagnostics and later rules).
 """
@@ -119,8 +125,10 @@ class RestartDecision:
         }
 
 
-def decide(before: RestartBefore | None, after: RestartAfter) -> RestartDecision:
-    """Decide whether the stop between the last saved tick and the first tick after it is bridged."""
+def _refusal_before_temperature(
+    before: RestartBefore | None, after: RestartAfter
+) -> RestartDecision | None:
+    """Refusal from every rule but the indoor temperature ones, None when they all hold."""
     now = after.now
     if before is None or not before.last_ticks:
         return RestartDecision(False, None, now, None, REASON_NO_SNAPSHOT)
@@ -149,12 +157,32 @@ def decide(before: RestartBefore | None, after: RestartAfter) -> RestartDecision
         return refuse(f"{before.excluded} before the stop")
     if after.excluded:
         return refuse(f"{after.excluded} after the restart")
+    return None
+
+
+def decide(before: RestartBefore | None, after: RestartAfter) -> RestartDecision:
+    """Decide whether the stop between the last saved tick and the first tick after it is bridged."""
+    refusal = _refusal_before_temperature(before, after)
+    if refusal is not None:
+        return refusal
+    now = after.now
+    t_stop = min(before.last_ticks)
+    downtime = now - t_stop
     if before.temp is None or after.temp is None:
-        return refuse(REASON_TEMPERATURE_UNKNOWN)
+        return RestartDecision(False, t_stop, now, downtime, REASON_TEMPERATURE_UNKNOWN)
     since = before.temp_since if before.temp_since is not None else t_stop
     if is_temperature_jump(abs(after.temp - before.temp), now - since):
-        return refuse(REASON_TEMPERATURE_JUMP)
+        return RestartDecision(False, t_stop, now, downtime, REASON_TEMPERATURE_JUMP)
     return RestartDecision(True, t_stop, now, downtime, None, before.hvac_mode)
+
+
+def command_holdable(before: RestartBefore | None, after: RestartAfter) -> bool:
+    """Whether the stop is bridgeable as far as known without the indoor temperature.
+
+    after describes the current calculation (its temperature is not read): the
+    downtime runs up to it.
+    """
+    return _refusal_before_temperature(before, after) is None
 
 
 def stop_time(saved_t: float | None, last_t: float, t_resume: float) -> float:

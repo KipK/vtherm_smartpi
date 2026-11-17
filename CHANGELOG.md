@@ -34,6 +34,10 @@ All notable changes to this project will be documented in this file.
   FF3 blocked for hours.
 - Restarts: a bridged restart also keeps the windows already counted by the
   slow feed-forward correction.
+- Restarts: while the indoor temperature is missing after a restart, SmartPI
+  keeps the command of before the stop instead of cutting the heating, up to
+  10 minutes after the stop. Past that the command goes to 0 until the
+  temperature comes, and the restart is not bridged.
 - Diagnostics: the recorded history also keeps the feed-forward source and its
   wall part, the room model's `a`, `b_eq` and 1 h / 12 h forecast errors, and
   the dead time in force.

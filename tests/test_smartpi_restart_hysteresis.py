@@ -315,8 +315,9 @@ def test_saved_output_waits_for_the_indoor_temperature():
     run.tick()
     run.start()
 
+    # The heating of before the stop is kept during the wait.
     _calculate(run, current_temp=None, advance_s=5.0)
-    assert run.u == 0.0
+    assert run.u == 1.0
     assert run.algo._hysteresis_restore is not None
     assert run.algo._hysteresis_output_context()["on"] is True
 
@@ -335,9 +336,11 @@ def test_saved_output_is_dropped_when_the_temperature_comes_back_too_late():
     run.start()
 
     _calculate(run, current_temp=None, advance_s=5.0)
-    _calculate(
-        run, current_temp=run.room.reading, advance_s=RESPONSE_LAG_RESTART_MAX_GAP_S + 1.0
-    )
+    assert run.u == 1.0
+    # Past the longest bridged stop the heating is cut.
+    _calculate(run, current_temp=None, advance_s=RESPONSE_LAG_RESTART_MAX_GAP_S + 1.0)
+    assert run.u == 0.0
+    _calculate(run, current_temp=run.room.reading, advance_s=5.0)
     assert run.algo._hysteresis_restore is None
     assert run.algo.ctl.hysteresis_state == "band"
     assert run.u == 0.0

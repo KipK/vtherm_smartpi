@@ -76,6 +76,31 @@ def test_each_failed_condition_refuses_the_bridge(before, after, reason) -> None
     assert d.reason == reason
 
 
+def test_command_is_holdable_on_every_rule_but_the_indoor_temperature() -> None:
+    assert rb.command_holdable(_before(), _after(temp=None))
+    assert rb.command_holdable(_before(temp=None), _after(temp=None))
+    assert rb.command_holdable(_before(), _after(now=T_STOP + RESTART_BRIDGE_MAX_GAP_S, temp=None))
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        (None, {}),
+        ({}, {"now": T_STOP + RESTART_BRIDGE_MAX_GAP_S + 1.0}),
+        ({}, {"now": T_STOP - 5.0}),
+        ({"heater_known": False}, {}),
+        ({"hvac_mode": "off"}, {}),
+        ({}, {"hvac_mode": "off"}),
+        ({}, {"hvac_mode": "cool"}),
+        ({}, {"cycle": (5.0, 0, 0, False)}),
+        ({"excluded": "window open"}, {}),
+        ({}, {"excluded": "safety mode"}),
+    ],
+)
+def test_command_is_not_holdable_when_the_stop_cannot_be_bridged(before, after) -> None:
+    assert not rb.command_holdable(None if before is None else _before(**before), _after(temp=None, **after))
+
+
 def test_short_restart_in_cool_is_bridged_without_the_heat_histories() -> None:
     # The learning stores hold no heater history in COOL: the committed power is enough
     d = rb.decide(_before(hvac_mode="cool", heater_known=False), _after(hvac_mode="cool"))

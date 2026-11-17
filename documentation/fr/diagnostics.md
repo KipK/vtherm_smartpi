@@ -82,7 +82,7 @@ redémarrage, et pour un thermostat qui démarre sans données sauvegardées.
 |---|---|
 | `bridged` | `true` lorsque le redémarrage a été ponté : les mesures en cours ont repris et rien n'a été exclu des données d'apprentissage. `false` lorsque SmartPI a repris avec prudence |
 | `downtime_s` | Durée de l'arrêt, en secondes ; `null` lorsqu'elle ne peut pas être mesurée (saut d'horloge, pas de données sauvegardées) |
-| `reason` | Raison pour laquelle le redémarrage n'a pas été ponté, `null` lorsqu'il l'a été : `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown`, `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, ou une exclusion avant l'arrêt ou après le redémarrage (par exemple `window open before the stop`, `safety mode after the restart`) |
+| `reason` | Raison pour laquelle le redémarrage n'a pas été ponté, `null` lorsqu'il l'a été : `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (aussi lorsque la commande est passée à 0 pendant que la température était attendue), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, ou une exclusion avant l'arrêt ou après le redémarrage (par exemple `window open before the stop`, `safety mode after the restart`) |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
