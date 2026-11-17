@@ -48,6 +48,14 @@ All notable changes to this project will be documented in this file.
   the dead time in force.
 - Requirements: `numpy` and `scipy` are installed with the integration. If they
   cannot be loaded, nothing is learned and the bootstrap value stays in use.
+- Calibration: whether a calibration can be completed is decided from the
+  measured outdoor temperature only, no longer from the thermal twin. A
+  passive phase can only bring the room toward the outdoor temperature, so the
+  cycle ends as unreachable when the outdoor temperature is within 0.5 degC of
+  (or beyond) the passive threshold to come: the cool-down threshold, or the
+  target for the final cool-down (the mirror in cooling). The twin's
+  equilibrium can no longer cancel a calibration meant to repair it. Nothing
+  is judged while the outdoor temperature is unknown.
 
 ## [0.6.6]
 
