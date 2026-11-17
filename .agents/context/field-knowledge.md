@@ -1,0 +1,38 @@
+# Field knowledge (anonymized)
+
+What real installations look like, to calibrate judgement and benches. Figures are orders of magnitude from the maintainer's own rooms; no tester data.
+
+## Rooms
+
+- Open-plan living area, two electric/PWM emitters in one zone, precise 0.01 C sensor mid-room, emitter at maximum pilot-wire level. Fast response, regulation within about +-0.1 C most of the time.
+- Upstairs bedrooms reached through a stairwell, rooms mostly open to each other; a bedroom that is unoccupied at night and worse insulated than the others loses heat faster and sits far from the living-area air.
+- Mild-weather estimates: time constants of 190-365 h (`tau = 1/b`), `a` around 0.05 C per time unit at full power, `a/b` around 1000-1800 C (hold power 1-2 % at a 15 K gap). `b` is likely biased LOW in mild weather (small indoor-outdoor gaps; the 1R1C model has no free-gain term) and should rise in winter. Calibrate benches on winter values. Plants with tau of 1 h do not exist.
+- Passive (OFF) slopes in such rooms are about 0.05 C/h: noise, quantization and window length dominate identification.
+- A bedroom with one or two sleepers at night: bedtime and wake-up vary by household; do not hard-code any.
+
+## Sensors
+
+- Target: precise 0.01 C sensors, publish on change (rate-limited, tens of seconds) + heartbeat of 5-10 min. Users often set a reporting threshold of 0.05 C to save battery (resolution stays 0.01, reported change 0.05).
+- Slow: 0.1 C resolution, publish on change, heartbeat 30-60 min depending on model. Not noisy; staircase-like. Best effort.
+- A bench sensor model that samples every 300 s is pessimistic for precise sensors.
+- Old exports: the published indoor value can stop refreshing while VT is off or during an overheat cut and keeps the stale value; with a dithered 0.01 C sensor, a run of one identical value for >= 30 min over >= 20 rows marks the data inactive. Do not apply this to slow sensors, which legitimately hold values.
+
+## Emitters
+
+- Electric/PWM panels and small radiators: dead time of minutes. Water radiators: tens of minutes. Floor heating: up to about an hour and large stored heat (overshoot after the setpoint is reached is the main defect, because power applied during the rise is still arriving).
+- Rooms with massive walls: cold walls after a night setback keep absorbing heat after a setpoint rise (the room stays just short of the setpoint for hours); setbacks that are short with heavy walls leave the room model unpublished.
+- After a setpoint rise the command at crossing is still 25-70 % (FF + integral grown during the rise); in massive slow-emitter rooms most of the overshoot is power applied above the setpoint.
+
+## Observed behaviours worth knowing
+
+- Without an integral guard, the post-rise temperature dip falls from 75-180 min to under 30 min on fast emitters, with overshoot <= 0.15 C; floor heating overshoots more.
+- Slope anticipation (regulate on `T + slope * emitter delay`, faded in only near the setpoint, horizon about half the emitter inertia) reduced simulated overshoot by large factors in slow-emitter cells with a rise-time cost of 5-10 min; it is a candidate not yet adopted (see `decisions.md`).
+- Gains of massive slow rooms already sit at the floors (`KP_MIN`/`KI_MIN`); counting emitter inertia in the gains alone does not fix floor heating in a massive room.
+- A heating-balance estimate (heating rate at full power, emitter lag) is unusable in regulation at variable power, usable in bootstrap/calibration; it is biased low 25-60 % in massive rooms and good in massless rooms. It is published for observation only.
+- Simulated field-like cells leave the bootstrap after about 36 h through the "full collection" path (31 measurements of a and b); with full histories SmartPI must never remain in bootstrap.
+
+## Home Assistant access (for maintainers' agents)
+
+- Live diagnostics: read sub-blocks of the diagnostics sensor attribute `live` with a template and `| tojson` (e.g. `model`, `tar_learning`, `analysis.learning.response_lag`, `analysis.learning.heating_balance`, `calibration`, `autocalib`). The full attribute dump is very large: never read it whole.
+- History: 5-minute statistics for numeric sensors (power percent, smoothed temperature which lags the raw value by minutes).
+- Never store endpoints, tokens or entity names of a real installation in this repository.

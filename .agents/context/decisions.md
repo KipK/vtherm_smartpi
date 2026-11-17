@@ -1,0 +1,115 @@
+# SmartPI design decisions
+
+Purpose: why the code is the way it is, and which ideas were already tried and rejected. State of the `dev-0.7` line. Module paths are relative to `custom_components/vtherm_smartpi/` unless they start with `smartpi/` (then `custom_components/vtherm_smartpi/smartpi/`). Check the code before relying on a statement: removed items below no longer exist in the tree.
+
+Standing design rules (apply to any change):
+- Simple and universal: one or two parameters, same for any on/off emitter, neutral start, capped. No over-engineering.
+- HEAT has priority. COOL is a signed mirror (`a < 0` in COOL, `b > 0` in both modes) and may be slower or less tuned. Hysteresis overshoot in the bootstrap is expected.
+- Disturbances (sun, occupants, other heaters) are detected and excluded from fits, never modelled inside them.
+- No occupancy schedule and no hard-coded night hours. Quiet periods come from data (computed sun position, constant setpoint, valid data).
+- Sensor health (stale, missing) is Versatile Thermostat's job. SmartPI only reacts to a missing value (hold, freeze), never judges a sensor.
+- User-facing diagnostics carry plain values, no internal rule or bench names. Documentation describes the current state only.
+
+## 1. Adopted mechanisms
+
+| Mechanism | What it does | Why adopted | Module |
+|---|---|---|---|
+| IMC/SIMC gains | `Kp = 1/(abs(a) (lambda + L))`, `Ti = min(tau, 4 (lambda + L))`, `Ki = Kp/Ti` clamped to `[KI_MIN, KI_MAX]`; safe fallback when the model is unreliable | One explicit rule replaced hybrid heuristics; SIMC bounds Ti for lag-dominant rooms so load disturbances are corrected in hours, not days | `smartpi/gains.py::GainScheduler` |
+| Near-band continuous taper | Kp/Ki damped smoothly close to the setpoint (`NEAR_BAND_TAPER_*`) | Replaced step factors; removes limit-cycle chatter at the band edge | `smartpi/gains.py`, `smartpi/const.py` |
+| Per-tick anti-windup | Back-calculation `Tt = Ti` against the applicable limit (`max_on_percent` in actuator space), drains the integral only | End-of-cycle tracking left a steady offset with valves that hold back small moves | `smartpi/controller.py::SmartPIController.track_output_limit` |
+| Bumpless gain rescale | `Ki*I` is preserved when Ki changes | Gain changes must not step the command | `algo.py`, `smartpi/controller.py` |
+| Near-setpoint unwind | Within 1.5 sensor steps of the setpoint a P-only saturated output may unwind the integral | Quantised sensors otherwise leave the room stuck one step off the setpoint | `smartpi/controller.py::compute_pwm` (`NEAR_SETPOINT_UNWIND_STEPS`) |
+| Integration step cap | A gap between two calculations integrates at most one cycle | A 9.9-cycle gap used to integrate in full | `algo.py::_update_time_tracking` |
+| Deadband with shell hold | Inside the deadband core the proportional output is shaped, integral held only in the hysteresis shell and in DEGRADED | Avoids chatter at the edge without suppressing real demand | `smartpi/deadband.py`, `smartpi/deadband_output.py`, `smartpi/governance.py` |
+| Governance regime matrix | Decides per regime whether gains and learning are frozen; a regime transition freezes gains and learning but does NOT hold the integral | Holding the integral on transitions blocked slow trim and left a steady error | `smartpi/governance.py` |
+| Resume dead-time hold | After a window or power-shedding resume the integral is held for the active dead time | The room cannot answer sooner; integrating the error there winds up | `smartpi/resume_hold.py::ResumeDeadtimeHold` |
+| Recovery plateau detection | Detects a disturbance recovery that stopped progressing | Ends a stuck disturbance trajectory (setpoint side) and resume holds | `smartpi/recovery_plateau.py`, `smartpi/setpoint.py` |
+| Late-braking P trajectory | Setpoint for P follows an analytic trajectory near the target; ends by its own completion (release, target reached, setpoint change) | Cuts overshoot after large steps without capping the PI output | `smartpi/setpoint.py`, `smartpi/trajectory.py` |
+| Guard cut and kick | HEAT only: output forced to 0 when measured T > SP + near_band_above and device active; released 1.5 sensor steps lower; learning, filter and dead-time estimator keep running during the cut | Limits slow overshoot; both cut and kick help on clean sensors; the reset margin kills ~1370 to ~60 bursts/day on flickering sensors | `smartpi/guards.py::SmartPIGuards`, `algo.py` |
+| Guard-cut integral unwind | During the cut the integral unwinds by back-calculation (`I -= v dt / Kp`), only while the request is positive, and never below `I_floor = Kp (near_band_above - hysteresis)/Ki` | Without it a room whose integral exceeds the heat need cycles for hours; the floor keeps the real comfort-period integral after a setback | `algo.py::_unwind_integral_during_guard_cut` |
+| Feed-forward FF1 | `u_ff = k_ff (T_sp - T_ext)`, `k_ff = b/a`, warm-up ramp (persisted across restarts) | Structural holding power; restoring the integral without FF caused a dip then overshoot | `smartpi/feedforward.py` |
+| FF trim | Slow bias learned on distinct-measurement windows aligned to the delayed applied power; stationary and periodic observers; transferred bumplessly from the integral | Absorbs the model-bias part of the integral so the integral can stay small; slow trim must never mutate the integral directly | `smartpi/ff_trim.py`, `smartpi/ff_trim_periodic.py`, `smartpi/ff_trim_runtime.py::FFTrimCoordinator` |
+| FF3 | Predictive correction from the 1R1C twin, per cycle | Anticipates disturbances; kept as is after bench scrutiny (marginal, active ~0.5 % of evaluations) | `smartpi/ff3.py`, `smartpi/ff3_eligibility.py` |
+| 1R1C thermal twin | Model `dT/dt = a u(t-L) - b (T - Text) + d`; diagnostics and FF3 support, does not drive the PI | Cheap prediction and disturbance estimate | `smartpi/thermal_twin_1r1c.py`, `smartpi/thermal_model.py` |
+| Command ownership via VT receipts | Each applied command is attributed to its request from Versatile Thermostat applied-command receipts | Local projection of scheduler behaviour was fragile; needed by FF trim and bumpless transfer | `smartpi/command_ownership.py`, `smartpi/causal_power_trace.py` |
+| Last valid outdoor value | Outdoor dropout keeps the last valid value without age limit for FF, setpoint model, near band; gains, learning, trim stay frozen; integral held only until a first value ever arrived | A TTL variant overshot at sensor return; keeping the value cut the dropout error ~4x | `algo.py` (`_ext_control`) |
+| Safety and runtime power | Handler reads VT runtime power; in VT safety mode the integral is held and the cycle is not SmartPI-owned | Do not integrate a stale temperature | `handler.py`, `algo.py` |
+| Raw temperature for learning slopes | Slopes use raw samples; an EMA-filtered copy only serves dead-time lookback and the guard | The EMA made slope uncertainty guards useless | `smartpi/deadtime_estimator.py`, `smartpi/learning_window.py` |
+| a/b estimation with windows | Robust OLS slope windows (ON for a, OFF for b), span guard against sensor flicker, median publication; per-channel drift sequences | Core model identification | `smartpi/ab_estimator.py`, `smartpi/learning_window.py`, `smartpi/ab_drift.py` |
+| Integral balance pools | Windows without a robust slope contribute `T2-T1 = a U - b D` segments pooled until relative uncertainty <= 25 % | Coarse or slow sensors stayed in bootstrap forever | `smartpi/ab_window_balance.py` |
+| Response lag and delivered power | Measures the emitter response lag; `a` is learned after the transient with delivered power; passive `b` gate waits after a heater cut | Residual emitter heat biased `b` low by ~10 %; slow emitters biased `a` | `smartpi/response_lag.py`, `smartpi/learning_window.py` |
+| Dead-time estimator | Median of the last 6 detections, filtered temperature for detection; pre-start trend baseline; never shortens on weak evidence | A single aberrant detection, or a room already warming at start, shifted windows and gains | `smartpi/deadtime_estimator.py`, `smartpi/deadtime_trend.py` |
+| Bootstrap | Hysteresis between configured thresholds (guards inactive), odd measurement counts (a 5, b 5, a 4 when consistent), ends after 4 heating phases when the lag cannot be measured; heating phases counted, not switches | An odd count tolerates as many outliers as the next even one; bursts of short interruptions must not end it | `smartpi/ab_estimator.py`, `smartpi/diagnostics.py` (status), `algo.py` |
+| Restart bridge | A stop of up to 10 min in the same mode is bridged: learning, windows and trim windows resume; missing indoor temperature holds the previous command up to 10 min | VT sends no command at stop/start, the heater keeps its state | `smartpi/restart_bridge.py::decide` |
+| Persistence | State written at most every 5 min (final write on stop); past timestamps survive restarts; PI memory expires after 96 h OFF while a/b is kept | Avoid I/O storms; stale integral is harmful | `state_store.py::SmartPIStateStore`, `smartpi/timestamp_utils.py` |
+| Calibration and auto-calibration | Phase machine judged on the parameters that triggered it; `b` monitored only when learnable; retry after fixed delay; unreachable phases stop at once (event) | Stopped repeated calibrations in mild weather and 10 h timeouts | `smartpi/calibration.py`, `smartpi/autocalib.py::AutoCalibTrigger` |
+| Valve support | Linearisation curve, `max_on_percent` applied in actuator space, no min-activation floor, VT-filter repairs | Valve position does not depend on ON time | `smartpi/valve_curve.py`, `valve_config_check.py` |
+| Emitter delay (T_ar) learning | Learns the heating response delay from morning comfort steps and a multi-day room fit on quiet periods; gains use half of it, never more aggressive than the bootstrap dead time, above 2x only when both methods agree. PWM only; off in valve mode | A too-long input halved Kp and slowed rises; half the effective delay is what the 3 L rule expects | `smartpi/tar_learning/`, `smartpi/quiet_periods/` |
+| Room model | Kalman observer (air, wall, disturbance) plus multi-day identification; published only after a qualified heat balance; feeds FF holding power and wall extra power after a setback. PWM only | A static ratio cannot reproduce wall transients; unpublished model changes nothing | `smartpi/room_model/` |
+| Heating balance (observation only) | Measures heating rate and emitter lag from an energy balance per heating phase | Published for observation; nothing reads it | `smartpi/heating_balance.py::HeatingBalance` |
+| Learning pause switch | Persisted switch pauses a/b and dead-time observation without stopping regulation | Secondary heating source can bias the model | `algo.py`, `handler.py` |
+
+## 2. Removed / rejected approaches
+
+| Approach | Why rejected or removed | Evidence | Instead |
+|---|---|---|---|
+| Setpoint reference governor (model-based post-PI command cap with handoff, reserve selectors, prediction falsification) | Complexity (~2400 production lines) for no measurable gain; the cap bound sat exactly at target on a biased model, so the room could plateau under target for hours | With it removed, switch-mode landings were practically unchanged; with valve position retention landings overshot 0.05-0.25 C more on some steps, but the cap was worse on as many other rows | Late-braking P trajectory only; the PI output is never capped near the target |
+| Direct command cap (cap enforced after soft/timing constraints, P on raw target) | Raw-target P plus legacy trajectory diverged 13-56 min before any cap acted | Cap-enforcing arm never settled and had worse IAE than the same arm without the cap; mirror HEAT/COOL effects failed | None; do not cap the post-PI command |
+| Monotone handoff / sensor-phase variants, guard-only profile, authority-free governor | Failed effect symmetry and plateau-qualification gates in every orientation tested | Gains on one orientation, regressions or invalid primes on the others | Stop; field braking left to the P trajectory |
+| Terminal braking release (governor-style release of the cap inside the deadband) | Never exercised in natural closed-loop runs (no retirement, no downstream effect) and jump gates failed identically in baseline | Six prime-valid cases, zero retirements | Nothing to release: there is no cap |
+| HEAT setpoint landing cap (model-aware cap, residual release latches) | Superseded by the same analysis as the governor | Equal rows better and worse after removal | P-branch trajectory ends through its own completion |
+| Eris cycle-based tuning (kept as inert research on a separate branch, not in this tree) | Nominal gain no better than IMC/SIMC; robust cases mixed | Nominal IAE +0.5 to +1.3 %, mismatch cases -4.6 to -0.3 % median with worst cases up to +18 % | IMC/SIMC with the current scheduler |
+| Hybrid heuristic Kp/Ki tuning, step near-band factors | Replaced by explicit rule and continuous taper | n/a | `GainScheduler` |
+| SIMC Ti rejected once (overshoot on steps and window openings), then adopted | The rejected variant removed the model bias the integral carried (setback recoveries, undetected losses); adopted only together with a bounded near-setpoint unwind (1.5 steps, P-only saturation) and a stalled-recovery condition | Combined set cut IAE ~3 % with the unwind bounded | `Ti = min(tau, 4 (lambda + L))` with `NEAR_SETPOINT_UNWIND_STEPS` |
+| Ki floor as the main protection | Binds in nearly all runs, so Ki was effectively constant; the floor was judged a defect for inert rooms | Floor reached in 100 % of runs on the older rule | SIMC Ti; floor stays as a lower clamp only |
+| Integral guard (setpoint-change guard, directional guard with unwind, stalled-recovery release, plateau exit, soft release) | Blocking the integral during a recovery left rooms below the setpoint for hours (cold walls, shedding); each release variant traded plateau against overshoot | Release at full rate overshot 0.10-0.13 C; the soft release (0.2x rate) fixed stalls but kept state machinery; removing the guard closed the gap in about half an hour | Integral works during the whole recovery; only the resume dead-time hold, per-tick anti-windup and guard cut remain. Do not reintroduce a setpoint-change guard |
+| Regime-transition integrator hold | Acted as an implicit anti-windup only | Removing it cut IAE ~1.3 %; shortened error after regime changes | Per-tick anti-windup; gains and learning still freeze on transitions |
+| End-of-cycle anti-windup tracking | Left a steady offset with valves that hold back moves | Offset removed; overshoot slightly higher in that case (dpercent 10) | Per-tick back-calculation |
+| Guard cut gated on the filtered near-band | Delayed the cut on slow overshoots | Ungated cut adopted after two-stage confirmation; cool side unchanged | Cut on measured temperature only; HEAT only |
+| No guard cut / no guard kick | Both help on clean sensors | Without the cut IAE +2.4 % and many overshoot rows; without the kick +1.4 % | Keep both |
+| Unwind during the cut by integrating the error toward zero without a floor | Removed the real comfort-period integral after an evening setback, slowing the next morning rise | Rise +30..+60 min on slow rooms | Floor `I_floor` |
+| Static energy-balance ratio (`b/a`) for FF holding | Accurate in clean cells but a correct static ratio regulated worse than the biased online value that compensated wall transients | Several cells reached fewer steps with the right ratio | Room model that includes the wall, published only when qualified |
+| Feeding the full learned T_ar to the gains | It is a mean delay, not the effective dead time the 3 L rule expects; halved Kp and slowed rises | Rise 87 to 156 min on a lag room; half the value neutral to better | Half of it, bounded, double-method rule |
+| T_ar for valves | Value only as good as the valve curve; short rises on slow emitters | Left rise short of the setpoint | Off in valve mode |
+| Moments estimator and dedicated lag-calibration night for T_ar | Too few accepted windows (zero with 0.2 C sensors, almost none on fast emitters, none on the real rooms) or too long for slow slabs | Accuracy fine when accepted, availability failed | Morning-step fit plus multi-day room fit |
+| Learning-window variants: centroid-linearised delta; OFF windows anchored after the passive dead time | Gain smaller than the noise floor; regulation mixed | Median b bias only halved or equal, fewer publications | Current windows; remaining items waited for winter data |
+| FF-06 asymmetric dead time on power decreases | No effect with whole-cycle prediction buffers | 115 of 120 cells bit-identical, IAE +0.7 % | Deferred to winter data |
+| FF3 value expiry after two cycles | The stale value seen was an observer artifact | Reproduced as a bench-only effect | Keep FF3 as is |
+| Outdoor value with a 2 h TTL | Overshoot when the sensor returns after expiry | Startup/return overshoot | Last valid value, no TTL |
+| Local ownership projection of scheduler commands | Fragile, duplicated VT logic | Replaced by receipts | VT receipts; older VT: warning, PI unchanged, trim/transfer inactive |
+| Alpha-per-dt EMA, EMA-slope for learning | Identical at 60 s cadence; EMA slopes biased early | Slope estimate vs truth off by up to x8 at 0.1 C/h | Raw temperature slopes |
+| Occupancy ranges, clock-defined nights | Not declared by users, not universal | n/a | Quiet periods from data |
+| PI-to-FFTrim rebalance | Slow trim mutating the integral accumulator | n/a | Causal bumpless transfer with a zero-step invariant |
+| 2R2C in the regulation path | Not identifiable on one night, sleepers and sun bias it, sensors too coarse; also bench plants only | Free fits invent a wall in rooms without mass | 2R2C used for simulation plants and inside the room model, with a reduced 1R1C fallback |
+| Early resolution of the delivered-power model on fast emitters | Not needed: fast emitters learn, they just need more heating phases | A fast electric radiator eventually learned its 8 min lag | Keep current gates |
+
+## 3. Release line timeline
+
+| Release | Capability change |
+|---|---|
+| 0.1.x | Initial SmartPI plugin, HACS, diagnostics sensor, bootstrap tuned to 8 b / 6 a, valve sync, switch to official `vtherm_api` |
+| 0.2.x | Valve power curve linearisation; first setpoint landing cap with residual release |
+| 0.3.x | Landing release safety, deadband proportional shaping, FF3 dead-time prediction, optional PWM forcing at band transitions, learning contexts, directional guard unwind, 96 h PI expiry, device registry fixes |
+| 0.4.0 | Schema v2 diagnostics (history vs live, Recorder-safe); learning pause service; signed COOL model; causal FF trim with bumpless transfer; valve/switch command ownership |
+| 0.5.0 | VT >= 10.6.2 required; governor and landing cap removed; per-tick anti-windup; ownership via VT receipts; outdoor dropout hold; transition hold removed; guard cut on measured temperature; calibration reachability; median dead time; valve repairs |
+| 0.5.1 | Integral balance pools for coarse or slow sensors; learning outcome diagnostics |
+| 0.6.0 | Response lag and delivered power for `a`; faster bootstrap (b 5, a 5 or 4) with guards off; integral works in hours (SIMC Ti, no discarded integral at setpoint change); guard cut hysteresis in sensor steps; stalled-recovery release; heat-loss learning after setpoint decreases; restart handling in bootstrap |
+| 0.6.1 | Guard-cut integral unwind; calibration cool-down no longer stopped on absurd equilibrium |
+| 0.6.2 | Soft stall release of the integral, FF ramp kept across restarts, integral/gains in history, floored guard-cut unwind |
+| 0.6.3 | Dead time measured against the pre-start trend |
+| 0.6.4 | Dead time never shortened on weak evidence |
+| 0.6.5 | Slow FF correction learned in the deadband border with bumpless transfer |
+| 0.6.6 | Integral guard removed; bootstrap counts heating phases and ends after 4 without a measurable lag; restart wait for the indoor temperature in bootstrap |
+| dev 0.7 | Heating balance (observation), emitter-delay learning always on, quiet periods from sun and setpoint, room model with qualified publication, bridged restarts, held command while the indoor temperature is missing, numpy/scipy dependency with lazy fallback |
+
+## 4. Open questions / not yet decided
+
+- Deferred learning items awaiting winter field data (mild-weather `b` is biased low by free gains): power returning inside an OFF window, optional stopping in sliding windows, recomputing stored `a` measurements with the current `b`, dead time bias of about one sensor period, window anchor and EMA alpha per dt.
+- FF-06 per-transition variant (increase delayed by heat dead time, decrease by cool dead time) to be tested on winter dead times.
+- Dedicated tuning for slow emitters (floor heating, heavy radiators): they may overshoot more after a large setpoint increase.
+- Heating balance is observation only; whether regulation or learning should consume it is undecided.
+- Room model: first publication needs about 6 days; short setbacks with heavy walls usually keep it unpublished; valves unsupported; a disturbed-night rule misses gains present every night; sensors of 0.1 C with mass rooms are refused.
+- T_ar learning: valve mode unsupported; very slow slabs (delay of an hour) and rooms with a bootstrap dead time far below the effective one overshoot and may never publish.
+- Guard-cut floor assumes the feed-forward already balances losses; cold start or slow sensors can unwind a still-needed integral.
+- Computing a recommended PWM cycle in SmartPI and publishing it as a repair is a possible follow-up.
+- COOL guard cut and the near-band override clamp are untouched; slow COOL and no-demand runs never block a decision.

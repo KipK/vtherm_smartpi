@@ -1,0 +1,4 @@
+# Project config for Codex. Custom subagents live in .codex/agents/.
+# Keep concurrency low: benches and simulations run one at a time on the dev machine.
+[agents]
+max_concurrent_threads_per_session = 4
