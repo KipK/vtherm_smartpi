@@ -253,9 +253,10 @@ After a heating start, the room warms up progressively: the emitter, the air and
 the sensor take some time before the temperature rises at its full rate. SmartPI
 measures this *response lag* on the first heating phases and ignores the start
 of each phase until the response has settled, then accounts for the heat
-actually delivered. `a` is only published once this lag is known (or after 7
+actually delivered. `a` is only published once this lag is known (or after 4
 heating phases where it could not be measured, for example with a sensor that
-reports too rarely).
+reports too rarely). A heating phase is a period of continuous heating; short
+interruptions of less than 10 minutes do not start a new one.
 
 SmartPI needs 5 valid heating observations for `a`, or 4 when they agree closely.
 
@@ -429,6 +430,8 @@ A restart is bridged when all of these hold:
 - SmartPI was in control before and after it (no open window, power shedding, safety mode or command overridden);
 - the indoor temperature did not jump during the stop;
 - the stored data are recent (a crash that lost the last writes makes the stop look long).
+
+The decision is taken at the first calculation that has the indoor temperature: a sensor that reports a few seconds after the restart does not prevent it, and the stop counts up to that moment.
 
 After a bridged restart, the measurements in progress resume (dead time, learning windows, emitter delay, the windows already counted by the slow feed-forward correction), the heater is taken as unchanged over the stop, nothing is excluded from the emitter delay learning or the room model (both heating only), and learning is not paused. A setpoint changed during the stop is handled at the first tick like any setpoint change. After any other restart SmartPI starts again carefully: the measurements in progress are dropped, learning pauses for one cycle, and only the stop itself is excluded from the learning data.
 

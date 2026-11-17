@@ -719,8 +719,8 @@ class ABEstimator:
                 return
 
             waiting_model = not self.a_model_ready and self.learn_ok_count_a == 0
-            # While the power model is unresolved the collection never reaches
-            # the publication count.
+            # While the power model is unresolved the collection is not
+            # published before the history is full.
             min_a_samples = AB_HISTORY_SIZE + 1 if waiting_model else AB_MIN_SAMPLES_A
 
             a_meas = (dTdt + self.b * delta) / u

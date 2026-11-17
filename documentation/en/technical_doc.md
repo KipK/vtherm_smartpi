@@ -89,7 +89,9 @@ SmartPI leaves `HYSTERESIS` once `b` has 5 measurements and `a` is published.
 measurements when they agree: their median absolute deviation is at most
 `AB_A_CONSISTENT_MAX_REL_MAD = 0.10` of their median. The first publication of
 `a` also waits for the delivered power model (3.7): while the response lag is not
-resolved, measurements are collected without publication. Both buffers continue
+resolved, measurements are collected without publication, until the collection
+holds `AB_HISTORY_SIZE = 31` measurements: the next accepted measurement then
+publishes `a`. Both buffers continue
 filling up to `AB_HISTORY_SIZE = 31` during normal SmartPI regulation. After a
 restart, the restored response lag state sets the phase from the first
 calculation; a state saved without a response lag block waits for the first
@@ -99,7 +101,8 @@ Inside the hysteresis band, the output keeps its previous on/off state. A
 modulated output left by another phase is not a hysteresis state: it is set to 0
 until the next threshold. The on/off state is persisted with the wall-clock time
 of the last calculation. After a bridged restart (5.4), the first calculation
-resumes it inside the band, as an uninterrupted hysteresis would have. Outside the
+that has the indoor temperature resumes it inside the band, as an uninterrupted
+hysteresis would have. Outside the
 band, the thresholds decide. After any other restart, and for a state saved
 without it, the output starts at 0. A heating or cooling phase in progress can
 thus resume after a short restart.
@@ -318,8 +321,8 @@ monotonic clock on load. The heater kept the committed power over the stop, and
 the first update after the restart spans the stop with that power: a passive
 period goes on and the stop counts as passive; an episode goes on, and the first
 observation continues or ends it like any other. After any other restart the
-passive period is dropped and an episode is counted as an ended episode without
-an estimate (`episode interrupted by restart`); a nonzero power then opens a new
+passive period is dropped and an episode ends without an estimate
+(`episode interrupted by restart`); a nonzero power then opens a new
 episode without a known passive period. The crossings come from the raw history
 of the dead time detector, persisted the same way; it holds no sample during the
 stop. A state saved without this context resumes nothing.
@@ -345,8 +348,11 @@ $\tau = T_{ar} - L$:
 $$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-L)/\tau}\right)\mathbb{1}_{t>L}\,dt $$
 
 The model is resolved once the lag is published, or after
-`RESPONSE_LAG_RESOLVE_EPISODES = 7` active episodes without a publication
-(the applied power is then used). Until then, `a` measurements are collected
+`RESPONSE_LAG_RESOLVE_EPISODES = 4` heating phases without a publication
+(the applied power is then used). A heating phase groups the active episodes
+separated by power cuts shorter than `RESPONSE_LAG_PHASE_MIN_OFF_S = 600 s`: an
+episode that starts less than 600 s after the end of the previous one does not
+count as a new phase. Until then, `a` measurements are collected
 without publication. When the published lag appears or changes by more than
 `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` before the first publication of `a`, the
 collected measurements are recomputed with the new delivered power. Only the
@@ -355,11 +361,11 @@ since their correction depends on the shape of the response.
 
 The state is published in `analysis.learning.response_lag` (`lag_s`, `estimates`,
 `episodes`, `episodes_target`, `episode_median_s`, `last_reason`) and persisted
-with the learning state. `episodes` counts the active episodes ended since the
+with the learning state. `episodes` counts the heating phases ended since the
 start of the learning, also after the lag is published; `episodes_target` is
 `RESPONSE_LAG_RESOLVE_EPISODES`. When both collections have reached their count
 and `a` waits for this model, `learning.bootstrap_status` reads
-`step2 - waiting response lag: estimates N, episodes K/7`.
+`step2 - waiting response lag: estimates N, heating phases K/4`.
 
 The lag is learned on constant-power episodes, which the hysteresis bootstrap
 provides. In PWM regulation the duty cycle changes from cycle to cycle, so an
@@ -1199,8 +1205,11 @@ unloaded or Home Assistant stops, and none at the start in heating or cooling
 before its first cycle: over a short stop the heater keeps its last commanded
 state. Such a
 stop is only a gap of a few samples. `restart_bridge.py` decides once, at the
-first calculation of a ready thermostat (a target is set) after a load, whether
-the restart is **bridged**. All of these must hold:
+first calculation of a ready thermostat (a target and an indoor temperature are
+available) after a load, whether the restart is **bridged**. Until then the
+restart stays pending: a sensor that reports a few seconds after the load does
+not prevent it, and the downtime is measured up to the calculation that decides.
+All of these must hold:
 
 - the downtime, on the wall clock from the oldest last tick of the three stores
   (algorithm, T_ar learning, room model) to the first tick, is at most
@@ -1367,7 +1376,8 @@ acceptance or rejection without changing the learning decision.
 | `AB_BALANCE_POOL_MAX_SEGMENTS` | `12`   |
 | `RESPONSE_LAG_HISTORY`         | `7`    |
 | `RESPONSE_LAG_MIN_ESTIMATES`   | `3`    |
-| `RESPONSE_LAG_RESOLVE_EPISODES` | `7`   |
+| `RESPONSE_LAG_RESOLVE_EPISODES` | `4`   |
+| `RESPONSE_LAG_PHASE_MIN_OFF_S` | `600` |
 | `RESPONSE_LAG_MAX_REL_UNC`     | `0.15` |
 | `RESPONSE_LAG_UNC_FLOOR_S`     | `30`   |
 | `RESPONSE_LAG_MIN_OFF_S`       | `1800` |

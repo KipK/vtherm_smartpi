@@ -815,14 +815,15 @@ class SmartPI:
                 quality=trace_quality,
             )
         self._update_deadtime_episode_status(linear_power, hvac_mode, now)
-        if self.tar_learning is not None:
+        # The learning components resume their histories once the restart is decided.
+        if self.tar_learning is not None and not self.restart.pending:
             # linear_power is the heat-equivalent power of the applied command
             # (valve curve inverted), the input unit of the model a and b.
             self.tar_learning.on_applied(
                 time.time(), linear_power, cycle_start, self._cycle_min, hvac_mode,
                 valve=self._valve_mode_enabled,
             )
-        if self.room_model is not None:
+        if self.room_model is not None and not self.restart.pending:
             try:
                 self.room_model.on_applied(
                     time.time(), linear_power, cycle_start, self._cycle_min, hvac_mode,
@@ -1175,7 +1176,7 @@ class SmartPI:
 
         excluded: why the applied power is not SmartPI's command (None when it is).
         """
-        if self.tar_learning is None:
+        if self.tar_learning is None or self.restart.pending:
             return
         if excluded is None and self.vt_safety_override:
             excluded = "safety mode"
@@ -1211,7 +1212,7 @@ class SmartPI:
         excluded: why the applied power is not SmartPI's command (None when it is).
         measure_id: identity of the indoor temperature measurement (its time stamp).
         """
-        if self.room_model is None:
+        if self.room_model is None or self.restart.pending:
             return
         if excluded is None and self.vt_safety_override:
             excluded = "safety mode"
@@ -1393,9 +1394,14 @@ class SmartPI:
         current_temp: float | None,
         power_shedding: bool = False,
     ) -> RestartDecision | None:
-        """Decide the restart once, at the first tick after a load, and apply it to every component."""
+        """Decide the restart once, at the first tick after a load that has the indoor temperature.
+
+        The restart stays pending, and no component is fed, until that tick.
+        """
         if not self.restart.pending:
             return self.restart.decision
+        if current_temp is None:
+            return None
         stores = []
         for manager in (self.tar_learning, self.room_model):
             context = manager.restart_context() if manager is not None else None
@@ -2232,8 +2238,9 @@ class SmartPI:
                 )
 
         # The restart of this session is decided at the first tick of a ready
-        # thermostat (a target is set), then the tick context is kept.
-        if target_temp is not None:
+        # thermostat (a target and an indoor temperature are available), then
+        # the tick context is kept. It stays pending while a sensor is missing.
+        if target_temp is not None and current_temp is not None:
             if self.restart.pending:
                 self.resolve_restart(hvac_mode, current_temp, power_shedding)
             self.restart.note_tick(
@@ -2245,7 +2252,8 @@ class SmartPI:
                 target=target_temp,
             )
 
-        # The saved bootstrap output only applies to the first calculation.
+        # The saved bootstrap output only applies to the first calculation that
+        # decides the restart; it stays pending while a sensor is missing.
         hysteresis_restore = self._take_hysteresis_restore(hvac_mode)
 
         # --- 1. Validation & Handle OFF ---

@@ -249,7 +249,7 @@ Une fois que `b` dispose de suffisamment d'observations pour être considéré c
 
 À partir de ces observations, il calcule `a`, le gain de chauffe. Ce paramètre représente l'efficacité avec laquelle votre système de chauffage fait monter la température intérieure.
 
-Après un démarrage de chauffe, la pièce se réchauffe progressivement : l'émetteur, l'air et la sonde mettent un certain temps avant que la température monte à plein régime. SmartPI mesure ce *retard de réponse* sur les premières phases de chauffe et ignore le début de chaque phase tant que la réponse ne s'est pas stabilisée, puis tient compte de la chaleur réellement délivrée. `a` n'est publié qu'une fois ce retard connu (ou après 7 phases de chauffe où il n'a pas pu être mesuré, par exemple avec une sonde qui rapporte trop rarement).
+Après un démarrage de chauffe, la pièce se réchauffe progressivement : l'émetteur, l'air et la sonde mettent un certain temps avant que la température monte à plein régime. SmartPI mesure ce *retard de réponse* sur les premières phases de chauffe et ignore le début de chaque phase tant que la réponse ne s'est pas stabilisée, puis tient compte de la chaleur réellement délivrée. `a` n'est publié qu'une fois ce retard connu (ou après 4 phases de chauffe où il n'a pas pu être mesuré, par exemple avec une sonde qui rapporte trop rarement). Une phase de chauffe est une période de chauffe continue ; les interruptions de moins de 10 minutes n'en démarrent pas une autre.
 
 SmartPI a besoin de 5 observations de chauffe valides pour `a`, ou de 4 lorsqu'elles concordent nettement.
 
@@ -422,6 +422,8 @@ Un redémarrage est ponté lorsque toutes ces conditions sont réunies :
 - SmartPI avait la main avant et après (pas de fenêtre ouverte, de délestage, de mode sécurité ni de commande remplacée) ;
 - la température intérieure n'a pas sauté pendant l'arrêt ;
 - les données stockées sont récentes (un plantage qui a perdu les dernières écritures fait paraître l'arrêt long).
+
+La décision est prise au premier calcul qui dispose de la température intérieure : une sonde qui rapporte quelques secondes après le redémarrage ne l'empêche pas, et l'arrêt est compté jusqu'à ce moment.
 
 Après un redémarrage ponté, les mesures en cours reprennent (temps mort, fenêtres d'apprentissage, retard de l'émetteur, fenêtres déjà comptées par la correction lente du feed-forward), le chauffage est considéré comme inchangé pendant l'arrêt, rien n'est exclu de l'apprentissage du retard de l'émetteur ni du modèle de pièce (tous deux en chauffage uniquement), et l'apprentissage n'est pas suspendu. Une consigne modifiée pendant l'arrêt est traitée au premier tick comme tout changement de consigne. Après tout autre redémarrage, SmartPI repart avec prudence : les mesures en cours sont abandonnées, l'apprentissage est suspendu pendant un cycle, et seul l'arrêt lui-même est exclu des données d'apprentissage.
 

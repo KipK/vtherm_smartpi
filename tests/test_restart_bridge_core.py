@@ -223,6 +223,59 @@ def test_bridged_restart_restores_the_committed_power() -> None:
     assert diag == {"bridged": True, "downtime_s": 60, "reason": None}
 
 
+def _restored_without_temperature(run: _Run) -> SmartPI:
+    """Restored algorithm that calculated once with no indoor temperature, components not yet fed."""
+    algo = _smartpi(run.saved)
+    algo.room_model = MagicMock(**{"restart_context.return_value": None})
+    algo.tar_learning = MagicMock(**{"restart_context.return_value": None})
+    algo.calculate(target_temp=run.setpoint, current_temp=None, ext_current_temp=T_EXT, slope=0,
+                   hvac_mode=VThermHvacMode_HEAT)
+    assert algo.resolve_restart(VThermHvacMode_HEAT, None) is None
+    assert algo.restart.pending
+    return algo
+
+
+def test_restart_waits_for_the_indoor_temperature_and_is_bridged_within_the_delay() -> None:
+    run = _to_heating_episode()
+    committed = run.algo.committed_on_percent
+    run.stop()
+    run.tick()
+    with _clocks(run.clock):
+        algo = _restored_without_temperature(run)
+        # No component is fed, and none settles its restart, while the decision waits.
+        algo._commit_applied_command(0.0, VThermHvacMode_HEAT, None, cycle_start=True)
+        algo.observe_room_model(None, T_EXT, VThermHvacMode_HEAT)
+        algo.observe_tar_learning(run.setpoint, None, T_EXT, VThermHvacMode_HEAT)
+        algo.room_model.on_applied.assert_not_called()
+        algo.room_model.observe.assert_not_called()
+        algo.tar_learning.on_applied.assert_not_called()
+        algo.tar_learning.observe.assert_not_called()
+        assert algo.restart.save() == run.saved["restart"]
+
+        run.clock.t += 5.0
+        decision = algo.resolve_restart(VThermHvacMode_HEAT, run.room.reading)
+        assert decision.bridged
+        assert decision.downtime_s == pytest.approx(TICK_S + 5.0, abs=1.0)
+        algo.room_model.on_restart.assert_called_once()
+        algo.tar_learning.on_restart.assert_called_once()
+        assert algo.committed_on_percent == pytest.approx(committed)
+        algo.observe_room_model(run.room.reading, T_EXT, VThermHvacMode_HEAT)
+        algo.room_model.observe.assert_called_once()
+
+
+def test_restart_is_not_bridged_when_the_indoor_temperature_comes_back_too_late() -> None:
+    run = _to_heating_episode()
+    run.stop()
+    run.tick()
+    with _clocks(run.clock):
+        algo = _restored_without_temperature(run)
+        run.clock.t += RESTART_BRIDGE_MAX_GAP_S
+        decision = algo.resolve_restart(VThermHvacMode_HEAT, run.room.reading)
+    assert decision.bridged is False
+    assert decision.reason == "stop too long"
+    assert decision.downtime_s > RESTART_BRIDGE_MAX_GAP_S
+
+
 def test_a_restart_context_with_obsolete_integral_guard_keys_still_bridges() -> None:
     """A context saved by an earlier version still loads: its integral guard keys are ignored."""
     run = _to_heating_episode()

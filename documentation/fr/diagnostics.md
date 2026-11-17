@@ -103,8 +103,8 @@ est disponible, `twin`.
 |---|---|
 | `lag_s` | Retard de réponse publié en secondes, `null` tant qu'il n'existe pas un ensemble cohérent d'estimations |
 | `estimates` | Nombre d'estimations conservées (7 au plus) |
-| `episodes` | Nombre d'épisodes actifs terminés depuis le début de l'apprentissage ; il continue après la publication du retard et peut dépasser `episodes_target` |
-| `episodes_target` | Nombre d'épisodes après lequel le modèle de puissance délivrée est résolu sans retard publié (`7`) |
+| `episodes` | Nombre de phases de chauffe terminées depuis le début de l'apprentissage (des périodes de chauffe séparées par moins de 10 minutes sans chauffe ne comptent que pour une phase) ; il continue après la publication du retard et peut dépasser `episodes_target` |
+| `episodes_target` | Nombre de phases de chauffe après lequel le modèle de puissance délivrée est résolu sans retard publié (`4`) |
 | `episode_median_s` | Durée médiane des épisodes actifs récents en secondes, `null` avec moins de 3 épisodes |
 | `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage). `episode interrupted by restart` : épisode en cours lors d'un redémarrage non ponté, non repris, compté sans estimation. Peut être vide juste après un redémarrage |
 
@@ -114,7 +114,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 |---|---|
 | `step1 - deadtime: heat:… cool:…` | Attente des temps morts actif et passif |
 | `step2 - collecting emeas: A:n/5 B:n/5` | Collecte des mesures de `a` et `b` |
-| `step2 - waiting response lag: estimates N, episodes K/7` | Collectes complètes ; la publication de `a` attend le modèle de puissance délivrée (retard publié, ou `K` atteint 7) |
+| `step2 - waiting response lag: estimates N, heating phases K/4` | Collectes complètes ; la publication de `a` attend le modèle de puissance délivrée (retard publié, `K` atteint 4, ou 31 mesures de `a` collectées) |
 
 `valve` vaut `null` sauf si le thermostat pilote une vanne. En mode vanne, il contient :
 
