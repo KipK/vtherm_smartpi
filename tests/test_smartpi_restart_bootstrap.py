@@ -45,12 +45,12 @@ def _waiting_state(response_lag: dict | None) -> dict:
     return state
 
 
-# Three inconsistent estimates, four episodes: the lag is not resolved.
+# Three inconsistent estimates, three heating phases: the lag is not resolved.
 _UNRESOLVED = {
     "estimates": [[200.0, 20.0], [700.0, 30.0], [1400.0, 40.0]],
     "durations": [1500.0, 1500.0, 1500.0, 1500.0],
     "published": None,
-    "episodes": 4,
+    "episodes": 3,
     "hvac_mode": "heat",
 }
 
@@ -80,7 +80,7 @@ def test_first_calculation_after_restart_is_on_off_in_the_band():
 
 
 def test_restored_resolved_lag_leaves_the_bootstrap():
-    resolved = dict(_UNRESOLVED, episodes=7)
+    resolved = dict(_UNRESOLVED, episodes=4)
     smartpi = _smartpi("restored", _waiting_state(resolved))
 
     assert smartpi.est.a_model_ready is True
@@ -94,7 +94,7 @@ def test_legacy_state_without_response_lag_keeps_the_default():
 
 
 def test_reset_learning_aligns_the_model_flag():
-    smartpi = _smartpi("restored", _waiting_state(dict(_UNRESOLVED, episodes=7)))
+    smartpi = _smartpi("restored", _waiting_state(dict(_UNRESOLVED, episodes=4)))
     assert smartpi.est.a_model_ready is True
 
     smartpi.reset_learning()
@@ -146,11 +146,11 @@ def test_bootstrap_status_names_the_response_lag_wait():
     published = smartpi.get_published_diagnostics()
 
     assert published["learning"]["bootstrap_status"] == (
-        "step2 - waiting response lag: estimates 3, episodes 4/7"
+        "step2 - waiting response lag: estimates 3, heating phases 3/4"
     )
     response_lag = published["analysis"]["learning"]["response_lag"]
-    assert response_lag["episodes"] == 4
-    assert response_lag["episodes_target"] == 7
+    assert response_lag["episodes"] == 3
+    assert response_lag["episodes_target"] == 4
 
 
 def test_bootstrap_status_keeps_the_collection_counts_below_target():

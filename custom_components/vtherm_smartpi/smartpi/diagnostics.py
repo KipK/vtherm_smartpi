@@ -204,7 +204,7 @@ def _bootstrap_state(algo: SmartPI) -> str | None:
         lag = algo.learn_win.response_lag
         return (
             f"step2 - waiting response lag: estimates {lag.estimates_count}, "
-            f"episodes {lag.episodes_count}/{RESPONSE_LAG_RESOLVE_EPISODES}"
+            f"heating phases {lag.episodes_count}/{RESPONSE_LAG_RESOLVE_EPISODES}"
         )
     return f"step2 - collecting emeas: A:{nb_a}/{AB_MIN_SAMPLES_A} B:{nb_b}/{AB_MIN_SAMPLES_B}"
 

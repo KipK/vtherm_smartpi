@@ -418,3 +418,52 @@ def test_window_closed_at_a_gap_uses_only_the_data_before_it():
     assert est._a_obs_hist
     # No submitted slope mixes the rising data with the post-gap cooling.
     assert all(obs[0] == pytest.approx(0.025, rel=0.05) for obs in est._a_obs_hist)
+
+
+def _power_runs(est: ResponseLagEstimator, runs: list[tuple[float, float]], now: float = 1000.0) -> float:
+    """Apply (power, seconds) runs at a 10 s step, without temperature history."""
+    for u, seconds in runs:
+        for _ in range(int(seconds / 10.0)):
+            now += 10.0
+            est.observe(now=now, dt_s=10.0, u=u, t_ext=T_EXT, hvac_mode=VThermHvacMode_HEAT,
+                        b=None, tin_history=[])
+    return now
+
+
+def test_runs_separated_by_short_power_cuts_count_as_one_heating_phase():
+    est = ResponseLagEstimator("t")
+    runs = [(0.0, 1800.0)]
+    for off_s in (60.0, 120.0, 180.0, 90.0):
+        runs += [(1.0, 300.0), (0.0, off_s)]
+    runs += [(1.0, 300.0), (0.0, 1800.0)]
+    _power_runs(est, runs)
+    assert est.episodes_count == 1
+
+
+def test_runs_separated_by_a_long_power_cut_count_as_two_heating_phases():
+    est = ResponseLagEstimator("t")
+    _power_runs(est, [(0.0, 1800.0), (1.0, 300.0), (0.0, 1200.0), (1.0, 300.0), (0.0, 1800.0)])
+    assert est.episodes_count == 2
+
+
+def test_last_episode_end_survives_save_and_load():
+    est = ResponseLagEstimator("t")
+    now = _power_runs(est, [(0.0, 1800.0), (1.0, 300.0), (0.0, 60.0)])
+    assert est.episodes_count == 1
+    saved = est.save_state()
+    assert saved["last_episode_end_wall"] is not None
+    restored = ResponseLagEstimator("t")
+    restored.load_state(saved)
+    assert restored._last_episode_end == pytest.approx(est._last_episode_end, abs=1e-3)
+    # An ON run right after the restart continues the phase.
+    now = _power_runs(restored, [(1.0, 300.0), (0.0, 1800.0)], now)
+    assert restored.episodes_count == 1
+    restored.clear()
+    assert restored._last_episode_end is None
+
+
+@pytest.mark.parametrize("value", [None, "x", float("nan"), True])
+def test_invalid_last_episode_end_means_no_previous_episode(value):
+    est = ResponseLagEstimator("t")
+    est.load_state({"episodes": 2, "last_episode_end_wall": value})
+    assert est._last_episode_end is None

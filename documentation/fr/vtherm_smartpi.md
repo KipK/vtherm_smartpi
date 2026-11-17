@@ -247,7 +247,7 @@ Une fois que `b` dispose de suffisamment d'observations pour être considéré c
 
 À partir de ces observations, il calcule `a`, le gain de chauffe. Ce paramètre représente l'efficacité avec laquelle votre système de chauffage fait monter la température intérieure.
 
-Après un démarrage de chauffe, la pièce se réchauffe progressivement : l'émetteur, l'air et la sonde mettent un certain temps avant que la température monte à plein régime. SmartPI mesure ce *retard de réponse* sur les premières phases de chauffe et ignore le début de chaque phase tant que la réponse ne s'est pas stabilisée, puis tient compte de la chaleur réellement délivrée. `a` n'est publié qu'une fois ce retard connu (ou après 7 phases de chauffe où il n'a pas pu être mesuré, par exemple avec une sonde qui rapporte trop rarement).
+Après un démarrage de chauffe, la pièce se réchauffe progressivement : l'émetteur, l'air et la sonde mettent un certain temps avant que la température monte à plein régime. SmartPI mesure ce *retard de réponse* sur les premières phases de chauffe et ignore le début de chaque phase tant que la réponse ne s'est pas stabilisée, puis tient compte de la chaleur réellement délivrée. `a` n'est publié qu'une fois ce retard connu (ou après 4 phases de chauffe où il n'a pas pu être mesuré, par exemple avec une sonde qui rapporte trop rarement). Une phase de chauffe est une période de chauffe continue ; les interruptions de moins de 10 minutes n'en démarrent pas une autre.
 
 SmartPI a besoin de 5 observations de chauffe valides pour `a`, ou de 4 lorsqu'elles concordent nettement.
 

@@ -251,9 +251,10 @@ After a heating start, the room warms up progressively: the emitter, the air and
 the sensor take some time before the temperature rises at its full rate. SmartPI
 measures this *response lag* on the first heating phases and ignores the start
 of each phase until the response has settled, then accounts for the heat
-actually delivered. `a` is only published once this lag is known (or after 7
+actually delivered. `a` is only published once this lag is known (or after 4
 heating phases where it could not be measured, for example with a sensor that
-reports too rarely).
+reports too rarely). A heating phase is a period of continuous heating; short
+interruptions of less than 10 minutes do not start a new one.
 
 SmartPI needs 5 valid heating observations for `a`, or 4 when they agree closely.
 

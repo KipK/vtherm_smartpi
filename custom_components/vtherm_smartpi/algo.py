@@ -1890,8 +1890,13 @@ class SmartPI:
                     self._name,
                 )
 
-        # The saved bootstrap output only applies to the first calculation.
-        hysteresis_restore = self._take_hysteresis_restore(now, hvac_mode)
+        # The saved bootstrap output only applies to the first calculation that
+        # has both temperatures; it stays pending while a sensor is missing.
+        hysteresis_restore = (
+            None
+            if current_temp is None or target_temp is None
+            else self._take_hysteresis_restore(now, hvac_mode)
+        )
 
         # --- 1. Validation & Handle OFF ---
         if self._validate_and_handle_off(target_temp, current_temp, hvac_mode, power_shedding, off_reason):

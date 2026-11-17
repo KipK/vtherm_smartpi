@@ -296,9 +296,11 @@ AB_BALANCE_MIN_SEGMENT_MIN = 15.0      # Shorter segments are dominated by noise
 # gates and the delivered power model of the a learning.
 RESPONSE_LAG_HISTORY = 7               # Estimates kept (published value: their median)
 RESPONSE_LAG_MIN_ESTIMATES = 3         # Estimates required before the lag is published
-# Active episodes after which an unpublished lag is given up for the a
+# Heating phases after which an unpublished lag is given up for the a
 # bootstrap (the applied power is then used for the a measurements).
-RESPONSE_LAG_RESOLVE_EPISODES = 7
+RESPONSE_LAG_RESOLVE_EPISODES = 4
+# Power cut shorter than this between two active episodes: same heating phase.
+RESPONSE_LAG_PHASE_MIN_OFF_S = 600.0
 # Publication: combined standard deviation of the inverse-variance weighted
 # estimates at most this fraction of their weighted median (floor for short lags).
 RESPONSE_LAG_MAX_REL_UNC = 0.15

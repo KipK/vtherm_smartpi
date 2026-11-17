@@ -32,6 +32,7 @@ from .const import (
     RESPONSE_LAG_MIN_CROSSINGS,
     RESPONSE_LAG_MIN_OFF_LAGS,
     RESPONSE_LAG_MIN_OFF_S,
+    RESPONSE_LAG_PHASE_MIN_OFF_S,
     RESPONSE_LAG_PASSIVE_SPAN_S,
     RESPONSE_LAG_RESOLVE_EPISODES,
     RESPONSE_LAG_RESOLVABLE_FRAC,
@@ -180,8 +181,12 @@ class ResponseLagEstimator:
         self._estimates: deque[Tuple[float, float]] = deque(maxlen=RESPONSE_LAG_HISTORY)
         self._published: float | None = None
         self._durations: deque[float] = deque(maxlen=RESPONSE_LAG_HISTORY)
-        # Active episodes ended since the start of the learning.
+        # Heating phases ended since the start of the learning: active episodes
+        # separated by less than RESPONSE_LAG_PHASE_MIN_OFF_S of power cut
+        # count once.
         self._episodes: int = 0
+        # End of the last ended active episode (monotonic s), None if none.
+        self._last_episode_end: float | None = None
         self._model_hvac_mode: str | None = None
         self._last_reason: str = ""
         self._clear_runtime()
@@ -246,7 +251,7 @@ class ResponseLagEstimator:
         """Whether the delivered power model is settled for the a learning.
 
         It is once a lag is published, or once RESPONSE_LAG_RESOLVE_EPISODES
-        active episodes have ended without a publication (the installation
+        heating phases have ended without a publication (the installation
         does not resolve its lag: the applied power is used).
         """
         return self._published is not None or self._episodes >= RESPONSE_LAG_RESOLVE_EPISODES
@@ -257,7 +262,7 @@ class ResponseLagEstimator:
 
     @property
     def episodes_count(self) -> int:
-        """Active episodes ended since the start of the learning."""
+        """Heating phases ended since the start of the learning."""
         return self._episodes
 
     @property
@@ -446,8 +451,15 @@ class ResponseLagEstimator:
             self._ep_off_before_s = episode["off_before_s"]
             self._ep_t_ext = episode["t_ext"]
             return
-        self._episodes += 1
+        self._count_episode(episode["start"], restore["last_obs"])
         self._last_reason = "episode interrupted by restart"
+
+    def _count_episode(self, t_start: float, t_end: float) -> None:
+        """Count an ended active episode unless it continues the previous phase."""
+        previous = self._last_episode_end
+        if previous is None or t_start - previous >= RESPONSE_LAG_PHASE_MIN_OFF_S:
+            self._episodes += 1
+        self._last_episode_end = t_end
 
     def _on_gap(
         self,
@@ -540,7 +552,7 @@ class ResponseLagEstimator:
         if duration <= 0.0:
             return
         self._durations.append(duration)
-        self._episodes += 1
+        self._count_episode(t_start, t_end)
         if not self._ep_const:
             self._last_reason = "power not constant"
             return
@@ -652,6 +664,7 @@ class ResponseLagEstimator:
         self._estimates.clear()
         self._durations.clear()
         self._episodes = 0
+        self._last_episode_end = None
         self._published = None
         self._last_reason = ""
         self._clear_runtime()
@@ -685,6 +698,7 @@ class ResponseLagEstimator:
             "durations": list(self._durations),
             "published": self._published,
             "episodes": self._episodes,
+            "last_episode_end_wall": monotonic_to_wall_ts(self._last_episode_end),
             "hvac_mode": self._model_hvac_mode,
         }
         context = self._restart_context()
@@ -781,6 +795,13 @@ class ResponseLagEstimator:
         episodes = state.get("episodes")
         if isinstance(episodes, int) and episodes >= 0:
             self._episodes = episodes
+        end_wall = state.get("last_episode_end_wall")
+        if (
+            isinstance(end_wall, (int, float))
+            and not isinstance(end_wall, bool)
+            and math.isfinite(end_wall)
+        ):
+            self._last_episode_end = wall_to_monotonic_ts(end_wall)
         published = state.get("published")
         if isinstance(published, (int, float)) and math.isfinite(published) and published >= 0.0:
             self._published = float(published)

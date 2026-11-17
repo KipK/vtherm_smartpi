@@ -325,3 +325,19 @@ def test_invalid_restart_context_is_ignored(restart):
     est.load_state({"estimates": [], "episodes": 2, "hvac_mode": "heat", "restart": restart})
     assert est._restore is None
     assert est.episodes_count == 2
+
+
+def test_interrupted_episode_and_the_run_after_a_short_stop_count_once():
+    run = _Run()
+    _cycles(run, 2)
+    run.run(0.0, 60.0)
+    run.run(1.0, 6.0)
+    run.stop()
+    run.run(1.0, 2.0)
+    run.start()
+    # The power differs after the restart: the episode is counted as ended.
+    run.run(1.0, 1.0, est_u=0.5)
+    assert run.est.episodes_count == 3
+    # The run started by the restart ends: same heating phase.
+    run.run(0.0, 10.0)
+    assert run.est.episodes_count == 3

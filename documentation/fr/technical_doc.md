@@ -90,7 +90,8 @@ SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 5 mesures et que `a` est publ
 concordent : leur écart absolu médian est au plus `AB_A_CONSISTENT_MAX_REL_MAD = 0.10`
 de leur médiane. La première publication de `a` attend aussi le modèle de puissance
 délivrée (3.7) : tant que le retard de réponse n'est pas résolu, les mesures sont
-collectées sans publication. Les deux buffers continuent ensuite à se remplir jusqu'à
+collectées sans publication, jusqu'à ce que la collecte atteigne `AB_HISTORY_SIZE = 31`
+mesures : la mesure admise suivante publie alors `a`. Les deux buffers continuent ensuite à se remplir jusqu'à
 `AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale. Après un redémarrage,
 l'état restauré du retard de réponse fixe la phase dès le premier calcul ; un état
 sauvegardé sans bloc de retard de réponse attend la première mise à jour de l'apprentissage.
@@ -98,7 +99,7 @@ sauvegardé sans bloc de retard de réponse attend la première mise à jour de 
 Dans la bande d'hystérésis, la sortie conserve son état tout-ou-rien précédent. Une
 sortie modulée laissée par une autre phase n'est pas un état d'hystérésis : elle est
 ramenée à 0 jusqu'au prochain seuil. L'état tout-ou-rien est persisté avec l'heure
-murale du dernier calcul. Au redémarrage, le premier calcul le reprend dans la bande
+murale du dernier calcul. Au redémarrage, le premier calcul disposant de la température intérieure et de la consigne le reprend dans la bande
 lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` (3.7) et que
 le mode HVAC est inchangé, comme l'aurait fait une hystérésis jamais interrompue.
 Hors de la bande, les seuils décident. Sinon, et pour un état sauvegardé sans cet
@@ -291,7 +292,7 @@ La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée
 
 Les `RESPONSE_LAG_HISTORY = 7` dernières estimations sont conservées. Le retard est publié lorsqu'au moins `RESPONSE_LAG_MIN_ESTIMATES = 3` estimations donnent un écart-type combiné de leur médiane pondérée par l'inverse des variances au plus égal à `RESPONSE_LAG_MAX_REL_UNC = 0.15` de cette médiane (plancher `RESPONSE_LAG_UNC_FLOOR_S = 30 s`) ; les estimations situées à plus de trois écarts-types de la médiane ne sont pas combinées. Un ensemble incohérent conserve la valeur publiée, afin que des estimations dispersées n'activent et ne désactivent pas le modèle de puissance délivrée. Une discontinuité de plus de 1 s entre deux mises à jour termine l'épisode au dernier instant observé, et la coupure de puissance est datée à la reprise.
 
-Un redémarrage reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive, ou début, puissance, constance, durée passive préalable et température extérieure de l'épisode) et reconverti en horloge monotone au chargement. Il s'applique à la première observation qui suit, lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` et que le mode HVAC est inchangé. Pendant un arrêt court, l'actionneur conserve son dernier état ; au-delà (hôte arrêté, coupure de courant, mise à jour), la puissance n'est pas connue. Une période passive reprend, et l'arrêt compte comme passif. Un épisode reprend lorsque la première puissance appliquée après le redémarrage est égale à la sienne à `RESPONSE_LAG_U_TOL` près. Sinon, il est compté comme épisode terminé, sans estimation (`episode interrupted by restart`), et une puissance non nulle ouvre un nouvel épisode sans période passive connue. Les franchissements viennent de l'historique brut du détecteur de temps mort, persisté de la même façon ; il ne contient aucun échantillon pendant l'arrêt. Un état sauvegardé sans ce contexte ne reprend rien.
+Un redémarrage reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive, ou début, puissance, constance, durée passive préalable et température extérieure de l'épisode) et reconverti en horloge monotone au chargement. Il s'applique à la première observation qui suit, lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` et que le mode HVAC est inchangé. Pendant un arrêt court, l'actionneur conserve son dernier état ; au-delà (hôte arrêté, coupure de courant, mise à jour), la puissance n'est pas connue. Une période passive reprend, et l'arrêt compte comme passif. Un épisode reprend lorsque la première puissance appliquée après le redémarrage est égale à la sienne à `RESPONSE_LAG_U_TOL` près. Sinon, il se termine sans estimation (`episode interrupted by restart`), et une puissance non nulle ouvre un nouvel épisode sans période passive connue. Les franchissements viennent de l'historique brut du détecteur de temps mort, persisté de la même façon ; il ne contient aucun échantillon pendant l'arrêt. Un état sauvegardé sans ce contexte ne reprend rien.
 
 L'inversion suppose une réponse à retard unique (premier ordre). Elle ne restitue le temps de séjour moyen que pour un tel émetteur, ou lorsque l'épisode dure plusieurs fois le retard. Sur un émetteur qui combine un retard pur et une inertie, ou deux inerties successives, l'ordonnée à l'origine d'un épisode court est plus tardive que celle d'un retard unique de même temps de séjour : le retard publié est alors surestimé, d'environ 1,3 fois sur les formes simulées, ou n'est jamais publié lorsque l'épisode reste dans le régime transitoire.
 
@@ -299,9 +300,9 @@ L'ordonnée à l'origine fixe le retard moyen de la réponse, pas sa forme. Le m
 
 $$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-L)/\tau}\right)\mathbb{1}_{t>L}\,dt $$
 
-Le modèle est résolu dès que le retard est publié, ou après `RESPONSE_LAG_RESOLVE_EPISODES = 7` épisodes actifs sans publication (la puissance appliquée est alors utilisée). Jusque-là, les mesures de `a` sont collectées sans publication. Lorsque le retard publié apparaît ou varie de plus de `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` avant la première publication de `a`, les mesures collectées sont recalculées avec la nouvelle puissance délivrée. Seules les fenêtres admises par la porte de stabilisation sont recalculées ; les autres sont écartées, puisque leur correction dépend de la forme de la réponse.
+Le modèle est résolu dès que le retard est publié, ou après `RESPONSE_LAG_RESOLVE_EPISODES = 4` phases de chauffe sans publication (la puissance appliquée est alors utilisée). Une phase de chauffe regroupe les épisodes actifs séparés par des coupures de puissance inférieures à `RESPONSE_LAG_PHASE_MIN_OFF_S = 600 s` : un épisode qui commence moins de 600 s après la fin du précédent ne compte pas comme une phase supplémentaire. Jusque-là, les mesures de `a` sont collectées sans publication. Lorsque le retard publié apparaît ou varie de plus de `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` avant la première publication de `a`, les mesures collectées sont recalculées avec la nouvelle puissance délivrée. Seules les fenêtres admises par la porte de stabilisation sont recalculées ; les autres sont écartées, puisque leur correction dépend de la forme de la réponse.
 
-L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`, `episodes_target`, `episode_median_s`, `last_reason`) et persisté avec l'état d'apprentissage. `episodes` compte les épisodes actifs terminés depuis le début de l'apprentissage, y compris après la publication du retard ; `episodes_target` vaut `RESPONSE_LAG_RESOLVE_EPISODES`. Lorsque les deux collectes ont atteint leur seuil et que `a` attend ce modèle, `learning.bootstrap_status` vaut `step2 - waiting response lag: estimates N, episodes K/7`.
+L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`, `episodes_target`, `episode_median_s`, `last_reason`) et persisté avec l'état d'apprentissage. `episodes` compte les phases de chauffe terminées depuis le début de l'apprentissage, y compris après la publication du retard ; `episodes_target` vaut `RESPONSE_LAG_RESOLVE_EPISODES`. Lorsque les deux collectes ont atteint leur seuil et que `a` attend ce modèle, `learning.bootstrap_status` vaut `step2 - waiting response lag: estimates N, heating phases K/4`.
 
 Le retard est appris sur des épisodes à puissance constante, que fournit le bootstrap par hystérésis. En régulation PWM, le rapport cyclique change d'un cycle à l'autre : une installation déjà sortie du bootstrap en fournit donc rarement.
 
@@ -858,7 +859,8 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `AB_BALANCE_POOL_MAX_SEGMENTS` | `12`   |
 | `RESPONSE_LAG_HISTORY`         | `7`    |
 | `RESPONSE_LAG_MIN_ESTIMATES`   | `3`    |
-| `RESPONSE_LAG_RESOLVE_EPISODES` | `7`   |
+| `RESPONSE_LAG_RESOLVE_EPISODES` | `4`   |
+| `RESPONSE_LAG_PHASE_MIN_OFF_S` | `600` |
 | `RESPONSE_LAG_MAX_REL_UNC`     | `0.15` |
 | `RESPONSE_LAG_UNC_FLOOR_S`     | `30`   |
 | `RESPONSE_LAG_MIN_OFF_S`       | `1800` |
