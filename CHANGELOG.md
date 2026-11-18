@@ -82,6 +82,9 @@ All notable changes to this project will be documented in this file.
 - Learning reset: `reset_smartpi_learning` also restarts the supervision of the
   automatic calibration. Its snapshot of the discarded model could otherwise
   make the new learning look stalled and start a calibration a few days later.
+- Documentation and cards: two names only, dead time (the time before the room
+  temperature first moves after a command) and emitter lag (the mean time the
+  commanded heat takes to arrive in the room), with a glossary.
 
 ## [0.6.7]
 

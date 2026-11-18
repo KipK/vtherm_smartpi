@@ -63,7 +63,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `ab_aggregator.py`: published a_hat / b_hat aggregation.
 - `ab_drift.py`: persistent drift helpers.
 - `ab_window_balance.py`: integral-balance pools for windows without a robust slope.
-- `heating_balance.py`: heating-balance estimator (its median kept lag is the HEAT horizon of the anticipation; the rest is observation only).
+- `heating_balance.py`: heating-balance estimator (its median kept emitter lag is the HEAT horizon of the anticipation; the rest is observation only).
 - `learning_window.py`: `LearningWindowManager`: multi-cycle learning windows, acceptance.
 - `learning_outcomes.py`: bounded counters of window outcomes.
 - `tint_filter.py`: adaptive filter on indoor temperature (`t_int_lp`, `t_int_clean`).
@@ -71,10 +71,10 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `thermal_model.py`: constant-power 1R1C propagation.
 - `thermal_twin_1r1c.py`: digital twin (diagnostics only, never alters the command).
 
-**Dead time and response lag**
+**Dead time and emitter lag**
 - `deadtime_estimator.py`: heating/cooling dead time by state machine on power transitions.
 - `deadtime_trend.py`: free-running trend before a power start.
-- `response_lag.py`: response lag estimator over learning windows.
+- `response_lag.py`: emitter lag estimator over the constant-power heating phases of the learning windows.
 
 **Calibration**
 - `calibration.py`: `CalibrationManager`: forced calibration state machine.
@@ -108,7 +108,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 **`room_model/`** (air-wall-emitter model: forecasts, FF holding power)
 - `manager.py` orchestration (event loop), `jobs.py` executor jobs (numpy/scipy), `identification.py` output-error fit, `energy_balance.py` daily static model, `gates.py` publication rules, `periods.py` fit periods, `observer.py` Kalman observer, `model.py` discretisation, `linalg.py` small matrices, `emitter.py` applied-command timeline, `feedforward.py` holding power, `scoring.py` forecast errors, `public.py` user-facing values, `const.py` rule constants.
 
-**`tar_learning/`** (emitter delay T_ar; always enabled by the handler, which builds `SmartPI(tar_learning=True, room_model=True)`; the constructor flag defaults to False and tests use it; numpy/scipy lazily imported)
+**`tar_learning/`** (emitter lag T_ar; always enabled by the handler, which builds `SmartPI(tar_learning=True, room_model=True)`; the constructor flag defaults to False and tests use it; numpy/scipy lazily imported)
 - `manager.py` orchestration, `jobs.py` executor jobs, `history.py` bounded signal history, `signals.py` signal primitives, `identification.py` multi-day night fit, `morning.py` comfort-step estimator, `response.py` step-response fit, `room_mass.py` room-mass indicator, `gates.py` acceptance gates, `policy.py` which value regulation uses, `clock.py` local days/hours, `deps.py` lazy numerical deps, `public.py` user-facing values, `const.py` rule constants.
 
 **`quiet_periods/`** (stretches without sun, constant setpoint, valid data; pure Python + astral)
@@ -124,12 +124,12 @@ Find a test by module name: `tests/test_<module>.py` or `tests/test_smartpi_<top
 | Control core | `test_smartpi_{antiwindup,bumpless_transfer,feedback,gain_generation,governance,guards,guard_cut_*,integral_hold,max_on_percent,pause,shedding,robustness*}`, `test_algo_{deadband_hysteresis,off_mode}` |
 | Setpoint / deadband | `test_smartpi_setpoint*`, `test_algo_setpoint_boost`, `test_smartpi_deadband_output`, `test_smartpi_near_band_unwind`, `test_smartpi_nearband_model`, `test_smartpi_valve_curve`, `test_smartpi_valve_runtime_sync` |
 | Learning A/B | `test_ab_window_balance`, `test_smartpi_ab_*`, `test_smartpi_learning_*`, `test_learning_outcomes`, `test_smartpi_heating_balance`, `test_smartpi_b_heat_learning_guard`, `test_smartpi_hysteresis_learning`, `test_smartpi_tin_history_coverage`, `test_thermal_measurement`, `test_smartpi_thermal_model` |
-| Dead time / lag / calibration | `test_smartpi_deadtime_*`, `test_smartpi_response_lag*`, `test_smartpi_calibration*` |
+| Dead time / emitter lag / calibration | `test_smartpi_deadtime_*`, `test_smartpi_response_lag*`, `test_smartpi_calibration*` |
 | Feed-forward | `test_smartpi_feedforward`, `test_smartpi_ff3_eligibility`, `test_smartpi_ff_trim_*`, `test_smartpi_fftrim_*` |
 | Trace / ownership / restart | `test_causal_power_trace`, `test_command_ownership`, `test_restart_bridge*`, `test_smartpi_restart_*` |
 | Persistence / diagnostics | `test_algo_persistence`, `test_handler_persistence`, `test_diagnostic_history`, `test_published_diagnostics_schema` |
 | Room model | `test_room_model_*` (helper `room_model_sim.py`) |
-| T_ar learning | `test_tar_learning_*`, `test_quiet_periods` (helper `tar_learning_sim.py`) |
+| Emitter lag learning | `test_tar_learning_*`, `test_quiet_periods` (helper `tar_learning_sim.py`) |
 
 Support files:
 - `conftest.py`: adds repo, `tests/`, sibling `vtherm_api/src` and `versatile_thermostat` to `sys.path`; loads `pytest_homeassistant_custom_component`; fixtures `fake_runtime`, `fake_handler_runtime`; autouse custom-integration enabling.

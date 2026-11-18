@@ -4,9 +4,9 @@ BRANCH-SPECIFIC FILE. It describes the branch it lives on (here `dev-0.7`, writt
 
 ## What `dev-0.7` contains beyond `master` (0.6.7)
 
-Already in the code: restart bridge, restart hold of the previous command while the indoor temperature is missing (stop + wait <= 10 min, one single bound), emitter-delay (T_ar) learning, room model, quiet periods, heating balance, slope anticipation in HEAT and COOL (the setpoint trajectory and its two configuration options are gone). `CHANGELOG.md` `[Unreleased]` lists them in user wording. Details: `algorithm-room-model.md`.
+Already in the code: restart bridge, restart hold of the previous command while the indoor temperature is missing (stop + wait <= 10 min, one single bound), emitter lag (T_ar) learning, room model, quiet periods, heating balance, slope anticipation in HEAT and COOL (the setpoint trajectory and its two configuration options are gone). `CHANGELOG.md` `[Unreleased]` lists them in user wording. Details: `algorithm-room-model.md`.
 
-Shipped in 0.6.6 and present in both lines: integral guard removal, bootstrap ending after four heating phases when the response lag cannot be measured (heating phases merged when the cut is short), saved bootstrap output waiting for the indoor temperature after a restart.
+Shipped in 0.6.6 and present in both lines: integral guard removal, bootstrap ending after four heating phases when the emitter lag cannot be measured (heating phases merged when the cut is short), saved bootstrap output waiting for the indoor temperature after a restart.
 
 Shipped in 0.6.7 and present in both lines: calibration reachability judged on the measured outdoor temperature only.
 
@@ -14,7 +14,7 @@ Shipped in 0.6.7 and present in both lines: calibration reachability judged on t
 
 1. Integral guard removal - done (0.6.6).
 2. Bootstrap exit - done (0.6.6). The exit by full collection (31 measurements of a and b) stays: with full histories SmartPI must never remain in bootstrap.
-3. Emitter delay from the heating balance, as lag source and bootstrap exit - screened under the frozen grid and REJECTED: exit later in slow-emitter cells (the `a` collection restarts when a balance lag is published), benefit 12 % against the 30 % required, lag 41 % too low in a fast massive room. The balance is good in massless rooms and on a floor-heating cell (where the reference publishes no lag) but biased low by 25-60 % in massive rooms. The gains and the bootstrap exit do not read it; only the slope anticipation reads the median of its kept lags (`analysis.learning.heating_balance.kept_lag_s`). Undecided idea: keep the exit timing and use the balance only where the intercept estimator gives nothing. Exit-on-balance: recommended to drop for good, not yet confirmed by the owner.
+3. Emitter lag from the heating balance, as source and bootstrap exit - screened under the frozen grid and REJECTED: exit later in slow-emitter cells (the `a` collection restarts when a balance lag is published), benefit 12 % against the 30 % required, lag 41 % too low in a fast massive room. The balance is good in massless rooms and on a floor-heating cell (where the reference publishes no lag) but biased low by 25-60 % in massive rooms. The gains and the bootstrap exit do not read it; only the slope anticipation reads the median of its kept lags (`analysis.learning.heating_balance.kept_lag_s`). Undecided idea: keep the exit timing and use the balance only where the intercept estimator gives nothing. Exit-on-balance: recommended to drop for good, not yet confirmed by the owner.
 4. Gains adapted to slow emitters - diagnostic result: counting the emitter inertia in the gains cuts overshoot by about a third only in a room without mass; in massive rooms the gains already sit at the floors (`KP_MIN`/`KI_MIN`) and overshoot (up to about 0.9 C) is unchanged or worse; half the inertia is enough, the full value adds nothing. Gains alone will not fix floor heating in a massive room. Slow-emitter gains are for 0.7 only.
 5. Slope anticipation (landing on the setpoint) - done, adopted by the owner; see below.
 6. Wall term: re-measure it on the no-guard baseline before any further wall-term work.
@@ -39,6 +39,14 @@ Shipped in 0.6.7 and present in both lines: calibration reachability judged on t
 
 - A saved heating-balance state with a published lag but no kept lag keeps that lag as the single kept lag (horizon of the anticipation survives an update).
 - A calibration survives a short stop (`CALIBRATION_PAUSE_MAX_MIN`, one constant): see `algorithm-core.md` section 6.
+
+## Next steps (order agreed by the owner)
+
+1. Heating balance as a fallback during the bootstrap (its emitter lag stands in for an unpublished emitter lag of the constant-power phases in the a/b learning; exit conditions unchanged): frozen screening lot in progress.
+2. Wording: two names only, "dead time" (start of the response) and "emitter lag" (mean arrival time of the heat, `T_ar`); docs, cards and a glossary; no published path changes in this step.
+3. Start in PI with the fallback gains instead of the hysteresis bootstrap: to bench on a blank start (rooms listed in `../workflows/benchmarking.md` terms: well insulated in mild weather, heavy floor, fast radiator, valve, 0.01 and 0.1 C sensors, restart with an incomplete model, COOL mirror). Owner's idea: offer both starts as a configuration choice, with the documentation saying what each implies (without the bootstrap the room needs daily setpoint changes to learn).
+4. Targeted calibration: hand the command back to the PI as soon as the requested measurement is obtained; auto-calibration as a relaunch of the observation. To test first: the calibration feeds the dead-time detector with the computed command, not the applied one.
+5. Audit of the emitter-lag estimators (constant-power heating phases, heating balance, morning and multi-day learning, room model refinement), then one published emitter lag with its origin.
 
 ## Open questions for the owner
 

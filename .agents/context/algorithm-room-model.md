@@ -9,11 +9,11 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 
 | Subsystem | Code | Regulation reads it? |
 |---|---|---|
-| Emitter delay (T_ar) learning | `smartpi/tar_learning/` | Yes (HEAT, PWM only): dead time used by gains, near band, I-hold, FF3, twin |
+| Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | Yes (HEAT, PWM only): gives the dead time in force used by gains, near band, I-hold, FF3, twin |
 | Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the two learnings above and below |
 | Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1). Forecasts, forecast errors, `a`/`b_eq` display: no |
-| Response lag | `smartpi/response_lag.py` | Yes: delivered-power model for the `a` learning |
-| Heating balance | `smartpi/heating_balance.py` | Yes, one value: the median kept lag is the HEAT horizon of the anticipation (`smartpi/anticipation.py`); `a` and the other values are observation only |
+| Emitter lag on constant-power heating phases | `smartpi/response_lag.py` | Yes: delivered-power model for the `a` learning |
+| Heating balance | `smartpi/heating_balance.py` | Yes, one value: the median kept emitter lag is the HEAT horizon of the anticipation (`smartpi/anticipation.py`); `a` and the other values are observation only |
 | Restart bridge | `smartpi/restart_bridge.py` | Yes: decides resume vs conservative restart for every component |
 | Resume hold | `smartpi/resume_hold.py` | Yes: temporary I-hold after window / power-shedding resume; `recovery_error_floor_c` (residual error under which a recovery counts as closed) |
 | Job abort | `smartpi/job_abort.py` | Plumbing for executor jobs |
@@ -49,11 +49,11 @@ Both managers are HEAT-only. PWM heaters only: in valve mode `TAR_VALVE_MODE_SUP
 
 ## 2. Quiet periods (`smartpi/quiet_periods/`)
 
-Purpose: select stretches without sun, at constant setpoint, with valid data, shared by the T_ar learning and
+Purpose: select stretches without sun, at constant setpoint, with valid data, shared by the emitter lag learning and
 the room model. Pure Python, no Home Assistant import. Times are epoch seconds, half-open `[start, end)`.
 
 - Inputs: home latitude/longitude (HA config, validated by `solar.py::validate_position`), setpoint timeline,
-  valid spans of the T_ar history (`TarHistory.valid_spans`), heater starts, indoor temperatures.
+  valid spans of the emitter lag history (`TarHistory.valid_spans`), heater starts, indoor temperatures.
 - Darkness (`solar.py::dark_intervals`): sun centre below `DARK_ELEVATION_DEG = -0.833 - 0.5` degrees, sampled
   every `SUN_SAMPLE_S = 600`, boundaries refined to 1 s, moved inward by `DARK_TIME_MARGIN_S = 120`. Polar night
   is cut into `DARK_BLOCK_S = 24 h` blocks; polar day has no darkness. No margin is taken after sunrise.
@@ -79,13 +79,15 @@ the room model. Pure Python, no Home Assistant import. Times are epoch seconds, 
   The daily energy balance (room model) does NOT need quiet periods.
 - Not a regulation input.
 
-## 3. Emitter delay (T_ar) learning (`smartpi/tar_learning/`)
+## 3. Emitter lag learning (`smartpi/tar_learning/`)
 
-Purpose: learn the HEAT emitter delay `T_ar` (first moment of the emitter response; about twice the apparent
-dead time the bootstrap measures) during normal regulation, and feed a safe value to the gains.
+Purpose: learn the HEAT emitter lag `T_ar` (first moment of the emitter response; about twice the apparent
+dead time the bootstrap measures) during normal regulation, and derive from it the dead time in force of the
+regulation (`applied_s`, `gains_s`: dead times, `applied_s` takes the learned emitter lag value when it is used,
+the gains read half of it, bounded). `bootstrap_s`, `reference_s` and `history.deadtime.applied_s` are dead times too.
 
 Inputs recorded each tick (`history.py::TarHistory.record`, `applied_cycle`): indoor/outdoor temperature,
-setpoint, SmartPI phase, published `b`, reliable cool dead time, response lag, heater edges (PWM cycles
+setpoint, SmartPI phase, published `b`, reliable cool dead time, emitter lag on constant-power phases, heater edges (PWM cycles
 rebuilt from applied cycles), invalid intervals (`TAR_GAP_S = 1200` s without observation, unavailable sensor,
 unknown command, non-bridged restart downtime, spikes `TAR_SPIKE_MIN_C = 0.5` C at more than
 `TAR_SPIKE_RATE_C_PER_H = 20`, and any tick where SmartPI is not in control: window open, shedding, safety,
@@ -116,7 +118,7 @@ Policy (`policy.py`):
   MAD/median <= `PUB_MAD_REL = 0.25`.
 - Lower bound: median of last 5 confirmed cut steps; never enters the fast value, never confirmed by a second method.
 - In force: refined value if published, else fast value; raised to the lower bound when that is larger.
-- Applied (`policy.py::applied_value`): learned effective dead time `L_T = TAR_GAIN_DEADTIME_FACTOR (0.5) x learned`
+- Applied (`policy.py::applied_value`): effective dead time of the gains `L_T = TAR_GAIN_DEADTIME_FACTOR (0.5) x learned emitter lag`
   versus reference `L_b` (larger of the first reliable bootstrap HEAT dead time seen since the learning started,
   frozen and stored in `reference_heat_s`, and the current one):
   - `L_T < L_b`: gains keep `L_b` (limit `short`);
@@ -167,10 +169,10 @@ state Ta, w, d), `observer.py` (3-state Kalman observer, never learns parameters
 fit, variable projection, residual checks, precision from the Jacobian), `gates.py` (publication rules),
 `energy_balance.py` (daily static model), `feedforward.py` (holding power source and transfers), `periods.py`
 (adapter to the quiet-period catalogue), `scoring.py` (forecast errors), `emitter.py` (command timeline through
-delay L and first order `tau_e`), `public.py` (plain-wording translation), `manager.py` (orchestration, persistence).
+dead time L and first order `tau_e`), `public.py` (plain-wording translation), `manager.py` (orchestration, persistence).
 
 Inputs: regulation tick (indoor temperature with measurement identity, outdoor temperature, `a` online, emitter
-first moment = HEAT dead time in force), applied commands (`on_applied`), T_ar history and quiet-period catalogue.
+first moment = HEAT dead time in force), applied commands (`on_applied`), emitter lag history and quiet-period catalogue.
 Observer runs only while SmartPI is in control in heating; power shedding keeps it running with zero heat; open
 window pins the air to the measurement; other exclusions pause it. A downtime up to `RM_RESUME_MAX_S = 3 h` keeps
 the state; longer restarts it at wall equilibrium and it settles for `RM_SETTLE_S = 3 h`.
@@ -182,9 +184,9 @@ Three computations:
    C/h from the recent median (>= `RM_NIGHT_MIN_TRACK_S = 4 h` tracked) are excluded from the windows.
    Emitter search on a fixed grid `RM_EMITTER_GRID_S` (13 values, 60 s to 3600 s) refined by Brent; significance
    `RM_EMITTER_CHI2 = 3.841`. Optimum at a grid end with significant profile: refused. Not significant: the
-   refined T_ar value is used if published, else the grid optimum.
+   refined emitter lag is used if published, else the grid optimum.
 2. Energy balance (`energy_balance.py`, `manager.py::_balance_job`): once per local day, `_EB_DELAY_S` (20 min)
-   after midnight, whatever the quiet periods; whole local days of the T_ar history (`EB_MAX_DAYS = 7`).
+   after midnight, whatever the quiet periods; whole local days of the emitter lag history (`EB_MAX_DAYS = 7`).
    Day usable with <= 20 % invalid (`EB_MIN_DAY_VALID`), duty >= `EB_MIN_DAY_DUTY = 0.02`, D > 0. Qualification:
    `EB_MIN_DAYS = 4`, mean duty >= `EB_MIN_DUTY = 0.05`, mean D >= `EB_MIN_DELTA_C = 6`, spread
    `EB_MIN_SPREAD_C = 1` to fit the free gain, slope half-width <= 5 %, slope in (0, `EB_MAX_SLOPE`], drift
@@ -249,18 +251,18 @@ Silent / declining states:
 | computation failed | `last_error` |
 Typical outcome with short setbacks and heavy walls: model stays unpublished and changes nothing.
 
-## 5. Response lag (`smartpi/response_lag.py`, class `ResponseLagEstimator`)
+## 5. Emitter lag on constant-power heating phases (`smartpi/response_lag.py`, class `ResponseLagEstimator`)
 
 Purpose: measure the intercept `T_ar` of the response on constant-power active episodes (deviation <=
-`RESPONSE_LAG_U_TOL = 0.05`) after a passive period >= `max(1800 s, 5 x known lag)`, and expose the settling
-gates plus the delivered-power model (pure delay `L = min(active dead time, T_ar)` then first order of `T_ar - L`).
+`RESPONSE_LAG_U_TOL = 0.05`) after a passive period >= `max(1800 s, 5 x known emitter lag)`, and expose the settling
+gates plus the delivered-power model (pure dead time `L = min(active dead time, T_ar)` then first order of `T_ar - L`).
 Estimates: last `RESPONSE_LAG_HISTORY = 7`; published when >= `RESPONSE_LAG_MIN_ESTIMATES = 3` and combined
 uncertainty <= `RESPONSE_LAG_MAX_REL_UNC = 0.15` of the median (inconsistent sets keep the published value).
-Model resolved when lag published or after `RESPONSE_LAG_RESOLVE_EPISODES = 4` heating phases without publication
+Model resolved when the emitter lag is published or after `RESPONSE_LAG_RESOLVE_EPISODES = 4` heating phases without publication
 (then applied power is used).
 Regulation: yes. It gates the first publication of `a` (`bootstrap_status = step2 - waiting response lag ...`),
 sets the settling delay of `a`/`b` windows and the delivered fraction of power. In PWM regulation constant-power
-episodes are rare, so an installation already out of the bootstrap may never publish a lag.
+episodes are rare, so an installation already out of the bootstrap may never publish an emitter lag.
 Persistence: in the learning-window state (`lw_state["response_lag"]`), passive period/episode context as
 wall-clock times (resumed after a bridged restart; otherwise episode ends "episode interrupted by restart").
 Diagnostics: `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`, `episodes_target`,
@@ -270,16 +272,16 @@ Diagnostics: `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`,
 ## 6. Heating balance (`smartpi/heating_balance.py`, class `HeatingBalance`)
 
 Measures heating rate `a` (C/min at full power) and emitter lag from an energy balance of each heating phase
-followed by a stop, in HEAT, from the same observations as the response lag (`learning_window.py` owns it).
+followed by a stop, in HEAT, from the same observations as the emitter lag on constant-power phases (`learning_window.py` owns it).
 Conditions: rest >= `HEATING_BALANCE_MIN_REST_S = 1800`, baseline of up to 3600 s (>= 4 samples), peak search in
 `HEATING_BALANCE_PEAK_BIN_S = 300` bins confirmed after `HEATING_BALANCE_PEAK_CONFIRM_S = 1800`, wait at most
 `HEATING_BALANCE_PEAK_MAX_S = 4 h`, kept when full-power time >= 600 s and rise >= 0.3 C. Last
-`HEATING_BALANCE_HISTORY = 7` measurements; published values are medians; lag only for constant-power phases.
-Regulation consumer: only `kept_lag_s` (median of the last `HEATING_BALANCE_HISTORY` lags, None while none measured), the HEAT
+`HEATING_BALANCE_HISTORY = 7` measurements; published values are medians; emitter lag only for constant-power phases.
+Regulation consumer: only `kept_lag_s` (median of the last `HEATING_BALANCE_HISTORY` emitter lags, None while none measured), the HEAT
 horizon of the anticipation (`smartpi/anticipation.py::select_horizon`); no learning consumer. `a` and `lag_s` are observation only.
 Persistence: with the learning state (`lw_state["heating_balance"]`); phase in progress resumes after a bridged
-restart, dropped otherwise. A saved state with a published `lag_s` but no kept lag (`lags` missing or empty) keeps that lag as the
-single kept lag. Diagnostics: `analysis.learning.heating_balance` (`state`, `measurements`, `a`,
+restart, dropped otherwise. A saved state with a published `lag_s` but no kept emitter lag (`lags` missing or empty) keeps it as the
+single kept value. Diagnostics: `analysis.learning.heating_balance` (`state`, `measurements`, `a`,
 `lag_s`, `kept_lag_s`, `kept_lags`, `last_reason`, `last`). Silent: `a`/`lag_s` null, `last_reason` gives the refusal.
 
 ## 7. Restart bridge and resume hold
@@ -295,7 +297,7 @@ bridge only in HEAT (`RestartDecision.heat_bridged`).
   committed command of before the stop while the restart is pending, as long as `command_holdable` stays true
   (stop plus wait <= 600 s). Past that the output goes to 0 until the temperature comes and the restart is
   not bridged (`indoor temperature unknown`). The heater cut during the wait is the reason it cannot be bridged.
-- Consumers (`SmartPI._apply_restart_decision`): dead-time detection, learning window, FF trim, response lag,
+- Consumers (`SmartPI._apply_restart_decision`): dead-time detection, learning window, FF trim, emitter lag on constant-power phases,
   heating balance, bootstrap hysteresis output, tar history, room model resume (bridged) or take the
   conservative path (other restart). Component behaviour table: technical_doc.md section 5.4 "Restarts".
 - Persistence: context of the last tick and committed power in the algorithm store (`restart`), plus last ticks of
@@ -335,9 +337,9 @@ change detection: history change records, observer `meas_key`). No persistence, 
 
 ## Pointers
 
-- User docs: `documentation/en/vtherm_smartpi.md` ("Emitter delay learning", "Room model", "Restarts").
+- User docs: `documentation/en/vtherm_smartpi.md` ("Emitter lag learning", "Room model", "Restarts").
 - Diagnostics reference: `documentation/en/diagnostics.md` (`tar_learning`, `room_model`, `feedforward`,
   `control.last_restart`, `analysis.learning.*`).
-- Constants: `smartpi/const.py` (response lag, heating balance, anticipation, restart bridge),
+- Constants: `smartpi/const.py` (emitter lag, heating balance, anticipation, restart bridge),
   `tar_learning/const.py`, `room_model/const.py`, `quiet_periods/const.py`. These are method parameters, not
   configuration knobs.

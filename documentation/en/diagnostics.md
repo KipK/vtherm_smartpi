@@ -47,7 +47,7 @@ The `history` block contains these eighteen series:
 | `room_model.b_eq` | Static loss of the room model, in the units of `model.b`; `null` before a publication |
 | `room_model.forecast_error_1h_c` | Root mean square error of the 1 h forecasts over the last 7 days (°C) |
 | `room_model.forecast_error_12h_c` | Same for the 12 h forecasts (°C) |
-| `deadtime.applied_s` | Heating dead time used by the regulation, in seconds (bootstrap or learned value) |
+| `deadtime.applied_s` | Heating dead time in force for the regulation, in seconds (the bootstrap dead time, or the value derived from the learned emitter lag) |
 
 The feed-forward, room model and dead-time series are always present and are
 `null` when the corresponding block is not computed. The applied command does
@@ -71,7 +71,7 @@ The `live` block is organized by responsibility:
 | `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
-| `tar_learning` | Emitter delay learning |
+| `tar_learning` | Emitter lag learning |
 | `room_model` | Room model |
 
 `control.last_restart` describes the last restart of Home Assistant or of the
@@ -93,7 +93,7 @@ anticipation of the temperature, in heating and in cooling:
 | Field | Meaning |
 |---|---|
 | `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon or without a rising or falling slope) |
-| `anticipation_horizon_s` | Horizon of the anticipation in seconds (the delay between a command and its effect), `0` when none |
+| `anticipation_horizon_s` | Horizon of the anticipation in seconds (the time between a command and its effect), `0` when none |
 | `anticipation_horizon_source` | Where the horizon comes from: `heating balance` (median of the last emitter lags measured), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none`; the heating balance is used in heating only |
 
 `analysis.deadtime` follows the dead time detection:
@@ -105,15 +105,15 @@ anticipation of the temperature, in heating and in cooling:
 | `waiting_elapsed_s` | Age of the response being waited for in seconds, `null` when no detection is armed |
 | `heat_last_outcome` / `cool_last_outcome` | Outcome of the last wait for a rising / falling response: `detected`, `timeout`, `aborted` (power transition before a detection), `rejected` (the temperature already moved in the direction of the response before the power start, too steeply or too irregularly to measure it), `ignored` (a measurement shorter than the published dead time, dropped because the temperature was already moving in the direction of the response before the start or the window before the start was too short to tell), `null` before the first one |
 
-`analysis.learning.response_lag` describes the response lag used by the `a`
-learning:
+`analysis.learning.response_lag` describes the emitter lag measured on heating
+phases at constant power, used by the `a` learning:
 
 | Field | Meaning |
 |---|---|
-| `lag_s` | Published response lag in seconds, `null` until a consistent set of estimates |
+| `lag_s` | Published emitter lag in seconds, `null` until a consistent set of estimates |
 | `estimates` | Number of retained estimates (at most 7) |
-| `episodes` | Number of heating phases ended since the start of the learning (heating runs separated by less than 10 minutes without heating count as one phase); it keeps counting after the lag is published and may exceed `episodes_target` |
-| `episodes_target` | Number of heating phases after which the delivered power model is resolved without a published lag (`4`) |
+| `episodes` | Number of heating phases ended since the start of the learning (heating runs separated by less than 10 minutes without heating count as one phase); it keeps counting after the emitter lag is published and may exceed `episodes_target` |
+| `episodes_target` | Number of heating phases after which the delivered power model is resolved without a published emitter lag (`4`) |
 | `episode_median_s` | Median duration of the recent active episodes in seconds, `null` with fewer than 3 episodes |
 | `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used). `episode interrupted by restart`: episode in progress at a restart that was not bridged, counted without an estimate. May be empty right after a restart |
 
@@ -126,10 +126,10 @@ lag measured on heating phases. The regulation reads only `kept_lag_s`:
 | `measurements` | Number of retained measurements (at most 7) |
 | `a` | Median heating rate in °C/min at full power (5 decimals), `null` without measurement |
 | `lag_s` | Median emitter lag in seconds, `null` without a measurement that resolves it |
-| `kept_lag_s` | Median of the last 7 lags measured, in seconds, `null` while none was measured; a measurement without lag removes none of them. It is the horizon of the anticipation when positive |
-| `kept_lags` | Number of lags kept (at most 7) |
+| `kept_lag_s` | Median of the last 7 emitter lags measured, in seconds, `null` while none was measured; a measurement without emitter lag removes none of them. It is the horizon of the anticipation when positive |
+| `kept_lags` | Number of emitter lags kept (at most 7) |
 | `last_reason` | Outcome of the last ended phase: `measured`, or why it gave nothing (`rest before heating too short`, `baseline samples insufficient`, `heating too short`, `temperature rise too small`, `still rising at the next heating`, `no peak within the wait`, `observation gap`, `heating mode left`, `interrupted by restart`). Empty before the first phase |
-| `last` | Last measurement, `null` without one: `heating_min` (full-power heating time in minutes), `rise_c` (temperature rise at the peak above the passive trajectory), `peak_delay_min` (minutes from the cut to the peak), `a`, `lag_s` (`null` when the power was not constant or the lag is not resolved), `constant_power`, `context` (`bootstrap`, `calibration` or `regulation`, at the start of the phase) |
+| `last` | Last measurement, `null` without one: `heating_min` (full-power heating time in minutes), `rise_c` (temperature rise at the peak above the passive trajectory), `peak_delay_min` (minutes from the cut to the peak), `a`, `lag_s` (`null` when the power was not constant or the emitter lag is not resolved), `constant_power`, `context` (`bootstrap`, `calibration` or `regulation`, at the start of the phase) |
 
 During the bootstrap, `learning.bootstrap_status` describes the current step:
 
@@ -149,30 +149,30 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `quantization_step_linear_percent` | Linear demand, in percent, moved by one `1%` valve step at the committed valve position; `1.0` without linearization, `null` when the valve is closed |
 | `issues` | Codes for command filtering, delay or an opening remap conflicting with SmartPI linearization: `dpercent_filter`, `period_filter`, `opening_remap`. The same warnings appear in Home Assistant Repairs; filtering or delay alone does not prove a learning failure |
 
-### Emitter delay learning
+### Emitter lag learning
 
-`tar_learning` describes the emitter delay learning (see [Emitter delay learning](./vtherm_smartpi.md#emitter-delay-learning)):
+`tar_learning` describes the emitter lag learning (see [Emitter lag learning](./vtherm_smartpi.md#emitter-lag-learning)):
 
 | Field | Meaning |
 |---|---|
 | `status` | `active`, `checking_dependencies` (until the thermostat has started), `dependencies_unavailable` (numpy/scipy cannot be loaded: bootstrap value in use) or `valve_mode_not_supported` |
-| `applied_s` | HEAT active dead time used by the regulation (near band, integral hold, FF3, thermal twin), in seconds: the learned value when the gains use it, else `bootstrap_s` |
+| `applied_s` | HEAT active dead time in force for the regulation (near band, integral hold, FF3, thermal twin), in seconds: the learned emitter lag when the gains use it, else `bootstrap_s` |
 | `source` | Origin of `applied_s` and `gains_s`: `bootstrap`, `fast`, `refined` or `lower_bound` (a lower bound from comfort steps cut by sunrise) |
-| `gains_s` | Dead time used by the gains, in seconds: half of `applied_s` for a learned value; otherwise `reference_s` when a learned value is shorter, twice `reference_s` when a learned value is longer and not confirmed, `bootstrap_s` without a learned value |
-| `bootstrap_s` | Bootstrap/calibration dead time (`model.deadtime_heat_s`), never modified |
+| `gains_s` | Dead time used by the gains, in seconds: half of `applied_s` for a learned emitter lag; otherwise `reference_s` when it is shorter, twice `reference_s` when it is longer and not confirmed, `bootstrap_s` without a learned emitter lag |
+| `bootstrap_s` | Bootstrap/calibration heating dead time (`model.deadtime_heat_s`), never modified |
 | `reference_s` | Reference of the gains, in seconds: the larger of the first `bootstrap_s` measured since the learning started (kept) and the current one; `null` until a bootstrap value is measured |
-| `in_force_s` / `in_force_source` | Learned value in force (refined, else fast) and its origin, `null` before any publication |
-| `out_of_bound` | `true` when a learned value exists and the gains do not use it as it is (see `limit_reason`) |
-| `limit_reason` | Why the gains do not use the learned value as it is (`learned delay shorter than the reference: the gains keep the reference dead time`, or `learned delay above twice the reference and not confirmed by a second method: the gains use twice the reference dead time`), `null` otherwise |
-| `fast.value_s` | Published fast value (confirmed comfort steps), `null` before 3 confirmed steps |
+| `in_force_s` / `in_force_source` | Learned emitter lag in force (refined, else fast) and its origin, `null` before any publication |
+| `out_of_bound` | `true` when a learned emitter lag exists and the gains do not use it as it is (see `limit_reason`) |
+| `limit_reason` | Why the gains do not use the learned emitter lag as it is (`learned delay shorter than the reference: the gains keep the reference dead time`, or `learned delay above twice the reference and not confirmed by a second method: the gains use twice the reference dead time`), `null` otherwise |
+| `fast.value_s` | Published fast emitter lag (confirmed comfort steps), `null` before 3 confirmed steps |
 | `fast.confirmed_mornings` | Number of accepted and confirmed comfort steps, one per quiet period at most |
-| `fast.lower_bound_s` | Lower bound in force: median of the last 5 confirmed comfort steps cut by sunrise too early for a value, `null` without any |
+| `fast.lower_bound_s` | Lower bound of the emitter lag in force: median of the last 5 confirmed comfort steps cut by sunrise too early for a value, `null` without any |
 | `fast.lower_bound_mornings` | Number of confirmed comfort steps cut by sunrise that gave a lower bound, one per quiet period at most |
-| `fast.last_value_s` | Value of the last accepted comfort step |
+| `fast.last_value_s` | Emitter lag of the last accepted comfort step |
 | `fast.last_status` | `confirmed`, `unconfirmed` or `none` for the last accepted comfort step |
 | `fast.last_unconfirmed_reason` | Why the last accepted comfort step is unconfirmed (for example `the room did not reach its low setpoint before the comfort step`, or at least 1 hour without heating while the room was regulated at its low setpoint) |
 | `fast.last_morning` | Last evaluated comfort step, at any hour: `day` (local date, YYYY-MM-DD), `accepted`, `reason` (`accepted`, or why the step gave no value, for example `temperature rise too small`, `comfort step in daylight`, `sunrise too soon after the comfort step`, `comfort step cut by sunrise before its response could be measured` or `comfort step cut by sunrise: gives only a lower bound of the delay, not a value`), `room_class`, `confirmed` (`true` or `false` for a step that gave a value or a lower bound, `null` otherwise) and `unconfirmed_reason` (why such a step is not confirmed, as in `last_unconfirmed_reason`) |
-| `refined.tau_e_s` | Published refined value `τe`, `null` before a publication |
+| `refined.tau_e_s` | Published refined emitter lag `τe`, `null` before a publication |
 | `refined.class` | Type of room in force from the identification: `thermal_mass`, `no_thermal_mass` or `undetermined` |
 | `refined.k_per_s`, `refined.tau_w_h` | Air-wall coupling and wall time constant in force (room with `thermal_mass`) |
 | `refined.last_evaluation` | Last evaluation, made when a quiet period ends: `day` (local date of that end, YYYY-MM-DD), `regulated_nights` (the six periods of its two fits are regulated), `class` and `tau_e_s` before the regulated-night rule, and the identified `a` and `b` in the units of `model.a` and `model.b` (information only, never applied; for a room with `thermal_mass`, `b` is the loss of the air to the outside, the walls being modelled apart, so it differs from the effective `model.b`) |

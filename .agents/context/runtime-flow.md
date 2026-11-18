@@ -54,7 +54,7 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
   `thermostat.prop_algorithm`; configures the valve curve (active only if configured and the scheduler
   `is_valve_mode`; invalid parameters disable it); sets `restart_exclusion_probe`; sends
   `SIGNAL_SMARTPI_TARGET_UPDATED` (the sensor platform reacts, section 8).
-- `async_added_to_hass`: loads algorithm state (`SmartPI.load_state`), T_ar state (plus home position and
+- `async_added_to_hass`: loads algorithm state (`SmartPI.load_state`), emitter lag state (plus home position and
   `dependencies_importable`), room model state. Failures are logged and never block startup.
 - `on_scheduler_ready(scheduler)`: re-syncs timing and valve curve, then
   - receipts supported (`hasattr(scheduler, "register_command_receipt_callback")`): registers
@@ -79,7 +79,7 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
     (`kind` CYCLE_START or UPDATE, `alterations`). `bind_receipt` owns a receipt only for a known id, same HVAC mode,
     no `MIN_ON_OFF`/`VALVE_RETAINED` alteration, no "timing" flag; a rejection is sticky per request.
   - `SmartPI._commit_applied_command` commits the applied power (valve curve inverted to linear) and feeds the
-    causal power trace, T_ar learning, room model; on a cycle start it resets per-cycle governance. Legacy path
+    causal power trace, emitter lag learning, room model; on a cycle start it resets per-cycle governance. Legacy path
     (`on_cycle_started`, `on_applied_power_updated`) commits the same way with no snapshot.
 - VT overrides: safety (`safety_manager.is_safety_detected`) sets `algo.vt_safety_override` (integral held, source
   `vt_safety`); power shedding (`is_overpowering_detected`) forces output off; window and OFF go through
@@ -176,7 +176,7 @@ Pipeline inside `calculate`, in execution order:
   requests, FF trim observation runtime, integral hold, learning resume timestamp, cycle
   state. Without a bridge, the first tick freezes learning for one cycle (`_startup_grace_period`).
 - Save throttling: `schedule_save` runs every tick but uses `Store.async_delay_save` with a 300 s window
-  (`SAVE_DELAY_SEC`), not re-armed while pending; the snapshot is taken when the write runs. T_ar and room model
+  (`SAVE_DELAY_SEC`), not re-armed while pending; the snapshot is taken when the write runs. emitter lag learning and room model
   use 1800 s (`TAR_SAVE_DELAY_S`, `RM_SAVE_DELAY_S`) and only when `dirty`. `save_now` writes at once and
   supersedes the pending write (services, `remove()`). `remove()` schedules the three writes
   as tasks, stops learning tasks and the timer, removes the receipt callback and valve issues.
@@ -185,12 +185,12 @@ Pipeline inside `calculate`, in execution order:
   `RESTART_BRIDGE_MAX_GAP_S` (600 s, from the oldest last tick of all stores), same HEAT/COOL mode and cycle
   config, committed/heater state saved, no exclusion before or after, no temperature jump, no clock jump. Then the
   committed command is restored and learning window, dead-time and FF-trim work go on; the HEAT-only histories
-  (T_ar, room model) go on only when bridged in HEAT. Otherwise conservative handling. Published as
+  (emitter lag learning, room model) go on only when bridged in HEAT. Otherwise conservative handling. Published as
   `restart.public()`.
 - Long OFF: after more than 5760 min (96 h, `PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN`) without activity the
   controller and holding source are reset; the learned model stays. A resume from OFF/window/shedding pauses
   learning for `LEARNING_PAUSE_RESUME_MIN` (20 min).
-- Migrations in code: legacy key copy; HVAC signed-model migration (`est.ensure_hvac_mode`); T_ar v1/v2 and room
+- Migrations in code: legacy key copy; HVAC signed-model migration (`est.ensure_hvac_mode`); emitter lag store v1/v2 and room
   model v1 readers; an unknown later version is ignored; `load_state` ignores a payload without `est_state`.
 
 ## 7. Services and climate extra state
@@ -199,7 +199,7 @@ Pipeline inside `calculate`, in execution order:
   `services.yaml`). Targets whose `proportional_function` is not `smartpi` are skipped; none matching raises
   `ServiceValidationError` (translation key `no_smartpi_target`). Each calls a handler method (entity first, then
   `_algo_handler`); all fire `vtherm_smartpi_event` with `entity_id` and a `type`:
-  - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, T_ar, room model, auto-calibration supervision), type
+  - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, emitter lag learning, room model, auto-calibration supervision), type
     `learning_reset`, forced tick, attributes, state write, `save_now`.
   - `set_smartpi_learning` (`learning_enabled`: bool, required): `set_learning_enabled` (invalidates in-flight
     observations), type `learning_enabled_changed`, attributes, diagnostic refresh, `save_now`.
@@ -246,5 +246,5 @@ Pipeline inside `calculate`, in execution order:
   `requires-python >= 3.13`.
 - numpy/scipy are imported lazily: only the learning executor jobs (`smartpi/tar_learning/jobs.py`,
   `smartpi/room_model/jobs.py`, imported inside functions) load them, so the event loop never imports scipy.
-  `smartpi/tar_learning/deps.py::dependencies_importable` uses `find_spec`; without them T_ar learning reports
+  `smartpi/tar_learning/deps.py::dependencies_importable` uses `find_spec`; without them emitter lag learning reports
   unavailable and the regulation keeps the bootstrap dead time.

@@ -612,7 +612,7 @@
 | Deadband | {% if db_active %}oui{% else %}non{% endif %} |
 | Core deadband | {% if core_db_active %}oui{% else %}non{% endif %} |
 | Near-band | {% if nb_active %}oui{% else %}non{% endif %} |
-| Deadtime window | {% if in_dt %}oui{% else %}non{% endif %} |
+| Fenêtre de temps mort | {% if in_dt %}oui{% else %}non{% endif %} |
 | Saturation | {{ sat_icons.get(sat, sat) }} |
 | Boost | {% if boost %}oui{% else %}non{% endif %} |
 
@@ -650,7 +650,7 @@
 | Type perturbation | `{{ ff3_disturbance_kind_label }}` |
 | Résidu persistant | {% if ff3_residual_persistent %}oui{% else %}non{% endif %} |
 | Cohérence dynamique | {% if ff3_dynamic_coherent %}oui{% else %}non{% endif %} |
-| Horizon FF3 | {{ ff3_horizon }} cycle · deadtime {{ ff3_deadtime_cycles }} · {% if ff3_horizon_capped %}capé{% else %}non capé{% endif %} |
+| Horizon FF3 | {{ ff3_horizon }} cycle · temps mort {{ ff3_deadtime_cycles }} · {% if ff3_horizon_capped %}capé{% else %}non capé{% endif %} |
 | Sensibilité FF3 | {% if ff3_action_sensitivity is not none %}{{ ff3_action_sensitivity | float | round(6) }} °C{% else %}—{% endif %} |
 | Candidat FF3 | {% if ff3_selected_candidate is not none %}{{ (ff3_selected_candidate | float * 100) | round(1) }}%{% else %}—{% endif %} |
 
@@ -667,7 +667,7 @@
 
 ---
 
-### ⏳ Deadtime
+### ⏳ Temps mort
 
 | Paramètre | Valeur |
 |---|---|

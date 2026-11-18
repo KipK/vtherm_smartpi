@@ -13,6 +13,7 @@
     - [When to enable it](#when-to-enable-it)
     - [Choosing the values](#choosing-the-values)
     - [Versatile Thermostat valve settings](#versatile-thermostat-valve-settings)
+  - [Dead time and emitter lag](#dead-time-and-emitter-lag)
   - [Operating phases](#operating-phases)
     - [Learning phase](#learning-phase)
       - [How bootstrap heats](#how-bootstrap-heats)
@@ -22,7 +23,7 @@
       - [Leaving bootstrap](#leaving-bootstrap)
     - [Stable phase](#stable-phase)
     - [Automatic recalibration](#automatic-recalibration)
-    - [Emitter delay learning](#emitter-delay-learning)
+    - [Emitter lag learning](#emitter-lag-learning)
     - [Room model](#room-model)
   - [Recommended settings](#recommended-settings)
   - [Configuration](#configuration)
@@ -209,6 +210,13 @@ SmartPI checks these settings when the thermostat starts and raises a warning in
 
 The regulation threshold and regulation minimum period are configured in the **Underlyings** menu of the Versatile Thermostat settings. Set them to `0` only if the device allows it. If the radiator only starts heating above a given opening and your device allows the default VT opening settings, set that opening as **Minimum valve opening** in the SmartPI valve curve. If you need to keep a VT opening remap, disable the SmartPI valve linearization.
 
+## Dead time and emitter lag
+
+SmartPI describes the time between a command and its effect with two quantities only, and every part of this documentation, of the diagnostics and of the cards uses these two names.
+
+- **Dead time**: the time from a change of the command to the first visible move of the room temperature. There are two values: the heating dead time after a start of heating (`model.deadtime_heat_s`) and the cooling dead time after a stop (`model.deadtime_cool_s`: the emitter keeps giving heat for a while). The bootstrap measures them (see [Step 1](#step-1--measuring-dead-times)) and SmartPI keeps measuring the heating dead time at each heating start. They are read by the gain rule (it expects an apparent dead time), the start of the learning windows, the integral hold after a resume and the fallback horizon of the anticipation.
+- **Emitter lag** (`T_ar`, the average residence time of Astrom and Hagglund): the mean time the commanded heat takes to arrive in the room, that is the dead time plus the inertia of the emitter. It is always at least the dead time, typically about twice. Three methods estimate this same quantity: the heating phases at constant power (`analysis.learning.response_lag`), the heating balance (`analysis.learning.heating_balance`), and the learning on morning setpoint rises and on several days of quiet periods ([Emitter lag learning](#emitter-lag-learning), `tar_learning`). The emitter lag is read by the correction of the delivered power when `a` is learned, by the delay before a learning window starts (3 lags) and, from the heating balance, by the horizon of the anticipation in heating. The emitter lag learning also gives the heating dead time in force for the regulation (`tar_learning.applied_s`), derived from the learned emitter lag.
+
 ## Operating phases
 
 ### Learning phase
@@ -226,10 +234,10 @@ This produces visible temperature swings which are expected and intentional at t
 
 #### Step 1 — Measuring dead times
 
-The first thing SmartPI needs to learn is **how long the room takes to react** after heating starts or stops. These delays are called *dead times*:
+The first thing SmartPI needs to learn is **how long the room takes to react** after heating starts or stops. These times are the *dead times* (see [Dead time and emitter lag](#dead-time-and-emitter-lag)):
 
-- **heating dead time**: the delay between the moment SmartPI sends a heating command and the moment the indoor temperature starts rising,
-- **cooling dead time**: the delay between the moment heating stops and the moment the temperature starts dropping.
+- **heating dead time**: the time between the moment SmartPI sends a heating command and the moment the indoor temperature starts rising,
+- **cooling dead time**: the time between the moment heating stops and the moment the temperature starts dropping.
 
 Dead times depend on the emitter type, room size, and sensor placement. They must be measured before SmartPI can interpret heating and cooling observations correctly.
 
@@ -251,9 +259,9 @@ From these observations, it calculates `a`, the heating gain. This parameter rep
 
 After a heating start, the room warms up progressively: the emitter, the air and
 the sensor take some time before the temperature rises at its full rate. SmartPI
-measures this *response lag* on the first heating phases and ignores the start
-of each phase until the response has settled, then accounts for the heat
-actually delivered. `a` is only published once this lag is known (or after 4
+measures the *emitter lag* on the first heating phases at constant power and
+ignores the start of each phase until the response has settled, then accounts
+for the heat actually delivered. `a` is only published once this emitter lag is known (or after 4
 heating phases where it could not be measured, for example with a sensor that
 reports too rarely). A heating phase is a period of continuous heating; short
 interruptions of less than 10 minutes do not start a new one.
@@ -289,7 +297,7 @@ At that point, SmartPI:
 
 Near the target temperature, SmartPI tries to avoid constant micro-corrections. The result should be steadier regulation with fewer unnecessary corrections than a fixed TPI.
 
-SmartPI anticipates the temperature, in HEAT and in COOL: the proportional and integral branches read the measured temperature plus the distance the room is about to travel during the delay between a command and its effect, estimated from the slope of the temperature. This lowers the command before the room reaches the setpoint, which limits the overshoot of slow emitters (underfloor heating, hydronic radiators) and of cooling that keeps acting after it stops. The delay is the emitter lag measured by the heating balance in HEAT; until one is measured, and always in COOL, it is derived from the dead times: the longer of the dead time of the active mode and half the dead time of the passive response. The correction is limited to 1 °C, and fades in as the room approaches the setpoint from far away, so that a rise or a fall from far from the setpoint is not slowed. Both branches use the raw setpoint.
+SmartPI anticipates the temperature, in HEAT and in COOL: the proportional and integral branches read the measured temperature plus the distance the room is about to travel during the time between a command and its effect, estimated from the slope of the temperature. This lowers the command before the room reaches the setpoint, which limits the overshoot of slow emitters (underfloor heating, hydronic radiators) and of cooling that keeps acting after it stops. The horizon is the emitter lag measured by the heating balance in HEAT; until one is measured, and always in COOL, it is derived from the dead times: the longer of the dead time of the active mode and half the dead time of the passive response. The correction is limited to 1 °C, and fades in as the room approaches the setpoint from far away, so that a rise or a fall from far from the setpoint is not slowed. Both branches use the raw setpoint.
 
 With `FF3`, enabled by default, SmartPI can also apply a small predictive correction near the setpoint when it detects a credible external disturbance context.
 
@@ -310,9 +318,9 @@ Useful points to know:
 - if the room cannot reach a calibration threshold (for example when it is warm outside), the cycle stops at once, no attempt is counted and the next one waits 24 hours,
 - after repeated unsuccessful recalibration attempts, SmartPI continues to run and reports a degraded model in diagnostics.
 
-### Emitter delay learning
+### Emitter lag learning
 
-The emitter delay `T_ar` is the time between the start of the heating and the rise of the room temperature. The bootstrap measures it once (`deadtime_heat_s`). SmartPI also learns it during normal regulation and uses the learned value for the regulation. This learning is always on and needs no setting.
+The emitter lag `T_ar` is the mean time the commanded heat takes to arrive in the room: the dead time plus the inertia of the emitter (see [Dead time and emitter lag](#dead-time-and-emitter-lag)). The bootstrap measures only the heating dead time (`deadtime_heat_s`), about half of it. SmartPI also learns the emitter lag during normal regulation and derives from it the dead time used by the regulation. This learning is always on and needs no setting.
 
 **Quiet periods**
 
@@ -324,7 +332,7 @@ The learning uses only quiet periods: stretches without sun, at a constant setpo
 
 **What it learns**
 
-- **Fast value.** A comfort step is a setpoint rise of at least 1 °C, at any hour, after a low setpoint held in the dark with valid data for 2 hours, to a setpoint not below the room temperature. Two hours after the step, SmartPI fits the rise of the temperature. The fit stops at sunrise: when the part left before sunrise is too short for the usual checks (duration, heat delivered, rise), the step gives no value. A rise cut by sunrise gives a value only when the part fitted lasts at least 3 times the larger of the fitted delay and the longest delay known before the step (the refined value in force, the published fast value, the lower bound in force, or twice the bootstrap value): a slow emitter fitted on a short window gives a delay that is too short. A shorter cut rise that passes every other check gives a **lower bound** instead, 0.6 times the fitted delay, never a value. A room with thermal mass (recognised on its periods without heating) gets an air-walls model in that fit. The fast value is published once 3 confirmed steps agree: median of the last 5, with a spread of at most 25 %. The lower bound in force is the median of the last 5 confirmed lower bounds; it never enters the fast value.
+- **Fast value.** A comfort step is a setpoint rise of at least 1 °C, at any hour, after a low setpoint held in the dark with valid data for 2 hours, to a setpoint not below the room temperature. Two hours after the step, SmartPI fits the rise of the temperature. The fit stops at sunrise: when the part left before sunrise is too short for the usual checks (duration, heat delivered, rise), the step gives no value. A rise cut by sunrise gives a value only when the part fitted lasts at least 3 times the larger of the fitted emitter lag and the longest emitter lag known before the step (the refined value in force, the published fast value, the lower bound in force, or twice the bootstrap dead time): a slow emitter fitted on a short window gives an emitter lag that is too short. A shorter cut rise that passes every other check gives a **lower bound** instead, 0.6 times the fitted emitter lag, never a value. A room with thermal mass (recognised on its periods without heating) gets an air-walls model in that fit. The fast value is published once 3 confirmed steps agree: median of the last 5, with a spread of at most 25 %. The lower bound in force is the median of the last 5 confirmed lower bounds; it never enters the fast value.
 - **Confirmation.** A step (or a lower bound) is confirmed only when the regulated part before it lasted at least 1.5 hours and the heater started at least once every hour of it. A regulated part that is missing or shorter than 1.5 hours leaves the step unconfirmed: nothing proves that no occupant warmed the room. Sleepers who get up during the fit window bias the rise, and a room that stays without heating while it should regulate is the visible sign of that risk. An unconfirmed step is shown in the diagnostics and never used.
 - **Refined value.** Each time a period ends, SmartPI fits a model of the room with its walls and its emitter over the last 3 periods, and compares it with the fit of the 3 periods before them. Each period is fitted with the response to the setpoint rise that ends it, for up to 2 hours while it is still dark and the new setpoint constant: that response is what reveals the emitter. When both agree, they give the room class (thermal mass or not), the wall parameters and an emitter time constant `τe`.
 - **Regulated periods only.** `τe` replaces the fast value only when the 6 periods of both fits were regulated over their regulated part, from its start to the setpoint rise or sunrise: at least 4 hours, constant setpoint, a heater start in every half hour, temperature within 0.3 °C of the setpoint, steady power, no data gap. Otherwise `τe` is a diagnostic only.
@@ -332,13 +340,13 @@ The learning uses only quiet periods: stretches without sun, at a constant setpo
 
 **What it changes**
 
-- The learned value is the refined value when published, else the fast value. A lower bound above it (or without it) takes its place.
-- The gain rule expects an apparent dead time, which is what the bootstrap measures; the learned value is the mean delay of the emitter, about twice as long. The rule therefore compares half the learned value with a **reference**: the larger of the first bootstrap value measured once the learning started (kept, so it never follows a bootstrap value that later falls, for example under sleepers who warm the room before the heater starts) and the current bootstrap value.
+- The learned emitter lag is the refined value when published, else the fast value. A lower bound above it (or without it) takes its place.
+- The gain rule expects an apparent dead time, which is what the bootstrap measures; the learned value is the emitter lag, about twice as long. The rule therefore compares half the learned value with a **reference**: the larger of the first bootstrap value measured once the learning started (kept, so it never follows a bootstrap value that later falls, for example under sleepers who warm the room before the heater starts) and the current bootstrap value.
   - Half the learned value shorter than the reference: the gains keep the reference. A learned value alone never makes the gains more aggressive than the reference.
   - Between 1 and 2 times the reference: the gains use half the learned value.
   - Above 2 times the reference: the gains use half the learned value only when the fast value and the identification value (the refined value, else the `τe` of the last evaluation whose two fits agree) agree within a factor of 1.25. Otherwise they use twice the reference. A lower bound is never confirmed this way.
-- When the gains use the learned value, the near band, the integral hold after a heater start or a resume, FF3 and the thermal twin use the learned value itself; otherwise they keep the bootstrap value. The learning of `a` and `b`, the feed-forward trim, the calibration and AutoCalib always keep the bootstrap value.
-- The bootstrap value is never modified. Without a learned value the regulation uses it as it is.
+- When the gains use the learned value, the near band, the integral hold after a heater start or a resume, FF3 and the thermal twin use the learned value itself as their heating dead time (`applied_s`); otherwise they keep the bootstrap dead time. The learning of `a` and `b`, the feed-forward trim, the calibration and AutoCalib always keep the bootstrap dead time.
+- The bootstrap dead time is never modified. Without a learned value the regulation uses it as it is.
 
 **Data quality**
 
@@ -353,7 +361,7 @@ A comfort step is evaluated only when the 2 hours before it and the 2 h 15 after
 
 **Requirements and limits**
 
-- Heating only (nothing is learned or applied in cooling), and heaters driven by PWM cycles. In valve mode nothing is learned or applied and the diagnostics show `valve_mode_not_supported`: the heating power of a valve is known only through the valve curve, and a curve that is missing or does not match the valve gives a wrong delay; on a slow emitter, the learned delay also left the morning rise short of the comfort setpoint.
+- Heating only (nothing is learned or applied in cooling), and heaters driven by PWM cycles. In valve mode nothing is learned or applied and the diagnostics show `valve_mode_not_supported`: the heating power of a valve is known only through the valve curve, and a curve that is missing or does not match the valve gives a wrong emitter lag; on a slow emitter, the learned emitter lag also left the morning rise short of the comfort setpoint.
 - The position of the home set in Home Assistant, a comfort step of at least 1 °C before sunrise, and a bootstrap dead time already measured.
 - The fast value needs 3 confirmed steps. A room that does not regulate at its low setpoint for 1.5 hours before the step (late or no return to the low setpoint) stays unconfirmed: the fast value is not published there.
 - The refined value needs 6 consecutive regulated periods, which requires a low setpoint reached at least 4 hours before the comfort step or sunrise, and held until then.
@@ -362,7 +370,7 @@ A comfort step is evaluated only when the 2 hours before it and the 2 h 15 after
 - The computations run in the background: up to a few seconds per day and per thermostat, about 20 MB at peak. SmartPI keeps 7 days of signals in its own storage file.
 - They use the `numpy` and `scipy` packages, installed with the integration and loaded only by the background computations. If they cannot be loaded, nothing is learned, the bootstrap value stays in use and the diagnostics show `dependencies_unavailable`.
 
-The `live.tar_learning` block of the [diagnostics](./diagnostics.md#emitter-delay-learning) shows the learned values, their status and the applied value.
+The `live.tar_learning` block of the [diagnostics](./diagnostics.md#emitter-lag-learning) shows the learned values, their status and the applied value.
 
 ### Room model
 
@@ -370,7 +378,7 @@ SmartPI also maintains a room model. The model describes the room with its air, 
 
 **What it computes**
 
-- **Identification, on the quiet periods.** The model is fitted on the same quiet periods as the emitter delay learning (see **Quiet periods** above: no sun, constant setpoint, valid data), from the signals it keeps; no hour is fixed. Each time a period ends, SmartPI fits the model in the background on the last 3 periods, each with the response to the setpoint rise that ends it for up to 2 hours while it is still dark. A series of periods is computed once, at most one per hour; after a long stop the series not computed yet follow one another, oldest first. The model holds the heating response `a` through the emitter (with its learned delay), the loss of the air to the outside and to the walls, and the slow response of the walls. The state of the walls at the start of each period is estimated, never assumed settled, and two periods are never joined.
+- **Identification, on the quiet periods.** The model is fitted on the same quiet periods as the emitter lag learning (see **Quiet periods** above: no sun, constant setpoint, valid data), from the signals it keeps; no hour is fixed. Each time a period ends, SmartPI fits the model in the background on the last 3 periods, each with the response to the setpoint rise that ends it for up to 2 hours while it is still dark. A series of periods is computed once, at most one per hour; after a long stop the series not computed yet follow one another, oldest first. The model holds the heating response `a` through the emitter (with its learned emitter lag), the loss of the air to the outside and to the walls, and the slow response of the walls. The state of the walls at the start of each period is estimated, never assumed settled, and two periods are never joined.
 - **Heat balance, once a day.** About 20 minutes after midnight, whatever the quiet periods, SmartPI computes the heat balance of each whole day kept in its storage (up to 7): the mean heating power, with the change of the indoor temperature removed, against the mean indoor-outdoor difference. A straight line through these daily points gives the static model of the room. Its slope is the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. Its offset is a constant free heat gain, in % of full power: heat from a warmer room next door or from steady occupants, or a loss to a colder room when negative. Once a model is published, the static loss SmartPI uses is slope × (setpoint − outdoor temperature) − free gain. Without the gain, the integral would have to carry it for good. The heat balance does not depend on the emitter response time.
   - A day counts when at most 20 % of its data are missing or invalid and it has some heating (2 % of full power on average): a day without heating says nothing about the losses.
   - The model needs at least 4 such days, a mean heating of at least 5 % of full power and a mean indoor-outdoor difference of at least 6 °C.
@@ -378,7 +386,7 @@ SmartPI also maintains a room model. The model describes the room with its air, 
   - A free gain can be told apart from the losses only when the indoor-outdoor difference has varied between the days (a standard deviation of at least 1 °C). Until then the slope alone is used: the mean power over the mean difference, with no gain. It is right at the usual conditions of the room, less so far from them. Once the difference has varied, the line with its gain must be determined; otherwise the day gives no new value (`free heat gains detected; the outdoor temperature has not varied enough yet to separate them from the losses` when the days show a gain, `the heating need varies too much from one day to the next` otherwise).
   - The days must not drift: when the heating need moves in one direction from day to day by more than 2.5 % beyond what the line explains, the walls are still storing or releasing heat (start of the heating season, a cold spell), and the day gives no new value.
   - Otherwise the last kept model stays in force.
-- **Emitter search.** Each identification fits the model with an emitter response time (its first moment) on a fixed scale from 1 minute to 1 hour (13 values, each 1.41 times the previous), refined around the best one. The dead time in force does not set the scale. A faster emitter is not resolved by the 1-minute steps of the fit; a slower one would be confused with the walls, whose time constant is at least 3 hours. The rise of the fit error away from the best value is weighed against the residual noise, counted in independent measurements. When the best value is at either end of the scale and the rise is significant, the true response time lies outside the scale and the series publishes nothing (`the heating response delay does not match the measured temperature`). When the rise is not significant, these periods do not determine the response time: the identification goes on with the learned delay when the emitter delay learning has refined it, otherwise with the best value of the scale, and the agreement with the heat balance judges the result.
+- **Emitter search.** Each identification fits the model with an emitter lag (the first moment of its response) on a fixed scale from 1 minute to 1 hour (13 values, each 1.41 times the previous), refined around the best one. The dead time in force does not set the scale. A faster emitter is not resolved by the 1-minute steps of the fit; a slower one would be confused with the walls, whose time constant is at least 3 hours. The rise of the fit error away from the best value is weighed against the residual noise, counted in independent measurements. When the best value is at either end of the scale and the rise is significant, the true emitter lag lies outside the scale and the series publishes nothing (`the heating response delay does not match the measured temperature`). When the rise is not significant, these periods do not determine the emitter lag: the identification goes on with the learned emitter lag when the emitter lag learning has refined it, otherwise with the best value of the scale, and the agreement with the heat balance judges the result.
 - **Information.** The periods must determine the model, whatever their duration. From each fit, SmartPI computes how precisely the measurements fix what the fit gives: `a` and `b_eq / a` for the simple model, `a`, the loss of the air and the share the walls take for the model with walls (its `b_eq / a` is checked against the heat balance instead), the emitter search included, and counting correlated errors as fewer measurements. A fit whose uncertainty (95 %) is wider than the tolerance used to compare two series of periods (15 % on `a`, 25 % on `b_eq / a` and on the loss of the air, 35 % on the wall share) is refused (`the quiet periods do not determine the model precisely enough yet`): two such series would agree or disagree by chance. Long nights with some heating usually determine the walls; a few short periods may not.
 - **Publication.** The values of a series are published only when the model follows the measured temperature closely and without systematic error, the values agree with those of the 3 periods before (other periods, never shared), and those earlier values also predict the new periods. The check of the error looks for a bias, a large spread, long runs of hourly means of the same sign, a correlation over one hour, and a link with the heating, the setpoint or the outdoor temperature. Shorter ripples, from the sensor response or the heating cycles, do not matter at the scale of the model. A model whose heating response `a` is more than twice or less than half the `a` learned by the regulation is refused (`the heating response differs too much from the one measured by the regulation`): such a model lumps the walls into the air. The fits take the free gain of the heat balance in force as a known heat input. Once a heat balance is in force, a model whose ratio `b_eq / a` differs from its slope by more than 5 % is refused too (`the model's heat loss disagrees with the measured heat balance`): with heavy walls, `b_eq` is the small difference between the loss of the air and the share the walls take, and a slightly wrong emitter response time shifts it by several %. The walls of such a model would not match the measured losses either. Two agreeing results are averaged, and the published values are the median of the last 3 accepted results; both are taken on `a`, the ratio `b_eq / a`, the wall share of the air loss and the wall rate, so the static ratio keeps the value the fits agree on. Otherwise the last published values are kept.
 - **Simple model.** The walls are kept in the model only with a precise temperature sensor (steps of 0.015 °C or less), when they carry a real share of the losses in both series of periods, when their time constant is at least 3 hours, and when they predict the following periods better than the simple model. Otherwise the model is the simple one, with `a` and `b_eq` only, like the A/B model.
@@ -413,7 +421,7 @@ The cost is a slight overshoot, around 0.1 °C, at the end of a morning rise in 
 - Heaters driven by PWM cycles; valves are not supported yet.
 - The position of the home set in Home Assistant: without it there is no quiet period and nothing is identified (the heat balance still runs).
 - A first publication needs 6 quiet periods with some heating that determine the model (about 6 days with a night setback), and a heat balance in force: the model's heat loss is checked against it within 5 % when it is published, and nothing is published before a first heat balance (it needs 4 usable whole days of recorded signals). A home with only short nights (summer at high latitudes) may give none. A model published by an earlier version stays in force; it gives no holding power while no heat balance is in force or while it disagrees with it.
-- It uses the same `numpy` and `scipy` packages as the emitter delay learning, in the background: up to about a minute per identification and per thermostat.
+- It uses the same `numpy` and `scipy` packages as the emitter lag learning, in the background: up to about a minute per identification and per thermostat.
 - Its parameters and state are kept in their own storage file and survive restarts. The `reset_smartpi_learning` service clears them.
 
 The `live.room_model` block of the [diagnostics](./diagnostics.md#room-model) shows the model status, its values, the heat balance in force, the forecasts and their errors. `live.feedforward.source` shows which model gives the holding power, and `live.feedforward.wall_power_percent` the wall part of it.
@@ -432,7 +440,7 @@ A restart is bridged when all of these hold:
 
 The decision is taken at the first calculation that has the indoor temperature: a sensor that reports a few seconds after the restart does not prevent it, and the stop counts up to that moment. While SmartPI waits for that temperature, it keeps the command of before the stop as long as the other conditions above hold; the heating is not interrupted. If the temperature is still missing 10 minutes after the stop, the command goes to 0 until it comes and the restart is not bridged.
 
-After a bridged restart, the measurements in progress resume (dead time, learning windows, emitter delay, the windows already counted by the slow feed-forward correction), the heater is taken as unchanged over the stop, nothing is excluded from the emitter delay learning or the room model (both heating only), and learning is not paused. A setpoint changed during the stop is handled at the first tick like any setpoint change. After any other restart SmartPI starts again carefully: the measurements in progress are dropped, learning pauses for one cycle, and only the stop itself is excluded from the learning data.
+After a bridged restart, the measurements in progress resume (dead time, learning windows, emitter lag, the windows already counted by the slow feed-forward correction), the heater is taken as unchanged over the stop, nothing is excluded from the emitter lag learning or the room model (both heating only), and learning is not paused. A setpoint changed during the stop is handled at the first tick like any setpoint change. After any other restart SmartPI starts again carefully: the measurements in progress are dropped, learning pauses for one cycle, and only the stop itself is excluded from the learning data.
 
 The diagnostic sensor shows the last restart in `control.last_restart`.
 

@@ -47,7 +47,7 @@ Le bloc `history` contient ces dix-huit séries :
 | `room_model.b_eq` | Déperdition statique du modèle de pièce, dans les unités de `model.b` ; `null` avant une publication |
 | `room_model.forecast_error_1h_c` | Racine de l'erreur quadratique moyenne des prévisions à 1 h sur les 7 derniers jours (°C) |
 | `room_model.forecast_error_12h_c` | Idem pour les prévisions à 12 h (°C) |
-| `deadtime.applied_s` | Temps mort de chauffe utilisé par la régulation, en secondes (valeur du bootstrap ou valeur apprise) |
+| `deadtime.applied_s` | Temps mort de chauffe en vigueur pour la régulation, en secondes (le temps mort du bootstrap, ou la valeur dérivée du retard de l'émetteur appris) |
 
 Les séries feed-forward, modèle de pièce et temps mort sont toujours présentes
 et valent `null` lorsque le bloc correspondant n'est pas calculé. La commande
@@ -93,7 +93,7 @@ l'anticipation de la température, en chauffage et en refroidissement :
 | Champ | Signification |
 |---|---|
 | `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon ou sans pente montante ou descendante) |
-| `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le délai entre une commande et son effet), `0` lorsqu'il n'y en a pas |
+| `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le temps entre une commande et son effet), `0` lorsqu'il n'y en a pas |
 | `anticipation_horizon_source` | Origine de l'horizon : `heating balance` (médiane des derniers retards de l'émetteur mesurés), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` ; le bilan de chauffe n'est utilisé qu'en chauffage |
 
 `analysis.deadtime` suit la détection du temps mort :
@@ -105,14 +105,14 @@ l'anticipation de la température, en chauffage et en refroidissement :
 | `waiting_elapsed_s` | Âge de la réponse attendue en secondes, `null` quand aucune détection n'est armée |
 | `heat_last_outcome` / `cool_last_outcome` | Issue de la dernière attente d'une réponse montante / descendante : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger), `null` avant la première |
 
-`analysis.learning.response_lag` décrit le retard de réponse utilisé par l'apprentissage de `a` :
+`analysis.learning.response_lag` décrit le retard de l'émetteur mesuré sur les phases de chauffe à puissance constante, utilisé par l'apprentissage de `a` :
 
 | Champ | Signification |
 |---|---|
-| `lag_s` | Retard de réponse publié en secondes, `null` tant qu'il n'existe pas un ensemble cohérent d'estimations |
+| `lag_s` | Retard de l'émetteur publié en secondes, `null` tant qu'il n'existe pas un ensemble cohérent d'estimations |
 | `estimates` | Nombre d'estimations conservées (7 au plus) |
-| `episodes` | Nombre de phases de chauffe terminées depuis le début de l'apprentissage (des périodes de chauffe séparées par moins de 10 minutes sans chauffe ne comptent que pour une phase) ; il continue après la publication du retard et peut dépasser `episodes_target` |
-| `episodes_target` | Nombre de phases de chauffe après lequel le modèle de puissance délivrée est résolu sans retard publié (`4`) |
+| `episodes` | Nombre de phases de chauffe terminées depuis le début de l'apprentissage (des périodes de chauffe séparées par moins de 10 minutes sans chauffe ne comptent que pour une phase) ; il continue après la publication du retard de l'émetteur et peut dépasser `episodes_target` |
+| `episodes_target` | Nombre de phases de chauffe après lequel le modèle de puissance délivrée est résolu sans retard de l'émetteur publié (`4`) |
 | `episode_median_s` | Durée médiane des épisodes actifs récents en secondes, `null` avec moins de 3 épisodes |
 | `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage). `episode interrupted by restart` : épisode en cours lors d'un redémarrage non ponté, non repris, compté sans estimation. Peut être vide juste après un redémarrage |
 
@@ -124,10 +124,10 @@ l'anticipation de la température, en chauffage et en refroidissement :
 | `measurements` | Nombre de mesures conservées (7 au plus) |
 | `a` | Vitesse de chauffe médiane en °C/min à pleine puissance (5 décimales), `null` sans mesure |
 | `lag_s` | Retard médian de l'émetteur en secondes, `null` sans mesure qui le résout |
-| `kept_lag_s` | Médiane des 7 derniers retards mesurés, en secondes, `null` tant qu'aucun n'a été mesuré ; une mesure sans retard n'en retire aucun. C'est l'horizon de l'anticipation lorsqu'il est positif |
-| `kept_lags` | Nombre de retards retenus (7 au plus) |
+| `kept_lag_s` | Médiane des 7 derniers retards de l'émetteur mesurés, en secondes, `null` tant qu'aucun n'a été mesuré ; une mesure sans retard de l'émetteur n'en retire aucun. C'est l'horizon de l'anticipation lorsqu'il est positif |
+| `kept_lags` | Nombre de retards de l'émetteur retenus (7 au plus) |
 | `last_reason` | Issue de la dernière phase terminée : `measured`, ou la raison pour laquelle elle n'a rien donné (`rest before heating too short`, `baseline samples insufficient`, `heating too short`, `temperature rise too small`, `still rising at the next heating`, `no peak within the wait`, `observation gap`, `heating mode left`, `interrupted by restart`). Vide avant la première phase |
-| `last` | Dernière mesure, `null` sans mesure : `heating_min` (durée de chauffe à pleine puissance en minutes), `rise_c` (hausse de température au pic au-dessus de la trajectoire passive), `peak_delay_min` (minutes entre la coupure et le pic), `a`, `lag_s` (`null` lorsque la puissance n'était pas constante ou que le retard n'est pas résolu), `constant_power`, `context` (`bootstrap`, `calibration` ou `regulation`, au début de la phase) |
+| `last` | Dernière mesure, `null` sans mesure : `heating_min` (durée de chauffe à pleine puissance en minutes), `rise_c` (hausse de température au pic au-dessus de la trajectoire passive), `peak_delay_min` (minutes entre la coupure et le pic), `a`, `lag_s` (`null` lorsque la puissance n'était pas constante ou que le retard de l'émetteur n'est pas résolu), `constant_power`, `context` (`bootstrap`, `calibration` ou `regulation`, au début de la phase) |
 
 Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 
@@ -135,7 +135,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 |---|---|
 | `step1 - deadtime: heat:… cool:…` | Attente des temps morts actif et passif |
 | `step2 - collecting emeas: A:n/5 B:n/5` | Collecte des mesures de `a` et `b` |
-| `step2 - waiting response lag: estimates N, heating phases K/4` | Collectes complètes ; la publication de `a` attend le modèle de puissance délivrée (retard publié, `K` atteint 4, ou 31 mesures de `a` collectées) |
+| `step2 - waiting response lag: estimates N, heating phases K/4` | Collectes complètes ; la publication de `a` attend le modèle de puissance délivrée (retard de l'émetteur publié, `K` atteint 4, ou 31 mesures de `a` collectées) |
 
 `valve` vaut `null` sauf si le thermostat pilote une vanne. En mode vanne, il contient :
 
@@ -154,23 +154,23 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | Champ | Signification |
 |---|---|
 | `status` | `active`, `checking_dependencies` (jusqu'au démarrage du thermostat), `dependencies_unavailable` (numpy/scipy ne peuvent pas être chargés : valeur du bootstrap utilisée) ou `valve_mode_not_supported` |
-| `applied_s` | Temps mort HEAT actif utilisé par la régulation (bande proche, maintien de l'intégrale, FF3, jumeau thermique), en secondes : la valeur apprise lorsque les gains l'utilisent, sinon `bootstrap_s` |
+| `applied_s` | Temps mort HEAT actif en vigueur pour la régulation (bande proche, maintien de l'intégrale, FF3, jumeau thermique), en secondes : le retard de l'émetteur appris lorsque les gains l'utilisent, sinon `bootstrap_s` |
 | `source` | Origine de `applied_s` et de `gains_s` : `bootstrap`, `fast`, `refined` ou `lower_bound` (une borne inférieure issue de montées de confort coupées par le lever) |
-| `gains_s` | Temps mort utilisé par les gains, en secondes : la moitié de `applied_s` pour une valeur apprise ; sinon `reference_s` lorsque la valeur apprise est plus courte, deux fois `reference_s` lorsqu'elle est plus longue et non confirmée, `bootstrap_s` sans valeur apprise |
-| `bootstrap_s` | Temps mort du bootstrap/calibration (`model.deadtime_heat_s`), jamais modifié |
+| `gains_s` | Temps mort utilisé par les gains, en secondes : la moitié de `applied_s` pour un retard de l'émetteur appris ; sinon `reference_s` lorsqu'il est plus court, deux fois `reference_s` lorsqu'il est plus long et non confirmé, `bootstrap_s` sans retard de l'émetteur appris |
+| `bootstrap_s` | Temps mort de chauffe du bootstrap/calibration (`model.deadtime_heat_s`), jamais modifié |
 | `reference_s` | Référence des gains, en secondes : le plus grand entre le premier `bootstrap_s` mesuré depuis le début de l'apprentissage (conservé) et le `bootstrap_s` actuel ; `null` tant qu'aucune valeur du bootstrap n'est mesurée |
-| `in_force_s` / `in_force_source` | Valeur apprise en vigueur (affinée, sinon rapide) et son origine, `null` avant toute publication |
-| `out_of_bound` | `true` lorsqu'une valeur apprise existe et que les gains ne l'utilisent pas telle quelle (voir `limit_reason`) |
-| `limit_reason` | Raison pour laquelle les gains n'utilisent pas la valeur apprise telle quelle (`learned delay shorter than the reference: the gains keep the reference dead time`, ou `learned delay above twice the reference and not confirmed by a second method: the gains use twice the reference dead time`), `null` sinon |
-| `fast.value_s` | Valeur rapide publiée (montées de confort confirmées), `null` avant 3 montées confirmées |
+| `in_force_s` / `in_force_source` | Retard de l'émetteur appris en vigueur (affinée, sinon rapide) et son origine, `null` avant toute publication |
+| `out_of_bound` | `true` lorsqu'un retard de l'émetteur appris existe et que les gains ne l'utilisent pas tel quel (voir `limit_reason`) |
+| `limit_reason` | Raison pour laquelle les gains n'utilisent pas le retard de l'émetteur appris tel quel (`learned delay shorter than the reference: the gains keep the reference dead time`, ou `learned delay above twice the reference and not confirmed by a second method: the gains use twice the reference dead time`), `null` sinon |
+| `fast.value_s` | Retard de l'émetteur rapide publié (montées de confort confirmées), `null` avant 3 montées confirmées |
 | `fast.confirmed_mornings` | Nombre de montées de confort acceptées et confirmées, une par période calme au plus |
-| `fast.lower_bound_s` | Borne inférieure en vigueur : médiane des 5 dernières montées de confort confirmées coupées par le lever trop tôt pour donner une valeur, `null` sans aucune |
+| `fast.lower_bound_s` | Borne inférieure du retard de l'émetteur en vigueur : médiane des 5 dernières montées de confort confirmées coupées par le lever trop tôt pour donner une valeur, `null` sans aucune |
 | `fast.lower_bound_mornings` | Nombre de montées de confort confirmées coupées par le lever qui ont donné une borne inférieure, une par période calme au plus |
-| `fast.last_value_s` | Valeur de la dernière montée de confort acceptée |
+| `fast.last_value_s` | Retard de l'émetteur de la dernière montée de confort acceptée |
 | `fast.last_status` | `confirmed`, `unconfirmed` ou `none` pour la dernière montée de confort acceptée |
 | `fast.last_unconfirmed_reason` | Raison pour laquelle la dernière montée de confort acceptée n'est pas confirmée (par exemple `the room did not reach its low setpoint before the comfort step`, ou au moins 1 heure sans chauffe alors que la pièce était régulée à sa consigne basse), en anglais |
 | `fast.last_morning` | Dernière montée de confort évaluée, à toute heure : `day` (date locale, AAAA-MM-JJ), `accepted`, `reason` (`accepted`, ou la raison, en anglais, pour laquelle la montée n'a pas donné de valeur, par exemple `temperature rise too small`, `comfort step in daylight` ou `sunrise too soon after the comfort step`, `comfort step cut by sunrise before its response could be measured` ou `comfort step cut by sunrise: gives only a lower bound of the delay, not a value`), `room_class`, `confirmed` (`true` ou `false` pour une montée qui a donné une valeur ou une borne basse, `null` sinon) et `unconfirmed_reason` (la raison, en anglais, pour laquelle cette montée n'est pas confirmée, comme `last_unconfirmed_reason`) |
-| `refined.tau_e_s` | Valeur affinée publiée `τe`, `null` avant une publication |
+| `refined.tau_e_s` | Retard de l'émetteur affiné publié `τe`, `null` avant une publication |
 | `refined.class` | Type de pièce en vigueur issu de l'identification : `thermal_mass` (pièce à masse thermique), `no_thermal_mass` ou `undetermined` |
 | `refined.k_per_s`, `refined.tau_w_h` | Couplage air-murs et constante de temps des murs en vigueur (pièce `thermal_mass`) |
 | `refined.last_evaluation` | Dernière évaluation, faite à la fin d'une période calme : `day` (date locale de cette fin, AAAA-MM-JJ), `regulated_nights` (les six périodes de ses deux ajustements sont régulées), `class` et `tau_e_s` avant la règle des nuits régulées, ainsi que les `a` et `b` identifiés, dans les unités de `model.a` et `model.b` (pour information, jamais appliqués ; pour une pièce `thermal_mass`, `b` est la perte de l'air vers l'extérieur, les murs étant modélisés à part, il diffère donc du `model.b` effectif) |

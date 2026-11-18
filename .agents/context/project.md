@@ -4,7 +4,7 @@
 
 SmartPI is a Home Assistant custom integration (`custom_components/vtherm_smartpi`, domain `vtherm_smartpi`) that registers a **proportional algorithm plugin** for **Versatile Thermostat (VT)**. VT owns the thermostat entity, the sensors, the PWM/valve cycle and the safety logic; SmartPI computes the normalized power command in [0, 1] each tick. SmartPI talks to VT only through the `vtherm_api` package (handler factory registration, applied-command receipts).
 
-SmartPI is a discrete **PI regulator on a 1R1C thermal model** with adaptive gains, feed-forward, dead-time estimation, learning governance, calibration and valve-curve linearization. The 0.7 line adds emitter-delay learning, a room model, quiet-period selection and a heating balance. Theory basis: Astrom & Hagglund, *PID Controllers* (2nd ed.) (see `theory.md`).
+SmartPI is a discrete **PI regulator on a 1R1C thermal model** with adaptive gains, feed-forward, dead-time estimation, learning governance, calibration and valve-curve linearization. The 0.7 line adds emitter lag learning, a room model, quiet-period selection and a heating balance. Theory basis: Astrom & Hagglund, *PID Controllers* (2nd ed.) (see `theory.md`).
 
 Users install it through HACS (zip release) or by copying the integration folder into Home Assistant. Minimum HA 2025.8 (`hacs.json`), Python >= 3.13, VT >= 10.6.2 (enforced at setup by `smartpi/compatibility.py`), `vtherm_api >= 0.7.0` (see `manifest.json` for the exact requirements).
 

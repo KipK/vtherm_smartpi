@@ -562,7 +562,7 @@
 | Periodic window | {% if fftrim_periodic_window_duration_s is not none and fftrim_periodic_target_duration_s is not none %}{{ (fftrim_periodic_window_duration_s | float / 60) | round(1) }} / {{ (fftrim_periodic_target_duration_s | float / 60) | round(1) }} min · {{ fftrim_periodic_measurement_count }} measurements{% else %}—{% endif %} |
 | Amplitude / closure error | {% if fftrim_periodic_amplitude_c is not none %}{{ fftrim_periodic_amplitude_c | float | round(3) }}°C{% else %}—{% endif %} / {% if fftrim_periodic_closure_error_c is not none %}{{ fftrim_periodic_closure_error_c | float | round(3) }}°C{% else %}—{% endif %} |
 | Last periodic rejection | {% if fftrim_periodic_last_reject_reason is not none %}`{{ fftrim_periodic_last_reject_reason }}`{% else %}—{% endif %} |
-| Dead-time alignment | {% if fftrim_alignment_delay_s is not none %}{{ fftrim_alignment_delay_s | float | round(1) }} s{% else %}—{% endif %} |
+| Dead time alignment | {% if fftrim_alignment_delay_s is not none %}{{ fftrim_alignment_delay_s | float | round(1) }} s{% else %}—{% endif %} |
 | Power coverage | {% if fftrim_power_coverage_ratio is not none %}{{ (fftrim_power_coverage_ratio | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | Causal power / FF1 | {% if fftrim_mean_causal_power is not none %}{{ (fftrim_mean_causal_power | float * 100) | round(1) }}%{% else %}—{% endif %} / {% if fftrim_mean_ff1 is not none %}{{ (fftrim_mean_ff1 | float * 100) | round(1) }}%{% else %}—{% endif %} |
 | Mean temperature / error | {% if fftrim_mean_temperature is not none %}{{ fftrim_mean_temperature | float | round(2) }}°C{% else %}—{% endif %} / {% if fftrim_mean_error is not none %}{{ '%+.2f' | format(fftrim_mean_error | float) }}°C{% else %}—{% endif %} |
@@ -612,7 +612,7 @@
 | Deadband | {% if db_active %}yes{% else %}no{% endif %} |
 | Core deadband | {% if core_db_active %}yes{% else %}no{% endif %} |
 | Near-band | {% if nb_active %}yes{% else %}no{% endif %} |
-| Deadtime window | {% if in_dt %}yes{% else %}no{% endif %} |
+| Dead time window | {% if in_dt %}yes{% else %}no{% endif %} |
 | Saturation | {{ sat_icons.get(sat, sat) }} |
 | Boost | {% if boost %}yes{% else %}no{% endif %} |
 
@@ -650,7 +650,7 @@
 | Disturbance type | `{{ ff3_disturbance_kind_label }}` |
 | Persistent residual | {% if ff3_residual_persistent %}yes{% else %}no{% endif %} |
 | Dynamic coherence | {% if ff3_dynamic_coherent %}yes{% else %}no{% endif %} |
-| FF3 Horizon | {{ ff3_horizon }} cycle · deadtime {{ ff3_deadtime_cycles }} · {% if ff3_horizon_capped %}capped{% else %}not capped{% endif %} |
+| FF3 Horizon | {{ ff3_horizon }} cycle · dead time {{ ff3_deadtime_cycles }} · {% if ff3_horizon_capped %}capped{% else %}not capped{% endif %} |
 | FF3 sensitivity | {% if ff3_action_sensitivity is not none %}{{ ff3_action_sensitivity | float | round(6) }} °C{% else %}—{% endif %} |
 | FF3 Candidate | {% if ff3_selected_candidate is not none %}{{ (ff3_selected_candidate | float * 100) | round(1) }}%{% else %}—{% endif %} |
 
@@ -667,7 +667,7 @@
 
 ---
 
-### ⏳ Deadtime
+### ⏳ Dead time
 
 | Parameter | Value |
 |---|---|
