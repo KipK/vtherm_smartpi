@@ -15,9 +15,9 @@ For an agent launched by a user (or a developer) to find why SmartPI behaves bad
 2. **VT-side configuration.** Cycle length, valve vs switch, activation/deactivation delays (SmartPI's own minimum on/off options are in the SmartPI entry), sensor type and resolution/heartbeat, presets and setpoint schedule, overheat/safety settings, window/presence features, SmartPI options (global vs per-thermostat). Many "SmartPI" problems are cycle or actuator settings.
 3. **Data quality.** Sensor resolution and publication cadence, gaps, restarts, VT off periods, setpoint changes, sun/occupancy influence.
 4. **Model sanity.** `a`, `b`, `tau = 1/b`, hold power `b*dT/a`, dead times (heat/cool), learning state and window outcomes. Implausible values (tau of a few hours, a near zero, a/b far from 1000-2000 C scale) point to learning or data problems.
-5. **Controller state.** Gains vs floors/caps, integral mode and hold source, deadband/near band, trajectory/boost flags, anti-windup output limit, FF terms (static, FF3, trim) and their ownership, valve curve.
+5. **Controller state.** Gains vs floors/caps, integral mode and hold source, deadband/near band, boost flag, anticipation (`analysis.control.anticipation_c`, horizon and its source), anti-windup output limit, FF terms (static, FF3, trim) and their ownership, valve curve.
 6. **Subsystem.** Bootstrap/calibration status, T_ar/room model/quiet periods publication reasons, restart bridge decision, command ownership binding reasons.
-7. **Timeline.** Align the history series (indoor, setpoint, commands, PI/FF split, a/b, kp/ki) with the events; locate the first instant the behaviour departs from the model.
+7. **Timeline.** Align the history series (indoor, integral error, commands, PI/FF split, a/b, kp/ki) with the events; locate the first instant the behaviour departs from the model.
 8. **Conclude.** Root cause or ranked hypotheses; classify: configuration, data/sensor, VT behaviour, SmartPI bug, SmartPI design limit (known; see `../context/decisions.md`). For a bug: minimal reproduction (a test sketch with the fake runtime) and the module concerned.
 9. **Escalate** a design flaw to `smartpi-architect`/`smartpi-control-researcher`; a code fix to `smartpi-developer` with a precise description.
 

@@ -26,11 +26,12 @@ Debug mode records both `live` and `history`. The content is not duplicated
 inside `history`: the historical contract remains identical in both modes.
 Debug mode therefore changes retention, not publication.
 
-The `history` block contains these seventeen series:
+The `history` block contains these eighteen series:
 
 | Path under `history` | Meaning |
 |---|---|
 | `temperature.indoor` | Indoor temperature |
+| `temperature.anticipated` | Indoor temperature plus the anticipation correction: the temperature read by the proportional and integral errors |
 | `temperature.integral_error` | Integral state (°C·min); `ki × integral_error` is its share of the command (0 to 1) |
 | `control.kp` | Proportional gain |
 | `control.ki` | Integral gain |
@@ -60,7 +61,7 @@ The `live` block is organized by responsibility:
 |---|---|
 | `control` | Phase, regulation mode, gains (`kp`, `ki`), effective integral time `ti_min` (minutes), saturation, regulation bands and the last restart (`last_restart`) |
 | `power` | Current and next-cycle power, PI/FF split, limits and applied power |
-| `temperature` | Indoor/outdoor temperatures, errors and integral state |
+| `temperature` | Indoor/outdoor temperatures, anticipated temperature (`anticipated`: indoor temperature plus the anticipation correction), errors and integral state |
 | `model` | A/B model, confidence, time constant and dead times |
 | `learning` | Learning stage, bootstrap progress, accepted updates and drift state |
 | `governance` | Thermal regime and model-update decision |

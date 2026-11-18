@@ -22,7 +22,9 @@ All notable changes to this project will be documented in this file.
   proportional branch always works on the raw setpoint. The overshoot of slow
   emitters is reduced. New diagnostics in `analysis.control`:
   `anticipation_c`, `anticipation_horizon_s` and
-  `anticipation_horizon_source` (`heating balance`, `dead times` or `none`).
+  `anticipation_horizon_source` (`heating balance`, `dead times` or `none`),
+  and `temperature.anticipated` (the measured temperature plus the correction,
+  in `live` and in `history`).
   Removed diagnostics: `setpoint.filtered_setpoint` (in `live` and in
   `history`: the regulation follows the setpoint of the thermostat),
   `setpoint.trajectory_active`, `setpoint.trajectory_source` and the whole

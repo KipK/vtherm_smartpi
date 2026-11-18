@@ -32,6 +32,7 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
         },
         "temperature": {
             "indoor": temperature["indoor"],
+            "anticipated": temperature["anticipated"],
             "integral_error": temperature["integral_error"],
         },
         "power": {

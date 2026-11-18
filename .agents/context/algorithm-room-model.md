@@ -11,12 +11,11 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 |---|---|---|
 | Emitter delay (T_ar) learning | `smartpi/tar_learning/` | Yes (HEAT, PWM only): dead time used by gains, near band, I-hold, FF3, twin |
 | Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the two learnings above and below |
-| Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1) and braking-prediction equilibrium. Forecasts, forecast errors, `a`/`b_eq` display: no |
+| Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1). Forecasts, forecast errors, `a`/`b_eq` display: no |
 | Response lag | `smartpi/response_lag.py` | Yes: delivered-power model for the `a` learning |
-| Heating balance | `smartpi/heating_balance.py` | No, observation only |
-| Recovery plateau | `smartpi/recovery_plateau.py` | Yes: ends a stuck setpoint/disturbance trajectory (`smartpi/setpoint.py`) |
+| Heating balance | `smartpi/heating_balance.py` | Yes, one value: the median kept lag is the HEAT horizon of the anticipation (`smartpi/anticipation.py`); `a` and the other values are observation only |
 | Restart bridge | `smartpi/restart_bridge.py` | Yes: decides resume vs conservative restart for every component |
-| Resume hold | `smartpi/resume_hold.py` | Yes: temporary I-hold after window / power-shedding resume |
+| Resume hold | `smartpi/resume_hold.py` | Yes: temporary I-hold after window / power-shedding resume; `recovery_error_floor_c` (residual error under which a recovery counts as closed) |
 | Job abort | `smartpi/job_abort.py` | Plumbing for executor jobs |
 | Thermal measurement | `smartpi/thermal_measurement.py` | Plumbing for the FF trim coordinator only |
 | Lazy numpy/scipy | `smartpi/tar_learning/deps.py` | Gate: without them nothing is learned |
@@ -268,7 +267,7 @@ Diagnostics: `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`,
 `episode_median_s`, `last_reason`). Silent: `lag_s = null` with `last_reason` saying why (for example
 `intercept not resolvable`).
 
-## 6. Heating balance (`smartpi/heating_balance.py`, class `HeatingBalance`) - observation only
+## 6. Heating balance (`smartpi/heating_balance.py`, class `HeatingBalance`)
 
 Measures heating rate `a` (C/min at full power) and emitter lag from an energy balance of each heating phase
 followed by a stop, in HEAT, from the same observations as the response lag (`learning_window.py` owns it).
@@ -276,21 +275,13 @@ Conditions: rest >= `HEATING_BALANCE_MIN_REST_S = 1800`, baseline of up to 3600 
 `HEATING_BALANCE_PEAK_BIN_S = 300` bins confirmed after `HEATING_BALANCE_PEAK_CONFIRM_S = 1800`, wait at most
 `HEATING_BALANCE_PEAK_MAX_S = 4 h`, kept when full-power time >= 600 s and rise >= 0.3 C. Last
 `HEATING_BALANCE_HISTORY = 7` measurements; published values are medians; lag only for constant-power phases.
-Read by nothing: no regulation or learning consumer (grep shows only `diagnostics.py` and `learning_window.py`).
+Regulation consumer: only `kept_lag_s` (median of the last `HEATING_BALANCE_HISTORY` lags, None while none measured), the HEAT
+horizon of the anticipation (`smartpi/anticipation.py::select_horizon`); no learning consumer. `a` and `lag_s` are observation only.
 Persistence: with the learning state (`lw_state["heating_balance"]`); phase in progress resumes after a bridged
 restart, dropped otherwise. Diagnostics: `analysis.learning.heating_balance` (`state`, `measurements`, `a`,
-`lag_s`, `last_reason`, `last`). Silent: `a`/`lag_s` null, `last_reason` gives the refusal.
+`lag_s`, `kept_lag_s`, `kept_lags`, `last_reason`, `last`). Silent: `a`/`lag_s` null, `last_reason` gives the refusal.
 
-## 7. Recovery plateau (`smartpi/recovery_plateau.py`)
-
-`RecoveryPlateauDetector`: averages the signed error over blocks of `plateau_block_min` (cycle x
-`RECOVERY_PLATEAU_BLOCK_CYCLES = 3`), declares a plateau after `RECOVERY_PLATEAU_BLOCKS = 2` stationary blocks
-above `recovery_error_floor_c` with no net progress over `RECOVERY_PLATEAU_PROGRESS_BLOCKS = 4`
-(constants in `smartpi/const.py`). Used by `smartpi/setpoint.py` (`_disturbance_plateau_reached`) to end a
-disturbance trajectory, or a released setpoint trajectory short of the target (cold walls), so that FF3 and the
-trim are not held for hours; also provides the error floor used by `resume_hold.py`. Not persisted, no own diagnostic.
-
-## 8. Restart bridge and resume hold
+## 7. Restart bridge and resume hold
 
 Restart bridge (`smartpi/restart_bridge.py::decide`, `RestartBridge`, `command_holdable`): one decision, taken at the
 first calculation of a ready thermostat, whether a stop is bridged. All must hold: downtime (wall clock, from the
@@ -319,7 +310,7 @@ active dead time exists, or immediately when the residual error is already withi
 persisted (cleared on reset). While active it flags FF-trim windows as `recovery` (`ff_trim_runtime.py`). The hold
 source is reported as `control.integral_hold_source` / `integral_hold_mode`.
 
-## 9. Thermal measurement (`smartpi/thermal_measurement.py`)
+## 8. Thermal measurement (`smartpi/thermal_measurement.py`)
 
 `ThermalMeasurementSource.observe` returns an immutable `ThermalMeasurement` only for a new distinct VT
 measurement identity (a repeated value is not new); `reset` bumps an epoch. Consumer: the FF trim coordinator
@@ -346,6 +337,6 @@ change detection: history change records, observer `meas_key`). No persistence, 
 - User docs: `documentation/en/vtherm_smartpi.md` ("Emitter delay learning", "Room model", "Restarts").
 - Diagnostics reference: `documentation/en/diagnostics.md` (`tar_learning`, `room_model`, `feedforward`,
   `control.last_restart`, `analysis.learning.*`).
-- Constants: `smartpi/const.py` (response lag, heating balance, recovery plateau, restart bridge),
+- Constants: `smartpi/const.py` (response lag, heating balance, anticipation, restart bridge),
   `tar_learning/const.py`, `room_model/const.py`, `quiet_periods/const.py`. These are method parameters, not
   configuration knobs.

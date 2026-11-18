@@ -97,8 +97,10 @@ def _build_power(algo: SmartPI) -> Dict[str, Any]:
 
 def _build_temperature(algo: SmartPI) -> Dict[str, Any]:
     """Return the measured temperatures, the error and the integral state."""
+    indoor = algo._last_current_temp
     return {
-        "indoor": algo._last_current_temp,
+        "indoor": indoor,
+        "anticipated": None if indoor is None else round(indoor + algo.anticipation_c, 2),
         "outdoor": algo._last_ext_temp,
         "error": round(algo.error, 4),
         "integral_error": round(algo.integral, 6),

@@ -320,6 +320,24 @@ def test_manage_setpoint_signs_the_anticipated_errors_by_the_mode() -> None:
     assert error_p == pytest.approx((20.5 - 0.3) - 20.0)
 
 
+def test_published_anticipated_temperature_is_the_measured_one_plus_the_correction(clock: _Clock) -> None:
+    smartpi = _make(horizon_s=1800.0)
+    temps = _rise(40)
+    _run(smartpi, clock, temps)
+    assert smartpi.anticipation_c > 0.1
+    temperature = smartpi.get_published_diagnostics()["temperature"]
+    assert temperature["indoor"] == temps[-1]
+    assert temperature["anticipated"] == round(temps[-1] + smartpi.anticipation_c, 2)
+
+    plain = _make()
+    _run(plain, clock, temps)
+    assert plain.get_published_diagnostics()["temperature"]["anticipated"] == round(temps[-1], 2)
+
+
+def test_published_anticipated_temperature_is_null_without_a_measure() -> None:
+    assert _make().get_published_diagnostics()["temperature"]["anticipated"] is None
+
+
 def test_reset_learning_clears_the_applied_correction(clock: _Clock) -> None:
     smartpi = _make(horizon_s=1800.0)
     _run(smartpi, clock, _rise(40))

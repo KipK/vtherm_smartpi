@@ -26,11 +26,12 @@ Le mode debug enregistre `live` et `history`. Le contenu n'est pas dupliqué
 dans `history` : le contrat historique reste identique dans les deux modes. Le
 mode debug change donc la conservation, pas la publication.
 
-Le bloc `history` contient ces dix-sept séries :
+Le bloc `history` contient ces dix-huit séries :
 
 | Chemin sous `history` | Signification |
 |---|---|
 | `temperature.indoor` | Température intérieure |
+| `temperature.anticipated` | Température intérieure plus la correction d'anticipation : la température lue par les erreurs proportionnelle et intégrale |
 | `temperature.integral_error` | État de l'intégrale (°C·min) ; `ki × integral_error` est sa part de la commande (0 à 1) |
 | `control.kp` | Gain proportionnel |
 | `control.ki` | Gain intégral |
@@ -60,7 +61,7 @@ Le bloc `live` est organisé par responsabilité :
 |---|---|
 | `control` | Phase, mode, gains (`kp`, `ki`), temps intégral effectif `ti_min` (minutes), saturation, bandes de régulation et dernier redémarrage (`last_restart`) |
 | `power` | Puissances du cycle courant et suivant, PI/FF, limites et puissance appliquée |
-| `temperature` | Températures intérieure/extérieure, erreurs et état de l'intégrale |
+| `temperature` | Températures intérieure/extérieure, température anticipée (`anticipated` : température intérieure plus la correction d'anticipation), erreurs et état de l'intégrale |
 | `model` | Modèle A/B, confiance, constante de temps et temps morts |
 | `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive |
 | `governance` | Régime thermique et décision de mise à jour du modèle |

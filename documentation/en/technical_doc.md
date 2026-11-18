@@ -965,6 +965,8 @@ is read from the mode, with the same dead-time source as the gain rule
 
 `analysis.control` publishes `anticipation_c` (the correction applied at the last
 tick), `anticipation_horizon_s` and `anticipation_horizon_source`.
+`temperature.anticipated` publishes the anticipated temperature (measured
+temperature plus correction), in `live` and in `history`.
 
 The thermal twin and FF3 share a pure
 constant-power 1R1C propagation function. Each consumer retains its own horizons,

@@ -125,8 +125,10 @@ Pipeline inside `calculate`, in execution order:
    (`_force_off_output`), power shedding; each returns early.
 5. Guard cut active: observe the room, unwind integral, `_set_linear_output(0)`, return.
 6. `_refresh_active_timestamp_and_expire_controller_memory` (96 h purge), `tint_filter.update`,
-   `_update_time_tracking` (dt capped to one cycle, 600 s after a bridged restart), `_remaining_cycle_min`.
-7. `_manage_setpoint` (filter, boost, trajectory; raw and filtered errors), setpoint-change handling.
+   `_update_time_tracking` (dt capped to one cycle, 600 s after a bridged restart).
+7. Anticipation: `correction_c` with the horizon of `SmartPI.anticipation_horizon` (STABLE phase only, else 0); then
+   `_manage_setpoint` (setpoint change, boost, raw error `error_i` and `error_p` on the anticipated temperature),
+   `error_i_ctl` = integral error on the anticipated temperature; setpoint-change handling.
 8. Learning: `dt_est.update`, `update_learning` (learning on, not HYSTERESIS, not calibrating), calibration
    timeout/`check_and_start`. CALIBRATION: `_calculate_forced_calibration`, return.
 9. Phase HYSTERESIS (bootstrap): `ctl.calculate_hysteresis` bang-bang, committed at once, return.
@@ -169,7 +171,7 @@ Pipeline inside `calculate`, in execution order:
   trim and holding source, tint filter, hysteresis output, and the restart context (last tick, mode, cycle config,
   exclusion, temperature, committed command, wall times).
 - Transient, empty after load (`load_state`): committed power (0 unless bridged), command ownership/pending
-  requests, FF trim observation runtime, integral hold, setpoint transients, learning resume timestamp, cycle
+  requests, FF trim observation runtime, integral hold, learning resume timestamp, cycle
   state. Without a bridge, the first tick freezes learning for one cycle (`_startup_grace_period`).
 - Save throttling: `schedule_save` runs every tick but uses `Store.async_delay_save` with a 300 s window
   (`SAVE_DELAY_SEC`), not re-armed while pending; the snapshot is taken when the write runs. T_ar and room model
@@ -220,8 +222,8 @@ Pipeline inside `calculate`, in execution order:
   `algo.get_published_diagnostics()` (`smartpi/diagnostics.py::build_published_diagnostics`) and writes HA state only
   if state or attributes changed.
 - Attributes (`smartpi/diagnostic_history.py::build_diagnostic_attributes`): `schema_version` (2), `live` (full),
-  `history` (compact, stable keys, null when not computed: kp/ki, indoor temperature, integral error, filtered
-  setpoint, power applied/command/pi/ff, model a/b, FF source and wall power, room model a/b_eq and 1 h/12 h
+  `history` (compact, stable keys, null when not computed: kp/ki, indoor temperature, integral error,
+  power applied/command/pi/ff, model a/b, FF source and wall power, room model a/b_eq and 1 h/12 h
   forecast error, applied dead time).
 - Recorder profiles: normal = `SmartPIDiagnosticSensor`, `_unrecorded_attributes = {"live"}` (only
   `schema_version` and `history` recorded); debug = `SmartPIRecordedDiagnosticSensor` (`live` recorded too). Chosen at

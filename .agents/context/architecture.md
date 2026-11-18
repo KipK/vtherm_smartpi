@@ -48,13 +48,12 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `gains.py`: `GainScheduler`: Kp/Ki from the model (IMC rule), near-band adjustment.
 - `governance.py`: `SmartPIGovernance`: regime (warm-up, stable, perturbed...) and whether learning/gains may adapt.
 - `guards.py`: `SmartPIGuards`: guard cut / guard kick safety actions.
-- `resume_hold.py`: `ResumeDeadtimeHold`: integral hold after window or shedding resume.
-- `recovery_plateau.py`: `RecoveryPlateauDetector`: recovery that stops progressing.
+- `resume_hold.py`: `ResumeDeadtimeHold`: integral hold after window or shedding resume; `recovery_error_floor_c`.
+- `anticipation.py`: slope anticipation (`correction_c`, `select_horizon`, `anticipated_error`): the P and I errors read the measured temperature plus the expected travel over the horizon, in HEAT and COOL.
 - `const.py`: algorithm constants, enums, `clamp`, governance matrix.
 
 **Setpoint / deadband**
-- `setpoint.py`: `SmartPISetpointManager`: setpoint filter (late braking on P branch), boost.
-- `trajectory.py`: late-braking trajectory generator.
+- `setpoint.py`: `SmartPISetpointManager`: setpoint boost state only (the regulation works on the raw setpoint).
 - `deadband.py`: `DeadbandManager`: deadband / near-band state with hysteresis and auto near-band.
 - `deadband_output.py`: error shaping inside the deadband.
 - `valve_curve.py`: static valve linearization of the command.
@@ -64,7 +63,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `ab_aggregator.py`: published a_hat / b_hat aggregation.
 - `ab_drift.py`: persistent drift helpers.
 - `ab_window_balance.py`: integral-balance pools for windows without a robust slope.
-- `heating_balance.py`: heating-balance estimator (observation only).
+- `heating_balance.py`: heating-balance estimator (its median kept lag is the HEAT horizon of the anticipation; the rest is observation only).
 - `learning_window.py`: `LearningWindowManager`: multi-cycle learning windows, acceptance.
 - `learning_outcomes.py`: bounded counters of window outcomes.
 - `tint_filter.py`: adaptive filter on indoor temperature (`t_int_lp`, `t_int_clean`).
@@ -154,7 +153,7 @@ Support files:
 | Add a persisted store (separate file) | new class in `state_store.py`, load/save wiring in `handler.py` (see `_tar_store`) |
 | Add a service | name in `const.py`; registration in `__init__.py::_register_services`; method `service_*` in `handler.py`; `services.yaml`; `translations/{en,fr}.json` `services`; `test_services.py`; docs |
 | Add a Repairs issue | `valve_config_check.py` or `smartpi/compatibility.py`; `translations` `issues`; tests |
-| Change setpoint braking / boost | `smartpi/setpoint.py`, `trajectory.py` |
+| Change the landing on the setpoint (anticipation) / boost | `smartpi/anticipation.py` (rule), `algo.py::SmartPI.calculate` (wiring), `smartpi/setpoint.py` (boost) |
 | Change restart behavior | `smartpi/restart_bridge.py`, `handler.py` (`_restart_exclusion`) |
 | Add a numerical learning job | new module in `smartpi/<pkg>/jobs.py` style (snapshot in, plain data out, executor, `job_abort.check`); numpy/scipy imported lazily in the job only |
 | Release / CI | `.github/workflows/*.yml`, `manifest.json`, `CHANGELOG.md` |
@@ -165,9 +164,9 @@ Rules for any user-visible change: update `documentation/en` and `documentation/
 
 `algo.py` and `handler.py` must not grow. New logic goes into a new or existing module under `smartpi/`; `algo.py` only wires it (construct, call, persist, publish), and `handler.py` only bridges VT. Extract before adding.
 
-Current sizes (lines): `algo.py` 2712, `handler.py` 859, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 26831. Largest `smartpi/` files: `ff_trim.py` 1904, `learning_window.py` 1172, `thermal_twin_1r1c.py` 1059, `ab_estimator.py` 1031.
+Current sizes (lines): `algo.py` 2646, `handler.py` 853, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 25851. Largest `smartpi/` files: `ff_trim.py` 1901, `learning_window.py` 1172, `thermal_twin_1r1c.py` 1059, `ab_estimator.py` 1031.
 
 ## 7. Names that do not exist (do not look for them)
 
 Mentioned by stale notes, absent from the code:
-`reference_governor.py`, `reference_governor_authority.py`, `reference_governor_runtime.py`, `governor_falsification.py`, `braking_release.py`, `integral_guard.py` (its resume hold lives in `smartpi/resume_hold.py`), `eris_tuning.py`, `ff_trim_candidate.py`, `gain_observation.py`.
+`reference_governor.py`, `reference_governor_authority.py`, `reference_governor_runtime.py`, `governor_falsification.py`, `braking_release.py`, `integral_guard.py` (its resume hold lives in `smartpi/resume_hold.py`), `eris_tuning.py`, `ff_trim_candidate.py`, `gain_observation.py`, `trajectory.py`, `recovery_plateau.py` (the setpoint trajectory and its plateau detector; the landing is the anticipation).

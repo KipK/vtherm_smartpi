@@ -45,7 +45,7 @@ class DummySmartPI(SmartPI):
     def get_published_diagnostics(self):
         return {
             "control": {"phase": self.phase.value, "kp": 0.4, "ki": 0.002},
-            "temperature": {"indoor": 20.5, "integral_error": 75.0},
+            "temperature": {"indoor": 20.5, "anticipated": 20.5, "integral_error": 75.0},
             "setpoint": {"boost_active": False},
             "power": {
                 "applied_percent": 30.0,
@@ -514,7 +514,7 @@ def test_diagnostic_sensor_builds_stable_envelope_and_deduplicates(hass) -> None
         "live": live.get_published_diagnostics(),
         "history": {
             "control": {"kp": 0.4, "ki": 0.002},
-            "temperature": {"indoor": 20.5, "integral_error": 75.0},
+            "temperature": {"indoor": 20.5, "anticipated": 20.5, "integral_error": 75.0},
             "power": {
                 "applied_percent": 30.0,
                 "command_percent": 35.0,

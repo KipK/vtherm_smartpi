@@ -670,7 +670,7 @@ L'horizon $H$ est le délai entre une commande et son effet sur la pièce. Il se
 - sinon, et toujours en COOL (le bilan de chauffe ne mesure qu'en chauffage), le plus long entre le temps mort actif du mode (le temps mort de chauffe en HEAT, le temps mort de refroidissement en COOL) et la moitié de son temps mort passif (le temps mort de refroidissement en HEAT, le temps mort de chauffe en COOL), chacun compté seulement lorsqu'il est fiable et positif, source `dead times` ;
 - sinon 0 : pas d'anticipation, source `none`.
 
-`analysis.control` publie `anticipation_c` (la correction appliquée au dernier tick), `anticipation_horizon_s` et `anticipation_horizon_source`.
+`analysis.control` publie `anticipation_c` (la correction appliquée au dernier tick), `anticipation_horizon_s` et `anticipation_horizon_source`. `temperature.anticipated` publie la température anticipée (température mesurée plus correction), dans `live` et dans `history`.
 
 Le jumeau thermique et FF3 partagent une fonction pure de propagation 1R1C à puissance constante. Chaque consommateur
 conserve ses horizons, sa politique de retard et ses validations.

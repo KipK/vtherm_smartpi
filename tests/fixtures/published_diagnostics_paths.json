@@ -273,6 +273,7 @@
   "setpoint",
   "setpoint.boost_active",
   "temperature",
+  "temperature.anticipated",
   "temperature.error",
   "temperature.indoor",
   "temperature.integral_error",
