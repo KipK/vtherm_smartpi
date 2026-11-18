@@ -584,7 +584,7 @@ Le réglage courant est disponible dans `specific_states.smartpi_learning_enable
 
 À utiliser quand le comportement thermique du logement a changé de manière importante, par exemple après des travaux d'isolation ou un changement d'émetteurs.
 
-Ce service efface l'apprentissage SmartPI et force un retour en mode bootstrap.
+Ce service efface l'apprentissage SmartPI et force un retour en mode bootstrap. La supervision de la calibration automatique repart de zéro avec le nouvel apprentissage.
 
 ### `force_smartpi_calibration`
 

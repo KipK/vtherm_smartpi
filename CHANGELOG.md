@@ -70,6 +70,9 @@ All notable changes to this project will be documented in this file.
   the dead time in force.
 - Requirements: `numpy` and `scipy` are installed with the integration. If they
   cannot be loaded, nothing is learned and the bootstrap value stays in use.
+- Learning reset: `reset_smartpi_learning` also restarts the supervision of the
+  automatic calibration. Its snapshot of the discarded model could otherwise
+  make the new learning look stalled and start a calibration a few days later.
 
 ## [0.6.7]
 

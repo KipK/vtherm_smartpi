@@ -453,6 +453,7 @@ class SmartPI:
         self._hysteresis_restore = None
         self.deadband_mgr.reset()
         self.calibration_mgr.reset()
+        self.autocalib.reset()  # its snapshot and counters describe the model that is discarded
         self.gain_scheduler.reset()
         self._ff_trim.reset()
         self.fftrim_coord.reset_observation_runtime()

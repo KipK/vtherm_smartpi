@@ -197,7 +197,7 @@ Pipeline inside `calculate`, in execution order:
   `services.yaml`). Targets whose `proportional_function` is not `smartpi` are skipped; none matching raises
   `ServiceValidationError` (translation key `no_smartpi_target`). Each calls a handler method (entity first, then
   `_algo_handler`); all fire `vtherm_smartpi_event` with `entity_id` and a `type`:
-  - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, T_ar, room model), type
+  - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, T_ar, room model, auto-calibration supervision), type
     `learning_reset`, forced tick, attributes, state write, `save_now`.
   - `set_smartpi_learning` (`learning_enabled`: bool, required): `set_learning_enabled` (invalidates in-flight
     observations), type `learning_enabled_changed`, attributes, diagnostic refresh, `save_now`.

@@ -7,6 +7,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from custom_components.vtherm_smartpi.algo import SmartPI
+from custom_components.vtherm_smartpi.smartpi.autocalib import AutoCalibState
 from custom_components.vtherm_smartpi.smartpi.const import (
     PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN,
 )
@@ -255,3 +256,31 @@ def test_reset_learning() -> None:
     assert smartpi.est.b == smartpi.est.B_INIT
     assert smartpi.integral == 0.0
     assert smartpi.est.learn_ok_count == 0
+
+
+def test_reset_learning_restarts_the_automatic_calibration_supervision() -> None:
+    """A snapshot of the discarded model must not be compared with the new learning."""
+    smartpi = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI",
+    )
+    smartpi.autocalib._state = AutoCalibState.MONITORING
+    smartpi.autocalib._snapshot_ts = time.time() - 30 * 3600.0
+    smartpi.autocalib._snap_ok_count_a = 40
+    smartpi.autocalib._snap_ok_count_b = 60
+    smartpi.autocalib._last_trigger_ts = time.time() - 48 * 3600.0
+    smartpi.autocalib._retry_count = 2
+    smartpi.autocalib._model_degraded = True
+
+    smartpi.reset_learning()
+
+    assert smartpi.autocalib.state == AutoCalibState.WAITING_SNAPSHOT
+    assert smartpi.autocalib.snapshot_age_h is None
+    assert smartpi.autocalib._snap_ok_count_a == 0
+    assert smartpi.autocalib._snap_ok_count_b == 0
+    assert smartpi.autocalib.last_trigger_ts_iso is None
+    assert smartpi.autocalib.retry_count == 0
+    assert smartpi.autocalib.model_degraded is False

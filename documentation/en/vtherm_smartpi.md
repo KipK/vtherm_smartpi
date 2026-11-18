@@ -590,7 +590,7 @@ The current setting is available as `specific_states.smartpi_learning_enabled` o
 
 Use this when the thermal behavior of the room has significantly changed, for example after insulation work or after changing emitters.
 
-This service clears SmartPI learning and forces a return to bootstrap mode.
+This service clears SmartPI learning and forces a return to bootstrap mode. The automatic calibration supervision starts again from scratch with the new learning.
 
 ### `force_smartpi_calibration`
 
