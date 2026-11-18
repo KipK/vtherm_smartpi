@@ -67,7 +67,7 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
 - `on_state_changed` (VT calls it after every `update_states`): in HEAT/COOL starts the 60 s timer
   (`SMARTPI_RECALC_INTERVAL_SEC`, calls `async_control_heating(timestamp=None)`); on resume from OFF calls
   `SmartPI.reset_cycle_state` (skipped at the first start after a bridged restart); other modes stop the timer and
-  cancel a running calibration.
+  suspend a running calibration (`CalibrationManager.suspend`).
 - `control_heating(timestamp, force)`: one tick, section 4. `should_publish_intermediate()` tells VT whether to
   write climate state (true for a periodic `timestamp`, `force`, a changed input signature or committed output).
 - Command receipts and ownership (`smartpi/command_ownership.py`):
@@ -130,7 +130,9 @@ Pipeline inside `calculate`, in execution order:
    `_manage_setpoint` (setpoint change, boost, raw error `error_i` and `error_p` on the anticipated temperature),
    `error_i_ctl` = integral error on the anticipated temperature; setpoint-change handling.
 8. Learning: `dt_est.update`, `update_learning` (learning on, not HYSTERESIS, not calibrating), calibration
-   timeout/`check_and_start`. CALIBRATION: `_calculate_forced_calibration`, return.
+   timeout/`check_and_start`. Before step 4, `CalibrationManager.follow_mode` runs on every tick (also while OFF, which
+   returns at step 4): a stop suspends the calibration, the same mode back within `CALIBRATION_PAUSE_MAX_MIN` resumes it,
+   a longer stop or another mode cancels it (`take_completed_result` then reports it to AutoCalib). CALIBRATION: `_calculate_forced_calibration`, return.
 9. Phase HYSTERESIS (bootstrap): `ctl.calculate_hysteresis` bang-bang, committed at once, return.
 10. `_update_control_context` (error filter, deadband, near-band), `resume_hold.update`.
 11. Governance: `gov.determine_regime`, `decide_update` for gains and thermal.
@@ -176,7 +178,7 @@ Pipeline inside `calculate`, in execution order:
 - Save throttling: `schedule_save` runs every tick but uses `Store.async_delay_save` with a 300 s window
   (`SAVE_DELAY_SEC`), not re-armed while pending; the snapshot is taken when the write runs. T_ar and room model
   use 1800 s (`TAR_SAVE_DELAY_S`, `RM_SAVE_DELAY_S`) and only when `dirty`. `save_now` writes at once and
-  supersedes the pending write (services, calibration cancel, `remove()`). `remove()` schedules the three writes
+  supersedes the pending write (services, `remove()`). `remove()` schedules the three writes
   as tasks, stops learning tasks and the timer, removes the receipt callback and valve issues.
 - Restart bridge (`smartpi/restart_bridge.py`, `SmartPI.resolve_restart`): decided once, at the first tick with an
   indoor temperature (until then the pre-stop command is held when still holdable). Bridged when downtime <=

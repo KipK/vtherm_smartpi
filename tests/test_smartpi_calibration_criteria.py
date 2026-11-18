@@ -14,6 +14,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     AUTOCALIB_COOLDOWN_H,
     AUTOCALIB_RETRY_DELAY_H,
     AUTOCALIB_SNAPSHOT_PERIOD_H,
+    CALIBRATION_PAUSE_MAX_MIN,
     CALIBRATION_REACHABILITY_MARGIN_C,
     HYST_LOWER_C,
     HYST_UPPER_C,
@@ -425,7 +426,7 @@ def test_power_limit_does_not_change_the_reachability():
 
 
 def test_completed_result_reports_every_way_a_run_ends():
-    """Success, HVAC OFF, timeout and reset each leave one result for the handler."""
+    """Success, a stop that lasts too long, timeout and reset each leave one result for the handler."""
     from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_OFF
 
     mgr = _manager(SmartPICalibrationPhase.COOL_DOWN_FINAL)
@@ -433,6 +434,9 @@ def test_completed_result_reports_every_way_a_run_ends():
     assert mgr.take_completed_result() == SmartPICalibrationResult.SUCCESS
 
     mgr = _manager(SmartPICalibrationPhase.COOL_DOWN)
+    _calc(mgr, None, VThermHvacMode_OFF)
+    assert mgr.take_completed_result() is None
+    mgr._pause_start_time -= (CALIBRATION_PAUSE_MAX_MIN + 1) * 60.0
     _calc(mgr, None, VThermHvacMode_OFF)
     assert mgr.take_completed_result() == SmartPICalibrationResult.CANCELLED
 

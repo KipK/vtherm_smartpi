@@ -298,6 +298,7 @@ Points utiles à connaître :
 - si le temps mort de refroidissement ne peut pas être appris pendant longtemps, SmartPI peut continuer avec un snapshot partiel,
 - une recalibration est jugée sur les paramètres qui l'ont déclenchée ; le `b`, qui dépend de la météo extérieure, n'est surveillé que lorsque la météo permet de l'apprendre,
 - une tentative échouée est relancée environ 6 heures plus tard,
+- un cycle de calibration (automatique ou forcé) dure plusieurs heures ; si le thermostat est éteint pendant ce temps (par exemple pendant qu'une fenêtre est ouverte), le cycle attend et reprend là où il était lorsque le même mode revient dans les 10 minutes ; après un arrêt plus long, ou dans un autre mode, il est annulé,
 - si la pièce ne peut pas atteindre un seuil de calibration (par exemple lorsqu'il fait chaud dehors), le cycle s'arrête immédiatement, aucune tentative n'est comptée et la suivante attend 24 heures,
 - après plusieurs échecs de recalibration, SmartPI continue de fonctionner et signale un modèle dégradé dans les diagnostics.
 

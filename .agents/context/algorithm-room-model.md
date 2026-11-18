@@ -278,7 +278,8 @@ Conditions: rest >= `HEATING_BALANCE_MIN_REST_S = 1800`, baseline of up to 3600 
 Regulation consumer: only `kept_lag_s` (median of the last `HEATING_BALANCE_HISTORY` lags, None while none measured), the HEAT
 horizon of the anticipation (`smartpi/anticipation.py::select_horizon`); no learning consumer. `a` and `lag_s` are observation only.
 Persistence: with the learning state (`lw_state["heating_balance"]`); phase in progress resumes after a bridged
-restart, dropped otherwise. Diagnostics: `analysis.learning.heating_balance` (`state`, `measurements`, `a`,
+restart, dropped otherwise. A saved state with a published `lag_s` but no kept lag (`lags` missing or empty) keeps that lag as the
+single kept lag. Diagnostics: `analysis.learning.heating_balance` (`state`, `measurements`, `a`,
 `lag_s`, `kept_lag_s`, `kept_lags`, `last_reason`, `last`). Silent: `a`/`lag_s` null, `last_reason` gives the refusal.
 
 ## 7. Restart bridge and resume hold

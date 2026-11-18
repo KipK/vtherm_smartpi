@@ -2260,6 +2260,9 @@ class SmartPI:
         # decides the restart; it stays pending while a sensor is missing.
         hysteresis_restore = self._take_hysteresis_restore(hvac_mode)
 
+        # A stop suspends a calibration; the mode that comes back resumes or cancels it
+        self.calibration_mgr.follow_mode(hvac_mode, self.dt_est)
+
         # --- 1. Validation & Handle OFF ---
         if self._validate_and_handle_off(target_temp, current_temp, hvac_mode, power_shedding, off_reason):
             return

@@ -306,6 +306,7 @@ Useful points to know:
 - if cooling dead time cannot be learned for a long time, SmartPI can still continue with a partial snapshot,
 - a recalibration is judged on the parameters that triggered it; the outdoor-dependent `b` is only monitored when the weather allows it to be learned,
 - a failed attempt is retried after about 6 hours,
+- a calibration cycle (automatic or forced) lasts several hours; if the thermostat is switched off during it (for example while a window is open), the cycle waits and continues where it was when the same mode comes back within 10 minutes; after a longer stop, or in another mode, it is cancelled,
 - if the room cannot reach a calibration threshold (for example when it is warm outside), the cycle stops at once, no attempt is counted and the next one waits 24 hours,
 - after repeated unsuccessful recalibration attempts, SmartPI continues to run and reports a degraded model in diagnostics.
 

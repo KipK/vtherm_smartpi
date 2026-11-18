@@ -618,6 +618,9 @@ class HeatingBalance:
         lags = state.get("lags")
         if isinstance(lags, list):
             self._lags = [lag for lag in map(_number, lags) if lag is not None][-HEATING_BALANCE_HISTORY:]
+        if not self._lags and self.lag_s is not None:
+            # A published lag saved without any kept lag is the one kept.
+            self._lags = [self.lag_s]
         restart = state.get("restart")
         if not isinstance(restart, dict):
             return

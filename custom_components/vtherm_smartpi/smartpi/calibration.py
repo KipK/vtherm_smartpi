@@ -12,9 +12,15 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
+from .timestamp_utils import (
+    elapsed_wall_minutes,
+    monotonic_to_wall_ts,
+    normalize_wall_timestamp,
+    wall_to_monotonic_ts,
+)
 
 from .const import (
+    CALIBRATION_PAUSE_MAX_MIN,
     CALIBRATION_REACHABILITY_MARGIN_C,
     HYST_LOWER_C,
     HYST_UPPER_C,
@@ -67,6 +73,11 @@ class CalibrationManager:
         self._calibration_result: SmartPICalibrationResult = SmartPICalibrationResult.PENDING
         # Result of a run that ended since the last take_completed_result() (runtime only)
         self._completed_result: SmartPICalibrationResult | None = None
+        # Mode of the last running tick, and the wall-clock time and mode of
+        # the stop that suspends the run (None while it is running)
+        self._run_mode: str | None = None
+        self._pause_start_time: float | None = None
+        self._pause_mode: str | None = None
 
     def reset(self) -> None:
         """Reset calibration state to initial values."""
@@ -76,6 +87,9 @@ class CalibrationManager:
         self._calibration_start_time = None
         self._force_calibration_requested = False
         self._calibration_result = SmartPICalibrationResult.PENDING
+        self._run_mode = None
+        self._pause_start_time = None
+        self._pause_mode = None
         # Note: _last_calibration_time is NOT reset to preserve history
 
     def request_calibration(self, phase=None) -> None:
@@ -109,8 +123,56 @@ class CalibrationManager:
         """Handle calibration timeout."""
         self._calibration_state = SmartPICalibrationPhase.IDLE
         self._calibration_start_time = None
+        self._pause_start_time = None
+        self._pause_mode = None
         self._calibration_result = SmartPICalibrationResult.CANCELLED
         self._completed_result = self._calibration_result
+
+    @property
+    def is_suspended(self) -> bool:
+        """Check if the running calibration waits for the thermostat to come back."""
+        return self.is_calibrating and self._pause_start_time is not None
+
+    def suspend(self) -> None:
+        """Suspend the running calibration: its phase is kept, nothing is commanded."""
+        if self.is_calibrating and self._pause_start_time is None:
+            self._pause_start_time = time.time()
+            self._pause_mode = self._run_mode
+            _LOGGER.info("%s - Calibration suspended (thermostat stopped)", self._name)
+
+    def follow_mode(self, hvac_mode, dt_est: "DeadTimeEstimator") -> None:
+        """Suspend, resume or cancel the calibration according to the thermostat mode.
+
+        A stop (any mode but heat or cool) suspends the run. The run continues
+        in its phase when the same mode comes back within
+        CALIBRATION_PAUSE_MAX_MIN of the stop; a longer stop, or another mode,
+        cancels it.
+        """
+        if not self.is_calibrating:
+            return
+        running = hvac_mode in (VThermHvacMode_HEAT, VThermHvacMode_COOL)
+        if running and self._pause_start_time is None:
+            self._run_mode = str(hvac_mode)
+            return
+        self.suspend()
+        paused_min = elapsed_wall_minutes(self._pause_start_time)
+        if paused_min is None or paused_min > CALIBRATION_PAUSE_MAX_MIN:
+            self._cancel()
+        elif running:
+            if self._pause_mode is not None and str(hvac_mode) != self._pause_mode:
+                self._cancel()
+                return
+            _LOGGER.info("%s - Calibration resumed after %.1f min", self._name, paused_min)
+            self._pause_start_time = None
+            self._pause_mode = None
+            self._run_mode = str(hvac_mode)
+            # A response detection in progress spans the stop: start it again
+            dt_est.reset_observation(0.0)
+
+    def _cancel(self) -> None:
+        """Cancel the run; the handler reports the result to the supervision."""
+        _LOGGER.info("%s - HVAC OFF: canceling ongoing calibration", self._name)
+        self.reset()
 
     def take_completed_result(self) -> SmartPICalibrationResult | None:
         """Return the result of a run that ended since the last call, then forget it."""
@@ -232,6 +294,8 @@ class CalibrationManager:
         Returns:
             CalibrationResult with on_percent (or None if not calibrating)
         """
+        self.follow_mode(hvac_mode, dt_est)
+
         # If not calibrating, return None
         if self._calibration_state == SmartPICalibrationPhase.IDLE:
             return CalibrationResult(
@@ -241,16 +305,13 @@ class CalibrationManager:
                 message="idle",
             )
         
-        # Safety/Exit conditions - HVAC OFF
-        if hvac_mode == VThermHvacMode_OFF:
-            self._calibration_state = SmartPICalibrationPhase.IDLE
-            self._calibration_result = SmartPICalibrationResult.CANCELLED
-            self._completed_result = self._calibration_result
+        # Suspended by a stop of the thermostat: nothing is commanded
+        if self._pause_start_time is not None:
             return CalibrationResult(
                 on_percent=0.0,
-                phase=SmartPICalibrationPhase.IDLE,
+                phase=self._calibration_state,
                 result=self._calibration_result,
-                message="hvac_off",
+                message="paused",
             )
 
         # Determine heating vs cooling mode
@@ -362,7 +423,12 @@ class CalibrationManager:
             
         self._calibration_start_time = wall_to_monotonic_ts(state.get("calibration_start_time"))
         self._force_calibration_requested = state.get("force_calibration_requested", False)
-        
+        self._run_mode = state.get("calibration_mode")
+        self._pause_start_time = normalize_wall_timestamp(state.get("calibration_pause_start"))
+        self._pause_mode = state.get("calibration_pause_mode")
+        if self._calibration_state == SmartPICalibrationPhase.IDLE:
+            self._run_mode = self._pause_start_time = self._pause_mode = None
+
         calibration_result_str = state.get("calibration_result")
         if calibration_result_str:
             try:
@@ -384,6 +450,9 @@ class CalibrationManager:
             "calibration_state": self._calibration_state.value if self._calibration_state else None,
             "calibration_start_time": monotonic_to_wall_ts(self._calibration_start_time),
             "force_calibration_requested": self._force_calibration_requested,
+            "calibration_mode": self._run_mode,
+            "calibration_pause_start": self._pause_start_time,
+            "calibration_pause_mode": self._pause_mode,
             "calibration_result": self._calibration_result.value if self._calibration_result else None,
         }
 
@@ -435,4 +504,4 @@ class CalibrationManager:
 
 
 # Import VThermHvacMode at end to avoid circular imports
-from ..hvac_mode import VThermHvacMode_OFF, VThermHvacMode_COOL  # noqa: E402
+from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT  # noqa: E402

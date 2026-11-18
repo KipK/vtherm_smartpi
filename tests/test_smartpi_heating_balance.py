@@ -513,6 +513,57 @@ def test_kept_lags_survive_a_restart():
     assert restored.kept_lag_count == 2
 
 
+def _saved_with_a_lag() -> tuple[dict, float]:
+    rig = _Rig()
+    rig.pulse()
+    with patch("custom_components.vtherm_smartpi.smartpi.timestamp_utils.time", rig.clock):
+        saved = rig.balance.save_state()
+    assert rig.balance.lag_s is not None
+    return saved, rig.balance.lag_s
+
+
+def test_old_state_with_a_published_lag_keeps_it_as_the_kept_lag():
+    saved, lag = _saved_with_a_lag()
+    saved.pop("lags")
+    restored = HeatingBalance("t")
+    restored.load_state(saved)
+    assert restored.kept_lag_count == 1
+    assert restored.kept_lag_s == pytest.approx(lag)
+
+
+def test_old_state_without_any_lag_keeps_none():
+    rig = _Rig()
+    _pulse_without_lag(rig)
+    with patch("custom_components.vtherm_smartpi.smartpi.timestamp_utils.time", rig.clock):
+        saved = rig.balance.save_state()
+    saved.pop("lags")
+    assert rig.balance.count == 1 and rig.balance.lag_s is None
+    restored = HeatingBalance("t")
+    restored.load_state(saved)
+    assert restored.kept_lag_count == 0
+    assert restored.kept_lag_s is None
+
+
+def test_state_with_an_empty_kept_list_keeps_the_published_lag():
+    saved, lag = _saved_with_a_lag()
+    saved["lags"] = []
+    restored = HeatingBalance("t")
+    restored.load_state(saved)
+    assert restored.kept_lag_count == 1
+    assert restored.kept_lag_s == pytest.approx(lag)
+
+
+def test_saved_kept_lags_are_not_replaced_by_the_published_lag():
+    saved, lag = _saved_with_a_lag()
+    restored = HeatingBalance("t")
+    saved["lags"] = [123.0, 456.0]
+    restored.load_state(saved)
+    assert restored.kept_lag_count == 2
+    assert restored.kept_lag_s == pytest.approx(289.5)
+    restored.load_state(restored.save_state())
+    assert restored.kept_lag_count == 2
+
+
 def test_clear_empties_the_kept_lags():
     rig = _Rig()
     rig.pulse()

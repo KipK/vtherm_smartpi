@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Calibration: switching the thermostat off during a calibration, for example
+  while a window is open, no longer cancels it. The calibration waits in its
+  phase and continues when the same mode comes back within 10 minutes; after a
+  longer stop, or in another mode, it is cancelled as before. Its 10-hour
+  limit still counts from the original start.
+- Anticipation (heating): a saved state that holds a measured emitter lag but
+  no kept lag (saved by a version that did not keep them) keeps that lag as
+  the horizon of the anticipation after a restart, instead of falling back to
+  the dead times until a new measurement.
 - Heating balance (heating): SmartPI measures, on each heating phase followed
   by a stop after a rest, the heating rate at full power and the emitter lag
   from an energy balance of the room, and publishes them in

@@ -383,6 +383,9 @@ NEAR_BAND_TAPER_KI_MIN = 0.45
 
 # --- Forced Calibration Constants ---
 CALIBRATION_TIMEOUT_MIN = 600  # 10 hours timeout
+# A calibration survives a stop of the thermostat shorter than this (minutes)
+# when the same mode comes back; a longer stop cancels it
+CALIBRATION_PAUSE_MAX_MIN = 10
 # A calibration threshold is reachable when the twin equilibrium of the phase
 # lies at least this far beyond it (deg C)
 CALIBRATION_REACHABILITY_MARGIN_C = 0.5

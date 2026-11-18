@@ -19,7 +19,6 @@ from .smartpi.tar_learning.deps import dependencies_importable
 from .smartpi.const import (
     SMARTPI_RECALC_INTERVAL_SEC,
     SmartPIPhase,
-    SmartPICalibrationResult,
 )
 from .const import (
     CONF_TARGET_VTHERM,
@@ -705,8 +704,9 @@ class SmartPIHandler:
                     _LOGGER.debug("%s - SmartPI resumed from OFF: cycle and learning window reset", t.name)
         else:
             self._stop_recalc_timer()
-            # Cancel any ongoing calibration when switching to OFF/SLEEP mode
-            await self._cancel_calibration_if_active()
+            # A running calibration is suspended; the mode that comes back decides its fate
+            if isinstance(t.prop_algorithm, SmartPI):
+                t.prop_algorithm.calibration_mgr.suspend()
 
     def _start_recalc_timer(self):
         """Start the periodic recalculation timer."""
@@ -735,32 +735,6 @@ class SmartPIHandler:
             self._recalc_timer_remove()
             self._recalc_timer_remove = None
             _LOGGER.debug("%s - SmartPI calc timer stopped", t)
-
-    async def _cancel_calibration_if_active(self):
-        """Cancel any ongoing calibration (manual or auto) when HVAC is turned off."""
-        t = self._thermostat
-        algo = t.prop_algorithm
-        if not algo or not isinstance(algo, SmartPI):
-            return
-
-        if not algo.calibration_mgr.is_calibrating:
-            return
-
-        _LOGGER.info("%s - HVAC OFF: canceling ongoing calibration", t.name)
-
-        # Reset the calibration manager
-        algo.calibration_mgr.reset()
-
-        # Notify autocalib trigger about the cancellation (it never returns an event)
-        algo.autocalib.on_calibration_complete(time.time(), algo, SmartPICalibrationResult.CANCELLED)
-
-        # The cancellation is notified above: drop the pending completion
-        algo.calibration_mgr.take_completed_result()
-
-        # Update attributes and save state
-        self.update_attributes()
-        t.async_write_ha_state()
-        await self._async_save()
 
     def update_attributes(self):
         """Keep climate attributes generic for SmartPI."""

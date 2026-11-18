@@ -31,9 +31,17 @@ Shipped in 0.6.7 and present in both lines: calibration reachability judged on t
 - The product code was shown bit-identical in HEAT to the bench form that was confirmed; the regulation reference fixture of the test suite carries the anticipation.
 - To follow in the field: the horizon and its source (`analysis.control.anticipation_horizon_s`, `anticipation_horizon_source`) and the applied correction (`analysis.control.anticipation_c`) on real slow emitters.
 
+## Decided by the owner
+
+- Emitter lag: the gains read half of it, every other use (anticipation horizon, holds) reads the full value. The code already follows this.
+
+## Small owner decisions implemented
+
+- A saved heating-balance state with a published lag but no kept lag keeps that lag as the single kept lag (horizon of the anticipation survives an update).
+- A calibration survives a short stop (`CALIBRATION_PAUSE_MAX_MIN`, one constant): see `algorithm-core.md` section 6.
+
 ## Open questions for the owner
 
-- Factor 1/2 of the emitter lag: recommendation = half for gains only, full value for other uses.
 - Drop exit-on-balance for good (see 3).
 - Port of the restart hold to 0.6.x: recommended against; not decided.
 - A heat-need observer replacing the error integral: study on hold; to reconsider with field results of the anticipation.
