@@ -42,7 +42,6 @@ def create_smartpi():
         name="test_vtherm",
         max_on_percent=1.0,
         deadband_c=0.1,
-        use_setpoint_filter=True,
     )
     # Bypass initial learning by filling history
     algo.est.a_meas_hist = [1.0] * 35

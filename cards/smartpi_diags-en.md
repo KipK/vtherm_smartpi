@@ -25,7 +25,6 @@
 {% set analysis = spi.get('analysis', {}) %}
 {% set analysis_control = analysis.get('control', {}) %}
 {% set analysis_learning = analysis.get('learning', {}) %}
-{% set analysis_trajectory = analysis.get('trajectory', {}) %}
 {% set analysis_deadtime = analysis.get('deadtime', {}) %}
 {% set analysis_governance = analysis.get('governance', {}) %}
 {% set analysis_ff = analysis.get('feedforward', {}) %}
@@ -169,9 +168,6 @@
   'rejected': 'rejected'
 }.get(fftrim_periodic_state, fftrim_periodic_state) %}
 
-{% set trajectory_active = setpoint.get('trajectory_active', false) %}
-{% set published_filtered_sp = setpoint.get('filtered_setpoint') %}
-{% set trajectory_source_pub = setpoint.get('trajectory_source', 'none') %}
 
 {% set autocalib_state = autocalib.get('state', 'unknown') %}
 {% set autocalib_degraded = autocalib.get('model_degraded', false) %}
@@ -217,12 +213,6 @@
   'disturbance_recovery': 'disturbance recovery'
 }.get(hold_mode, hold_mode) %}
 
-{% set trajectory_source_label = {
-  'none': 'none',
-  'setpoint': 'setpoint',
-  'disturbance': 'disturbance'
-}.get(trajectory_source_pub, trajectory_source_pub) %}
-
 {% set current_ff_blk = ((ff_pct / 100) * 18) | int %}
 {% set current_pi_blk = ((pi_pct / 100) * 18) | int %}
 {% set current_off_blk = [18 - current_ff_blk - current_pi_blk, 0] | max %}
@@ -231,7 +221,6 @@
 {% if has_analysis %}
 {% set cycle_min = analysis_control.get('cycle_min', '—') %}
 {% set sat = control.get('saturation_state', 'NO_SAT') %}
-{% set filt_sp = published_filtered_sp %}
 {% set error_f = analysis_control.get('error_filtered') %}
 {% set err_display = error_f | float(error | float(0)) %}
 {% set ep = analysis_control.get('error_p', 0) | float %}
@@ -257,20 +246,15 @@
 {% set learn_skip = analysis_learning.get('learn_skip_count', 0) | int %}
 {% set ff_ok = analysis_learning.get('ff_warmup_ok_count', 0) | int %}
 {% set ff_cyc = analysis_learning.get('ff_warmup_cycles', 0) | int %}
-{% set traj_start_sp = analysis_trajectory.get('start_setpoint') %}
-{% set traj_target_sp = analysis_trajectory.get('target_setpoint') %}
-{% set traj_tau_ref = analysis_trajectory.get('tau_ref_min') %}
-{% set traj_elapsed_s = analysis_trajectory.get('elapsed_s') %}
-{% set traj_phase = analysis_trajectory.get('phase') %}
-{% set traj_source = trajectory_source_pub %}
-{% set traj_pending = analysis_trajectory.get('pending_target_change_braking') %}
-{% set traj_braking_needed = analysis_trajectory.get('braking_needed') %}
-{% set traj_model_ready = analysis_trajectory.get('model_ready') %}
-{% set traj_remaining_cycle_min = analysis_trajectory.get('remaining_cycle_min') %}
-{% set traj_next_cycle_u_ref = analysis_trajectory.get('next_cycle_reference') %}
-{% set traj_bumpless_u_delta = analysis_trajectory.get('bumpless_delta') %}
-{% set traj_bumpless_ready = analysis_trajectory.get('bumpless_ready') %}
 {% set temperature_slope_h = analysis_control.get('temperature_slope_h') %}
+{% set anticipation_c = analysis_control.get('anticipation_c') %}
+{% set anticipation_horizon_s = analysis_control.get('anticipation_horizon_s') %}
+{% set anticipation_horizon_source = analysis_control.get('anticipation_horizon_source', 'none') %}
+{% set anticipation_horizon_source_label = {
+  'heating balance': 'heating balance',
+  'dead times': 'dead times',
+  'none': 'none'
+}.get(anticipation_horizon_source, anticipation_horizon_source) %}
 {% set learn_u_avg = analysis_learning.get('window_mean_power') %}
 {% set learn_u_cv = analysis_learning.get('window_power_cv') %}
 {% set learn_u_std = analysis_learning.get('window_power_std') %}
@@ -385,7 +369,6 @@
   'horizon_no_candidate_effect': 'horizon sees no candidate effect',
   'simulation_invalid_params': 'simulation invalid params',
   'simulation_invalid_prediction': 'simulation invalid',
-  'trajectory_setpoint_active': 'setpoint trajectory active',
   'twin_not_ready': 'twin unavailable',
   'twin_warming_up': 'twin warming up',
   'residual_not_persistent': 'non-persistent residual',
@@ -395,7 +378,6 @@
 }.get(ff3_reason, ff3_reason) %}
 {% set ff3_disturbance_reason_label = {
   'none': 'valid context',
-  'trajectory_setpoint_active': 'setpoint trajectory active',
   'twin_not_ready': 'twin unavailable',
   'twin_unavailable': 'twin unavailable',
   'twin_warming_up': 'twin warming up',
@@ -422,11 +404,6 @@
   'power_shedding': 'power shedding'
 }.get(restart_reason, restart_reason) %}
 
-{% set analysis_trajectory_source_label = {
-  'none': 'none',
-  'setpoint': 'setpoint',
-  'disturbance': 'disturbance'
-}.get(traj_source, traj_source) %}
 {% endif %}
 
 ## 🏠 {{ entity_name }}
@@ -434,7 +411,6 @@
 {{ regime_icon }} **{{ regime | replace('_', ' ') | upper }}** · `{{ phase | upper }}`
 {%- if has_analysis %} · {{ cycle_min }} min{% endif %}
  · `{{ mode }}`
-{%- if trajectory_active %} · 🎯 trajectory{% endif %}
 {%- if ff3_status == 'active' %} · 🔮 FF3{% endif %}
 {%- if has_analysis and control.get('in_deadband', false) %} · 💤 DB{% elif has_analysis and control.get('in_near_band', false) %} · 〰️ NB{% endif %}
 {%- if autocalib_degraded %} · ⚠️ degraded model{% endif %}
@@ -447,7 +423,7 @@
 | Metric | Value |
 |---|---:|
 | Room | {% if t_in is not none %}**{{ t_in | float | round(2) }}°C**{% else %}—{% endif %} |
-| Setpoint | {% if t_set is not none %}{{ t_set | float | round(2) }}°C{% else %}—{% endif %}{% set display_sp = filt_sp if has_analysis else published_filtered_sp %}{% if display_sp is not none and (display_sp | float) != (t_set | float(0)) %} → **{{ display_sp | float | round(2) }}°C**{% endif %} |
+| Setpoint | {% if t_set is not none %}{{ t_set | float | round(2) }}°C{% else %}—{% endif %} |
 | Outdoor | {% if t_ext is not none %}{{ t_ext }}°C{% else %}—{% endif %} |
 | Error | {% if error is not none %}`{{ '%+.2f' | format((error | float)) }}°C`{% else %}—{% endif %}{% if has_analysis and error_f is not none %} → `{{ '%+.2f' | format(err_display) }}°C`{% endif %} |
 | Integral | {% if integral_error is not none %}{{ integral_error | float | round(4) }}{% else %}—{% endif %} |
@@ -464,31 +440,19 @@
 
 ---
 
-### 🎯 Trajectory
+{% if has_analysis %}
+### 🎯 Anticipation
 
 | Signal | Value |
 |---|---:|
-| Active | {% if trajectory_active %}yes{% else %}no{% endif %} |
-| Source | `{{ trajectory_source_label }}` |
-| Filtered setpoint | {% if published_filtered_sp is not none %}{{ published_filtered_sp | float | round(2) }}°C{% else %}—{% endif %} |
-{% if has_analysis -%}
-| Trajectory source | `{{ analysis_trajectory_source_label }}` |
-| Start | {% if traj_start_sp is not none %}{{ traj_start_sp | float | round(3) }}°C{% else %}—{% endif %} |
-| Target | {% if traj_target_sp is not none %}{{ traj_target_sp | float | round(3) }}°C{% else %}—{% endif %} |
-| `tau_ref` | {% if traj_tau_ref is not none %}{{ traj_tau_ref | float | round(3) }} min{% else %}—{% endif %} |
-| Elapsed time | {% if traj_elapsed_s is not none %}{{ traj_elapsed_s | float | round(1) }} s{% else %}—{% endif %} |
-| Phase | `{{ traj_phase if traj_phase is not none else '—' }}` |
-| Pending braking | {% if traj_pending is sameas true %}yes{% elif traj_pending is sameas false %}no{% else %}—{% endif %} |
-| Braking needed | {% if traj_braking_needed is sameas true %}yes{% elif traj_braking_needed is sameas false %}no{% else %}—{% endif %} |
-| Model ready | {% if traj_model_ready is sameas true %}yes{% elif traj_model_ready is sameas false %}no{% else %}—{% endif %} |
-| Remaining cycle | {% if traj_remaining_cycle_min is not none %}{{ traj_remaining_cycle_min | float | round(3) }} min{% else %}—{% endif %} |
-| `u_ref` cycle+1 | {% if traj_next_cycle_u_ref is not none %}{{ (traj_next_cycle_u_ref | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| `u_delta` bumpless | {% if traj_bumpless_u_delta is not none %}{{ (traj_bumpless_u_delta | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| Bumpless ready | {% if traj_bumpless_ready is sameas true %}yes{% elif traj_bumpless_ready is sameas false %}no{% else %}—{% endif %} |
+| Correction | {% if anticipation_c is not none %}{{ '%+.3f' | format(anticipation_c | float) }}°C{% else %}—{% endif %} |
+| Horizon | {% if anticipation_horizon_s is not none %}{{ anticipation_horizon_s | float | round(0) | int }} s{% else %}—{% endif %} |
+| Horizon source | `{{ anticipation_horizon_source_label }}` |
 | Temperature slope | {% if temperature_slope_h is not none %}{{ temperature_slope_h | float | round(3) }}°C/h{% else %}—{% endif %} |
-{% endif %}
 
 ---
+
+{% endif %}
 
 ### ⚡ Command
 

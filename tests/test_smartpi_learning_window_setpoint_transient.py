@@ -232,7 +232,7 @@ def test_blocked_on_uses_supplied_diagnostic_reason():
         dt_estimator,
         u_active=0.8,
         a_learning_allowed=False,
-        a_learning_block_reason="skip: trajectory active",
+        a_learning_block_reason="skip: setpoint transition",
     )
 
-    assert estimator.learn_last_reason == "skip: trajectory active"
+    assert estimator.learn_last_reason == "skip: setpoint transition"

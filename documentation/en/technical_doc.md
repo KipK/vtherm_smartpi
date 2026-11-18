@@ -372,13 +372,14 @@ The lag is learned on constant-power episodes, which the hysteresis bootstrap
 provides. In PWM regulation the duty cycle changes from cycle to cycle, so an
 installation already out of the bootstrap rarely provides one.
 
-#### Heating balance (observation only)
+#### Heating balance
 
 `HeatingBalance` (`heating_balance.py`) measures, on each heating phase followed
 by a stop, the heating rate `a` (°C/min at full power) and the emitter lag from
-an energy balance of the room. It is published for observation: no regulation or
-learning reads its results. It works in heating mode only, from the same
-observations as the response lag.
+an energy balance of the room. It is published; the regulation reads only the
+median of the last lags it measured, as the horizon of the anticipation (see
+section 4.4). It works in heating mode only, from the same observations as the
+response lag.
 
 A phase starts at the first interval with a power above 1 % and ends after its
 cut. Heating runs separated by less than `HEATING_BALANCE_PHASE_MIN_OFF_S`
@@ -406,6 +407,11 @@ $\Delta_p \ge$ `HEATING_BALANCE_MIN_RISE_C = 0.3 °C`. The last
 `HEATING_BALANCE_HISTORY = 7` measurements are kept; the published `a` and lag
 are their medians.
 
+The lags are also kept in a history of their own, of the same length: a
+measurement that gives no lag (power not constant, lag not resolved) removes
+none of them, unlike the retained measurements. The median of that history is
+the kept lag, published as `kept_lag_s` (`kept_lags` is their number).
+
 For a phase at constant power (its mean power $u_0 = t_{on}/D$ is at least
 `1 - RESPONSE_LAG_U_TOL` times its highest interval power), the heat still
 missing at the cut gives the lag. With
@@ -418,7 +424,8 @@ when $\delta \le 0$ and unknown when $\delta \ge 0.98\,D$.
 
 The state is published in `analysis.learning.heating_balance` and persisted with
 the learning state. The measurements are restored after a restart; the phase in
-progress resumes after a bridged restart and is dropped otherwise.
+progress resumes after a bridged restart and is dropped otherwise. The kept lags
+are restored too.
 
 ### 3.8 Quiet periods of the emitter delay learning
 
@@ -882,7 +889,6 @@ FF3 is disabled if any of the following conditions is not met:
 - not in deadband,
 - in near-band,
 - compatible governance regime,
-- no active `setpoint` trajectory,
 - a credible external-disturbance context is present.
 
 The disturbance context accepts a structurally usable model even when `model_reliable = False`.
@@ -899,26 +905,68 @@ Under this contract, FF3 is no longer a generic near-band optimizer. It is reser
 
 ### 4.4 Setpoint management
 
-`SmartPISetpointManager` now drives an analytical trajectory for the P branch.
-This trajectory is activated only when a significant thermal gap appears, the model is considered reliable, and the setpoint change calls for shaping the proportional reference.
+The regulation works on the raw setpoint in HEAT and in COOL. The I branch and
+the P branch read the same setpoint; the P and I errors read an anticipated
+temperature (see **Anticipation** below), which is the only mechanism that
+lowers the command ahead of the setpoint.
 
-The principle is:
+`SmartPISetpointManager` keeps the boost state. A
+significant setpoint change (`SETPOINT_BOOST_THRESHOLD = 0.3 °C`) activates the
+boost, which raises the rate limit of the output (`SETPOINT_BOOST_RATE`) until
+the error falls below `SETPOINT_BOOST_ERROR_MIN = 0.3 °C`. The detection of a
+setpoint change that invalidates the learning windows is made by the
+orchestrator, from the change of the raw setpoint (more than `0.01 °C`).
 
-- the I branch keeps using the raw setpoint,
-- the P branch receives `filtered_setpoint`,
-- the P branch keeps the raw setpoint until the predicted braking zone is reached,
-- a significant setpoint change arms late braking once; HEAT and COOL then use the same signed braking-window equations,
-- disturbance-triggered entry continues to require the significant-gap threshold,
-- the exact learned 1R1C model, the passive-response dead time of the mode (`deadtime_cool` in HEAT, `deadtime_heat` in COOL), the remaining cycle latency, and the committed cycle power are used to detect the braking zone,
-- a smooth late-braking trajectory then shapes the P reference toward a braking target below the raw target in the demand direction,
-- when braking is no longer needed, the filtered reference returns progressively to the raw target before the trajectory stops,
-- for a trajectory triggered by a setpoint change, entering the `release` phase keeps that phase locked until the trajectory ends, with no return to `tracking`,
-- during `release`, the P reference stays on the demand side of the measured room temperature without crossing the raw target: it never exceeds the target in HEAT and never falls below it in COOL,
-- the trajectory ends once it is in `release`, the P reference and the room are both within `0.05 °C` of the target, and switching P back to the raw target changes the proportional command by at most `0.03`; once the P reference is within `0.05 °C` of the target, a room that stays on a plateau short of it (the plateau test below, with `0.05 °C` as its floor) also ends the trajectory, which then blocks a new disturbance trajectory like a disturbance plateau,
-- the trajectory also ends as soon as the room reaches or crosses the target in the demand direction, or on any real setpoint change; the P branch then uses the raw target again,
-- `trajectory_active` indicates whether the analytical trajectory is running.
+#### Anticipation (heating and cooling)
 
-The thermal twin, FF3 and the braking-entry prediction share a pure
+In HEAT and in COOL, in the stable phase, the proportional error and the integral error
+read an anticipated temperature: the measured temperature plus a correction
+$c$, the distance the room is about to travel during the delay between a
+command and its effect. The deadband, the near-band, the guards, the
+feed-forward and the learning keep the measured temperature.
+
+The correction is the least-squares slope $s$ of the raw temperature history over
+the last $W = \max(\text{ANTICIPATION\_MIN\_WINDOW\_S},\ H \cdot \text{ANTICIPATION\_WINDOW\_FRAC})$
+seconds ($H$ is the horizon below), multiplied by $H$ and limited to
+$\pm$ `ANTICIPATION_MAX_C` (`1.0 °C`; `ANTICIPATION_MIN_WINDOW_S = 600 s`,
+`ANTICIPATION_WINDOW_FRAC = 1/3`). It is 0 without horizon, outside
+the stable phase, with fewer than 3 samples, or when the samples span less than
+half of the window. It then fades in with the distance to the setpoint: with
+$e = $ target $-$ measured temperature,
+
+$$c \leftarrow c \cdot \mathrm{clamp}\left(2 - \frac{e}{c},\ 0,\ 1\right)$$
+
+so the correction is 0 when the room moves toward the setpoint and is further
+from it than $2c$, full within $c$ of it, beyond it, or when the room moves
+away from it.
+
+The ratio $e / c$ does not depend on the mode: in COOL the room approaching the
+setpoint from above has $e < 0$ and $c < 0$, so the rule is the same in both
+modes.
+
+The errors are computed on the anticipated temperature $T + c$ with the sign of
+the mode (target $-$ temperature in HEAT, temperature $-$ target in COOL):
+
+- HEAT: $e_P = \text{target} - (T + c)$ and $e_I = (\text{target} - T) - c$,
+- COOL: $e_P = (T + c) - \text{target}$ and $e_I = (T - \text{target}) + c$.
+
+The horizon $H$ is the delay between a command and its effect on the room. It
+is read from the mode, with the same dead-time source as the gain rule
+(`gain_dead_time`):
+
+- in HEAT, the median of the last lags measured by the heating balance (the kept
+  lags, section 3.7) when it is positive, published source `heating balance`;
+- otherwise, and always in COOL (the heating balance is measured in heating
+  only), the longer of the active dead time of the mode (the heating dead time
+  in HEAT, the cooling dead time in COOL) and half its passive dead time (the
+  cooling dead time in HEAT, the heating dead time in COOL), each counted only
+  when reliable and positive, source `dead times`;
+- otherwise 0: no anticipation, source `none`.
+
+`analysis.control` publishes `anticipation_c` (the correction applied at the last
+tick), `anticipation_horizon_s` and `anticipation_horizon_source`.
+
+The thermal twin and FF3 share a pure
 constant-power 1R1C propagation function. Each consumer retains its own horizons,
 delay policy and input validation.
 
@@ -932,61 +980,14 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-The braking entry predicts the signed change in the active demand direction (`+1` for HEAT, `-1` for COOL) over the remaining cycle, the passive dead time and any queued next-cycle power. The braking gap is that predicted change multiplied by `TRAJECTORY_BRAKE_GAIN = 1.20`.
+The canonical `live.setpoint` block publishes `boost_active`.
 
-In HEAT, when a room model is published (walls or simple model) with a static
-model of the energy balance in force and the heater is not a valve, the
-equilibrium of that prediction is the one of the holding power: the
-committed power drives the room toward $T_{ext} + (u + g_{EB}) / s_{EB}$
-(the equilibrium gain $a/b$ is replaced by $1/s_{EB}$ and the free gain is
-added to the power). The relaxation factor $\alpha = e^{-b \cdot h}$
-keeps the learned `b`, and the readiness checks keep the learned `a` and `b`.
-A learned `b/a` biased low by the walls otherwise overstates the committed
-rise and arms the braking too early. The thermal twin and FF3 keep the learned
-model.
-
-The canonical `live.setpoint` block publishes the summary:
-
-- `filtered_setpoint`,
-- `trajectory_active`,
-- `trajectory_source`,
-- `boost_active`.
-
-The same payload in both modes exposes trajectory details under
-`live.analysis.trajectory`:
-
-- `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` and `phase`,
-- `pending_target_change_braking`, `braking_needed` and `model_ready`,
-- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` and `bumpless_ready`.
-
-Setpoint reference shaping is limited to the P branch, so the integral path keeps the raw setpoint untouched. No command cap is applied after the PI computation: the PI command goes straight to the soft constraints (rate limiter, `max_on_percent`) and then to the timing constraints.
+No command cap is applied after the PI computation: the PI command goes straight to the soft constraints (rate limiter, `max_on_percent`) and then to the timing constraints.
 
 After a setpoint change or a resume, the integral follows the raw setpoint
 error without any extra recovery rule: it is limited only by the anti-windup
 (below), the deadband and near-band modes, the overshoot clamp and the overheat
-cut. The setpoint trajectory brakes the proportional branch only.
-
-A disturbance-recovery trajectory brakes the P branch because the model
-predicts that the committed power is enough to close the gap. When this model
-is biased, the room can settle on a plateau below the setpoint and the
-trajectory never ends. A plateau test then ends the trajectory:
-
-- the signed error is averaged over blocks of
-  `RECOVERY_PLATEAU_BLOCK_CYCLES = 3` cycles,
-- a block is stationary if its average stays above the residual error floor
-  (the larger of `RECOVERY_ERROR_FLOOR_DEADBAND_RATIO = 2` times the deadband
-  and the deadband plus its hysteresis) and does not vary by more than
-  `RECOVERY_PLATEAU_SLOPE_ABS_H = 0.12 °C/h` applied over one block,
-- `RECOVERY_PLATEAU_BLOCKS = 2` consecutive stationary blocks are required,
-- and no net progress over `RECOVERY_PLATEAU_PROGRESS_BLOCKS = 4` blocks:
-  the average must not have dropped by more than
-  `RECOVERY_PLATEAU_PROGRESS_MIN_C = 0.03 °C`. A slow recovery tail, seen
-  through a quantized probe, is therefore not mistaken for a plateau.
-
-On detection, the trajectory switches back to passthrough. No new disturbance
-trajectory starts until the error has dropped back below the trigger threshold
-minus the tracking hysteresis, or until a setpoint change or a reset. A new
-disturbance therefore remains braked normally.
+cut.
 
 Window resumes and power-shedding resumes in heating mode hold the integral
 during the dead time:
@@ -1003,7 +1004,6 @@ This sequence prevents the integral from learning a resume transient that is sti
 
 Transient catch-up states are not restored after a reboot:
 
-- the active analytical trajectory is cleared,
 - any temporary `integral_hold_mode` is cleared.
 
 The restart therefore keeps only useful persistent PI memory, without restoring transient servo states that are no longer physically valid outside their original runtime session. The wall-clock timestamp of the last valid active regulation tick is persisted and is not refreshed while HVAC is OFF. If inactivity exceeds 96 hours, controller PI memory is purged on resume while the learned A/B model remains available. If the HVAC mode after a restart differs from the mode of the persisted model (HEAT versus COOL), the integral is cleared. When a tick is skipped because the temperature sensor is missing or `guard_cut` is active, time tracking restarts like after OFF, so the error is not integrated over the skipped period.
@@ -1091,14 +1091,14 @@ Before and during each phase the manager checks, from the measured outdoor tempe
 | `learning_window.py`   | learning-window management and guardrails                   |
 | `ab_window_balance.py` | integral balance of windows without a robust slope and `a/b` pools |
 | `response_lag.py`      | `ResponseLagEstimator`: response lag, settling gates and delivered power model |
-| `heating_balance.py`   | `HeatingBalance`: heating rate and emitter lag measured on heating phases (observation only) |
+| `heating_balance.py`   | `HeatingBalance`: heating rate and emitter lag measured on heating phases |
 | `learning_outcomes.py` | bounded counters of learning-window outcomes                |
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis, integral transfers |
 | `deadband.py`          | deadband and near-band                                      |
-| `setpoint.py`          | analytical setpoint trajectory for the P reference          |
-| `resume_hold.py`       | I:HOLD during the dead time after a window or power-shedding resume |
-| `recovery_plateau.py`  | plateau test of a trajectory that no longer progresses       |
+| `setpoint.py`          | control setpoint and setpoint boost state                   |
+| `anticipation.py`      | horizon and correction of the anticipation of the measured temperature (heating and cooling) |
+| `resume_hold.py`       | I:HOLD during the dead time after a window or power-shedding resume, residual error floor |
 | `feedforward.py`       | `u_ff1/u_ff2/u_ff3` orchestration, signed FF gain `b/a` and warmup scale, room model FF1 |
 | `room_model/feedforward.py` | holding power source from the published room model and the static model of the energy balance in force, bumpless transfer of the discrete changes of its static part, blend of its wall part, static gain for the braking prediction |
 | `ff_trim.py`           | causal slow bias and bounded trim/integral ownership plans  |
@@ -1125,7 +1125,7 @@ Components instantiated by `SmartPI.__init__()` notably include:
 
 ```python
 self.gov = SmartPIGovernance(name)
-self.sp_mgr = SmartPISetpointManager(name, enabled=use_setpoint_filter, release_tau_factor=release_tau_factor)
+self.sp_mgr = SmartPISetpointManager(name)
 self.ctl = SmartPIController(name)
 self.est = ABEstimator()
 self.learn_win = LearningWindowManager(name)
@@ -1466,11 +1466,9 @@ acceptance or rejection without changing the learning decision.
 | `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
 | `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
 | `RECOVERY_ERROR_FLOOR_DEADBAND_RATIO` | `2.0` |
-| `RECOVERY_PLATEAU_SLOPE_ABS_H` | `0.12` |
-| `RECOVERY_PLATEAU_BLOCK_CYCLES` | `3` |
-| `RECOVERY_PLATEAU_BLOCKS` | `2` |
-| `RECOVERY_PLATEAU_PROGRESS_BLOCKS` | `4` |
-| `RECOVERY_PLATEAU_PROGRESS_MIN_C` | `0.03` |
+| `ANTICIPATION_MAX_C`          | `1.0`   |
+| `ANTICIPATION_MIN_WINDOW_S`   | `600`   |
+| `ANTICIPATION_WINDOW_FRAC`    | `1/3`   |
 | `GUARD_CUT_RESET_STEPS`       | `1.5`   |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |

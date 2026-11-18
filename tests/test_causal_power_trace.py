@@ -171,7 +171,7 @@ def test_logical_trim_resets_do_not_clear_shared_physical_evidence() -> None:
     trace.record_applied_power(AppliedPowerSegment(0.0, 60.0, 0.5))
     initial_epoch = trace.epoch
 
-    observer.invalidate("trajectory_active", now_monotonic=60.0, washout_s=30.0)
+    observer.invalidate("setpoint_changed", now_monotonic=60.0, washout_s=30.0)
     observer.reset_after_trim_update(now_monotonic=60.0, washout_s=30.0)
     observer.reset_runtime(reset_physical_trace=False)
 

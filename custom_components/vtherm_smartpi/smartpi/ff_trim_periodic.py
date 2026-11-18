@@ -268,8 +268,6 @@ class PeriodicFFTrimObserver(_ThermalWindowCollector):
             return f"frozen_{sample.trim_frozen_reason}"
         if sample.setpoint_changed:
             return "setpoint_changed"
-        if sample.trajectory_active:
-            return "trajectory_active"
         if sample.ff3_active:
             return "ff3_active"
         if sample.regime not in FF_TRIM_PERIODIC_ALLOWED_REGIMES:

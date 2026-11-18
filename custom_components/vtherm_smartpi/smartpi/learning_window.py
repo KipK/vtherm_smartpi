@@ -102,7 +102,7 @@ class LearningWindowManager:
         self._outcomes = LearningOutcomes()
         # Response lag after power steps: delivered power and settling gates.
         self._response_lag = ResponseLagEstimator(name)
-        # Heating rate and emitter lag measured on heating phases (observation only).
+        # Heating rate and emitter lag measured on heating phases.
         self._heating_balance = HeatingBalance(name)
         # Lag of the power model of the collected a measurements.
         self._lag_model: float | None = None

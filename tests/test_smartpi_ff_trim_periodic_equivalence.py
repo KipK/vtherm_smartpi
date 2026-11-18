@@ -38,7 +38,6 @@ _BASE_SAMPLE = FFTrimThermalSample(
     u_pi=-0.04,
     hvac_mode="heat",
     saturated=False,
-    trajectory_active=False,
     ff3_active=False,
     setpoint_changed=False,
     outside_temperature_available=True,
@@ -387,8 +386,6 @@ class _ReferencePeriodicFFTrimObserver:
             return f"frozen_{sample.trim_frozen_reason}"
         if sample.setpoint_changed:
             return "setpoint_changed"
-        if sample.trajectory_active:
-            return "trajectory_active"
         if sample.ff3_active:
             return "ff3_active"
         if sample.regime not in cls._ALLOWED_REGIMES:
@@ -520,7 +517,6 @@ class _Scenario:
             u_pi=-0.04,
             hvac_mode=self.mode,
             saturated=False,
-            trajectory_active=0.003 <= rare < 0.004,
             ff3_active=0.004 <= rare < 0.005,
             setpoint_changed=0.005 <= rare < 0.006,
             outside_temperature_available=not (0.006 <= rare < 0.007),

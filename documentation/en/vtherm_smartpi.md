@@ -289,7 +289,7 @@ At that point, SmartPI:
 
 Near the target temperature, SmartPI tries to avoid constant micro-corrections. The result should be steadier regulation with fewer unnecessary corrections than a fixed TPI.
 
-During a setpoint change in HEAT or COOL, the setpoint filter also uses the learned model to manage the final approach to the target. When the model predicts that the heat or cold already committed will carry the room close to the target, the proportional branch follows a smooth braking trajectory, while the raw setpoint remains available to the integral branch. The trajectory then returns progressively to the raw target and ends once the room and the reference are close to it.
+SmartPI anticipates the temperature, in HEAT and in COOL: the proportional and integral branches read the measured temperature plus the distance the room is about to travel during the delay between a command and its effect, estimated from the slope of the temperature. This lowers the command before the room reaches the setpoint, which limits the overshoot of slow emitters (underfloor heating, hydronic radiators) and of cooling that keeps acting after it stops. The delay is the emitter lag measured by the heating balance in HEAT; until one is measured, and always in COOL, it is derived from the dead times: the longer of the dead time of the active mode and half the dead time of the passive response. The correction is limited to 1 °C, and fades in as the room approaches the setpoint from far away, so that a rise or a fall from far from the setpoint is not slowed. Both branches use the raw setpoint.
 
 With `FF3`, enabled by default, SmartPI can also apply a small predictive correction near the setpoint when it detects a credible external disturbance context.
 
@@ -398,8 +398,6 @@ The holding power is the part of the command that compensates the losses for the
 
 The room model holding power applies at once at full weight, and the slow feed-forward correction (FF2) is set to zero and stays frozen while it is in force: the model replaces the bias that correction learns. A change of the static loss (switch between the A/B model and the room model, between the simple model and the model with walls, or a new heat balance value) is absorbed by the integral, so the command does not jump; the integral then gives its share back at the pace of the regulation. The wall extra power is never absorbed by the integral: when it starts, stops (tracking no longer `ok`, after an open window for example) or changes with a new publication, it moves gradually over 30 minutes from its last value to the new one. After a window, the morning rise therefore gets its wall power back within 30 minutes once the tracking is `ok` again. The source in force and the wall power being applied are kept across restarts.
 
-The braking of the approach to the setpoint also uses the heat balance in force (slope and free gain) to predict where the heat already committed takes the room. A learned A/B model biased by the walls otherwise starts braking too early.
-
 The cost is a slight overshoot, around 0.1 °C, at the end of a morning rise in a room with heavy walls.
 
 **What it shows**
@@ -445,7 +443,6 @@ Start simple:
 
 - keep the default hysteresis thresholds if your sensor is accurate and reports often (see below otherwise),
 - keep `FF3` enabled unless you have a specific reason to disable it,
-- keep the setpoint filter enabled by default,
 - adjust the deadband first if the temperature oscillates too much around the target,
 - enable the Versatile Thermostat window detection (window sensor or automatic detection).
 
@@ -495,11 +492,9 @@ These values come from simulations of each installation type. A cycle within one
 | **Minimal activation delay**   | Minimum time the heater stays on once activated. Switch outputs only; ignored for valves.                                                  | `0 s`         |
 | **Minimal deactivation delay** | Minimum time the heater stays off once deactivated. Switch outputs only; ignored for valves.                                               | `0 s`         |
 | **Deadband**                   | Tolerance zone around the setpoint.                                                               | `0.05°C`      |
-| **Setpoint filter**            | Enables proportional setpoint shaping and predictive HEAT/COOL governance near the target.        | `enabled`     |
 | **FF3**                        | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled`     |
 | **Allow P inside deadband**    | Allows the proportional branch to remain active inside the deadband.                              | `disabled`    |
 | **Allow PWM cycle restart on band transitions** | Allows SmartPI to restart the current PWM cycle when entering or leaving deadband or near-band. | `disabled` |
-| **Release tau factor**         | Scales the integral release delay relative to the learned time constant.                          | `0.5`         |
 | **Hysteresis on** | Restart threshold during bootstrap learning: heating restarts at setpoint − threshold in HEAT, cooling restarts at setpoint + threshold in COOL. | `0.3°C`       |
 | **Hysteresis off** | Stop threshold during bootstrap learning: heating stops at setpoint + threshold in HEAT, cooling stops at setpoint − threshold in COOL. | `0.5°C`       |
 | **SmartPI debug mode**         | Records the complete live diagnostic payload for historical analysis.                             | `disabled`    |
@@ -548,15 +543,12 @@ Other useful blocks under `live`:
 - `temperature`: measured temperature, error, integral state,
 - `model`: learned `a`, `b`, confidence, and dead times,
 - `feedforward`: feed-forward and FF3 status,
-- `setpoint`: filtered setpoint and trajectory information,
+- `setpoint`: setpoint boost state,
 - `autocalib`: automatic supervision state,
 - `calibration`: forced calibration state.
 
-In normal mode, the `setpoint` block can show:
+The `setpoint` block shows:
 
-- `filtered_setpoint`: reference followed by the proportional branch,
-- `trajectory_active`: whether a setpoint trajectory is active,
-- `trajectory_source`: why the trajectory is active,
 - `boost_active`: whether the setpoint boost is active.
 
 Advanced values used by the supplied card are always available under

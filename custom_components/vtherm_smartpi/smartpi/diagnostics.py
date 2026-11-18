@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     from ..algo import SmartPI
     from .ab_estimator import TauReliability
     from .ff_trim_runtime import FFTrimCoordinator
-    from .setpoint import SmartPISetpointManager
 
 
 def _round_optional(value: float | None, digits: int) -> float | None:
@@ -465,13 +464,9 @@ def _build_feedforward(algo: SmartPI, twin_diag: Dict[str, Any]) -> Dict[str, An
 
 
 def _build_setpoint(algo: SmartPI) -> Dict[str, Any]:
-    """Return the effective setpoint and the trajectory and boost flags."""
-    sp_mgr = algo.sp_mgr
+    """Return the boost flag of a setpoint change."""
     return {
-        "filtered_setpoint": _round_optional(sp_mgr.effective_setpoint, 2),
-        "trajectory_active": sp_mgr.trajectory_active,
-        "trajectory_source": sp_mgr.trajectory_source,
-        "boost_active": sp_mgr.boost_active,
+        "boost_active": algo.sp_mgr.boost_active,
     }
 
 
@@ -500,6 +495,7 @@ def _build_calibration(algo: SmartPI) -> Dict[str, Any]:
 def _build_analysis_control(algo: SmartPI) -> Dict[str, Any]:
     """Return the error terms, the anti-windup step and the band geometry."""
     deadband_mgr = algo.deadband_mgr
+    horizon = algo.anticipation_horizon()
     return {
         "cycle_min": round(algo.cycle_min, 3),
         "error_filtered": (
@@ -508,6 +504,9 @@ def _build_analysis_control(algo: SmartPI) -> Dict[str, Any]:
             else None
         ),
         "error_p": round(algo.error_p, 4),
+        "anticipation_c": round(algo.anticipation_c, 4),
+        "anticipation_horizon_s": round(horizon.seconds, 1),
+        "anticipation_horizon_source": horizon.source,
         "aw_du": round(algo.aw_du, 6),
         "forced_by_timing": algo.forced_by_timing,
         "in_core_deadband": (
@@ -567,9 +566,10 @@ def _response_lag_diag(response_lag) -> Dict[str, Any]:
 
 
 def _heating_balance_diag(balance) -> Dict[str, Any]:
-    """Return the heating balance measurements (observation only)."""
+    """Return the heating balance measurements."""
     a = balance.a_per_min
     lag = balance.lag_s
+    kept_lag = balance.kept_lag_s
     results = balance.results
     last = None
     if results:
@@ -588,28 +588,10 @@ def _heating_balance_diag(balance) -> Dict[str, Any]:
         "measurements": balance.count,
         "a": round(a, 5) if a is not None else None,
         "lag_s": round(lag) if lag is not None else None,
+        "kept_lag_s": round(kept_lag) if kept_lag is not None else None,
+        "kept_lags": balance.kept_lag_count,
         "last_reason": balance.last_reason,
         "last": last,
-    }
-
-
-def _build_analysis_trajectory(sp_mgr: SmartPISetpointManager) -> Dict[str, Any]:
-    """Return the setpoint trajectory and its braking decision."""
-    return {
-        "start_setpoint": _round_optional(sp_mgr.trajectory_start_setpoint, 3),
-        "target_setpoint": _round_optional(sp_mgr.trajectory_target_setpoint, 3),
-        "tau_ref_min": _round_optional(sp_mgr.trajectory_tau_ref_min, 3),
-        "elapsed_s": round(sp_mgr.trajectory_elapsed_s, 3),
-        "phase": sp_mgr.trajectory_phase.value,
-        "pending_target_change_braking": (
-            sp_mgr.trajectory_pending_target_change_braking
-        ),
-        "braking_needed": sp_mgr.trajectory_braking_needed,
-        "model_ready": sp_mgr.trajectory_model_ready,
-        "remaining_cycle_min": round(sp_mgr.trajectory_remaining_cycle_min, 3),
-        "next_cycle_reference": round(sp_mgr.trajectory_next_cycle_u_ref, 6),
-        "bumpless_delta": _round_optional(sp_mgr.trajectory_bumpless_u_delta, 6),
-        "bumpless_ready": sp_mgr.trajectory_bumpless_ready,
     }
 
 
@@ -697,7 +679,6 @@ def _build_analysis(algo: SmartPI, twin_diag: Dict[str, Any]) -> Dict[str, Any]:
     analysis = {
         "control": _build_analysis_control(algo),
         "learning": _build_analysis_learning(algo),
-        "trajectory": _build_analysis_trajectory(algo.sp_mgr),
         "deadtime": {
             "state": algo.dt_est.state,
             "last_power": algo.dt_est.last_power,

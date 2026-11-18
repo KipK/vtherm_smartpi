@@ -24,7 +24,7 @@ def _make_smartpi() -> SmartPI:
 
 
 def test_update_learning_forwards_causal_setpoint_gate_reasons() -> None:
-    """Only a setpoint transition blocks A learning; a trajectory does not."""
+    """Only a setpoint transition blocks A learning."""
     smartpi = _make_smartpi()
     smartpi.learn_win.update = MagicMock(return_value=(0, 0))
 
@@ -34,21 +34,6 @@ def test_update_learning_forwards_causal_setpoint_gate_reasons() -> None:
     assert kwargs["a_learning_allowed"] is False
     assert kwargs["a_learning_block_reason"] == "skip: setpoint transition"
 
-    smartpi.sp_mgr._trajectory_source = "setpoint"
-    smartpi.update_learning(10.0, 20.0, 10.0, 0.5)
-
-    kwargs = smartpi.learn_win.update.call_args.kwargs
-    assert kwargs["a_learning_allowed"] is True
-    assert kwargs["a_learning_block_reason"] is None
-
-    smartpi.sp_mgr.set_passthrough(20.0)
-    smartpi.update_learning(10.0, 20.0, 10.0, 0.5)
-
-    kwargs = smartpi.learn_win.update.call_args.kwargs
-    assert kwargs["a_learning_allowed"] is True
-    assert kwargs["a_learning_block_reason"] is None
-
-    smartpi.sp_mgr._trajectory_source = "disturbance"
     smartpi.update_learning(10.0, 20.0, 10.0, 0.5)
 
     kwargs = smartpi.learn_win.update.call_args.kwargs
@@ -189,11 +174,12 @@ def test_published_diagnostics_expose_learning_enabled() -> None:
 
 
 def test_published_diagnostics_have_no_governor_or_landing_fields() -> None:
-    """Published setpoint diagnostics expose the trajectory only."""
+    """Published diagnostics carry no governor, landing or trajectory fields."""
     diagnostics = build_published_diagnostics(_make_smartpi())
 
     assert not any(key.startswith("governor_") for key in diagnostics["setpoint"])
     assert "reference_governor" not in diagnostics["analysis"]
-    assert "trajectory" in diagnostics["analysis"]
+    assert "trajectory" not in diagnostics["analysis"]
+    assert not any(key.startswith("trajectory_") for key in diagnostics["setpoint"])
     assert "landing" not in diagnostics["analysis"]
     assert not any(key.startswith("landing_") for key in diagnostics["setpoint"])

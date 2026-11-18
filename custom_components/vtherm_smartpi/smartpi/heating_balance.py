@@ -1,5 +1,5 @@
 """
-Heating balance for Smart-PI (observation only).
+Heating balance for Smart-PI.
 
 On a heating phase followed by a stop, the room integrates the delivered power:
 the temperature rise above the passive trajectory, plus the losses over the
@@ -8,8 +8,8 @@ estimator measures the heating rate `a` (C/min at full power) from the rise
 at the temperature peak after the cut, and the emitter lag from the heat still
 missing at the cut (the emitter has not delivered all the energy commanded).
 
-The results are published for observation: no regulation or learning reads
-them.
+The results are published. The regulation reads only the median of the last
+lags, as the horizon of its anticipation (smartpi/anticipation.py).
 """
 from __future__ import annotations
 
@@ -148,6 +148,9 @@ class HeatingBalance:
     def __init__(self, name: str) -> None:
         self._name = name
         self._results: list[dict] = []
+        # Lags (s) of the last measurements that resolved one, oldest first: a measurement
+        # without lag removes none, unlike the kept results.
+        self._lags: list[float] = []
         self._last_reason: str = ""
         self._clear_runtime()
 
@@ -181,6 +184,15 @@ class HeatingBalance:
         """Median emitter lag (s) of the measurements that resolve it."""
         lags = [r["lag_s"] for r in self._results if r["lag_s"] is not None]
         return statistics.median(lags) if lags else None
+
+    @property
+    def kept_lag_s(self) -> float | None:
+        """Median of the last measured lags (s), None while none was measured."""
+        return statistics.median(self._lags) if self._lags else None
+
+    @property
+    def kept_lag_count(self) -> int:
+        return len(self._lags)
 
     @property
     def count(self) -> int:
@@ -459,6 +471,9 @@ class HeatingBalance:
             "lag_s": lag_s,
         })
         del self._results[:-HEATING_BALANCE_HISTORY]
+        if lag_s is not None:
+            self._lags.append(lag_s)
+            del self._lags[:-HEATING_BALANCE_HISTORY]
         self._last_reason = "measured"
 
     # ------------------------------------------------------------------
@@ -491,6 +506,7 @@ class HeatingBalance:
     def clear(self) -> None:
         """Forget the measurements and the phase in progress."""
         self._results.clear()
+        self._lags.clear()
         self._last_reason = ""
         self._clear_runtime()
 
@@ -504,7 +520,7 @@ class HeatingBalance:
         return {"phase": self._phase, "rest_start": self._rest_start}
 
     def save_state(self) -> dict:
-        state: dict = {"results": [dict(r) for r in self._results]}
+        state: dict = {"results": [dict(r) for r in self._results], "lags": list(self._lags)}
         context = self._restart_context()
         if context is not None:
             phase = context["phase"]
@@ -599,6 +615,9 @@ class HeatingBalance:
                 if result is not None:
                     self._results.append(result)
             del self._results[:-HEATING_BALANCE_HISTORY]
+        lags = state.get("lags")
+        if isinstance(lags, list):
+            self._lags = [lag for lag in map(_number, lags) if lag is not None][-HEATING_BALANCE_HISTORY:]
         restart = state.get("restart")
         if not isinstance(restart, dict):
             return

@@ -26,7 +26,7 @@ Debug mode records both `live` and `history`. The content is not duplicated
 inside `history`: the historical contract remains identical in both modes.
 Debug mode therefore changes retention, not publication.
 
-The `history` block contains these eighteen series:
+The `history` block contains these seventeen series:
 
 | Path under `history` | Meaning |
 |---|---|
@@ -34,7 +34,6 @@ The `history` block contains these eighteen series:
 | `temperature.integral_error` | Integral state (°C·min); `ki × integral_error` is its share of the command (0 to 1) |
 | `control.kp` | Proportional gain |
 | `control.ki` | Integral gain |
-| `setpoint.filtered_setpoint` | Filtered control setpoint |
 | `power.applied_percent` | Applied command after output constraints |
 | `power.command_percent` | Requested command before actuator effects |
 | `power.pi_percent` | PI contribution |
@@ -66,7 +65,7 @@ The `live` block is organized by responsibility:
 | `learning` | Learning stage, bootstrap progress, accepted updates and drift state |
 | `governance` | Thermal regime and model-update decision |
 | `feedforward` | Holding power source, FF3 status, dead-band source and canonical FFTrim diagnostics |
-| `setpoint` | Filtered setpoint, trajectory and boost summary |
+| `setpoint` | Setpoint boost state |
 | `autocalib` | Automatic calibration supervisor state |
 | `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
@@ -85,8 +84,16 @@ and for a thermostat that starts without saved data.
 | `reason` | Why the restart was not bridged, `null` when it was: `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (also when the command went to 0 while the temperature was awaited), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, or an exclusion before the stop or after the restart (for example `window open before the stop`, `safety mode after the restart`) |
 
 `analysis` groups the advanced live values into `control`, `learning`,
-`trajectory`, `deadtime`, `governance`, `feedforward` and, when
-available, `twin`.
+`deadtime`, `governance`, `feedforward` and, when available, `twin`.
+
+`analysis.control` publishes, among the error terms and the band geometry, the
+anticipation of the temperature, in heating and in cooling:
+
+| Field | Meaning |
+|---|---|
+| `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon or without a rising or falling slope) |
+| `anticipation_horizon_s` | Horizon of the anticipation in seconds (the delay between a command and its effect), `0` when none |
+| `anticipation_horizon_source` | Where the horizon comes from: `heating balance` (median of the last emitter lags measured), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none`; the heating balance is used in heating only |
 
 `analysis.deadtime` follows the dead time detection:
 
@@ -110,7 +117,7 @@ learning:
 | `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used). `episode interrupted by restart`: episode in progress at a restart that was not bridged, counted without an estimate. May be empty right after a restart |
 
 `analysis.learning.heating_balance` describes the heating rate and the emitter
-lag measured on heating phases. It is published for observation only:
+lag measured on heating phases. The regulation reads only `kept_lag_s`:
 
 | Field | Meaning |
 |---|---|
@@ -118,6 +125,8 @@ lag measured on heating phases. It is published for observation only:
 | `measurements` | Number of retained measurements (at most 7) |
 | `a` | Median heating rate in °C/min at full power (5 decimals), `null` without measurement |
 | `lag_s` | Median emitter lag in seconds, `null` without a measurement that resolves it |
+| `kept_lag_s` | Median of the last 7 lags measured, in seconds, `null` while none was measured; a measurement without lag removes none of them. It is the horizon of the anticipation when positive |
+| `kept_lags` | Number of lags kept (at most 7) |
 | `last_reason` | Outcome of the last ended phase: `measured`, or why it gave nothing (`rest before heating too short`, `baseline samples insufficient`, `heating too short`, `temperature rise too small`, `still rising at the next heating`, `no peak within the wait`, `observation gap`, `heating mode left`, `interrupted by restart`). Empty before the first phase |
 | `last` | Last measurement, `null` without one: `heating_min` (full-power heating time in minutes), `rise_c` (temperature rise at the peak above the passive trajectory), `peak_delay_min` (minutes from the cut to the peak), `a`, `lag_s` (`null` when the power was not constant or the lag is not resolved), `constant_power`, `context` (`bootstrap`, `calibration` or `regulation`, at the start of the phase) |
 

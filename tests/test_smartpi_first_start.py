@@ -157,8 +157,8 @@ class TestSmartPIHysteresisPhase:
         assert control["mode"] == "hysteresis"
         assert "hysteresis_state" in control
 
-    def test_reboot_clears_transient_hold_and_trajectory_state(self):
-        """A reboot must not restore active transient SmartPI recovery states."""
+    def test_reboot_clears_transient_hold_and_loads_an_old_trajectory_state(self):
+        """A reboot must not restore an integral hold; trajectory keys of an old state are ignored."""
         smartpi1 = SmartPI(
             hass=MagicMock(),
             cycle_min=10,
@@ -166,19 +166,26 @@ class TestSmartPIHysteresisPhase:
             minimal_deactivation_delay=0,
             name="TestSmartPI_RebootTransient",
         )
-        smartpi1.sp_mgr.filtered_setpoint = 19.0
-        smartpi1.sp_mgr.effective_setpoint = 18.9
-        smartpi1.sp_mgr._pending_target_change_braking = True
-        smartpi1.sp_mgr._trajectory.start(
-            start_setpoint=19.0,
-            target_setpoint=18.8,
-            tau_ref_min=5.0,
-            now_monotonic=100.0,
-        )
-        smartpi1.sp_mgr._trajectory_source = "setpoint"
+        smartpi1.sp_mgr.prev_setpoint_for_boost = 18.9
         smartpi1.ctl.start_integral_hold("window_resume")
 
         saved_state = smartpi1.save_state()
+        assert set(saved_state["sp_mgr_state"]) == {"setpoint_boost_active", "prev_setpoint_for_boost"}
+        saved_state["sp_mgr_state"].update(
+            {
+                "filtered_setpoint": 19.0,
+                "effective_setpoint": 18.9,
+                "last_user_target_temp": 19.0,
+                "trajectory_pending_target_change_braking": True,
+                "trajectory_source": "setpoint",
+                "trajectory_active": True,
+                "trajectory_phase": "tracking",
+                "trajectory_start_setpoint": 19.0,
+                "trajectory_target_setpoint": 18.8,
+                "trajectory_tau_ref_min": 5.0,
+                "trajectory_elapsed_s": 100.0,
+            }
+        )
 
         smartpi2 = SmartPI(
             hass=MagicMock(),
@@ -189,8 +196,8 @@ class TestSmartPIHysteresisPhase:
             saved_state=saved_state,
         )
 
-        assert smartpi2.sp_mgr.trajectory_active is False
-        assert smartpi2.sp_mgr.trajectory_source == "none"
+        assert smartpi2.sp_mgr.prev_setpoint_for_boost == 18.9
+        assert set(smartpi2.save_state()["sp_mgr_state"]) == {"setpoint_boost_active", "prev_setpoint_for_boost"}
         assert smartpi2.ctl.integral_hold_mode == "none"
 
 

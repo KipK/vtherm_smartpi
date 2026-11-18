@@ -148,7 +148,7 @@ SETPOINT_BOOST_RATE = 0.50       # boosted rate limit (/min) vs MAX_STEP_PER_MIN
 
 # Setpoint change handling (mode change vs adjustment)
 # - Large change (>= threshold): mode change (eco ↔ comfort) -> restart error history, integral preserved
-# - Small change (< threshold): integral preserved, servo via P + SP filter + FF
+# - Small change (< threshold): integral preserved, servo via P + FF
 SETPOINT_MODE_DELTA_C = 0.5      # °C threshold for mode change detection
 OVERSHOOT_I_CLAMP_EPS_C = 0.04  # Guard band below setpoint where integral cannot increase (°C)
 
@@ -188,27 +188,13 @@ NEAR_BAND_HYSTERESIS_C = 0.05
 # threshold, so that a reading flickering between two levels cannot re-trigger it.
 GUARD_CUT_RESET_STEPS = 1.5
 
-class TrajectoryPhase(str, Enum):
-    """Trajectory state for setpoint shaping."""
-    IDLE = "idle"
-    TRACKING = "tracking"
-    RELEASE = "release"
-
-
-# Trajectory generator
-TRAJECTORY_ENABLE_ERROR_THRESHOLD = 0.3  # °C — signed raw error needed to arm the trajectory
-TRAJECTORY_COMPLETE_EPS_C = 0.05         # °C — convergence epsilon to finish tracking
-TRAJECTORY_MIN_P_ERROR_RATIO = 0.25      # Fraction of the raw signed error kept on the P path during braking
-TRAJECTORY_BRAKE_GAIN = 1.20             # Safety factor applied to the predicted inertial rise before braking
-TRAJECTORY_BRAKE_RELEASE_HYST_C = 0.10   # Extra signed-error margin to keep an active trajectory in tracking
-TRAJECTORY_RELEASE_TAU_FACTOR = 0.5      # Make the return to the raw target faster than braking while staying smooth
-TRAJECTORY_BUMPLESS_MAX_U_DELTA = 0.03   # Maximum allowed proportional command step when releasing trajectory
 RECOVERY_ERROR_FLOOR_DEADBAND_RATIO = 2.0  # Residual error (multiples of the deadband) under which a recovery counts as closed
-RECOVERY_PLATEAU_SLOPE_ABS_H = 0.12  # Mean-error change (°C/h) under which a recovery block counts as stationary
-RECOVERY_PLATEAU_BLOCK_CYCLES = 3.0  # Block length (cycles) of the mean-error test that detects a stuck recovery
-RECOVERY_PLATEAU_BLOCKS = 2  # Consecutive stationary blocks before a disturbance recovery counts as stuck
-RECOVERY_PLATEAU_PROGRESS_BLOCKS = 4  # Look-back (blocks) of the net-progress test of a plateau
-RECOVERY_PLATEAU_PROGRESS_MIN_C = 0.03  # Net fall of the mean error over the look-back that still counts as a recovering tail
+
+# Anticipation of the measured temperature (heating and cooling)
+ANTICIPATION_MAX_C = 1.0                 # °C — largest correction added to the measured temperature
+ANTICIPATION_MIN_WINDOW_S = 600.0        # s — shortest window of the least-squares slope
+ANTICIPATION_WINDOW_FRAC = 1.0 / 3.0     # Fraction of the horizon used as slope window when longer than the minimum
+
 # Error filter time constant
 ERROR_FILTER_TAU = 25.0 # Minutes (matches alpha ~0.35 at 10min)
 
@@ -328,7 +314,7 @@ RESPONSE_LAG_MAX_S = DT_MAX_MIN * 60.0  # Upper bound of an estimate
 # An intercept at or beyond this fraction of its asymptotic limit (infinite
 # lag) cannot be resolved from the episode.
 RESPONSE_LAG_RESOLVABLE_FRAC = 0.9
-# Heating balance (observation only): heating rate and emitter lag measured on
+# Heating balance: heating rate and emitter lag measured on
 # a heating phase followed by a stop, from the energy balance of the room.
 HEATING_BALANCE_MIN_REST_S = 1800.0    # Rest before the heating, for a settled baseline
 HEATING_BALANCE_BASELINE_SPAN_S = 3600.0  # Max rest tail used to fit the baseline

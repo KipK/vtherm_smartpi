@@ -94,6 +94,8 @@ class TestSmartPiIntegration:
         pi.dt_est.deadtime_heat_reliable = True # Set valid bool
         pi.dt_est.deadtime_cool_reliable = True
         pi.dt_est.deadtime_cool_s = 120.0
+        pi.dt_est.active_deadtime.return_value = (120.0, True)
+        pi.dt_est.passive_deadtime.return_value = (120.0, True)
 
         # Force STABLE phase by populating history
         # We need AB_HISTORY_SIZE (31) measurements

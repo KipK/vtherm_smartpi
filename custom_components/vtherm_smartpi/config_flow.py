@@ -24,9 +24,7 @@ from .const import (
     CONF_SMART_PI_KNEE_VALVE,
     CONF_SMART_PI_MAX_VALVE,
     CONF_SMART_PI_MIN_VALVE,
-    CONF_SMART_PI_RELEASE_TAU_FACTOR,
     CONF_SMART_PI_USE_FF3,
-    CONF_SMART_PI_USE_SETPOINT_FILTER,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
@@ -107,21 +105,6 @@ def build_main_options_schema(
                 mode=selector.NumberSelectorMode.BOX,
             )
         ),
-        vol.Optional(
-            CONF_SMART_PI_RELEASE_TAU_FACTOR,
-            default=defaults[CONF_SMART_PI_RELEASE_TAU_FACTOR],
-        ): selector.NumberSelector(
-            selector.NumberSelectorConfig(
-                min=0.0,
-                max=5.0,
-                step=0.01,
-                mode=selector.NumberSelectorMode.BOX,
-            )
-        ),
-        vol.Optional(
-            CONF_SMART_PI_USE_SETPOINT_FILTER,
-            default=defaults[CONF_SMART_PI_USE_SETPOINT_FILTER],
-        ): bool,
         vol.Optional(
             CONF_SMART_PI_USE_FF3,
             default=defaults[CONF_SMART_PI_USE_FF3],

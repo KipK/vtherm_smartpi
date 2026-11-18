@@ -19,7 +19,6 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
     """
     control = live["control"]
     temperature = live["temperature"]
-    setpoint = live["setpoint"]
     power = live["power"]
     model = live["model"]
     feedforward = live.get("feedforward") or {}
@@ -34,9 +33,6 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
         "temperature": {
             "indoor": temperature["indoor"],
             "integral_error": temperature["integral_error"],
-        },
-        "setpoint": {
-            "filtered_setpoint": setpoint["filtered_setpoint"],
         },
         "power": {
             "applied_percent": power["applied_percent"],

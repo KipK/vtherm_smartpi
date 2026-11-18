@@ -26,7 +26,7 @@ Le mode debug enregistre `live` et `history`. Le contenu n'est pas dupliqué
 dans `history` : le contrat historique reste identique dans les deux modes. Le
 mode debug change donc la conservation, pas la publication.
 
-Le bloc `history` contient ces dix-huit séries :
+Le bloc `history` contient ces dix-sept séries :
 
 | Chemin sous `history` | Signification |
 |---|---|
@@ -34,7 +34,6 @@ Le bloc `history` contient ces dix-huit séries :
 | `temperature.integral_error` | État de l'intégrale (°C·min) ; `ki × integral_error` est sa part de la commande (0 à 1) |
 | `control.kp` | Gain proportionnel |
 | `control.ki` | Gain intégral |
-| `setpoint.filtered_setpoint` | Consigne filtrée utilisée par la régulation |
 | `power.applied_percent` | Commande appliquée après les contraintes de sortie |
 | `power.command_percent` | Commande demandée avant les effets de l'actionneur |
 | `power.pi_percent` | Contribution PI |
@@ -66,7 +65,7 @@ Le bloc `live` est organisé par responsabilité :
 | `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
 | `feedforward` | Source de la puissance de maintien, état FF3, source de bande morte et diagnostics FFTrim canoniques |
-| `setpoint` | Consigne filtrée, trajectoire et résumé du boost |
+| `setpoint` | État du boost de consigne |
 | `autocalib` | État du superviseur de calibration automatique |
 | `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
@@ -85,8 +84,16 @@ redémarrage, et pour un thermostat qui démarre sans données sauvegardées.
 | `reason` | Raison pour laquelle le redémarrage n'a pas été ponté, `null` lorsqu'il l'a été : `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (aussi lorsque la commande est passée à 0 pendant que la température était attendue), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, ou une exclusion avant l'arrêt ou après le redémarrage (par exemple `window open before the stop`, `safety mode after the restart`) |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
-`trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
-est disponible, `twin`.
+`deadtime`, `governance`, `feedforward` et, lorsqu'il est disponible, `twin`.
+
+`analysis.control` publie, parmi les termes d'erreur et la géométrie de bande,
+l'anticipation de la température, en chauffage et en refroidissement :
+
+| Champ | Signification |
+|---|---|
+| `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon ou sans pente montante ou descendante) |
+| `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le délai entre une commande et son effet), `0` lorsqu'il n'y en a pas |
+| `anticipation_horizon_source` | Origine de l'horizon : `heating balance` (médiane des derniers retards de l'émetteur mesurés), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` ; le bilan de chauffe n'est utilisé qu'en chauffage |
 
 `analysis.deadtime` suit la détection du temps mort :
 
@@ -108,7 +115,7 @@ est disponible, `twin`.
 | `episode_median_s` | Durée médiane des épisodes actifs récents en secondes, `null` avec moins de 3 épisodes |
 | `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage). `episode interrupted by restart` : épisode en cours lors d'un redémarrage non ponté, non repris, compté sans estimation. Peut être vide juste après un redémarrage |
 
-`analysis.learning.heating_balance` décrit la vitesse de chauffe et le retard de l'émetteur mesurés sur les phases de chauffe. Il est publié pour observation seule :
+`analysis.learning.heating_balance` décrit la vitesse de chauffe et le retard de l'émetteur mesurés sur les phases de chauffe. La régulation ne lit que `kept_lag_s` :
 
 | Champ | Signification |
 |---|---|
@@ -116,6 +123,8 @@ est disponible, `twin`.
 | `measurements` | Nombre de mesures conservées (7 au plus) |
 | `a` | Vitesse de chauffe médiane en °C/min à pleine puissance (5 décimales), `null` sans mesure |
 | `lag_s` | Retard médian de l'émetteur en secondes, `null` sans mesure qui le résout |
+| `kept_lag_s` | Médiane des 7 derniers retards mesurés, en secondes, `null` tant qu'aucun n'a été mesuré ; une mesure sans retard n'en retire aucun. C'est l'horizon de l'anticipation lorsqu'il est positif |
+| `kept_lags` | Nombre de retards retenus (7 au plus) |
 | `last_reason` | Issue de la dernière phase terminée : `measured`, ou la raison pour laquelle elle n'a rien donné (`rest before heating too short`, `baseline samples insufficient`, `heating too short`, `temperature rise too small`, `still rising at the next heating`, `no peak within the wait`, `observation gap`, `heating mode left`, `interrupted by restart`). Vide avant la première phase |
 | `last` | Dernière mesure, `null` sans mesure : `heating_min` (durée de chauffe à pleine puissance en minutes), `rise_c` (hausse de température au pic au-dessus de la trajectoire passive), `peak_delay_min` (minutes entre la coupure et le pic), `a`, `lag_s` (`null` lorsque la puissance n'était pas constante ou que le retard n'est pas résolu), `constant_power`, `context` (`bootstrap`, `calibration` ou `regulation`, au début de la phase) |
 

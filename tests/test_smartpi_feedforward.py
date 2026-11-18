@@ -634,11 +634,11 @@ class TestFF3:
             b=0.002,
             deadtime_heat_s=0.0,
             disturbance_context_active=False,
-            disturbance_context_reason="trajectory_setpoint_active",
+            disturbance_context_reason="dynamic_incoherent",
         )
         assert result.enabled is False
         assert result.u_ff3_applied == pytest.approx(0.0)
-        assert result.reason_disabled == "trajectory_setpoint_active"
+        assert result.reason_disabled == "dynamic_incoherent"
         assert result.candidate_scores == []
         assert result.horizon_cycles == 2
 
@@ -679,8 +679,6 @@ class TestFF3:
         context = build_ff3_disturbance_context(
             twin_diag={"status": "zero_dt"},
             measured_slope_h=None,
-            trajectory_active=False,
-            trajectory_source="none",
         )
         assert context.disturbance_active is False
         assert context.reason == "twin_unavailable"

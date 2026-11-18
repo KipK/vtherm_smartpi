@@ -306,9 +306,9 @@ L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`,
 
 Le retard est appris sur des épisodes à puissance constante, que fournit le bootstrap par hystérésis. En régulation PWM, le rapport cyclique change d'un cycle à l'autre : une installation déjà sortie du bootstrap en fournit donc rarement.
 
-#### Bilan de chauffe (observation seule)
+#### Bilan de chauffe
 
-`HeatingBalance` (`heating_balance.py`) mesure, sur chaque phase de chauffe suivie d'un arrêt, la vitesse de chauffe `a` (°C/min à pleine puissance) et le retard de l'émetteur à partir d'un bilan énergétique de la pièce. Il est publié pour observation : aucune régulation ni aucun apprentissage ne lit ses résultats. Il ne fonctionne qu'en mode chauffage, à partir des mêmes observations que le retard de réponse.
+`HeatingBalance` (`heating_balance.py`) mesure, sur chaque phase de chauffe suivie d'un arrêt, la vitesse de chauffe `a` (°C/min à pleine puissance) et le retard de l'émetteur à partir d'un bilan énergétique de la pièce. Il est publié ; la régulation ne lit que la médiane des derniers retards qu'il a mesurés, comme horizon de l'anticipation (voir la section 4.4). Il ne fonctionne qu'en mode chauffage, à partir des mêmes observations que le retard de réponse.
 
 Une phase commence au premier intervalle où la puissance dépasse 1 % et se termine après sa coupure. Les chauffes séparées de moins de `HEATING_BALANCE_PHASE_MIN_OFF_S` (10 minutes) sans chauffage appartiennent à la même phase. Avant la phase, le repos (chauffage éteint) doit durer au moins `HEATING_BALANCE_MIN_REST_S = 1800 s`. Une référence, la droite des moindres carrés des échantillons de température sur la fin du repos (au plus `HEATING_BALANCE_BASELINE_SPAN_S = 3600 s`, au moins 4 échantillons), tient lieu de trajectoire passive : $T_0(t) = T_0 + s\,(t - t_{start})$. Pendant la phase, l'estimateur cumule le temps à pleine puissance $t_{on}$ (somme de la puissance × intervalle) et l'aire $A$ de $T - T_0(t)$ en °C·min.
 
@@ -318,9 +318,11 @@ $$a = \frac{\Delta_p + b\,A_p}{t_{on}}$$
 
 La mesure est retenue lorsque $t_{on} \ge$ `HEATING_BALANCE_MIN_ON_S = 600 s` et $\Delta_p \ge$ `HEATING_BALANCE_MIN_RISE_C = 0.3 °C`. Les `HEATING_BALANCE_HISTORY = 7` dernières mesures sont conservées ; les valeurs publiées de `a` et du retard sont leurs médianes.
 
+Les retards sont aussi conservés dans un historique propre, de même longueur : une mesure qui ne donne pas de retard (puissance non constante, retard non résolu) n'en retire aucun, contrairement aux mesures retenues. La médiane de cet historique est le retard retenu, publié comme `kept_lag_s` (`kept_lags` en est le nombre).
+
 Pour une phase à puissance constante (sa puissance moyenne $u_0 = t_{on}/D$ vaut au moins `1 - RESPONSE_LAG_U_TOL` fois sa puissance la plus haute par intervalle), la chaleur encore manquante à la coupure donne le retard. Avec $\Delta_c = T_{cut} - T_0(t_{cut})$ ($T_{cut}$ est la moyenne des échantillons à ±150 s de la coupure), $A_c$ l'aire à la coupure et $D$ la durée de la phase, le déficit de livraison vaut $\delta = \left(t_{on} - 60\,(\Delta_c + b\,A_c)/a\right)/u_0$ en secondes. Un émetteur du premier ordre de constante de temps $\tau$ donne $\delta = \tau\,(1 - e^{-D/\tau})$, résolue en $\tau$ par dichotomie ; le retard vaut 0 lorsque $\delta \le 0$ et est inconnu lorsque $\delta \ge 0.98\,D$.
 
-L'état est publié dans `analysis.learning.heating_balance` et persisté avec l'état d'apprentissage. Les mesures sont restaurées après un redémarrage ; la phase en cours reprend après un redémarrage ponté et est abandonnée sinon.
+L'état est publié dans `analysis.learning.heating_balance` et persisté avec l'état d'apprentissage. Les mesures sont restaurées après un redémarrage ; la phase en cours reprend après un redémarrage ponté et est abandonnée sinon. Les retards retenus sont restaurés également.
 
 ### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur
 
@@ -625,7 +627,6 @@ FF3 est désactivé si l'une des conditions suivantes n'est pas satisfaite :
 - pas en deadband,
 - présence en near-band,
 - régime de gouvernance compatible,
-- pas de trajectoire active de source `setpoint`,
 - présence d'un contexte crédible de perturbation externe.
 
 Le contexte de perturbation accepte un modèle structurellement utilisable même si `model_reliable = False`.
@@ -642,27 +643,36 @@ Dans ce contrat, FF3 n'est plus un optimiseur générique near-band. Il est rés
 
 ### 4.4 Gestion de consigne
 
-`SmartPISetpointManager` pilote désormais une trajectoire analytique pour la branche P.
-Cette trajectoire s’active uniquement lorsqu’un écart thermique significatif apparaît, que le modèle est jugé fiable et que la consigne évolue dans un sens nécessitant un lissage de la référence P.
+La régulation travaille sur la consigne brute en HEAT comme en COOL. Les branches I et P lisent la même consigne ; les erreurs P et I lisent une température anticipée (voir **Anticipation** ci-dessous), qui est le seul mécanisme abaissant la commande en avance de la consigne.
 
-Le principe est le suivant :
+`SmartPISetpointManager` conserve l'état du boost. Un changement de consigne significatif (`SETPOINT_BOOST_THRESHOLD = 0.3 °C`) active le boost, qui relève la limite de pente de la sortie (`SETPOINT_BOOST_RATE`) jusqu'à ce que l'erreur passe sous `SETPOINT_BOOST_ERROR_MIN = 0.3 °C`. La détection d'un changement de consigne qui invalide les fenêtres d'apprentissage est faite par l'orchestrateur, à partir de la variation de la consigne brute (supérieure à `0,01 °C`).
 
-- la branche I continue d’utiliser la consigne brute,
-- la branche P reçoit `filtered_setpoint`,
-- la branche P conserve la consigne brute tant que la zone de freinage prédite n'est pas atteinte,
-- un changement de consigne significatif arme une seule fois le freinage tardif ; HEAT et COOL utilisent ensuite les mêmes équations signées de fenêtre de freinage,
-- un déclenchement dû à une perturbation continue d'exiger le seuil d'écart significatif,
-- le modèle 1R1C appris, le temps mort de réponse passive du mode (`deadtime_cool` en HEAT, `deadtime_heat` en COOL), la latence restante du cycle et la puissance engagée sur le cycle servent à détecter cette zone de freinage,
-- une trajectoire de freinage tardif douce façonne alors la référence P vers une cible de freinage située en deçà de la consigne brute dans le sens de la demande,
-- lorsque le freinage n'est plus nécessaire, la référence filtrée remonte progressivement vers la consigne brute avant l'arrêt de la trajectoire,
-- pour une trajectoire issue d'un changement de consigne, l'entrée en phase `release` verrouille ensuite cette phase jusqu'à la fin de la trajectoire, sans retour vers `tracking`,
-- pendant `release`, la référence P reste du côté de la demande par rapport à la température mesurée de la pièce, sans franchir la consigne brute : elle ne dépasse jamais la cible en HEAT et ne descend jamais sous celle-ci en COOL,
-- la trajectoire se termine une fois en `release`, lorsque la référence P et la pièce sont toutes deux à moins de `0,05 °C` de la cible et que le retour de P à la consigne brute modifie la commande proportionnelle d'au plus `0,03` ; une fois la référence P à moins de `0,05 °C` de la cible, une pièce qui reste sur un plateau en deçà (le test de plateau ci-dessous, avec `0,05 °C` pour plancher) termine aussi la trajectoire, qui bloque alors une nouvelle trajectoire de perturbation comme un plateau de perturbation,
-- la trajectoire se termine aussi dès que la pièce atteint ou franchit la cible dans le sens de la demande, ou lors de tout changement réel de consigne ; la branche P utilise alors de nouveau la consigne brute,
-- `trajectory_active` indique si la trajectoire analytique est en cours.
+#### Anticipation (chauffage et refroidissement)
 
-Le jumeau thermique, FF3 et la prédiction d'entrée en freinage partagent une
-fonction pure de propagation 1R1C à puissance constante. Chaque consommateur
+En HEAT et en COOL, en phase stable, l'erreur proportionnelle et l'erreur intégrale lisent une température anticipée : la température mesurée plus une correction $c$, la distance que la pièce est sur le point de parcourir pendant le délai entre une commande et son effet. La deadband, la near-band, les gardes, le feed-forward et l'apprentissage conservent la température mesurée.
+
+La correction est la pente $s$ des moindres carrés de l'historique de température brute sur les $W = \max(\text{ANTICIPATION\_MIN\_WINDOW\_S},\ H \cdot \text{ANTICIPATION\_WINDOW\_FRAC})$ dernières secondes ($H$ est l'horizon ci-dessous), multipliée par $H$ et limitée à $\pm$ `ANTICIPATION_MAX_C` (`1.0 °C` ; `ANTICIPATION_MIN_WINDOW_S = 600 s`, `ANTICIPATION_WINDOW_FRAC = 1/3`). Elle vaut 0 sans horizon, hors phase stable, avec moins de 3 échantillons, ou lorsque les échantillons couvrent moins de la moitié de la fenêtre. Elle s'établit ensuite progressivement avec la distance à la consigne : avec $e = $ cible $-$ température mesurée,
+
+$$c \leftarrow c \cdot \mathrm{clamp}\left(2 - \frac{e}{c},\ 0,\ 1\right)$$
+
+donc la correction vaut 0 lorsque la pièce se rapproche de la consigne et en est plus éloignée que $2c$, elle est pleine à moins de $c$ de celle-ci, au-delà de la consigne, ou lorsque la pièce s'éloigne de la consigne.
+
+Le rapport $e / c$ ne dépend pas du mode : en COOL, la pièce qui approche la consigne depuis le haut a $e < 0$ et $c < 0$, si bien que la règle est la même dans les deux modes.
+
+Les erreurs sont calculées sur la température anticipée $T + c$ avec le signe du mode (cible $-$ température en HEAT, température $-$ cible en COOL) :
+
+- HEAT : $e_P = \text{cible} - (T + c)$ et $e_I = (\text{cible} - T) - c$,
+- COOL : $e_P = (T + c) - \text{cible}$ et $e_I = (T - \text{cible}) + c$.
+
+L'horizon $H$ est le délai entre une commande et son effet sur la pièce. Il se lit selon le mode, avec la même source de temps mort que la règle des gains (`gain_dead_time`) :
+
+- en HEAT, la médiane des derniers retards mesurés par le bilan de chauffe (les retards retenus, section 3.7) lorsqu'elle est positive, source publiée `heating balance` ;
+- sinon, et toujours en COOL (le bilan de chauffe ne mesure qu'en chauffage), le plus long entre le temps mort actif du mode (le temps mort de chauffe en HEAT, le temps mort de refroidissement en COOL) et la moitié de son temps mort passif (le temps mort de refroidissement en HEAT, le temps mort de chauffe en COOL), chacun compté seulement lorsqu'il est fiable et positif, source `dead times` ;
+- sinon 0 : pas d'anticipation, source `none`.
+
+`analysis.control` publie `anticipation_c` (la correction appliquée au dernier tick), `anticipation_horizon_s` et `anticipation_horizon_source`.
+
+Le jumeau thermique et FF3 partagent une fonction pure de propagation 1R1C à puissance constante. Chaque consommateur
 conserve ses horizons, sa politique de retard et ses validations.
 
 La propagation utilise la forme discrète du modèle 1R1C dans l'espace de commande interne linéaire :
@@ -675,55 +685,14 @@ $$
 T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
 $$
 
-L'entrée en freinage prédit la variation signée dans le sens de la demande active (`+1` en HEAT, `-1` en COOL) sur le reste du cycle, le temps mort passif et l'éventuelle puissance déjà prévue pour le cycle suivant. L'écart de freinage vaut cette variation prédite multipliée par `TRAJECTORY_BRAKE_GAIN = 1.20`.
+Le bloc canonique `live.setpoint` publie `boost_active`.
 
-En HEAT, lorsqu'un modèle de pièce est publié (avec murs ou modèle simple) avec un modèle statique du bilan énergétique en vigueur et que le chauffage n'est pas une vanne, l'équilibre de cette prédiction est celui de la puissance de maintien : la chaleur engagée amène la pièce vers $T_{ext} + (u + g_{EB}) / s_{EB}$ (le gain d'équilibre $a/b$ est remplacé par $1/s_{EB}$ et l'apport gratuit s'ajoute à la puissance). Le facteur de relaxation $\alpha = e^{-b \cdot h}$ conserve le `b` appris, et les contrôles de disponibilité conservent le `a` et le `b` appris. Un `b/a` appris, biaisé à la baisse par les murs, surestimerait sinon la montée engagée et armerait le freinage trop tôt. Le jumeau thermique et FF3 conservent le modèle appris.
-
-Le bloc canonique `live.setpoint` publie le résumé :
-
-- `filtered_setpoint`,
-- `trajectory_active`,
-- `trajectory_source`,
-- `boost_active`.
-
-Le même payload dans les deux modes expose les détails de trajectoire dans
-`live.analysis.trajectory` :
-
-- `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` et `phase`,
-- `pending_target_change_braking`, `braking_needed` et `model_ready`,
-- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` et `bumpless_ready`.
-
-Le façonnage de référence est limité à la branche P, ce qui laisse la consigne brute intacte côté intégrale. Aucun plafond de commande n'est appliqué après le calcul PI : la commande PI passe directement par les contraintes douces (limiteur de pente, `max_on_percent`) puis par les contraintes de temporisation.
+Aucun plafond de commande n'est appliqué après le calcul PI : la commande PI passe directement par les contraintes douces (limiteur de pente, `max_on_percent`) puis par les contraintes de temporisation.
 
 Après un changement de consigne ou une reprise, l'intégrale suit l'erreur brute
 à la consigne sans règle de rattrapage supplémentaire : seuls l'anti-windup
 (ci-dessous), les modes de deadband et de near-band, le clamp de dépassement et
-la coupure de surchauffe la limitent. La trajectoire de consigne ne freine que
-la branche proportionnelle.
-
-Une trajectoire de récupération de perturbation freine la branche P parce que le
-modèle prédit que la puissance engagée suffit à combler l'écart. Quand ce modèle
-est biaisé, la pièce peut se stabiliser sur un plateau sous la consigne et la
-trajectoire ne se termine jamais. Un test de plateau termine alors la
-trajectoire :
-
-- l'erreur signée est moyennée par blocs de
-  `RECOVERY_PLATEAU_BLOCK_CYCLES = 3` cycles,
-- un bloc est stationnaire si sa moyenne reste au-dessus du plancher d'erreur
-  résiduelle (le plus grand de `RECOVERY_ERROR_FLOOR_DEADBAND_RATIO = 2` fois la
-  deadband et de la deadband augmentée de son hystérésis) et ne varie pas de plus
-  de `RECOVERY_PLATEAU_SLOPE_ABS_H = 0.12 °C/h` appliqué sur un bloc,
-- il faut `RECOVERY_PLATEAU_BLOCKS = 2` blocs stationnaires consécutifs,
-- et aucun progrès net sur `RECOVERY_PLATEAU_PROGRESS_BLOCKS = 4` blocs :
-  la moyenne ne doit pas avoir baissé de plus de
-  `RECOVERY_PLATEAU_PROGRESS_MIN_C = 0.03 °C`. Une queue de récupération lente,
-  vue à travers une sonde quantifiée, n'est donc pas prise pour un plateau.
-
-À la détection, la trajectoire repasse en passthrough. Aucune nouvelle
-trajectoire de perturbation ne démarre tant que l'erreur n'est pas redescendue
-sous le seuil de déclenchement diminué de l'hystérésis de suivi, ou jusqu'à un
-changement de consigne ou une remise à zéro. Une nouvelle perturbation reste
-donc freinée normalement.
+la coupure de surchauffe la limitent.
 
 Les reprises suivant détection d'ouverture et power shedding gèlent l'intégrale
 pendant le temps mort en chauffage :
@@ -740,10 +709,10 @@ Cette séquence évite de faire apprendre à l'intégrale une dynamique de repri
 
 Les états transitoires de rattrapage ne sont pas restaurés après reboot :
 
-- la trajectoire analytique active est purgée,
 - tout `integral_hold_mode` temporaire est effacé.
 
 Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer des états servo transitoires qui ne sont plus physiquement valides hors de leur session d'origine. Le timestamp mural de la dernière régulation active valide est persisté et n'est pas rafraîchi lorsque le mode HVAC est OFF. Si l'inactivité dépasse 96 heures, la mémoire PI du contrôleur est purgée à la reprise tandis que le modèle A/B appris reste disponible. Si le mode HVAC après un redémarrage diffère du mode du modèle persisté (HEAT versus COOL), l'intégrale est effacée. Lorsqu'une itération de régulation est ignorée parce que le capteur de température est absent ou que `guard_cut` est actif, le suivi du temps repart comme après un passage en OFF, afin que l'erreur ne soit pas intégrée sur la période ignorée.
+
 
 ### 4.5 Deadband, near-band et protections
 
@@ -835,14 +804,14 @@ Avant et pendant chaque phase, le manager vérifie, à partir de la seule tempé
 | `learning_window.py`   | gestion des fenêtres d'apprentissage et de leurs gardes  |
 | `ab_window_balance.py` | bilan intégral des fenêtres sans pente robuste et pools `a/b` |
 | `response_lag.py`      | `ResponseLagEstimator` : retard de réponse, portes de stabilisation et modèle de puissance délivrée |
-| `heating_balance.py`   | `HeatingBalance` : vitesse de chauffe et retard de l'émetteur mesurés sur les phases de chauffe (observation seule) |
+| `heating_balance.py`   | `HeatingBalance` : vitesse de chauffe et retard de l'émetteur mesurés sur les phases de chauffe |
 | `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis, transferts d'intégrale |
 | `deadband.py`          | deadband et near-band                                    |
-| `setpoint.py`          | trajectoire analytique de la référence P                    |
-| `resume_hold.py`       | maintien I:HOLD pendant le temps mort après reprise de fenêtre ou de délestage |
-| `recovery_plateau.py`  | test de plateau d'une trajectoire qui ne progresse plus      |
+| `setpoint.py`          | consigne de régulation et état du boost |
+| `anticipation.py`      | horizon et correction de l'anticipation de la température mesurée (chauffage et refroidissement) |
+| `resume_hold.py`       | maintien I:HOLD pendant le temps mort après reprise de fenêtre ou de délestage, plancher d'erreur résiduelle |
 | `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`, gain FF signé `b/a`, facteur de montée en charge et FF1 du modèle de pièce |
 | `room_model/feedforward.py` | source de puissance de maintien issue du modèle de pièce publié et du modèle statique du bilan énergétique en vigueur, transfert sans à-coup des variations discrètes de sa part statique, fondu de sa part des murs, gain statique pour la prédiction de freinage |
 | `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
@@ -869,7 +838,7 @@ Les composants instanciés par `SmartPI.__init__()` sont notamment :
 
 ```python
 self.gov = SmartPIGovernance(name)
-self.sp_mgr = SmartPISetpointManager(name, enabled=use_setpoint_filter, release_tau_factor=release_tau_factor)
+self.sp_mgr = SmartPISetpointManager(name)
 self.ctl = SmartPIController(name)
 self.est = ABEstimator()
 self.learn_win = LearningWindowManager(name)
@@ -1162,11 +1131,9 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
 | `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
 | `RECOVERY_ERROR_FLOOR_DEADBAND_RATIO` | `2.0` |
-| `RECOVERY_PLATEAU_SLOPE_ABS_H` | `0.12` |
-| `RECOVERY_PLATEAU_BLOCK_CYCLES` | `3` |
-| `RECOVERY_PLATEAU_BLOCKS` | `2` |
-| `RECOVERY_PLATEAU_PROGRESS_BLOCKS` | `4` |
-| `RECOVERY_PLATEAU_PROGRESS_MIN_C` | `0.03` |
+| `ANTICIPATION_MAX_C` | `1.0` |
+| `ANTICIPATION_MIN_WINDOW_S` | `600` |
+| `ANTICIPATION_WINDOW_FRAC` | `1/3` |
 | `GUARD_CUT_RESET_STEPS`       | `1.5`   |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |

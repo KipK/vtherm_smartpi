@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -29,8 +28,6 @@ from custom_components.vtherm_smartpi.smartpi.room_model.feedforward import (
 from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_WALL_FADE_S
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 from custom_components.vtherm_smartpi.smartpi.room_model.observer import HEALTH_OK, HEALTH_SETTLING
-from custom_components.vtherm_smartpi.smartpi.setpoint import SmartPISetpointManager
-from custom_components.vtherm_smartpi.smartpi.thermal_model import propagate_1r1c
 
 H = 3600.0
 FULL = RoomParams("full", 0.0012, 1.0 / (2.5 * H), 1.0 / (80.0 * H), 0.65 / (2.5 * H), 600.0, 120.0)
@@ -503,35 +500,6 @@ def _select_learned(algo: SmartPI, learned, now: float):
     return algo._select_holding_power(learned, T_SP, T_EXT, HEAT, now=now)
 
 
-def test_braking_equilibrium_is_the_energy_balance(monkeypatch) -> None:
-    """The braking prediction of the setpoint trajectory gets the static model in force (slope and free gain)."""
-    algo = _algo()
-    seen = []
-    real = algo.sp_mgr.filter_setpoint
-
-    def spy(**kw):
-        seen.append((kw.get("equilibrium_gain"), kw.get("equilibrium_free_gain")))
-        return real(**kw)
-
-    monkeypatch.setattr(algo.sp_mgr, "filter_setpoint", spy)
-    from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
-
-    def run():
-        seen.clear()
-        algo.calculate(target_temp=T_SP, current_temp=19.5, ext_current_temp=T_EXT, slope=None, hvac_mode=HEAT,
-                       cycle_boundary=True)
-        return seen[-1] if seen else "not called"
-
-    assert algo.phase == SmartPIPhase.STABLE
-    run()
-    assert run() == (None, 0.0)
-    _publish(algo, FULL, eb=0.97 * FULL.b_eq / FULL.a)
-    algo.room_model.eb_gain = 0.05
-    assert run() == (0.97 * FULL.b_eq / FULL.a, 0.05)
-    _publish(algo, FULL, eb=None)
-    assert run() == (None, 0.0)
-
-
 def test_restart_during_a_fade_goes_on_with_the_applied_wall_part() -> None:
     algo = _on_static()
     _set_tracking(algo, True)
@@ -581,46 +549,6 @@ def test_state_without_the_wall_blend_applies_the_saved_wall_term() -> None:
         restored._ff_holding.load(state["ff_source"], bad)
         assert restored._ff_holding.wall_applied == pytest.approx(state["ff_source"]["wall"])
         assert not restored._ff_holding.fading
-
-
-# ---------------------------------------------------------------------------
-# Braking prediction of the setpoint trajectory
-# ---------------------------------------------------------------------------
-def test_braking_prediction_uses_the_room_model_equilibrium() -> None:
-    mgr = SmartPISetpointManager(name="t", enabled=True)
-    a, b, gain = 0.4, 0.02, 0.03
-    kw = dict(current_temp=19.0, ext_current_temp=5.0, hvac_mode=VThermHvacMode_HEAT, a=a, b=b, u_ref=0.6,
-              horizon_min=12.0)
-    base = mgr._compute_predicted_signed_change(**kw)
-    expected = propagate_1r1c(temperature=19.0, external_temperature=5.0, a=b / gain, b=b, power=0.6,
-                              duration_min=12.0) - 19.0
-    assert mgr._compute_predicted_signed_change(**kw, equilibrium_gain=gain) == pytest.approx(expected)
-    # The learned b / a as equilibrium gain gives the learned prediction
-    assert mgr._compute_predicted_signed_change(**kw, equilibrium_gain=b / a) == pytest.approx(base)
-    # Equilibrium only: the learned rate b keeps the dynamics (same relaxation factor)
-    decay = -math.expm1(-b * 12.0)
-    assert expected == pytest.approx((5.0 - 19.0 + 0.6 / gain) * decay)
-    # Cooling ignores it
-    cool = dict(kw, hvac_mode=VThermHvacMode_COOL, a=-a, current_temp=27.0, ext_current_temp=30.0)
-    assert mgr._compute_predicted_signed_change(**cool, equilibrium_gain=gain) == \
-        mgr._compute_predicted_signed_change(**cool)
-
-
-def test_low_learned_ratio_no_longer_arms_braking_with_the_room_model() -> None:
-    """A learned b / a 35 % low overstates the committed rise and arms the braking; b_eq / a does not."""
-    room_gain = 1.0 / 15.5  # equilibrium 0.5 C above the setpoint at full power
-    a, b = 0.4, 0.65 * room_gain * 0.4
-
-    def armed(gain):
-        mgr = SmartPISetpointManager(name="t", enabled=True)
-        mgr.filter_setpoint(target_temp=20.0, current_temp=19.5, hvac_mode=VThermHvacMode_HEAT, a=a, b=b,
-                            ext_current_temp=5.0, u_ref=1.0, stop_deadtime_s=600.0, stop_deadtime_reliable=True,
-                            tau_reliable=True, deadband_c=0.05, kp=1.0, cycle_min=10.0, remaining_cycle_min=5.0,
-                            now_monotonic=0.0, equilibrium_gain=gain)
-        return mgr.trajectory_braking_needed
-
-    assert armed(None) is True
-    assert armed(room_gain) is False
 
 
 # ---------------------------------------------------------------------------
@@ -815,18 +743,3 @@ def test_closed_loop_restart_keeps_the_room_model_source(caplog) -> None:
     assert abs(out["u_ff"][i] - out["u_ff"][i - 1]) < 0.005
     assert abs(out["i_power"][i] - out["i_power"][i - 1]) < 0.005
     assert abs(out["u"][i] - out["u"][i - 1]) < 0.01
-
-
-def test_braking_prediction_adds_the_free_gain_to_the_committed_power() -> None:
-    """With the room model equilibrium, the committed power drives the room toward T_ext + (u + g) / s."""
-    algo = _algo()
-    kw = dict(current_temp=19.0, ext_current_temp=5.0, hvac_mode=HEAT, a=0.02, b=0.0005, horizon_min=30.0,
-              next_horizon_min=10.0, equilibrium_gain=0.03)
-    pred = algo.sp_mgr._compute_predicted_signed_change
-    with_gain = pred(u_ref=0.6, next_u_ref=0.5, equilibrium_free_gain=0.1, **kw)
-    assert with_gain == pytest.approx(pred(u_ref=0.7, next_u_ref=0.6, **kw))
-    assert with_gain > pred(u_ref=0.6, next_u_ref=0.5, **kw) > 0.0
-    # Without the room model equilibrium the free gain is not used
-    plain = dict(kw, equilibrium_gain=None)
-    assert pred(u_ref=0.6, next_u_ref=0.5, equilibrium_free_gain=0.1, **plain) == pred(u_ref=0.6, next_u_ref=0.5,
-                                                                                         **plain)

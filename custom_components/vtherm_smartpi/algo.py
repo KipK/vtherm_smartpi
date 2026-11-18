@@ -33,7 +33,7 @@ Key features (v2)
 4. Comfort & Protections:
    - Setpoint Boost: Faster reaction to manual setpoint increases (>0.3°C).
    - Integral hold during the dead time after a window or power-shedding resume.
-   - Analytical Setpoint Trajectory: Shapes the proportional reference toward the target.
+   - Anticipation: The P and I errors read the measured temperature plus its expected travel over the dead time.
    - Anti-windup: Conditional integration + Tracking anti-windup.
 
 The output is a power command between 0 and 1 (0-100%).
@@ -78,12 +78,12 @@ from .smartpi.const import (
     DEFAULT_NEAR_BAND_DEG,
     CALIBRATION_TIMEOUT_MIN,
     ERROR_FILTER_TAU,
-    TRAJECTORY_ENABLE_ERROR_THRESHOLD,
     NEAR_SETPOINT_UNWIND_STEPS,
     NEAR_BAND_HYSTERESIS_C,
     RESTART_BRIDGE_MAX_GAP_S,
     clamp,
 )
+from .smartpi.anticipation import AnticipationHorizon, anticipated_error, correction_c, select_horizon
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
 from .smartpi.deadtime_estimator import (
     DeadTimeEstimator,
@@ -127,7 +127,7 @@ from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.resume_hold import ResumeDeadtimeHold, ResumeHoldSource
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
 from .smartpi.tar_learning.manager import TarLearningManager
-from .smartpi.room_model.feedforward import HoldingTransfer, select_source, static_model
+from .smartpi.room_model.feedforward import HoldingTransfer, select_source
 from .smartpi.room_model.manager import RoomModelManager
 from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING
 from .smartpi.restart_bridge import (
@@ -181,13 +181,10 @@ class SmartPI:
         # --- Feed-forward (FF) progressive enablement ("smart warm-up") ---
         ff_warmup_ok_count: int = 30,
         ff_warmup_cycles: int = 6,
-        # --- Setpoint trajectory shaping knobs ---
         near_band_deg: float = DEFAULT_NEAR_BAND_DEG,
-        use_setpoint_filter: bool = True,
         use_ff3: bool = False,
         hysteresis_on: float = HYST_LOWER_C,
         hysteresis_off: float = HYST_UPPER_C,
-        release_tau_factor: float = 0.5,
         deadband_allow_p: bool = False,
         enable_valve_linearization: bool = False,
         valve_curve_params: ValveCurveParams | None = None,
@@ -225,10 +222,7 @@ class SmartPI:
 
         # --- Sub-Systems ---
         self.gov = SmartPIGovernance(name)
-        self.sp_mgr = SmartPISetpointManager(
-            name, enabled=use_setpoint_filter,
-            release_tau_factor=release_tau_factor,
-        )
+        self.sp_mgr = SmartPISetpointManager(name)
         self.ctl = SmartPIController(name)
 
         # Model estimator
@@ -252,6 +246,7 @@ class SmartPI:
         # Diagnostics / status
         self._last_error: float = 0.0
         self._last_error_p: float = 0.0
+        self._last_anticipation_c: float = 0.0
         self._last_temperature_slope_h: float | None = None
         self._last_u_ff: float = 0.0
         self._last_u_pi: float = 0.0
@@ -263,7 +258,6 @@ class SmartPI:
         self._ff_holding = HoldingTransfer()
 
         self._cycle_boundary_pending: bool = True  # Force boundary on first run
-        self._current_cycle_start_monotonic: float | None = None
 
         self._tau_reliable: bool = False
 
@@ -403,6 +397,7 @@ class SmartPI:
 
         self._last_error = 0.0
         self._last_error_p = 0.0
+        self._last_anticipation_c = 0.0
         self._set_linear_output(0.0)
         self._output_initialized = False
         self._last_u_ff = 0.0
@@ -430,7 +425,6 @@ class SmartPI:
         self._last_ext_temp = None
         self._last_hvac_mode = None
         self._learning_start_date = datetime.now()
-        self._current_cycle_start_monotonic = None
 
         # Learning window state is managed by learn_win component
         self.tint_filter.reset()
@@ -813,7 +807,6 @@ class SmartPI:
                 ownership=ownership,
                 quality=trace_quality,
             )
-            self._current_cycle_start_monotonic = now
         else:
             self._causal_power_trace.update_applied_power(
                 now_monotonic=now,
@@ -853,20 +846,7 @@ class SmartPI:
 
         # Cycle accepted -> Count it
         self._cycles_since_reset += 1
-        self._current_cycle_start_monotonic = None
         self._cycle_boundary_pending = True
-
-    def _remaining_cycle_min(
-        self,
-        now_monotonic: float,
-        cycle_boundary: bool,
-    ) -> float:
-        """Return the remaining time before the next cycle boundary."""
-        if cycle_boundary or self._current_cycle_start_monotonic is None:
-            return 0.0
-
-        elapsed_min = max(0.0, (now_monotonic - self._current_cycle_start_monotonic) / 60.0)
-        return max(0.0, self._cycle_min - elapsed_min)
 
     @property
     def a(self) -> float:
@@ -1073,6 +1053,21 @@ class SmartPI:
     @property
     def error_p(self) -> float:
         return self._last_error_p
+
+    @property
+    def anticipation_c(self) -> float:
+        """Correction (°C) added to the measured temperature for the P and I errors, 0 when off."""
+        return self._last_anticipation_c
+
+    def anticipation_horizon(self, hvac_mode: VThermHvacMode | None = None) -> AnticipationHorizon:
+        """Horizon (s) of the anticipation read now and its source (see smartpi/anticipation.py)."""
+        mode = hvac_mode if hvac_mode is not None else self._last_hvac_mode
+        return select_horizon(self.learn_win.heating_balance.kept_lag_s, lambda: self.gain_dead_time(mode), mode)
+
+    @property
+    def anticipation_horizon_in_use_s(self) -> float:
+        """Horizon (s) of the anticipation read now; 0 = no anticipation."""
+        return self.anticipation_horizon().seconds
 
     @property
     def temperature_slope_h(self) -> float | None:
@@ -1603,7 +1598,6 @@ class SmartPI:
         self.deadband_mgr.load_state(state.get("db_state", {}))
         self.calibration_mgr.load_state(state.get("cal_state", {}))
         self.gain_scheduler.load_state(state.get("gs_state", {}))
-        self.sp_mgr.clear_runtime_transients()
         self.ctl.clear_integral_hold()
 
         self._committed_on_percent = 0.0
@@ -1706,7 +1700,6 @@ class SmartPI:
         self._t_cool_episode_start = None
         self._output_initialized = True
         self._last_calculate_time = None
-        self._current_cycle_start_monotonic = None
         self.resume_hold.clear()
 
     def _validate_and_handle_off(
@@ -1867,8 +1860,6 @@ class SmartPI:
         ff3_context = build_ff3_disturbance_context(
             twin_diag=self._last_twin_diag,
             measured_slope_h=slope_h,
-            trajectory_active=self.sp_mgr.trajectory_active,
-            trajectory_source=self.sp_mgr.trajectory_source,
         )
         twin_reliable = ff3_context.prediction_usable
         ff3_result: FF3Result = compute_ff3(
@@ -1915,74 +1906,16 @@ class SmartPI:
         self,
         target_temp: float,
         current_temp: float,
-        ext_current_temp: float | None,
         hvac_mode: VThermHvacMode,
-        dt_min: float,
-        now_monotonic: float,
-        remaining_cycle_min: float = 0.0,
-        resumed_from_off: bool = False,
-        startup_first_run: bool = False,
-    ) -> tuple[float, bool, float, float, float | None]:
-        """Setpoint filtering and boost logic.
+        anticipation_c: float,
+    ) -> tuple[bool, float, float, float | None]:
+        """Setpoint change detection, error terms and boost logic.
 
         Returns:
-            Tuple of (target_temp_filt, setpoint_changed, error_i, error_p, old_target_temp).
-            error_i: raw setpoint error (SP_brut - y), signed by hvac_mode — for integral.
-            error_p: filtered setpoint error (SP_for_P - y), signed by hvac_mode — for P term.
+            Tuple of (setpoint_changed, error_i, error_p, old_target_temp).
+            error_i: raw setpoint error (SP - y), signed by hvac_mode — deadband and stored state.
+            error_p: error on the anticipated temperature (SP - (y + anticipation_c)), signed by hvac_mode — P term.
         """
-        # Filter setpoint — only apply in STABLE phase.
-        # During HYSTERESIS and CALIBRATION the raw setpoint must be used directly
-        # to avoid disrupting bang-bang control and model identification.
-
-        tau_info = self.est.tau_reliability()
-
-        allow_disturbance_trigger = False
-        if self._last_target_temp is not None and self._last_current_temp is not None:
-            previous_error_i = self._last_target_temp - self._last_current_temp
-            if hvac_mode == VThermHvacMode_COOL:
-                previous_error_i = -previous_error_i
-            allow_disturbance_trigger = (
-                abs(previous_error_i) < TRAJECTORY_ENABLE_ERROR_THRESHOLD
-            )
-
-        if self.phase == SmartPIPhase.STABLE and not resumed_from_off and not startup_first_run:
-            stop_deadtime_s, stop_deadtime_reliable = self.dt_est.passive_deadtime(hvac_mode)
-            room_static = static_model(self.room_model, hvac_mode, self._valve_mode_enabled)
-            target_temp_filt = self.sp_mgr.filter_setpoint(
-                target_temp=target_temp,
-                current_temp=current_temp,
-                hvac_mode=hvac_mode,
-                a=self.est.a,
-                b=self.est.b,
-                equilibrium_gain=None if room_static is None else room_static[0],
-                equilibrium_free_gain=0.0 if room_static is None else room_static[1],
-                ext_current_temp=ext_current_temp,
-                u_ref=self._committed_on_percent,
-                stop_deadtime_s=stop_deadtime_s,
-                stop_deadtime_reliable=stop_deadtime_reliable,
-                tau_reliable=tau_info.reliable,
-                deadband_c=self.deadband_c,
-                kp=self.Kp,
-                next_cycle_u_ref=self._on_percent,
-                cycle_min=self._cycle_min,
-                remaining_cycle_min=remaining_cycle_min,
-                now_monotonic=now_monotonic,
-                allow_disturbance_trigger=allow_disturbance_trigger,
-            )
-        else:
-            # Bypass shaping outside STABLE and on the first cycle after a
-            # restart path. After startup or an OFF/window-close resume the
-            # controller needs the raw demand immediately; arming the
-            # trajectory from T_int would make error_p start at 0 on that cycle.
-            if self.phase == SmartPIPhase.STABLE and resumed_from_off:
-                self.sp_mgr.arm_pending_braking_after_resume(
-                    target_temp=target_temp,
-                    current_temp=current_temp,
-                    hvac_mode=hvac_mode,
-                )
-            self.sp_mgr.set_passthrough(target_temp)
-            target_temp_filt = target_temp
-
         setpoint_changed = False
         old_target_temp = self._last_target_temp  # Save before update
         if self._last_target_temp is not None:
@@ -1995,17 +1928,15 @@ class SmartPI:
                 )
         self._last_target_temp = target_temp
 
-        # error_i: integral error — always uses raw setpoint (Åström rule)
-        # error_p: proportional error — uses filtered setpoint
         error_i = target_temp - current_temp
-        error_p = target_temp_filt - current_temp
+        error_p = target_temp - (current_temp + anticipation_c)
         if hvac_mode == VThermHvacMode_COOL:
             error_i = -error_i
             error_p = -error_p
 
-        self.sp_mgr.update_boost_state(target_temp, error_i, hvac_mode)
+        self.sp_mgr.update_boost_state(target_temp, error_i)
 
-        return target_temp_filt, setpoint_changed, error_i, error_p, old_target_temp
+        return setpoint_changed, error_i, error_p, old_target_temp
 
     def _update_control_context(
         self,
@@ -2020,7 +1951,7 @@ class SmartPI:
 
         Args:
             error_i: Raw setpoint error (SP_brut - y) — used for deadband and stored state.
-            error_p: Filtered setpoint error (SP_for_P - y) — returned as e_p for P term.
+            error_p: Error on the anticipated temperature — returned as e_p for P term.
 
         Returns:
             e_p, the error used by the P term.
@@ -2237,8 +2168,7 @@ class SmartPI:
             The limited output.
         """
         # Rate Limit
-        boost_ok = self.sp_mgr.boost_active and not self.sp_mgr.trajectory_active
-        rate_limit = SETPOINT_BOOST_RATE if boost_ok else MAX_STEP_PER_MINUTE
+        rate_limit = SETPOINT_BOOST_RATE if self.sp_mgr.boost_active else MAX_STEP_PER_MINUTE
         # Bypass rate limit on first run, setpoint change, or when dt_min is 0
         if setpoint_changed or not self._output_initialized or dt_min <= 0.0:
             u_limited = u_cmd
@@ -2382,7 +2312,7 @@ class SmartPI:
             t_int_clean = current_temp
 
         # --- 2. Update Time Tracking ---
-        dt_min, resumed_from_off, startup_first_run, resume_hold_source = self._update_time_tracking(now)
+        dt_min, _resumed_from_off, startup_first_run, resume_hold_source = self._update_time_tracking(now)
 
         # --- 2. Predict Cycle Trigger ---
         # Evaluate if we need to cross a cycle boundary (bridged from on_cycle_completed or forced).
@@ -2391,20 +2321,19 @@ class SmartPI:
             self._cycle_boundary_pending = False
             _LOGGER.debug("%s - Cycle boundary triggered for FF3 prediction", self._name)
 
-        remaining_cycle_min = self._remaining_cycle_min(now, cycle_boundary)
-
         # --- 3. Setpoint Management ---
-        target_temp_filt, setpoint_changed, error_i, error_p, old_target_temp = self._manage_setpoint(
-            target_temp,
-            current_temp,
-            self._ext_control,
-            hvac_mode,
-            dt_min,
-            now,
-            remaining_cycle_min,
-            resumed_from_off,
-            startup_first_run,
+        # The anticipated temperature feeds the P and I errors only; the deadband,
+        # guards, feed-forward and learning keep the measured temperature.
+        anticipating = self.phase == SmartPIPhase.STABLE
+        anticipation_c = correction_c(
+            self.anticipation_horizon(hvac_mode).seconds if anticipating else 0.0,
+            now, current_temp, target_temp, self.dt_est.tin_history, anticipating,
         )
+        self._last_anticipation_c = anticipation_c
+        setpoint_changed, error_i, error_p, old_target_temp = self._manage_setpoint(
+            target_temp, current_temp, hvac_mode, anticipation_c,
+        )
+        error_i_ctl = anticipated_error(error_i, anticipation_c, hvac_mode)  # integral error on the anticipated temperature
 
         # Clear cycle regimes on setpoint change to prevent REGIME_TRANSITION freeze
         if setpoint_changed:
@@ -2501,7 +2430,7 @@ class SmartPI:
                 now_monotonic=now,
                 hvac_mode=hvac_mode,
             )
-            out = self.ctl.calculate_hysteresis(target_temp_filt, current_temp, hvac_mode, self._hyst_off, self._hyst_on)
+            out = self.ctl.calculate_hysteresis(target_temp, current_temp, hvac_mode, self._hyst_off, self._hyst_on)
             if out is None and hysteresis_restore is not None:
                 # Inside the band after a short restart: resume the saved
                 # on/off state instead of starting from OFF.
@@ -2609,7 +2538,7 @@ class SmartPI:
         u_max = 1.0 if u_max is None else min(1.0, u_max)
 
         u_cmd = self.ctl.compute_pwm(
-            error_i,
+            error_i_ctl,
             e_p,
             self.Kp,
             self.Ki,

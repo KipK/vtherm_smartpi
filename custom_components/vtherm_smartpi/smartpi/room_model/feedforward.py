@@ -18,7 +18,7 @@ The constant gain g is part of it: the balance of the days is u = s D - g
 with D the indoor-outdoor difference, and a holding power s (T_sp - T_ext)
 without g would leave the integral to carry g for good (heat from a warmer
 neighbour, steady occupants). The fit gives the wall dynamics (delta_wall /
-a). The same static model is the equilibrium of the braking prediction.
+a).
 
 The holding power is clamped to [0, 1] and applies at full weight (no warmup
 ramp); the unmeasured disturbance d is not used. The learned holding power

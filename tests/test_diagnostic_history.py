@@ -13,7 +13,7 @@ def _live_diagnostics() -> dict:
     return {
         "control": {"phase": "Stable", "kp": 0.4, "ki": 0.002, "ti_min": 200.0},
         "temperature": {"indoor": 20.5, "outdoor": 8.0, "integral_error": 75.0},
-        "setpoint": {"filtered_setpoint": 21.0, "boost_active": False},
+        "setpoint": {"boost_active": False},
         "power": {
             "applied_percent": 30.0,
             "command_percent": 35.0,
@@ -33,7 +33,6 @@ def test_history_contains_only_equinox_time_series() -> None:
     assert build_history_diagnostics(_live_diagnostics()) == {
         "control": {"kp": 0.4, "ki": 0.002},
         "temperature": {"indoor": 20.5, "integral_error": 75.0},
-        "setpoint": {"filtered_setpoint": 21.0},
         "power": {
             "applied_percent": 30.0,
             "command_percent": 35.0,

@@ -98,7 +98,6 @@ class FFTrimThermalSample:
     u_pi: float | None
     hvac_mode: str
     saturated: bool
-    trajectory_active: bool
     ff3_active: bool
     setpoint_changed: bool
     outside_temperature_available: bool
@@ -930,8 +929,6 @@ class CausalFFTrimObserver(_ThermalWindowCollector):
             return f"frozen_{sample.trim_frozen_reason}"
         if sample.setpoint_changed:
             return "setpoint_changed"
-        if sample.trajectory_active:
-            return "trajectory_active"
         if sample.ff3_active:
             return "ff3_active"
         if sample.saturated:

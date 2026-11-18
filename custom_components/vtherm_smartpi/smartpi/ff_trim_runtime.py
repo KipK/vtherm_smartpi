@@ -253,8 +253,6 @@ class FFTrimCoordinator:
             flags.append("saturated_high")
         elif spi.ctl.last_sat == "SAT_LO":
             flags.append("saturated_low")
-        if spi.sp_mgr.trajectory_active:
-            flags.append("trajectory")
         current_phase = spi.phase
         if current_phase != SmartPIPhase.STABLE:
             flags.append(f"phase_{current_phase.value}")
@@ -678,8 +676,6 @@ class FFTrimCoordinator:
             return "application_i_not_frozen"
         if spi.ctl.last_sat != "NO_SAT":
             return "application_saturated"
-        if spi.sp_mgr.trajectory_active:
-            return "application_trajectory"
         if spi.calibration_mgr.state != SmartPICalibrationPhase.IDLE:
             return "application_calibration"
         if spi.guards.guard_cut_active or spi.guards.guard_kick_active:
@@ -824,7 +820,6 @@ class FFTrimCoordinator:
             i_hold_source=self._integral_hold_source(),
             hvac_mode=mode,
             saturated=spi.ctl.last_sat != "NO_SAT",
-            trajectory_active=spi.sp_mgr.trajectory_active,
             ff3_active=spi.ff3_state.active_cycle,
             setpoint_changed=setpoint_changed,
             outside_temperature_available=(

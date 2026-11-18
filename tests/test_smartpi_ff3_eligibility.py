@@ -10,30 +10,6 @@ from custom_components.vtherm_smartpi.smartpi.ff3_eligibility import (
 )
 
 
-def test_ff3_context_rejects_setpoint_trajectory():
-    """A setpoint trajectory must block FF3 even if twin residuals are strong."""
-    context = build_ff3_disturbance_context(
-        twin_diag={
-            "status": "ok",
-            "model_reliable": True,
-            "bias_warning": True,
-            "external_gain_detected": True,
-            "external_loss_detected": False,
-            "perturbation_dTdt": 0.01,
-            "warming_up": False,
-        },
-        measured_slope_h=0.2,
-        trajectory_active=True,
-        trajectory_source="setpoint",
-    )
-
-    assert context.disturbance_active is False
-    assert context.reason == "trajectory_setpoint_active"
-    assert context.disturbance_kind == "gain"
-    assert context.residual_persistent is True
-    assert context.dynamic_coherent is True
-
-
 def test_ff3_context_requires_dynamic_coherence():
     """Residual persistence alone must not activate FF3 without matching dynamics."""
     context = build_ff3_disturbance_context(
@@ -47,8 +23,6 @@ def test_ff3_context_requires_dynamic_coherence():
             "warming_up": False,
         },
         measured_slope_h=None,
-        trajectory_active=False,
-        trajectory_source="none",
     )
 
     assert context.disturbance_active is False
@@ -71,8 +45,6 @@ def test_ff3_context_accepts_external_loss_with_coherent_cooling():
             "warming_up": False,
         },
         measured_slope_h=-0.1,
-        trajectory_active=False,
-        trajectory_source="disturbance",
     )
 
     assert context.disturbance_active is True
@@ -95,8 +67,6 @@ def test_ff3_prediction_quality_degraded_keeps_reduced_authority():
             "perturbation_dTdt": -0.015,
         },
         measured_slope_h=-0.1,
-        trajectory_active=False,
-        trajectory_source="none",
     )
 
     assert context.disturbance_active is True
@@ -118,8 +88,6 @@ def test_ff3_warming_up_blocks_even_with_disturbance():
             "perturbation_dTdt": -0.015,
         },
         measured_slope_h=-0.1,
-        trajectory_active=False,
-        trajectory_source="none",
     )
 
     assert context.disturbance_active is False
@@ -141,8 +109,6 @@ def test_ff3_invalid_steady_state_blocks_prediction():
             "perturbation_dTdt": -0.015,
         },
         measured_slope_h=-0.1,
-        trajectory_active=False,
-        trajectory_source="none",
     )
 
     assert context.reason == "twin_steady_invalid"

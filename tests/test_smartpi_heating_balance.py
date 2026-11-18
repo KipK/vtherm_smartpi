@@ -429,12 +429,15 @@ def test_diagnostics_publish_the_heating_balance():
     empty = _heating_balance_diag(HeatingBalance("t"))
     assert empty == {
         "state": "resting", "measurements": 0, "a": None, "lag_s": None,
-        "last_reason": "", "last": None,
+        "kept_lag_s": None, "kept_lags": 0, "last_reason": "", "last": None,
     }
     rig = _Rig()
     rig.pulse()
     diag = _heating_balance_diag(rig.balance)
-    assert set(diag) == {"state", "measurements", "a", "lag_s", "last_reason", "last"}
+    assert set(diag) == {
+        "state", "measurements", "a", "lag_s", "kept_lag_s", "kept_lags", "last_reason", "last",
+    }
+    assert diag["kept_lags"] == rig.balance.kept_lag_count
     assert diag["measurements"] == 1
     assert diag["last_reason"] == "measured"
     assert diag["a"] == pytest.approx(A_PER_MIN, rel=0.12)
@@ -442,3 +445,77 @@ def test_diagnostics_publish_the_heating_balance():
         "heating_min", "rise_c", "peak_delay_min", "a", "lag_s", "constant_power", "context",
     }
     assert diag["last"]["heating_min"] == pytest.approx(40.0)
+
+
+# ----------------------------------------------------------------------
+# Kept lags
+# ----------------------------------------------------------------------
+
+
+def _pulse_without_lag(rig: _Rig) -> None:
+    """A heating with a short stop inside: a result without lag."""
+    rig.run(0.0, 60.0)
+    rig.run(1.0, 20.0)
+    rig.run(0.0, 5.0)
+    rig.run(1.0, 20.0)
+    rig.run(0.0, 300.0)
+
+
+def test_kept_lags_survive_results_without_lag():
+    rig = _Rig()
+    rig.pulse()
+    measured = rig.balance.lag_s
+    assert measured is not None
+    assert rig.balance.kept_lag_count == 1
+    assert rig.balance.kept_lag_s == measured
+    for _ in range(8):
+        _pulse_without_lag(rig)
+    assert rig.balance.count == 7
+    assert all(r["lag_s"] is None for r in rig.balance.results)
+    assert rig.balance.lag_s is None
+    assert rig.balance.kept_lag_count == 1
+    assert rig.balance.kept_lag_s == measured
+
+
+def test_kept_lags_are_capped_and_give_their_median():
+    rig = _Rig()
+    for _ in range(9):
+        rig.pulse(rest_min=60.0, heat_min=30.0, wait_min=240.0)
+    assert rig.balance.kept_lag_count == 7
+    lags = [r["lag_s"] for r in rig.balance.results]
+    assert rig.balance.kept_lag_s == sorted(lags)[3]
+
+
+def test_kept_lags_are_none_without_measurement():
+    balance = HeatingBalance("t")
+    assert balance.kept_lag_s is None
+    assert balance.kept_lag_count == 0
+
+
+def test_kept_lags_survive_a_restart():
+    rig = _Rig()
+    rig.pulse()
+    for _ in range(8):
+        _pulse_without_lag(rig)
+    with patch("custom_components.vtherm_smartpi.smartpi.timestamp_utils.time", rig.clock):
+        saved = rig.balance.save_state()
+    assert len(saved["lags"]) == 1
+    restored = HeatingBalance("t")
+    restored.load_state(saved)
+    assert restored.kept_lag_count == 1
+    assert restored.kept_lag_s == rig.balance.kept_lag_s
+    assert restored.lag_s is None
+    saved.pop("lags")
+    restored.load_state(saved)
+    assert restored.kept_lag_count == 0
+    assert restored.kept_lag_s is None
+    restored.load_state({"lags": [300.0, "x", None, 500.0]})
+    assert restored.kept_lag_count == 2
+
+
+def test_clear_empties_the_kept_lags():
+    rig = _Rig()
+    rig.pulse()
+    rig.balance.clear()
+    assert rig.balance.kept_lag_count == 0
+    assert rig.balance.kept_lag_s is None

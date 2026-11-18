@@ -5,12 +5,20 @@ from enum import Enum
 from typing import TYPE_CHECKING, Callable
 
 from ..hvac_mode import VThermHvacMode
-from .recovery_plateau import recovery_error_floor_c
+from .const import DEADBAND_HYSTERESIS, RECOVERY_ERROR_FLOOR_DEADBAND_RATIO
 
 
 if TYPE_CHECKING:
     from .controller import SmartPIController
     from .deadtime_estimator import DeadTimeEstimator
+
+
+def recovery_error_floor_c(deadband_c: float) -> float:
+    """Return the residual error (°C) under which a recovery counts as closed."""
+    return max(
+        max(deadband_c, 0.0) * RECOVERY_ERROR_FLOOR_DEADBAND_RATIO,
+        max(deadband_c, 0.0) + max(DEADBAND_HYSTERESIS, 0.0),
+    )
 
 
 class ResumeHoldSource(str, Enum):

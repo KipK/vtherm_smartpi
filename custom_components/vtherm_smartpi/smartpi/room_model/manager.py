@@ -1,11 +1,11 @@
 """Orchestration of the room model (event loop side, pure Python).
 
 Once published, the room model gives the regulation its feed-forward holding
-power in heating and the equilibrium of the braking prediction
-(feedforward.py). The manager feeds the observer at each regulation tick and
-with each applied command, schedules the computations (jobs.py, run in an
-executor on the history recorded by the T_ar learning), publishes the
-qualified parameters, and holds the persistence and the diagnostics.
+power in heating (feedforward.py). The manager feeds the observer at each
+regulation tick and with each applied command, schedules the computations
+(jobs.py, run in an executor on the history recorded by the T_ar learning),
+publishes the qualified parameters, and holds the persistence and the
+diagnostics.
 
 Identification: the quiet periods come from the shared catalogue of the T_ar
 learning (no sun, constant setpoint, valid data). Each closed period that

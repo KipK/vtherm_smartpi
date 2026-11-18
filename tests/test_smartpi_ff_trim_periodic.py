@@ -48,7 +48,6 @@ def _sample(
         u_pi=-0.04,
         hvac_mode="heat",
         saturated=saturation_state != "NO_SAT",
-        trajectory_active=False,
         ff3_active=False,
         setpoint_changed=False,
         outside_temperature_available=True,

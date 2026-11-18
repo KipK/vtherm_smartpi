@@ -26,11 +26,9 @@ from .const import (
     CONF_MINIMAL_ACTIVATION_DELAY,
     CONF_MINIMAL_DEACTIVATION_DELAY,
     CONF_SMART_PI_DEADBAND,
-    CONF_SMART_PI_USE_SETPOINT_FILTER,
     CONF_SMART_PI_USE_FF3,
     CONF_SMART_PI_HYSTERESIS_ON,
     CONF_SMART_PI_HYSTERESIS_OFF,
-    CONF_SMART_PI_RELEASE_TAU_FACTOR,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
     CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
     CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
@@ -112,11 +110,9 @@ class SmartPIHandler:
 
         # SmartPI specific
         deadband = entry[CONF_SMART_PI_DEADBAND]
-        use_setpoint_filter = entry[CONF_SMART_PI_USE_SETPOINT_FILTER]
         use_ff3 = entry[CONF_SMART_PI_USE_FF3]
         hyst_on = entry[CONF_SMART_PI_HYSTERESIS_ON]
         hyst_off = entry[CONF_SMART_PI_HYSTERESIS_OFF]
-        release_tau_factor = entry[CONF_SMART_PI_RELEASE_TAU_FACTOR]
         deadband_allow_p = entry[CONF_SMART_PI_DEADBAND_ALLOW_P]
         self._allow_pwm_cycle_force = entry[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE]
         self._valve_linearization_configured = entry[CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION]
@@ -147,11 +143,9 @@ class SmartPIHandler:
             name=t.name,
             max_on_percent=max_on_percent,
             deadband_c=deadband,
-            use_setpoint_filter=use_setpoint_filter,
             use_ff3=use_ff3,
             hysteresis_on=hyst_on,
             hysteresis_off=hyst_off,
-            release_tau_factor=release_tau_factor,
             deadband_allow_p=deadband_allow_p,
             enable_valve_linearization=valve_linearization_enabled,
             valve_curve_params=self._valve_curve_params,

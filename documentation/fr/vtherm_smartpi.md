@@ -281,7 +281,7 @@ Quand le modèle thermique devient fiable, SmartPI bascule dans son mode normal 
 
 Près de la température cible, SmartPI cherche à éviter les micro-corrections permanentes. Le résultat attendu est une régulation plus stable, avec moins de corrections inutiles qu'un TPI fixe.
 
-Lors d'un changement de consigne en HEAT ou COOL, le filtre de consigne utilise aussi le modèle appris pour gérer l'approche finale de la cible. Lorsque le modèle prédit que la chaleur ou le froid déjà engagés amèneront la pièce près de la cible, la branche proportionnelle suit une trajectoire de freinage douce, tandis que la consigne brute reste disponible pour la branche intégrale. La trajectoire revient ensuite progressivement vers la consigne brute et se termine lorsque la pièce et la référence en sont proches.
+SmartPI anticipe la température, en HEAT comme en COOL : les branches proportionnelle et intégrale lisent la température mesurée plus la distance que la pièce est sur le point de parcourir pendant le délai entre une commande et son effet, estimée à partir de la pente de la température. Cela abaisse la commande avant que la pièce n'atteigne la consigne, ce qui limite le dépassement des émetteurs lents (plancher chauffant, radiateurs à eau) et celui d'un refroidissement qui continue d'agir après son arrêt. Le délai est le retard de l'émetteur mesuré par le bilan de chauffe en HEAT ; tant qu'aucun n'est mesuré, et toujours en COOL, il est dérivé des temps morts : le plus long entre le temps mort actif du mode et la moitié du temps mort passif de la réponse. La correction est limitée à 1 °C et s'établit progressivement lorsque la pièce approche de la consigne depuis loin, afin qu'une montée ou une descente depuis loin de la consigne ne soit pas ralentie. Les deux branches utilisent la consigne brute.
 
 Avec `FF3`, activé par défaut, SmartPI peut aussi appliquer une petite correction prédictive près de la consigne lorsqu'il détecte un contexte crédible de perturbation externe.
 
@@ -390,8 +390,6 @@ La puissance de maintien est la part de la commande qui compense les pertes pour
 
 La puissance de maintien du modèle de pièce s'applique tout de suite, à plein poids, et la correction lente du feed-forward (FF2) est remise à zéro et reste gelée tant qu'elle est en vigueur : le modèle remplace le biais que cette correction apprend. Un changement de la perte statique (bascule entre le modèle A/B et le modèle de pièce, entre le modèle simple et le modèle avec murs, ou nouvelle valeur de bilan thermique) est absorbé par l'intégrale, afin que la commande ne fasse pas de saut ; l'intégrale rend ensuite sa part au rythme de la régulation. La puissance supplémentaire des murs n'est jamais absorbée par l'intégrale : lorsqu'elle démarre, s'arrête (suivi non `ok`, après une fenêtre ouverte par exemple) ou change avec une nouvelle publication, elle passe progressivement sur 30 minutes de sa dernière valeur à la nouvelle. Après une fenêtre ouverte, la montée du matin retrouve donc sa puissance des murs en 30 minutes dès que le suivi est de nouveau `ok`. La source en vigueur et la puissance des murs appliquée sont conservées lors des redémarrages.
 
-Le freinage de l'approche de la consigne utilise aussi le bilan thermique en vigueur (pente et apport gratuit) pour prévoir où la chaleur déjà engagée amène la pièce. Un modèle A/B appris, biaisé par les murs, commencerait sinon à freiner trop tôt.
-
 Le prix à payer est un léger dépassement, d'environ 0,1 °C, en fin de montée du matin dans une pièce à murs épais.
 
 **Ce qu'il affiche**
@@ -437,7 +435,6 @@ Pour démarrer simplement :
 
 - gardez les seuils d'hystérésis par défaut si votre sonde est précise et publie souvent (voir ci-dessous sinon),
 - laissez `FF3` activé sauf raison précise de le désactiver,
-- laissez le filtre de consigne activé par défaut,
 - ajustez d'abord la deadband si la température oscille trop autour de la cible,
 - activez la détection d'ouverture de Versatile Thermostat (capteur de fenêtre ou détection automatique).
 
@@ -487,11 +484,9 @@ Ces valeurs viennent de simulations de chaque type d'installation. Un cycle à u
 | **Délai minimal d'activation**       | Durée minimale pendant laquelle le chauffage reste allumé une fois activé. Sorties switch uniquement, ignoré pour les vannes.                             | `0 s`             |
 | **Délai minimal de désactivation**   | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé. Sorties switch uniquement, ignoré pour les vannes.                          | `0 s`             |
 | **Deadband**                         | Zone de tolérance autour de la consigne.                                                               | `0.05°C`          |
-| **Filtre de consigne**               | Active le lissage proportionnel et la gouvernance prédictive HEAT/COOL près de la cible.                | `activé`          |
 | **FF3**                              | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé`          |
 | **Autoriser P dans la deadband**     | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
 | **Autoriser le redémarrage PWM aux transitions de bande** | Permet à SmartPI de redémarrer le cycle PWM courant lors d'une entrée ou sortie de deadband ou de near-band. | `désactivé` |
-| **Facteur release tau**              | Échelle du délai de relâchement intégral par rapport à la constante de temps apprise.                  | `0.5`             |
 | **Hystérésis marche**                | Seuil de redémarrage pendant le bootstrap : le chauffage redémarre à consigne − seuil en HEAT, le refroidissement redémarre à consigne + seuil en COOL. | `0.3°C`           |
 | **Hystérésis arrêt**                 | Seuil d'arrêt pendant le bootstrap : le chauffage s'arrête à consigne + seuil en HEAT, le refroidissement s'arrête à consigne − seuil en COOL. | `0.5°C`           |
 | **Mode debug SmartPI**               | Enregistre les diagnostics live complets pour l'analyse historique.                                    | `désactivé`       |
@@ -541,15 +536,12 @@ Autres blocs utiles sous `live` :
 - `temperature` : température mesurée, erreur, état de l'intégrale,
 - `model` : `a`, `b`, niveau de confiance et temps morts appris,
 - `feedforward` : état du feed-forward et de FF3,
-- `setpoint` : informations de consigne filtrée et de trajectoire,
+- `setpoint` : état du boost de consigne,
 - `autocalib` : état de la supervision automatique,
 - `calibration` : état d'une calibration forcée.
 
-En mode normal, le bloc `setpoint` peut contenir :
+Le bloc `setpoint` contient :
 
-- `filtered_setpoint` : référence suivie par la branche proportionnelle,
-- `trajectory_active` : indique si une trajectoire de consigne est active,
-- `trajectory_source` : indique pourquoi la trajectoire est active,
 - `boost_active` : indique si le boost de consigne est actif.
 
 Les valeurs avancées utilisées par la carte fournie sont toujours disponibles

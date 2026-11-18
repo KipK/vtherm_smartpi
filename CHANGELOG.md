@@ -7,8 +7,28 @@ All notable changes to this project will be documented in this file.
 - Heating balance (heating): SmartPI measures, on each heating phase followed
   by a stop after a rest, the heating rate at full power and the emitter lag
   from an energy balance of the room, and publishes them in
-  `analysis.learning.heating_balance`. They are for observation only: nothing
-  in the regulation or the learning uses them.
+  `analysis.learning.heating_balance`, with the median of the last lags
+  measured (`kept_lag_s`) and their number (`kept_lags`). Only that median is
+  read by the regulation, as the horizon of the anticipation below.
+- Anticipation (heating and cooling): the proportional and integral errors
+  read the measured temperature plus the distance the room is about to travel
+  during the delay between a command and its effect (the slope of the
+  temperature times that delay, at most 1 °C, faded in as the room approaches
+  the setpoint). In heating the delay is the median emitter lag of the heating
+  balance, else the longer of the heating dead time and half the cooling dead
+  time. In cooling it is the longer of the cooling dead time and half the
+  heating dead time. It is the one mechanism of the approach to the setpoint
+  in both modes: the setpoint trajectory (late braking) is removed, and the
+  proportional branch always works on the raw setpoint. The overshoot of slow
+  emitters is reduced. New diagnostics in `analysis.control`:
+  `anticipation_c`, `anticipation_horizon_s` and
+  `anticipation_horizon_source` (`heating balance`, `dead times` or `none`).
+  Removed diagnostics: `setpoint.filtered_setpoint` (in `live` and in
+  `history`: the regulation follows the setpoint of the thermostat),
+  `setpoint.trajectory_active`, `setpoint.trajectory_source` and the whole
+  `analysis.trajectory` block. The
+  options "Setpoint filter" and "Release tau factor" of the configuration are
+  removed: they only drove the trajectory.
 - Emitter delay learning (heating, PWM heaters, always on): SmartPI learns how
   long the heater takes to warm the room, from the morning comfort steps and
   from a multi-day model of the room, and uses it for the gains. A learned

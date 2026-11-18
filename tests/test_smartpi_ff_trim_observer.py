@@ -42,7 +42,6 @@ def _sample(
         u_pi=u_pi,
         hvac_mode=hvac_mode,
         saturated=False,
-        trajectory_active=False,
         ff3_active=False,
         setpoint_changed=False,
         outside_temperature_available=True,

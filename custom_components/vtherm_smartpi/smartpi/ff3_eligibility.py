@@ -121,8 +121,6 @@ def build_ff3_disturbance_context(
     *,
     twin_diag: dict,
     measured_slope_h: float | None,
-    trajectory_active: bool,
-    trajectory_source: str,
 ) -> FF3DisturbanceContext:
     """Build the FF3 disturbance-only eligibility context."""
     twin_status = str(twin_diag.get("status", "unavailable"))
@@ -154,9 +152,7 @@ def build_ff3_disturbance_context(
         measured_slope_h=measured_slope_h,
     )
 
-    if trajectory_active and trajectory_source == "setpoint":
-        reason = "trajectory_setpoint_active"
-    elif prediction_usable is False:
+    if prediction_usable is False:
         reason = prediction_quality
     elif not residual_persistent:
         reason = "residual_not_persistent"

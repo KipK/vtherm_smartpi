@@ -5,11 +5,6 @@ from math import exp
 import pytest
 
 from custom_components.vtherm_smartpi.smartpi.thermal_model import propagate_1r1c
-from custom_components.vtherm_smartpi.hvac_mode import (
-    VThermHvacMode_COOL,
-    VThermHvacMode_HEAT,
-)
-from custom_components.vtherm_smartpi.smartpi.setpoint import SmartPISetpointManager
 from custom_components.vtherm_smartpi.smartpi.ff3_predictor import predict_ff3_open_loop
 from custom_components.vtherm_smartpi.smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 
@@ -78,23 +73,6 @@ def test_semigroup_and_legacy_equilibrium_form(bias: float) -> None:
 
     assert second == pytest.approx(whole, abs=1e-12)
     assert whole == pytest.approx(legacy, abs=1e-12)
-
-
-@pytest.mark.parametrize("direction", [1.0, -1.0])
-def test_braking_matches_segmented_closed_form(direction: float) -> None:
-    mode = VThermHvacMode_HEAT if direction > 0 else VThermHvacMode_COOL
-    a, b = direction * 0.4, 0.02
-    expected = 20.0
-    for horizon_min, command in ((2.0, 0.6), (3.0, 0.3)):
-        equilibrium = 20.0 + a * command / b
-        expected = equilibrium + (expected - equilibrium) * exp(-b * horizon_min)
-
-    change = SmartPISetpointManager("test")._compute_predicted_signed_change(
-        current_temp=20.0, ext_current_temp=20.0, hvac_mode=mode,
-        a=a, b=b, u_ref=0.6, horizon_min=2.0,
-        next_u_ref=0.3, next_horizon_min=3.0,
-    )
-    assert change == pytest.approx(direction * (expected - 20.0), abs=1e-12)
 
 
 def test_ff3_and_twin_match_closed_form_without_mutating_prediction_state() -> None:

@@ -437,7 +437,6 @@ async def test_missing_valve_position_keeps_its_cycle_out_of_the_stationary_trim
                 u_pi=0.1,
                 hvac_mode="heat",
                 saturated=False,
-                trajectory_active=False,
                 ff3_active=False,
                 setpoint_changed=False,
                 outside_temperature_available=True,
