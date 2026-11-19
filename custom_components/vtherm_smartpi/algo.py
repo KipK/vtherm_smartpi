@@ -83,7 +83,7 @@ from .smartpi.const import (
     RESTART_BRIDGE_MAX_GAP_S,
     clamp,
 )
-from .smartpi.anticipation import AnticipationHorizon, anticipated_error, correction_c, select_horizon
+from .smartpi.anticipation import AnticipationHorizon, DeadbandGate, anticipated_error, correction_c, select_horizon
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
 from .smartpi.deadtime_estimator import (
     DeadTimeEstimator,
@@ -246,7 +246,7 @@ class SmartPI:
         # Diagnostics / status
         self._last_error: float = 0.0
         self._last_error_p: float = 0.0
-        self._last_anticipation_c: float = 0.0
+        self._anticipation = DeadbandGate()
         self._last_temperature_slope_h: float | None = None
         self._last_u_ff: float = 0.0
         self._last_u_pi: float = 0.0
@@ -397,7 +397,7 @@ class SmartPI:
 
         self._last_error = 0.0
         self._last_error_p = 0.0
-        self._last_anticipation_c = 0.0
+        self._anticipation.reset()
         self._set_linear_output(0.0)
         self._output_initialized = False
         self._last_u_ff = 0.0
@@ -1058,7 +1058,7 @@ class SmartPI:
     @property
     def anticipation_c(self) -> float:
         """Correction (°C) added to the measured temperature for the P and I errors, 0 when off."""
-        return self._last_anticipation_c
+        return self._anticipation.value
 
     def anticipation_horizon(self, hvac_mode: VThermHvacMode | None = None) -> AnticipationHorizon:
         """Horizon (s) of the anticipation read now and its source (see smartpi/anticipation.py)."""
@@ -2215,6 +2215,7 @@ class SmartPI:
             mode_changed = previous_mode is not None and str(hvac_mode) != str(previous_mode)
             if mode_changed:
                 self.ctl.reset()
+                self._anticipation.reset()
                 self._ff_holding.reset()
                 self._ff_trim.clear_pending()
                 self._ff_trim.clear_last_transaction()
@@ -2329,11 +2330,10 @@ class SmartPI:
         # The anticipated temperature feeds the P and I errors only; the deadband,
         # guards, feed-forward and learning keep the measured temperature.
         anticipating = self.phase == SmartPIPhase.STABLE
-        anticipation_c = correction_c(
+        anticipation_c = self._anticipation.apply(correction_c(
             self.anticipation_horizon(hvac_mode).seconds if anticipating else 0.0,
             now, current_temp, target_temp, self.dt_est.tin_history, anticipating,
-        )
-        self._last_anticipation_c = anticipation_c
+        ), self.deadband_mgr.in_deadband)
         setpoint_changed, error_i, error_p, old_target_temp = self._manage_setpoint(
             target_temp, current_temp, hvac_mode, anticipation_c,
         )

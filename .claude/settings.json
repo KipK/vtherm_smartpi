@@ -9,5 +9,19 @@
       "Bash(git --no-pager tag *)",
       "Agent(smartpi-fable-consult)"
     ]
+  },
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "on va compact le contexte. Sauvegarde dans la mémoire ce qui est necessaire",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
   }
 }

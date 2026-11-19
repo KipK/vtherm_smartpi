@@ -23,7 +23,10 @@ All notable changes to this project will be documented in this file.
   read the measured temperature plus the distance the room is about to travel
   during the delay between a command and its effect (the slope of the
   temperature times that delay, at most 1 °C, faded in as the room approaches
-  the setpoint). In heating the delay is the median emitter lag of the heating
+  the setpoint; inside the deadband it is kept until it dies out, then there is
+  none while the room stays there, so that the command does not step at the
+  arrival and a small quick move of the sensor at the setpoint does not move it).
+  In heating the delay is the median emitter lag of the heating
   balance, else the longer of the heating dead time and half the cooling dead
   time. In cooling it is the longer of the cooling dead time and half the
   heating dead time. It is the one mechanism of the approach to the setpoint

@@ -658,6 +658,8 @@ donc la correction vaut 0 lorsque la pièce se rapproche de la consigne et en es
 
 Le rapport $e / c$ ne dépend pas du mode : en COOL, la pièce qui approche la consigne depuis le haut a $e < 0$ et $c < 0$, si bien que la règle est la même dans les deux modes.
 
+Dans la deadband du régulateur (état laissé par le tick précédent), la correction est conservée jusqu'à ce qu'elle vaille 0 ou que son signe diffère de celui du tick précédent, puis elle vaut 0 tant que la pièce reste dans la deadband. Une pièce qui arrive à sa consigne garde son freinage, donc la commande ne saute pas à l'entrée ; une pièce installée à sa consigne ne s'en approche pas, et une petite variation rapide de la sonde serait sinon extrapolée sur tout l'horizon. La correction reprend lorsque la pièce quitte la deadband.
+
 Les erreurs sont calculées sur la température anticipée $T + c$ avec le signe du mode (cible $-$ température en HEAT, température $-$ cible en COOL) :
 
 - HEAT : $e_P = \text{cible} - (T + c)$ et $e_I = (\text{cible} - T) - c$,

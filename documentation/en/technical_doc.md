@@ -946,6 +946,14 @@ The ratio $e / c$ does not depend on the mode: in COOL the room approaching the
 setpoint from above has $e < 0$ and $c < 0$, so the rule is the same in both
 modes.
 
+Inside the regulator's deadband (the state left by the previous tick), the
+correction is kept until it is 0 or its sign differs from that of the previous
+tick, then it is 0 as long as the room stays in the deadband. A room that
+arrives at its setpoint keeps its braking, so the command does not step at the
+entry; a room settled at its setpoint is not approaching it, and a small quick
+move of the sensor would otherwise be extrapolated over the whole horizon. The
+correction starts again when the room leaves the deadband.
+
 The errors are computed on the anticipated temperature $T + c$ with the sign of
 the mode (target $-$ temperature in HEAT, temperature $-$ target in COOL):
 

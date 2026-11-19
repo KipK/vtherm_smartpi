@@ -11,7 +11,12 @@ import pytest
 from custom_components.vtherm_smartpi import algo as algo_module
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
-from custom_components.vtherm_smartpi.smartpi.anticipation import anticipated_error, correction_c, select_horizon
+from custom_components.vtherm_smartpi.smartpi.anticipation import (
+    DeadbandGate,
+    anticipated_error,
+    correction_c,
+    select_horizon,
+)
 from custom_components.vtherm_smartpi.smartpi.const import (
     ANTICIPATION_MAX_C,
     SmartPIPhase,
@@ -201,6 +206,51 @@ def test_deadband_and_near_band_use_the_measured_temperature(clock: _Clock) -> N
         assert a["e_filt"] == b["e_filt"]
         assert a["in_deadband"] == b["in_deadband"]
         assert a["in_near_band"] == b["in_near_band"]
+
+
+def _with_reliable_tau(smartpi: SmartPI) -> SmartPI:
+    """Enough accepted loss measurements for the deadband to be in use."""
+    smartpi.est.learn_ok_count_b = 11
+    smartpi.est._b_hat_hist.extend([smartpi.est.b] * 5)
+    return smartpi
+
+
+def test_no_correction_while_settled_in_the_deadband(clock: _Clock) -> None:
+    """A room settled at its setpoint is not anticipated: a small quick move of the sensor is not extrapolated."""
+    temps = [TARGET] * 25 + [TARGET + 0.03] * 12 + [TARGET - 0.03] * 12
+    plain_rows = _run(_with_reliable_tau(_make()), clock, temps)
+    ant_rows = _run(_with_reliable_tau(_make(horizon_s=1800.0)), clock, temps)
+    settled = [i for i in range(1, len(ant_rows)) if ant_rows[i - 1]["in_deadband"]]
+    assert len(settled) > 40
+    for i in settled:
+        assert ant_rows[i]["anticipation_c"] == 0.0
+        assert ant_rows[i]["error_p"] == plain_rows[i]["error_p"]
+        assert ant_rows[i]["u_cmd"] == plain_rows[i]["u_cmd"]
+
+
+def test_correction_resumes_when_the_room_leaves_the_deadband(clock: _Clock) -> None:
+    """Outside the deadband the same slope is anticipated again."""
+    temps = [TARGET] * 25 + [round(TARGET + 0.03 * i, 4) for i in range(1, 16)]
+    rows = _run(_with_reliable_tau(_make(horizon_s=1800.0)), clock, temps)
+    assert rows[24]["in_deadband"] and rows[25]["anticipation_c"] == 0.0
+    assert not rows[-2]["in_deadband"]
+    assert rows[-1]["anticipation_c"] > 0.1
+
+
+def test_correction_is_kept_at_the_deadband_entry_until_it_dies_out(clock: _Clock) -> None:
+    """A room arriving at its setpoint keeps its braking inside the deadband; once it has died out it stays off."""
+    rise = [round(TARGET - 0.60 + 0.02 * i, 4) for i in range(30)]
+    temps = rise + [rise[-1]] * 40 + [rise[-1] + 0.02] * 10
+    rows = _run(_with_reliable_tau(_make(horizon_s=1800.0)), clock, temps)
+    entry = next(i for i in range(1, len(rows)) if rows[i - 1]["in_deadband"])
+    assert rows[entry - 1]["anticipation_c"] > 0.0
+    assert rows[entry]["anticipation_c"] > 0.0
+    inside = [i for i in range(entry, len(rows)) if rows[i - 1]["in_deadband"]]
+    assert inside == list(range(entry, len(rows)))
+    off = next(i for i in inside if rows[i]["anticipation_c"] == 0.0)
+    assert off > entry
+    assert all(rows[i]["anticipation_c"] > 0.0 for i in range(entry, off))
+    assert all(rows[i]["anticipation_c"] == 0.0 for i in range(off, len(rows)))
 
 
 def _make_cool(stable: bool = True, horizon_s: float | None = None) -> SmartPI:
@@ -651,6 +701,50 @@ def test_correction_is_zero_when_not_active() -> None:
     now = 10_000.0
     history = _history(now, 0.02 / 60.0, 600.0)
     assert correction_c(1800.0, now, 19.2, None, history, False) == 0.0
+
+
+def test_gate_passes_the_correction_outside_the_deadband() -> None:
+    gate = DeadbandGate()
+    for correction in (0.3, 0.0, -0.2, 0.1):
+        assert gate.apply(correction, False) == correction
+        assert gate.value == correction
+
+
+def test_gate_keeps_the_correction_at_the_deadband_entry_until_it_is_zero() -> None:
+    gate = DeadbandGate()
+    assert gate.apply(0.30, False) == 0.30
+    assert gate.apply(0.25, True) == 0.25
+    assert gate.apply(0.10, True) == 0.10
+    assert gate.apply(0.0, True) == 0.0
+    assert gate.apply(0.08, True) == 0.0
+    assert gate.apply(-0.08, True) == 0.0
+    assert gate.value == 0.0
+
+
+def test_gate_ends_the_correction_when_its_sign_changes() -> None:
+    gate = DeadbandGate()
+    gate.apply(0.20, False)
+    assert gate.apply(0.05, True) == 0.05
+    assert gate.apply(-0.04, True) == 0.0
+    assert gate.apply(-0.06, True) == 0.0
+    assert gate.apply(0.06, True) == 0.0
+
+
+def test_gate_starts_again_when_the_room_leaves_the_deadband() -> None:
+    gate = DeadbandGate()
+    assert gate.apply(0.0, True) == 0.0
+    assert gate.apply(0.2, True) == 0.0
+    assert gate.apply(0.2, False) == 0.2
+    assert gate.apply(0.15, True) == 0.15
+
+
+def test_gate_reset_forgets_the_settled_mark() -> None:
+    gate = DeadbandGate()
+    gate.apply(0.0, True)
+    assert gate.apply(0.1, True) == 0.0
+    gate.reset()
+    assert gate.value == 0.0
+    assert gate.apply(0.1, True) == 0.1
 
 
 def test_correction_needs_three_samples_spanning_half_the_window() -> None:

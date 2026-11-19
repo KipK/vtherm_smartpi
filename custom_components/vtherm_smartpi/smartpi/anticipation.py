@@ -107,3 +107,38 @@ def correction_c(
         error = float(target_temp) - float(current_temp)
         correction *= clamp(2.0 - error / correction, 0.0, 1.0)
     return correction
+
+
+class DeadbandGate:
+    """Ends the correction once the room has settled inside the regulator's deadband.
+
+    Outside the deadband the correction passes unchanged. Inside it, the correction
+    is kept until it is 0 or of the sign opposite to the previous calculation's, so
+    that a room arriving at its setpoint keeps its braking and the command does not
+    step at the entry; from then on it is 0 until the room leaves the deadband: a
+    room settled at its setpoint is not approaching it, and a small quick move of
+    the sensor would otherwise be extrapolated over the whole horizon.
+    ``in_deadband`` is the state the previous calculation left. The state is not
+    persisted.
+    """
+
+    def __init__(self) -> None:
+        self.settled = False
+        self.previous = 0.0
+        self.value = 0.0
+
+    def reset(self) -> None:
+        """Forget the settled mark and the previous correction."""
+        self.settled = False
+        self.previous = 0.0
+        self.value = 0.0
+
+    def apply(self, correction: float, in_deadband: bool) -> float:
+        """Return the correction to use for this calculation."""
+        previous, self.previous = self.previous, correction
+        if not in_deadband:
+            self.settled = False
+        elif not self.settled and (correction == 0.0 or correction * previous < 0.0):
+            self.settled = True
+        self.value = 0.0 if self.settled else correction
+        return self.value
