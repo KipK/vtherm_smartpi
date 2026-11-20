@@ -18,7 +18,10 @@ All notable changes to this project will be documented in this file.
   from an energy balance of the room, and publishes them in
   `analysis.learning.heating_balance`, with the median of the last lags
   measured (`kept_lag_s`) and their number (`kept_lags`). Only that median is
-  read by the regulation, as the horizon of the anticipation below.
+  read by the regulation, as the horizon of the anticipation below. On a
+  heating phase at constant power, the heat the emitter still holds when the
+  temperature peaks is counted in the balance: the lag is closer to the real
+  one in rooms whose walls absorb heat, where it was read short.
 - Anticipation (heating and cooling): the proportional and integral errors
   read the measured temperature plus the distance the room is about to travel
   during the delay between a command and its effect (the slope of the

@@ -277,6 +277,10 @@ Conditions: rest >= `HEATING_BALANCE_MIN_REST_S = 1800`, baseline of up to 3600 
 `HEATING_BALANCE_PEAK_BIN_S = 300` bins confirmed after `HEATING_BALANCE_PEAK_CONFIRM_S = 1800`, wait at most
 `HEATING_BALANCE_PEAK_MAX_S = 4 h`, kept when full-power time >= 600 s and rise >= 0.3 C. Last
 `HEATING_BALANCE_HISTORY = 7` measurements; published values are medians; emitter lag only for constant-power phases.
+On a constant-power phase the heat still to come at the peak is counted: late power `max(0, b*rise - baseline slope)` (C/min, flat
+temperature at the peak), arriving over one lag, added to the heat of the phase; `a` and the lag are solved together by iteration
+(`_LAG_ITERATIONS = 60`, `_LAG_TOL_S = 1`; no lag when it does not settle). Reading against the true lag (simulation): exact in massless
+rooms, about 60-90 % of it with wall mass (35-55 % without the term), about 30 % over with floor heating (pure delay + lag).
 Regulation consumer: only `kept_lag_s` (median of the last `HEATING_BALANCE_HISTORY` emitter lags, None while none measured), the HEAT
 horizon of the anticipation (`smartpi/anticipation.py::select_horizon`); no learning consumer. `a` and `lag_s` are observation only.
 Persistence: with the learning state (`lw_state["heating_balance"]`); phase in progress resumes after a bridged

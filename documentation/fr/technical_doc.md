@@ -322,6 +322,12 @@ Les retards de l'émetteur sont aussi conservés dans un historique propre, de m
 
 Pour une phase à puissance constante (sa puissance moyenne $u_0 = t_{on}/D$ vaut au moins `1 - RESPONSE_LAG_U_TOL` fois sa puissance la plus haute par intervalle), la chaleur encore manquante à la coupure donne le retard de l'émetteur. Avec $\Delta_c = T_{cut} - T_0(t_{cut})$ ($T_{cut}$ est la moyenne des échantillons à ±150 s de la coupure), $A_c$ l'aire à la coupure et $D$ la durée de la phase, le déficit de livraison vaut $\delta = \left(t_{on} - 60\,(\Delta_c + b\,A_c)/a\right)/u_0$ en secondes. Un émetteur du premier ordre de constante de temps $\tau$ donne $\delta = \tau\,(1 - e^{-D/\tau})$, résolue en $\tau$ par dichotomie ; le retard de l'émetteur vaut 0 lorsque $\delta \le 0$ et est inconnu lorsque $\delta \ge 0.98\,D$.
 
+Sur une telle phase, la chaleur que l'émetteur contient encore au pic est comptée elle aussi. Au pic la température est plate : l'émetteur donne donc encore ce que la pièce perd, $p = \max(0,\ b\,\Delta_p - 60\,s)$ en °C/min, avec $s$ en °C/s. Cette puissance est supposée arriver sur un retard de l'émetteur, ce qui ajoute $p\,\tau/60$ à la chaleur de la phase :
+
+$$a(\tau) = \frac{\Delta_p + b\,A_p + p\,\tau/60}{t_{on}}$$
+
+La vitesse de chauffe et le retard de l'émetteur sont résolus ensemble : en partant de $\tau = 0$, le déficit calculé avec $a(\tau)$ donne le $\tau$ suivant, jusqu'à ce que deux valeurs successives diffèrent de moins de 1 s, en 60 pas au plus. Le retard de l'émetteur est inconnu lorsque l'itération ne se stabilise pas. La mesure conserve $a(\tau)$ comme vitesse de chauffe. Sans ce terme, le retard de l'émetteur est lu trop court dans une pièce dont les murs absorbent la chaleur, où le pic survient alors que l'émetteur est encore chaud.
+
 L'état est publié dans `analysis.learning.heating_balance` et persisté avec l'état d'apprentissage. Les mesures sont restaurées après un redémarrage ; la phase en cours reprend après un redémarrage ponté et est abandonnée sinon. Les retards de l'émetteur retenus sont restaurés également.
 
 ### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur

@@ -13,7 +13,7 @@ from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_HEAT,
 )
 from custom_components.vtherm_smartpi.smartpi.diagnostics import _heating_balance_diag
-from custom_components.vtherm_smartpi.smartpi.heating_balance import HeatingBalance
+from custom_components.vtherm_smartpi.smartpi.heating_balance import HeatingBalance, _lag_from_deficit
 from custom_components.vtherm_smartpi.smartpi.learning_window import LearningWindowManager
 
 A_PER_MIN = 0.05  # full-power heating rate (C/min)
@@ -95,6 +95,62 @@ def test_pulse_after_a_rest_gives_the_heating_rate_and_the_lag():
     assert result["peak_delay_s"] > 0.0
     assert result["a_no_loss"] < result["a"]
     assert result["end_wall"] > 1e9
+
+
+class _MassRig(_Rig):
+    """Room whose walls absorb heat: the air exchanges with a mass five times heavier."""
+
+    AIR_TO_MASS_PER_MIN = 0.006
+    AIR_LOSS_PER_MIN = 0.0009
+    MASS_LOSS_PER_MIN = 0.00018
+    B_PER_MIN = 0.0017  # loss rate of the settled room
+
+    def __init__(self, tau_s: float) -> None:
+        super().__init__(tau_s=tau_s, a_per_min=0.09)
+        self.mass = self.temp
+
+    def advance(self, u: float) -> None:
+        for _ in range(int(STEP_S / 10.0)):
+            self.heat += (u - self.heat) * (1.0 - math.exp(-10.0 / self.tau_s))
+            flow = self.AIR_TO_MASS_PER_MIN * (self.temp - self.mass)
+            self.temp += (self.a_per_min * self.heat - flow - self.AIR_LOSS_PER_MIN * (self.temp - T_EXT)) * 10.0 / 60.0
+            self.mass += (flow / 5.0 - self.MASS_LOSS_PER_MIN * (self.mass - T_EXT)) * 10.0 / 60.0
+        self.now += STEP_S
+        self.clock.mono = self.now
+        self.history.append((self.now + self.clock.shift, round(self.temp, 2)))
+
+
+def _lag_with_an_empty_emitter_at_the_peak(result: dict, b: float) -> float | None:
+    """Lag of a measurement when all the heat is taken as arrived at the peak."""
+    a = (result["rise_c"] + b * result["area_peak"]) / (result["on_s"] / 60.0)
+    mean_u = result["on_s"] / result["duration_s"]
+    deficit = (result["on_s"] - 60.0 * (result["cut_dev_c"] + b * result["area_cut"]) / a) / mean_u
+    return _lag_from_deficit(deficit, result["duration_s"])
+
+
+def test_slow_emitter_lag_counts_the_heat_still_held_at_the_peak():
+    rig = _Rig(tau_s=1200.0)
+    rig.pulse(rest_min=120.0, heat_min=60.0, wait_min=400.0)
+
+    result = rig.balance.results[0]
+    assert result["lag_s"] == pytest.approx(1200.0, rel=0.08)
+    assert result["a"] == pytest.approx(A_PER_MIN, rel=0.06)
+    assert _lag_with_an_empty_emitter_at_the_peak(result, B_PER_MIN) < 0.85 * 1200.0
+
+
+def test_wall_mass_lag_counts_the_heat_still_held_at_the_peak():
+    rig = _MassRig(tau_s=3600.0)
+    b = _MassRig.B_PER_MIN
+    rig.run(0.0, 120.0, b=b)
+    rig.run(1.0, 75.0, b=b)
+    rig.run(0.0, 400.0, b=b)
+
+    result = rig.balance.results[0]
+    without = _lag_with_an_empty_emitter_at_the_peak(result, b)
+    # The walls bring the peak early, while the emitter still holds heat.
+    assert result["peak_delay_s"] < 3600.0
+    assert without < 0.55 * 3600.0
+    assert 1.2 * without < result["lag_s"] < 3600.0
 
 
 def test_context_of_the_phase_start_is_kept():

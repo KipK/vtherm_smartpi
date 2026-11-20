@@ -7,6 +7,10 @@ phase, equals the heating rate times the delivered full-power time. The
 estimator measures the heating rate `a` (C/min at full power) from the rise
 at the temperature peak after the cut, and the emitter lag from the heat still
 missing at the cut (the emitter has not delivered all the energy commanded).
+On a constant-power phase the heat the emitter still holds at the peak is
+counted too: the temperature is flat there, so the emitter gives what the room
+loses, and that power is taken to arrive over one lag. The heating rate and
+the lag are then solved together.
 
 The results are published. The regulation reads only the median of the last
 lags, as the horizon of its anticipation (smartpi/anticipation.py).
@@ -48,6 +52,9 @@ _CUT_WINDOW_S = 150.0
 _BASELINE_MIN_SAMPLES = 4
 # A measured lag at or beyond this fraction of the phase duration is not resolved.
 _LAG_RESOLVABLE_FRAC = 0.98
+# The lag and the heat still to come at the peak are solved together: steps, tolerance (s).
+_LAG_ITERATIONS = 60
+_LAG_TOL_S = 1.0
 
 _HEATING = "heating"
 _CUT = "cut"
@@ -450,8 +457,21 @@ class HeatingBalance:
         if phase["cut_temp"] is not None:
             cut_dev_c = phase["cut_temp"] - (value + slope * (t_cut - t_start))
             if constant:
-                deficit = (on_s - 60.0 * (cut_dev_c + b_used * phase["area_cut"]) / a) / mean_u
-                lag_s = _lag_from_deficit(deficit, duration_s)
+                # At the peak the temperature is flat: the emitter still gives what the room
+                # loses (C/min). That heat, arriving over one lag, belongs to the phase.
+                late_c_min = max(0.0, b_used * rise_c - 60.0 * slope)
+                delivered_min = cut_dev_c + b_used * phase["area_cut"]
+                a_lag, lag_s = a, 0.0
+                for _ in range(_LAG_ITERATIONS):
+                    previous = lag_s
+                    a_lag = a + late_c_min * previous / 60.0 / on_min
+                    lag_s = _lag_from_deficit((on_s - 60.0 * delivered_min / a_lag) / mean_u, duration_s)
+                    if lag_s is None or abs(lag_s - previous) < _LAG_TOL_S:
+                        break
+                else:
+                    lag_s = None
+                if lag_s is not None:
+                    a = a_lag
         self._results.append({
             "end_wall": monotonic_to_wall_ts(t_cut),
             "context": phase["context"],

@@ -424,6 +424,21 @@ in seconds. A first-order emitter of time constant $\tau$ gives
 $\delta = \tau\,(1 - e^{-D/\tau})$, solved for $\tau$ by bisection; the emitter lag is 0
 when $\delta \le 0$ and unknown when $\delta \ge 0.98\,D$.
 
+On such a phase the heat the emitter still holds at the peak is counted as
+well. At the peak the temperature is flat, so the emitter still gives what the
+room loses: $p = \max(0,\ b\,\Delta_p - 60\,s)$ in °C/min, with $s$ in °C/s.
+That power is taken to arrive over one emitter lag, which adds $p\,\tau/60$ to
+the heat of the phase:
+
+$$a(\tau) = \frac{\Delta_p + b\,A_p + p\,\tau/60}{t_{on}}$$
+
+The heating rate and the emitter lag are solved together: starting from
+$\tau = 0$, the deficit computed with $a(\tau)$ gives the next $\tau$, until two
+successive values differ by less than 1 s, in at most 60 steps. The emitter lag
+is unknown when the iteration does not settle. The measurement keeps $a(\tau)$
+as its heating rate. Without that term the emitter lag is read short in a room
+whose walls absorb heat, where the peak comes while the emitter is still warm.
+
 The state is published in `analysis.learning.heating_balance` and persisted with
 the learning state. The measurements are restored after a restart; the phase in
 progress resumes after a bridged restart and is dropped otherwise. The kept emitter lags
