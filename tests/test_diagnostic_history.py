@@ -54,7 +54,7 @@ def test_history_contains_only_equinox_time_series() -> None:
 def test_history_carries_the_feedforward_room_model_and_deadtime_series() -> None:
     """The room model, its feed-forward and the dead time in force are charted."""
     live = _live_diagnostics()
-    live["feedforward"] = {"source": "room model (air and walls)", "wall_power_percent": 4.2, "ff3_status": "x"}
+    live["feedforward"] = {"source": "room model (air and walls)", "wall_power_percent": 4.2, "deadband_power_source": "x"}
     live["room_model"] = {
         "status": "identified",
         "a": 0.031,

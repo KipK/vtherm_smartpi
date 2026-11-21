@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -45,6 +46,42 @@ def test_save_and_load_state() -> None:
     assert smartpi2.est.learn_ok_count == 10
     assert smartpi2.integral == 5.0
     assert smartpi2.u_prev == 0.0
+
+
+def test_state_saved_with_removed_components_loads_without_warning(caplog) -> None:
+    """Keys of the removed twin, feed-forward trim and trim observer are ignored silently."""
+    smartpi1 = SmartPI(
+        hass=MagicMock(),
+        cycle_min=10,
+        minimal_activation_delay=0,
+        minimal_deactivation_delay=0,
+        name="TestSmartPI1",
+    )
+    smartpi1.est.a = 0.015
+    smartpi1.est.b = 0.003
+    smartpi1.integral = 5.0
+    saved = smartpi1.save_state()
+    saved["twin_state"] = {"T_hat": 20.1, "d_hat": 0.01, "saved_at": 1_700_000_000.0}
+    saved["ff_v2_trim"] = {"u_ff_trim": 0.04, "frozen": True, "freeze_reason": "reboot"}
+    saved["ff_trim_delta"] = 0.01
+    saved["ff_trim_last_result"] = {"reason": "periodic_window_ready", "correction": -0.01}
+
+    with caplog.at_level(logging.WARNING):
+        smartpi2 = SmartPI(
+            hass=MagicMock(),
+            cycle_min=10,
+            minimal_activation_delay=0,
+            minimal_deactivation_delay=0,
+            name="TestSmartPI2",
+            saved_state=saved,
+        )
+
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+    assert smartpi2.est.a == 0.015
+    assert smartpi2.est.b == 0.003
+    assert smartpi2.integral == 5.0
+    for key in ("twin_state", "ff_v2_trim", "ff_trim_delta", "ff_trim_last_result"):
+        assert key not in smartpi2.save_state()
 
 
 def test_last_active_wall_timestamp_is_persisted() -> None:

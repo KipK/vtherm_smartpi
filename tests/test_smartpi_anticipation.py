@@ -667,19 +667,41 @@ def _history(now: float, slope_per_s: float, span_s: float, step_s: float = 60.0
 def test_correction_is_slope_times_horizon() -> None:
     now = 10_000.0
     slope = 0.02 / 60.0
-    history = _history(now, slope, 600.0)
+    history = _history(now, slope, 1800.0)
     current = history[-1][1] + slope * 60.0
     c = correction_c(1800.0, now, current, None, history, True)
     assert c == pytest.approx(slope * 1800.0, rel=1e-9)
 
 
-def test_correction_uses_the_window_of_a_third_of_a_long_horizon() -> None:
-    """Horizon 3 h: window 1 h; samples older than the window are ignored."""
+def _least_squares_slope(points) -> float:
+    n = len(points)
+    mean_t = sum(t for t, _ in points) / n
+    mean_v = sum(v for _, v in points) / n
+    return sum((t - mean_t) * (v - mean_v) for t, v in points) / sum((t - mean_t) ** 2 for t, _ in points)
+
+
+@pytest.mark.parametrize(
+    "horizon, window",
+    [(300.0, 600.0), (1200.0, 1200.0), (3600.0, 1800.0)],
+)
+def test_correction_slope_window_is_the_horizon_bounded_to_10_and_30_minutes(horizon, window) -> None:
+    """The slope window is the horizon bounded to [600 s, 1800 s]; older samples are ignored."""
     now = 20_000.0
-    old = [(now - 7200.0 + 60.0 * i, 10.0) for i in range(30)]  # flat, outside the window
-    recent = [(now - 3600.0 + 60.0 * i, 19.0 + 0.00005 * 60.0 * i) for i in range(60)]
-    c = correction_c(3 * 3600.0, now, recent[-1][1] + 0.003, None, old + recent, True)
-    assert c == pytest.approx(0.00005 * 3 * 3600.0, rel=1e-6)
+    rate = 2e-4  # degC/s of the ramp, which starts in the middle of the window
+    kink = now - window / 2.0
+    history = [
+        (t, 19.0 + rate * max(0.0, t - kink))
+        for t in (now - window - 1800.0 + 60.0 * i for i in range(int((window + 1800.0) // 60.0)))
+    ]
+    current = 19.0 + rate * (now - kink)
+    expected_slope = _least_squares_slope([(t, v) for t, v in history if t >= now - window] + [(now, current)])
+    c = correction_c(horizon, now, current, None, history, True)
+    assert c == pytest.approx(expected_slope * horizon, rel=1e-9)
+    assert abs(c) < ANTICIPATION_MAX_C
+    # a window one third shorter or a third longer would read another slope
+    for other in (window * 2.0 / 3.0, window * 4.0 / 3.0):
+        other_slope = _least_squares_slope([(t, v) for t, v in history if t >= now - other] + [(now, current)])
+        assert abs(other_slope - expected_slope) > 0.05 * expected_slope
 
 
 def test_correction_is_clamped_to_the_limit() -> None:
@@ -752,18 +774,18 @@ def test_correction_needs_three_samples_spanning_half_the_window() -> None:
     slope = 0.02 / 60.0
     # the current tick makes the third sample; they span 120 s < 300 s
     short = _history(now, slope, 120.0)
-    assert correction_c(1800.0, now, 19.1, None, short, True) == 0.0
+    assert correction_c(600.0, now, 19.1, None, short, True) == 0.0
     # two samples in all
-    assert correction_c(1800.0, now, 19.1, None, short[:1], True) == 0.0
+    assert correction_c(600.0, now, 19.1, None, short[:1], True) == 0.0
     # enough samples, span of 360 s >= 300 s
     ok = _history(now, slope, 360.0)
-    assert correction_c(1800.0, now, ok[-1][1] + slope * 60.0, None, ok, True) != 0.0
+    assert correction_c(600.0, now, ok[-1][1] + slope * 60.0, None, ok, True) != 0.0
 
 
 def test_correction_counts_the_current_tick_once() -> None:
     now = 10_000.0
     slope = 0.02 / 60.0
-    history = _history(now, slope, 600.0) + [(now, 19.0 + slope * 600.0)]
+    history = _history(now, slope, 1800.0) + [(now, 19.0 + slope * 1800.0)]
     without = correction_c(1800.0, now, history[-1][1], None, history, True)
     assert without == pytest.approx(slope * 1800.0, rel=1e-9)
 
@@ -771,7 +793,7 @@ def test_correction_counts_the_current_tick_once() -> None:
 def test_fade_in_weight() -> None:
     now = 10_000.0
     slope = 0.02 / 60.0
-    history = _history(now, slope, 600.0)
+    history = _history(now, slope, 1800.0)
     current = history[-1][1] + slope * 60.0
     c = slope * 1800.0
     # error e = target - measured

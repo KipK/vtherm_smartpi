@@ -291,8 +291,6 @@ Près de la température cible, SmartPI cherche à éviter les micro-corrections
 
 SmartPI anticipe la température, en HEAT comme en COOL : les branches proportionnelle et intégrale lisent la température mesurée plus la distance que la pièce est sur le point de parcourir pendant le temps entre une commande et son effet, estimée à partir de la pente de la température. Cela abaisse la commande avant que la pièce n'atteigne la consigne, ce qui limite le dépassement des émetteurs lents (plancher chauffant, radiateurs à eau) et celui d'un refroidissement qui continue d'agir après son arrêt. L'horizon est le retard de l'émetteur mesuré par le bilan de chauffe en HEAT ; tant qu'aucun n'est mesuré, et toujours en COOL, il est dérivé des temps morts : le plus long entre le temps mort actif du mode et la moitié du temps mort passif de la réponse. La correction est limitée à 1 °C et s'établit progressivement lorsque la pièce approche de la consigne depuis loin, afin qu'une montée ou une descente depuis loin de la consigne ne soit pas ralentie. Lorsque la pièce entre dans la deadband autour de la consigne, la correction est conservée jusqu'à ce qu'elle s'éteigne, puis il n'y en a plus tant que la pièce y reste : la commande ne saute pas à l'arrivée, et une petite variation rapide de la sonde ne la fait pas bouger ensuite. Les deux branches utilisent la consigne brute.
 
-Avec `FF3`, activé par défaut, SmartPI peut aussi appliquer une petite correction prédictive près de la consigne lorsqu'il détecte un contexte crédible de perturbation externe.
-
 ### Recalibration automatique
 
 SmartPI continue de surveiller la qualité de son modèle dans le temps.
@@ -337,7 +335,7 @@ L'apprentissage n'utilise que des périodes calmes : des plages sans soleil, à 
   - Moitié de la valeur apprise plus courte que la référence : les gains gardent la référence. Une valeur apprise seule ne rend jamais les gains plus agressifs que la référence.
   - Entre 1 et 2 fois la référence : les gains utilisent la moitié de la valeur apprise.
   - Au-delà de 2 fois la référence : les gains utilisent la moitié de la valeur apprise seulement lorsque la valeur rapide et la valeur d'identification (la valeur affinée, sinon le `τe` de la dernière évaluation dont les deux ajustements concordent) concordent à un facteur 1,25 près. Sinon, ils utilisent deux fois la référence. Une borne inférieure n'est jamais confirmée de cette façon.
-- Lorsque les gains utilisent la valeur apprise, la bande proche, le maintien de l'intégrale après un démarrage ou une reprise du chauffage, FF3 et le jumeau thermique utilisent la valeur apprise elle-même comme temps mort de chauffe (`applied_s`) ; sinon ils gardent le temps mort du bootstrap. L'apprentissage de `a` et `b`, la correction feed-forward, la calibration et AutoCalib gardent toujours le temps mort du bootstrap.
+- Lorsque les gains utilisent la valeur apprise, la bande proche et le maintien de l'intégrale après un démarrage ou une reprise du chauffage utilisent la valeur apprise elle-même comme temps mort de chauffe (`applied_s`) ; sinon ils gardent le temps mort du bootstrap. L'apprentissage de `a` et `b`, la calibration et AutoCalib gardent toujours le temps mort du bootstrap.
 - Le temps mort du bootstrap n'est jamais modifié. Sans valeur apprise, la régulation l'utilise telle quelle.
 
 **Qualité des données**
@@ -397,7 +395,7 @@ La puissance de maintien est la part de la commande qui compense les pertes pour
 - **Modèle publié mais aucun bilan thermique en vigueur, ou un bilan entré en vigueur ensuite dont la pente s'écarte de plus de 5 % du `b_eq / a` du modèle :** la puissance de maintien du modèle A/B, inchangée, sans la puissance supplémentaire des murs.
 - **Rien de publié, refroidissement ou vannes :** la puissance de maintien du modèle A/B, inchangée. Le bilan thermique seul n'est pas utilisé : sans la puissance supplémentaire des murs, il donnerait une mauvaise puissance de maintien dans une pièce à murs épais.
 
-La puissance de maintien du modèle de pièce s'applique tout de suite, à plein poids, et la correction lente du feed-forward (FF2) est remise à zéro et reste gelée tant qu'elle est en vigueur : le modèle remplace le biais que cette correction apprend. Un changement de la perte statique (bascule entre le modèle A/B et le modèle de pièce, entre le modèle simple et le modèle avec murs, ou nouvelle valeur de bilan thermique) est absorbé par l'intégrale, afin que la commande ne fasse pas de saut ; l'intégrale rend ensuite sa part au rythme de la régulation. La puissance supplémentaire des murs n'est jamais absorbée par l'intégrale : lorsqu'elle démarre, s'arrête (suivi non `ok`, après une fenêtre ouverte par exemple) ou change avec une nouvelle publication, elle passe progressivement sur 30 minutes de sa dernière valeur à la nouvelle. Après une fenêtre ouverte, la montée du matin retrouve donc sa puissance des murs en 30 minutes dès que le suivi est de nouveau `ok`. La source en vigueur et la puissance des murs appliquée sont conservées lors des redémarrages.
+La puissance de maintien du modèle de pièce s'applique tout de suite, à plein poids. Un changement de la perte statique (bascule entre le modèle A/B et le modèle de pièce, entre le modèle simple et le modèle avec murs, ou nouvelle valeur de bilan thermique) est absorbé par l'intégrale, afin que la commande ne fasse pas de saut ; l'intégrale rend ensuite sa part au rythme de la régulation. La puissance supplémentaire des murs n'est jamais absorbée par l'intégrale : lorsqu'elle démarre, s'arrête (suivi non `ok`, après une fenêtre ouverte par exemple) ou change avec une nouvelle publication, elle passe progressivement sur 30 minutes de sa dernière valeur à la nouvelle. Après une fenêtre ouverte, la montée du matin retrouve donc sa puissance des murs en 30 minutes dès que le suivi est de nouveau `ok`. La source en vigueur et la puissance des murs appliquée sont conservées lors des redémarrages.
 
 Le prix à payer est un léger dépassement, d'environ 0,1 °C, en fin de montée du matin dans une pièce à murs épais.
 
@@ -432,7 +430,7 @@ Un redémarrage est ponté lorsque toutes ces conditions sont réunies :
 
 La décision est prise au premier calcul qui dispose de la température intérieure : une sonde qui rapporte quelques secondes après le redémarrage ne l'empêche pas, et l'arrêt est compté jusqu'à ce moment. Pendant cette attente, SmartPI garde la commande d'avant l'arrêt tant que les autres conditions ci-dessus sont remplies ; le chauffage n'est pas interrompu. Si la température manque encore 10 minutes après l'arrêt, la commande passe à 0 jusqu'à son arrivée et le redémarrage n'est pas ponté.
 
-Après un redémarrage ponté, les mesures en cours reprennent (temps mort, fenêtres d'apprentissage, retard de l'émetteur, fenêtres déjà comptées par la correction lente du feed-forward), le chauffage est considéré comme inchangé pendant l'arrêt, rien n'est exclu de l'apprentissage du retard de l'émetteur ni du modèle de pièce (tous deux en chauffage uniquement), et l'apprentissage n'est pas suspendu. Une consigne modifiée pendant l'arrêt est traitée au premier tick comme tout changement de consigne. Après tout autre redémarrage, SmartPI repart avec prudence : les mesures en cours sont abandonnées, l'apprentissage est suspendu pendant un cycle, et seul l'arrêt lui-même est exclu des données d'apprentissage.
+Après un redémarrage ponté, les mesures en cours reprennent (temps mort, fenêtres d'apprentissage, retard de l'émetteur), le chauffage est considéré comme inchangé pendant l'arrêt, rien n'est exclu de l'apprentissage du retard de l'émetteur ni du modèle de pièce (tous deux en chauffage uniquement), et l'apprentissage n'est pas suspendu. Une consigne modifiée pendant l'arrêt est traitée au premier tick comme tout changement de consigne. Après tout autre redémarrage, SmartPI repart avec prudence : les mesures en cours sont abandonnées, l'apprentissage est suspendu pendant un cycle, et seul l'arrêt lui-même est exclu des données d'apprentissage.
 
 Le capteur de diagnostic affiche le dernier redémarrage dans `control.last_restart`.
 
@@ -443,7 +441,6 @@ Les réglages par défaut conviennent dans la plupart des installations.
 Pour démarrer simplement :
 
 - gardez les seuils d'hystérésis par défaut si votre sonde est précise et publie souvent (voir ci-dessous sinon),
-- laissez `FF3` activé sauf raison précise de le désactiver,
 - ajustez d'abord la deadband si la température oscille trop autour de la cible,
 - activez la détection d'ouverture de Versatile Thermostat (capteur de fenêtre ou détection automatique).
 
@@ -493,7 +490,6 @@ Ces valeurs viennent de simulations de chaque type d'installation. Un cycle à u
 | **Délai minimal d'activation**       | Durée minimale pendant laquelle le chauffage reste allumé une fois activé. Sorties switch uniquement, ignoré pour les vannes.                             | `0 s`             |
 | **Délai minimal de désactivation**   | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé. Sorties switch uniquement, ignoré pour les vannes.                          | `0 s`             |
 | **Deadband**                         | Zone de tolérance autour de la consigne.                                                               | `0.05°C`          |
-| **FF3**                              | Active une petite correction prédictive près de la consigne dans certaines situations de perturbation. | `activé`          |
 | **Autoriser P dans la deadband**     | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
 | **Autoriser le redémarrage PWM aux transitions de bande** | Permet à SmartPI de redémarrer le cycle PWM courant lors d'une entrée ou sortie de deadband ou de near-band. | `désactivé` |
 | **Hystérésis marche**                | Seuil de redémarrage pendant le bootstrap : le chauffage redémarre à consigne − seuil en HEAT, le refroidissement redémarre à consigne + seuil en COOL. | `0.3°C`           |
@@ -544,7 +540,7 @@ Autres blocs utiles sous `live` :
 - `power` : informations de commande du cycle courant et du suivant,
 - `temperature` : température mesurée, erreur, état de l'intégrale,
 - `model` : `a`, `b`, niveau de confiance et temps morts appris,
-- `feedforward` : état du feed-forward et de FF3,
+- `feedforward` : source de la puissance de maintien et part des murs,
 - `setpoint` : état du boost de consigne,
 - `autocalib` : état de la supervision automatique,
 - `calibration` : état d'une calibration forcée.

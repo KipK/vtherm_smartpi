@@ -5,48 +5,16 @@ from unittest.mock import MagicMock
 import pytest
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.feedforward import (
-    compute_ff,
     FFResult,
-)
-from custom_components.vtherm_smartpi.smartpi.ff3 import (
-    _compute_near_band_ff3_scale,
-    FF3Result,
-    FF3RuntimeState,
-    compute_ff3,
-)
-from custom_components.vtherm_smartpi.smartpi.ff3_predictor import (
-    compute_ff3_action_sensitivity,
-    compute_ff3_horizon,
-    predict_ff3_open_loop,
-)
-from custom_components.vtherm_smartpi.smartpi.ff3_eligibility import (
-    build_ff3_disturbance_context,
-)
-from custom_components.vtherm_smartpi.smartpi.ff_trim import (
-    FFTrim,
-    FFTrimUpdateResult,
-    FFTrimWindowProposal,
-    evaluate_pi_eligibility_for_trim,
+    add_wall_part,
+    compute_ff,
 )
 from custom_components.vtherm_smartpi.smartpi.const import (
     GovernanceDecision,
     GovernanceRegime,
-    FF3_DELTA_U,
-    FF3_MAX_HORIZON_CYCLES,
-    FF3_MAX_AUTHORITY,
-    FF3_NEARBAND_GAIN,
-    FF_TRIM_LAMBDA,
-    FF_TRIM_PERSISTENCE,
-)
-from custom_components.vtherm_smartpi.smartpi.thermal_twin_1r1c import ThermalTwin1R1C
-from custom_components.vtherm_smartpi.const import (
-    CONF_SMART_PI_USE_FF3,
-    DEFAULT_OPTIONS,
-    DEFAULT_SMART_PI_USE_FF3,
 )
 from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
-    VThermHvacMode_HEAT,
 )
 
 
@@ -56,41 +24,14 @@ def _call(
     ext_temp: float | None = 5.0,
     target_temp_ff: float = 21.0,
     warmup_scale: float = 1.0,
-    trim_value: float = 0.0,
 ) -> FFResult:
     """Helper: call compute_ff with sensible defaults for behavioural tests."""
-    trim = FFTrim()
-    trim.u_ff_trim = trim_value
     return compute_ff(
         k_ff=k_ff,
         target_temp_ff=target_temp_ff,
         ext_temp=ext_temp,
         warmup_scale=warmup_scale,
-        trim=trim,
     )
-
-
-def test_smartpi_ff3_default_is_enabled():
-    assert DEFAULT_SMART_PI_USE_FF3 is True
-    assert DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3] is True
-
-
-def test_smartpi_ff3_missing_entry_uses_default_options():
-    entry = {}
-    use_ff3 = entry.get(
-        CONF_SMART_PI_USE_FF3,
-        DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3],
-    )
-    assert use_ff3 is True
-
-
-def test_smartpi_ff3_explicit_false_stays_disabled():
-    entry = {CONF_SMART_PI_USE_FF3: False}
-    use_ff3 = entry.get(
-        CONF_SMART_PI_USE_FF3,
-        DEFAULT_OPTIONS[CONF_SMART_PI_USE_FF3],
-    )
-    assert use_ff3 is False
 
 
 def test_signed_cool_feedforward_matches_heat_magnitude():
@@ -111,14 +52,13 @@ def test_signed_cool_feedforward_matches_heat_magnitude():
 
 
 def test_algo_enables_signed_structural_feedforward_in_cool():
-    """The runtime orchestrator must no longer force COOL FF1 to zero."""
+    """The runtime orchestrator does not force COOL FF1 to zero."""
     algo = SmartPI(
         hass=MagicMock(),
         cycle_min=10.0,
         minimal_activation_delay=0,
         minimal_deactivation_delay=0,
         name="cool-ff",
-        use_ff3=False,
     )
     algo.est.a = -0.05
     algo.est.b = 0.0025
@@ -141,7 +81,6 @@ def test_algo_enables_signed_structural_feedforward_in_cool():
         ext_current_temp=30.0,
         hvac_mode=VThermHvacMode_COOL,
         error=0.2,
-        current_temp=20.2,
         e_p=0.2,
     )
 
@@ -150,792 +89,76 @@ def test_algo_enables_signed_structural_feedforward_in_cool():
     assert runtime_ff == pytest.approx(0.5)
 
 
-def test_ff3_horizon_covers_heat_deadtime():
-    horizon = compute_ff3_horizon(cycle_min=10.0, deadtime_heat_s=1800.0)
-    assert horizon.deadtime_cycles == 3
-    assert horizon.horizon_cycles == 5
-    assert horizon.horizon_capped is False
-
-
-def test_ff3_horizon_caps_long_deadtime():
-    horizon = compute_ff3_horizon(cycle_min=10.0, deadtime_heat_s=7200.0)
-    assert horizon.deadtime_cycles == 12
-    assert horizon.horizon_cycles == FF3_MAX_HORIZON_CYCLES
-    assert horizon.horizon_capped is True
-
-
-def test_ff3_open_loop_candidate_effect_appears_after_deadtime():
-    twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
-    twin.reset(tin_init=20.7, text_init=5.0, u_init=0.6)
-
-    base_prediction = predict_ff3_open_loop(
-        twin=twin,
-        current_temp=20.7,
-        ext_temp=5.0,
-        a=0.08,
-        b=0.004,
-        u_first_cycle=0.6,
-        u_base=0.6,
-        cycle_min=10.0,
-        deadtime_heat_s=1800.0,
-        horizon_cycles=5,
-    )
-    candidate_prediction = predict_ff3_open_loop(
-        twin=twin,
-        current_temp=20.7,
-        ext_temp=5.0,
-        a=0.08,
-        b=0.004,
-        u_first_cycle=0.8,
-        u_base=0.6,
-        cycle_min=10.0,
-        deadtime_heat_s=1800.0,
-        horizon_cycles=5,
-    )
-
-    assert base_prediction.temperatures[:3] == pytest.approx(
-        candidate_prediction.temperatures[:3],
-        abs=1e-9,
-    )
-    assert (
-        base_prediction.temperatures[3]
-        != pytest.approx(candidate_prediction.temperatures[3])
-        or base_prediction.temperatures[4]
-        != pytest.approx(candidate_prediction.temperatures[4])
-    )
-    assert compute_ff3_action_sensitivity([base_prediction, candidate_prediction]) > 0.0
-
-
 # ================================================================
 # Passthrough Tests
 # ================================================================
 
 
 class TestPassthrough:
-    """When no gate fires, u_ff_eff reflects u_ff_ab + trim."""
+    """FF1 reflects the structural branch k_ff * (target - ext) scaled by the warm-up."""
 
     def test_positive_error_passes_through(self):
         result = _call(k_ff=0.2, target_temp_ff=21.0, ext_temp=5.0)
-        # u_ff_ab = clamp(0.2 * (21 - 5), 0, 1) * 1.0 = clamp(3.2, 0, 1) = 1.0
-        assert result.u_ff_eff == pytest.approx(1.0)
+        # u_ff1 = clamp(0.2 * (21 - 5), 0, 1) * 1.0 = clamp(3.2, 0, 1) = 1.0
+        assert result.u_ff1 == pytest.approx(1.0)
         assert result.ff_reason == "ff_none"
 
     def test_small_positive_error_passes_through(self):
         result = _call(k_ff=0.05, target_temp_ff=21.0, ext_temp=20.0)
-        # u_ff_ab = clamp(0.05 * 1.0, 0, 1) = 0.05
-        assert result.u_ff_eff == pytest.approx(0.05)
+        # u_ff1 = clamp(0.05 * 1.0, 0, 1) = 0.05
+        assert result.u_ff1 == pytest.approx(0.05)
         assert result.ff_reason == "ff_none"
 
     def test_no_ext_temp_gives_zero(self):
         result = _call(ext_temp=None)
-        assert result.u_ff_eff == 0.0
+        assert result.u_ff1 == 0.0
         assert result.ff_reason == "ff_no_ext_temp"
 
     def test_zero_warmup_scale_gives_zero(self):
         result = _call(warmup_scale=0.0)
-        assert result.u_ff_eff == 0.0
+        assert result.u_ff1 == 0.0
+
+    def test_half_warmup_scale_halves_ff1(self):
+        result = _call(k_ff=0.05, target_temp_ff=21.0, ext_temp=15.0, warmup_scale=0.5)
+        assert result.u_ff1 == pytest.approx(0.15)
+        assert result.warmup_scale == pytest.approx(0.5)
 
 
 # ================================================================
-# FFResult structure
+# FFResult structure and wall part
 # ================================================================
-
-
-
-def _update_persistent(trim: FFTrim, delta_power: float, u_ff_ab: float) -> FFTrimUpdateResult:
-    """Feed one stationary correction through the persistence buffer and apply it."""
-    persistent = trim.collect_persistent(
-        FFTrimWindowProposal(
-            correction=float(delta_power),
-            mean_ff1=float(u_ff_ab),
-            physical_power_deficit=None,
-            integral_bias=None,
-            transfer_eligible=False,
-            transfer_reason="causal_update_without_transfer",
-            observation_mode="stationary",
-        )
-    )
-    if not persistent.ready:
-        return FFTrimUpdateResult(False, persistent.reason, 0.0, persistent.pending_count)
-    return trim.apply_persistent_result(persistent, u_ff_ab=float(u_ff_ab))
 
 
 class TestFFResult:
-    """Verify all FFResult fields are populated correctly."""
+    """FFResult carries the FF1 power, its reason and the warm-up factor."""
 
-    def test_result_fields_present(self):
+    def test_result_fields(self):
         result = _call(k_ff=0.1, target_temp_ff=21.0, ext_temp=15.0)
         assert isinstance(result, FFResult)
-        assert hasattr(result, "u_ff1")
-        assert hasattr(result, "u_ff2")
-        assert hasattr(result, "u_ff_final")
-        assert hasattr(result, "u_ff3")
-        assert hasattr(result, "u_ff_trim")
-        assert hasattr(result, "u_ff_eff")
-        assert hasattr(result, "ff_reason")
+        assert result.u_ff1 == pytest.approx(0.6)
+        assert result.ff_reason == "ff_none"
+        assert result.warmup_scale == pytest.approx(1.0)
 
-    def test_ff_final_matches_sum_of_ff1_and_ff2(self):
-        """The explicit FF final command must be the saturated sum of FF1 and FF2."""
-        result = _call(
-            k_ff=0.05,
-            target_temp_ff=21.0,
-            ext_temp=15.0,
-            trim_value=0.10,
-        )
-        assert result.u_ff1 == pytest.approx(0.30)
-        assert result.u_ff2 == pytest.approx(0.10)
-        assert result.u_ff_final == pytest.approx(0.40)
-        assert result.u_ff_eff == pytest.approx(result.u_ff_final)
+    def test_wall_part_is_added_and_clamped(self):
+        result = _call(k_ff=0.05, target_temp_ff=21.0, ext_temp=15.0)
+        assert add_wall_part(result, 0.1, 15.0).u_ff1 == pytest.approx(0.4)
+        assert add_wall_part(result, 0.9, 15.0).u_ff1 == pytest.approx(1.0)
 
-    def test_ff3_only_changes_effective_ff(self):
-        """FF3 must not rewrite the nominal FF1 + FF2 result."""
-        trim = FFTrim()
-        trim.u_ff_trim = 0.10
-        result = compute_ff(
-            k_ff=0.05,
-            target_temp_ff=21.0,
-            ext_temp=15.0,
-            warmup_scale=1.0,
-            trim=trim,
-            u_ff3=0.05,
-        )
-        assert result.u_ff1 == pytest.approx(0.30)
-        assert result.u_ff2 == pytest.approx(0.10)
-        assert result.u_ff_final == pytest.approx(0.40)
-        assert result.u_ff3 == pytest.approx(0.05)
-        assert result.u_ff_eff == pytest.approx(0.45)
-
-    def test_trim_update_applies_incremental_correction(self):
-        """A trim correction must be applied as an increment, not an absolute target.
-
-        authority = FF_TRIM_RHO * u_ff_ab = 0.15 * 0.5 = 0.075
-        Starting trim must be within [-0.075, 0.075] to avoid clamping.
-        expected = u_ff_trim + FF_TRIM_LAMBDA * delta_power.
-        """
-        trim = FFTrim()
-        trim.u_ff_trim = 0.05  # within authority (0.075)
-
-        trim._apply_correction(median_correction=0.03, u_ff_ab=0.5, pending_count=0)
-
-        expected = 0.05 + FF_TRIM_LAMBDA * 0.03
-        assert trim.u_ff_trim == pytest.approx(expected)
-
-    def test_trim_persistent_update_waits_for_same_direction_samples(self):
-        """Persistent trim must wait before applying a thermal correction."""
-        trim = FFTrim()
-
-        for idx in range(FF_TRIM_PERSISTENCE - 1):
-            result = _update_persistent(trim, delta_power=0.03, u_ff_ab=0.5)
-            assert result.updated is False
-            assert result.reason == f"pending_{idx + 1}/{FF_TRIM_PERSISTENCE}"
-            assert trim.u_ff_trim == pytest.approx(0.0)
-
-        result = _update_persistent(trim, delta_power=0.03, u_ff_ab=0.5)
-
-        assert result.updated is True
-        assert result.reason == "updated_persistent"
-        assert result.median_correction == pytest.approx(0.03)
-        assert result.requested_trim_delta == pytest.approx(
-            FF_TRIM_LAMBDA * 0.03
-        )
-        assert result.applied_delta == pytest.approx(FF_TRIM_LAMBDA * 0.03)
-        assert trim.u_ff_trim == pytest.approx(FF_TRIM_LAMBDA * 0.03)
-
-    def test_trim_persistent_update_uses_rolling_median(self):
-        """Persistent trim must apply the robust median of pending corrections."""
-        trim = FFTrim()
-
-        _update_persistent(trim, delta_power=0.02, u_ff_ab=0.5)
-        _update_persistent(trim, delta_power=0.04, u_ff_ab=0.5)
-        result = _update_persistent(trim, delta_power=0.03, u_ff_ab=0.5)
-
-        assert result.updated is True
-        assert result.median_correction == pytest.approx(0.03)
-        assert result.applied_delta == pytest.approx(FF_TRIM_LAMBDA * 0.03)
-        assert trim.u_ff_trim == pytest.approx(FF_TRIM_LAMBDA * 0.03)
-
-    def test_trim_persistent_update_resets_on_sign_flip(self):
-        """Opposite correction signs belong to different thermal contexts."""
-        trim = FFTrim()
-
-        _update_persistent(trim, delta_power=0.03, u_ff_ab=0.5)
-        result = _update_persistent(trim, delta_power=-0.03, u_ff_ab=0.5)
-
-        assert result.updated is False
-        assert result.reason == f"pending_1/{FF_TRIM_PERSISTENCE}"
-        assert trim.u_ff_trim == pytest.approx(0.0)
-
-        _update_persistent(trim, delta_power=-0.03, u_ff_ab=0.5)
-        result = _update_persistent(trim, delta_power=-0.03, u_ff_ab=0.5)
-
-        assert result.updated is True
-        assert result.median_correction == pytest.approx(-0.03)
-        assert result.applied_delta == pytest.approx(-FF_TRIM_LAMBDA * 0.03)
-        assert trim.u_ff_trim == pytest.approx(-FF_TRIM_LAMBDA * 0.03)
-
-    def test_trim_pi_eligibility_accepts_frozen_deadband(self):
-        result = evaluate_pi_eligibility_for_trim(
-            regime=GovernanceRegime.DEAD_BAND,
-            i_mode="I:FREEZE(deadband)",
-            u_pi=0.08,
-        )
-
-        assert result.admissible is True
-        assert result.reason == "pi_deadband_freeze"
-
-    def test_trim_pi_eligibility_accepts_deadband_shell_hold(self):
-        result = evaluate_pi_eligibility_for_trim(
-            regime=GovernanceRegime.DEAD_BAND,
-            i_mode="I:HOLD",
-            u_pi=0.08,
-            i_hold_source="deadband_hysteresis_shell",
-        )
-
-        assert result.admissible is True
-        assert result.reason == "pi_deadband_shell_hold"
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            None,
-            "none",
-            "deadtime",
-            "governance_sensor_invalid",
-            "vt_safety",
-            "external",
-        ),
-    )
-    def test_trim_pi_eligibility_rejects_other_holds_in_deadband(self, source):
-        result = evaluate_pi_eligibility_for_trim(
-            regime=GovernanceRegime.DEAD_BAND,
-            i_mode="I:HOLD",
-            u_pi=0.08,
-            i_hold_source=source,
-        )
-
-        assert result.admissible is False
-        assert result.reason == "pi_mode_I:HOLD"
-
-    @pytest.mark.parametrize("mode", ("I:HOLD(window_resume)", "I:RUN", "I:SKIP(SAT_HI)"))
-    def test_trim_pi_eligibility_rejects_other_modes_in_deadband(self, mode):
-        result = evaluate_pi_eligibility_for_trim(
-            regime=GovernanceRegime.DEAD_BAND,
-            i_mode=mode,
-            u_pi=0.08,
-            i_hold_source="deadband_hysteresis_shell",
-        )
-
-        assert result.admissible is False
-
-    def test_trim_pi_eligibility_near_band_ignores_shell_hold(self):
-        result = evaluate_pi_eligibility_for_trim(
-            regime=GovernanceRegime.NEAR_BAND,
-            i_mode="I:HOLD",
-            u_pi=0.2,
-            i_hold_source="deadband_hysteresis_shell",
-        )
-
-        assert result.admissible is False
-        assert result.reason == "pi_mode_I:HOLD"
-
-    def test_trim_pi_eligibility_accepts_stable_near_band(self):
-        result = evaluate_pi_eligibility_for_trim(
-            regime=GovernanceRegime.NEAR_BAND,
-            i_mode="I:RUN",
-            u_pi=0.205,
-        )
-
-        assert result.admissible is True
-        assert result.reason == "pi_near_band_stable"
-
-    def test_trim_pi_eligibility_rejects_excited_stable(self):
-        result = evaluate_pi_eligibility_for_trim(
-            regime=GovernanceRegime.EXCITED_STABLE,
-            i_mode="I:RUN",
-            u_pi=0.20,
-        )
-
-        assert result.admissible is False
-        assert result.reason == "regime_excited_stable"
-
-
-class TestFF3:
-    """Behavioural tests for the FF3 conservative selector."""
-
-    @staticmethod
-    def _make_initialized_twin() -> ThermalTwin1R1C:
-        twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
-        twin.reset(tin_init=19.0, text_init=5.0, u_init=0.4)
-        result = twin.step(
-            tin_meas=19.0,
-            text_meas=5.0,
-            a=0.02,
-            b=0.002,
-            u_now=0.4,
-            deadtime_s=0.0,
-            sp=21.0,
-            dt_s=60.0,
-            mode="heat",
-        )
-        assert result["status"] == "ok"
-        assert twin.T_hat is not None
-        return twin
-
-    def test_ff3_disabled_on_recent_setpoint_change(self):
-        """FF3 must remain off immediately after a setpoint change."""
-        twin = self._make_initialized_twin()
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.EXCITED_STABLE,
-            in_deadband=False,
-            in_near_band=False,
-            setpoint_changed=True,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.4,
-            current_temp=19.0,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.02,
-            b=0.002,
-            deadtime_heat_s=0.0,
-        )
-        assert result.enabled is False
-        assert result.u_ff3_applied == pytest.approx(0.0)
-        assert result.reason_disabled == "recent_setpoint_change"
-        assert result.horizon_cycles == 2
-
-    def test_ff3_disabled_outside_near_band(self):
-        """FF3 must remain off outside the near-band."""
-        twin = self._make_initialized_twin()
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.EXCITED_STABLE,
-            in_deadband=False,
-            in_near_band=False,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.4,
-            current_temp=19.0,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.02,
-            b=0.002,
-            deadtime_heat_s=0.0,
-        )
-        assert result.enabled is False
-        assert result.u_ff3_applied == pytest.approx(0.0)
-        assert result.reason_disabled == "not_near_band"
-        assert result.candidate_scores == []
-        assert result.horizon_cycles == 2
-
-    @staticmethod
-    def _gate_call(twin: ThermalTwin1R1C, **overrides) -> FF3Result:
-        kwargs = dict(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.4,
-            current_temp=20.8,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.02,
-            b=0.002,
-            deadtime_heat_s=0.0,
-        )
-        kwargs.update(overrides)
-        return compute_ff3(**kwargs)
-
-    def test_ff3_missing_ext_temp_reason_precedes_degraded_regime(self):
-        """A missing outdoor temperature is reported as such, not as the DEGRADED regime it implies."""
-        twin = self._make_initialized_twin()
-        result = self._gate_call(twin, ext_temp=None, regime=GovernanceRegime.DEGRADED)
-        assert result.enabled is False
-        assert result.u_ff3_applied == pytest.approx(0.0)
-        assert result.reason_disabled == "missing_ext_temp"
-
-    def test_ff3_disabled_in_deadband_at_cycle_boundary(self):
-        """FF3 stays off when the cycle boundary falls inside the deadband."""
-        twin = self._make_initialized_twin()
-        result = self._gate_call(twin, in_deadband=True, current_temp=20.98)
-        assert result.enabled is False
-        assert result.u_ff3_applied == pytest.approx(0.0)
-        assert result.reason_disabled == "deadband"
-        assert result.candidate_scores == []
-
-    def test_ff3_pending_value_dropped_before_cycle_start(self):
-        """A dropped pending value is not latched by the next cycle start."""
-        state = FF3RuntimeState()
-        state.u_pending = 0.05
-        state.pending_active = True
-        assert state.disable_pending() is True
-        state.start_cycle()
-        assert state.u_cycle == pytest.approx(0.0)
-        assert state.active_cycle is False
-        assert state.disable_pending() is False
-
-    def test_ff3_disabled_without_disturbance_context(self):
-        """FF3 must remain off when no disturbance-recovery context is active."""
-        twin = self._make_initialized_twin()
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.4,
-            current_temp=19.0,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.02,
-            b=0.002,
-            deadtime_heat_s=0.0,
-            disturbance_context_active=False,
-            disturbance_context_reason="dynamic_incoherent",
-        )
-        assert result.enabled is False
-        assert result.u_ff3_applied == pytest.approx(0.0)
-        assert result.reason_disabled == "dynamic_incoherent"
-        assert result.candidate_scores == []
-        assert result.horizon_cycles == 2
-
-    def test_ff3_disabled_when_twin_is_warming_up(self):
-        """FF3 must expose the warm-up reason instead of a generic reliability failure."""
-        twin = self._make_initialized_twin()
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=False,
-            twin_initialized=True,
-            twin_disabled_reason="twin_warming_up",
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.4,
-            current_temp=19.0,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.02,
-            b=0.002,
-            deadtime_heat_s=0.0,
-        )
-        assert result.enabled is False
-        assert result.reason_disabled == "twin_warming_up"
-
-    def test_ff3_disturbance_context_reports_twin_unavailable(self):
-        """FF3 disturbance diagnostics must distinguish an unavailable twin."""
-        context = build_ff3_disturbance_context(
-            twin_diag={"status": "zero_dt"},
-            measured_slope_h=None,
-        )
-        assert context.disturbance_active is False
-        assert context.reason == "twin_unavailable"
-
-    def test_ff3_uses_nine_candidates_in_near_band(self):
-        """FF3 must evaluate the full candidate set when near-band is active."""
-        twin = self._make_initialized_twin()
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.4,
-            current_temp=19.0,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.02,
-            b=0.002,
-            deadtime_heat_s=0.0,
-        )
-        candidate_u = [item["u"] for item in result.candidate_scores]
-        assert len(candidate_u) == 9
-        assert candidate_u == pytest.approx([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6])
-        assert result.horizon_cycles == 2
-
-    def test_ff3_uses_two_cycle_horizon_when_deadtime_exceeds_cycle(self):
-        """FF3 must keep the configured multi-cycle horizon in near-band."""
-        twin = self._make_initialized_twin()
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.4,
-            current_temp=19.0,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.02,
-            b=0.002,
-            deadtime_heat_s=900.0,
-        )
-        assert result.horizon_cycles == 4
-        assert len(result.candidate_scores) == 9
-
-    def test_ff3_near_band_applies_gain(self):
-        """Near-band FF3 output must be scaled by the near-band gain."""
-        twin = self._make_initialized_twin()
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.4,
-            current_temp=19.0,
-            setpoint=30.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.02,
-            b=0.002,
-            deadtime_heat_s=900.0,
-        )
-        assert abs(result.u_ff3_raw) <= FF3_MAX_AUTHORITY + 1e-9
-        assert result.u_ff3_applied == pytest.approx(result.u_ff3_raw * FF3_NEARBAND_GAIN)
-        assert abs(result.u_ff3_applied) <= (FF3_MAX_AUTHORITY * FF3_NEARBAND_GAIN) + 1e-9
-
-    def test_ff3_deadtime_aware_horizon_can_select_candidate(self):
-        twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
-        twin.reset(tin_init=20.7, text_init=5.0, u_init=0.6)
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            disturbance_context_active=True,
-            current_temp=20.7,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.08,
-            b=0.004,
-            u_base=0.6,
-            deadtime_heat_s=1800.0,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-        )
-
-        assert result.horizon_cycles == 5
-        assert result.deadtime_cycles == 3
-        assert result.action_sensitivity > 0.0
-        assert len(result.candidate_scores) > 0
-        assert result.reason_disabled in (
-            "none",
-            "score_not_better",
-            "authority_tapered_to_zero",
-        )
-
-    def test_ff3_reports_no_candidate_effect_when_horizon_cannot_see_action(self):
-        twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
-        twin.reset(tin_init=20.7, text_init=5.0, u_init=0.6)
-        base_prediction = predict_ff3_open_loop(
-            twin=twin,
-            current_temp=20.7,
-            ext_temp=5.0,
-            a=0.08,
-            b=0.004,
-            u_first_cycle=0.6,
-            u_base=0.6,
-            cycle_min=10.0,
-            deadtime_heat_s=1800.0,
-            horizon_cycles=3,
-        )
-        candidate_prediction = predict_ff3_open_loop(
-            twin=twin,
-            current_temp=20.7,
-            ext_temp=5.0,
-            a=0.08,
-            b=0.004,
-            u_first_cycle=0.8,
-            u_base=0.6,
-            cycle_min=10.0,
-            deadtime_heat_s=1800.0,
-            horizon_cycles=3,
-        )
-
-        assert compute_ff3_action_sensitivity([base_prediction, candidate_prediction]) == 0.0
-
-    def test_ff3_selects_closest_candidate_on_equal_cost(self):
-        twin = self._make_initialized_twin()
-        u_base = 0.4
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=u_base,
-            current_temp=19.0,
-            setpoint=19.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.0,
-            b=0.002,
-            deadtime_heat_s=0.0,
-        )
-
-        assert result.selected_candidate == pytest.approx(u_base)
-        assert result.enabled is False
-
-    def test_ff3_authority_factor_limits_output(self):
-        twin = ThermalTwin1R1C(dt_s=60, gamma=0.1)
-        twin.reset(tin_init=20.7, text_init=5.0, u_init=0.6)
-        result = compute_ff3(
-            enabled=True,
-            twin=twin,
-            twin_reliable=True,
-            twin_initialized=True,
-            tau_reliable=True,
-            ext_temp=5.0,
-            hvac_mode=VThermHvacMode_HEAT,
-            regime=GovernanceRegime.NEAR_BAND,
-            in_deadband=False,
-            in_near_band=True,
-            setpoint_changed=False,
-            startup_first_run=False,
-            last_sat="NO_SAT",
-            u_base=0.6,
-            current_temp=20.7,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-            cycle_min=10.0,
-            a=0.08,
-            b=0.004,
-            deadtime_heat_s=1800.0,
-            authority_factor=0.5,
-        )
-
-        assert abs(result.u_ff3_raw) <= FF3_MAX_AUTHORITY * 0.5 + 1e-9
-        assert abs(result.u_ff3_applied) <= FF3_MAX_AUTHORITY * 0.5 + 1e-9
-
-    def test_ff3_authority_tapers_near_deadband(self):
-        """Near the deadband boundary, FF3 authority must taper continuously."""
-        scale = _compute_near_band_ff3_scale(
-            current_temp=20.94,
-            setpoint=21.0,
-            deadband_c=0.05,
-            near_band_below_deg=0.4,
-            near_band_above_deg=0.3,
-        )
-
-        assert scale == pytest.approx((0.06 - 0.05) / (0.4 - 0.05))
+    def test_wall_part_is_ignored_without_outdoor_temperature_or_wall(self):
+        result = _call(k_ff=0.05, target_temp_ff=21.0, ext_temp=15.0)
+        assert add_wall_part(result, 0.0, 15.0) is result
+        assert add_wall_part(result, 0.1, None) is result
 
 
 # ================================================================
-# Invariant: 0 <= u_ff_eff <= 1
+# Invariant: 0 <= u_ff1 <= 1
 # ================================================================
 
 
 class TestInvariants:
-    """u_ff_eff must always be in [0, 1]."""
+    """u_ff1 must always be in [0, 1]."""
 
     @pytest.mark.parametrize("k_ff", [0.0, 0.05, 0.20, 0.50, 2.0])
-    def test_u_ff_eff_in_range(self, k_ff):
+    def test_u_ff1_in_range(self, k_ff):
         result = _call(k_ff=k_ff)
-        assert 0.0 <= result.u_ff_eff <= 1.0
+        assert 0.0 <= result.u_ff1 <= 1.0

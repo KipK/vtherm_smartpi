@@ -1,6 +1,6 @@
 ---
 name: smartpi-senior-developer
-description: "Implementation agent for SmartPI changes that need judgement: regulation behaviour (PI, gains, anti-windup, setpoint trajectory, feed-forward), learning gates and windows, persistence/restart, command ownership, bootstrap. Use when the change cannot be fully specified in advance."
+description: "Implementation agent for SmartPI changes that need judgement: regulation behaviour (PI, gains, anti-windup, setpoint trajectory, feed-forward), learning gates and windows, persistence/restart, bootstrap. Use when the change cannot be fully specified in advance."
 tools: Read, Grep, Glob, Bash, Edit, Write
 model: opus
 effort: high

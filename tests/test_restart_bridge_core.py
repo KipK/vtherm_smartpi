@@ -112,7 +112,7 @@ class _Run:
                             slope=0, hvac_mode=VThermHvacMode_HEAT, cycle_boundary=boundary)
 
     def _commit(self) -> None:
-        self.algo._commit_applied_command(self.algo.on_percent, VThermHvacMode_HEAT, None, cycle_start=True)
+        self.algo._commit_applied_command(self.algo.on_percent, VThermHvacMode_HEAT, cycle_start=True)
         self.u = self.algo.committed_on_percent
 
     def tick(self) -> None:
@@ -243,7 +243,7 @@ def test_restart_waits_for_the_indoor_temperature_and_is_bridged_within_the_dela
     with _clocks(run.clock):
         algo = _restored_without_temperature(run)
         # No component is fed, and none settles its restart, while the decision waits.
-        algo._commit_applied_command(0.0, VThermHvacMode_HEAT, None, cycle_start=True)
+        algo._commit_applied_command(0.0, VThermHvacMode_HEAT, cycle_start=True)
         algo.observe_room_model(None, T_EXT, VThermHvacMode_HEAT)
         algo.observe_tar_learning(run.setpoint, None, T_EXT, VThermHvacMode_HEAT)
         algo.room_model.on_applied.assert_not_called()

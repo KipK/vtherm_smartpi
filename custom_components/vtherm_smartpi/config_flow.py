@@ -24,7 +24,6 @@ from .const import (
     CONF_SMART_PI_KNEE_VALVE,
     CONF_SMART_PI_MAX_VALVE,
     CONF_SMART_PI_MIN_VALVE,
-    CONF_SMART_PI_USE_FF3,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
@@ -105,10 +104,6 @@ def build_main_options_schema(
                 mode=selector.NumberSelectorMode.BOX,
             )
         ),
-        vol.Optional(
-            CONF_SMART_PI_USE_FF3,
-            default=defaults[CONF_SMART_PI_USE_FF3],
-        ): bool,
         vol.Optional(
             CONF_SMART_PI_DEADBAND_ALLOW_P,
             default=defaults[CONF_SMART_PI_DEADBAND_ALLOW_P],

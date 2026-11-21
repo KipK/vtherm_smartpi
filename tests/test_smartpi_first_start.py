@@ -307,7 +307,6 @@ class TestSmartPIRebootBehavior:
             "db_state": {},
             "cal_state": {},
             "gs_state": {},
-            "twin_state": {},
             "guards_state": {},
             "ac_state": {},
         }
@@ -416,7 +415,6 @@ class TestSmartPIRebootBehavior:
             "db_state": {},
             "cal_state": {},
             "gs_state": {"kp": 0.948701, "ki": 0.00129},
-            "twin_state": {},
             "guards_state": {},
             "ac_state": {},
         }
@@ -488,7 +486,6 @@ class TestSmartPIRebootBehavior:
             "db_state": {},
             "cal_state": {},
             "gs_state": {"kp": 0.948701, "ki": 0.00129},
-            "twin_state": {},
             "guards_state": {},
             "ac_state": {},
         }
@@ -553,7 +550,6 @@ class TestSmartPIRebootBehavior:
             "db_state": {},
             "cal_state": {},
             "gs_state": {"kp": 0.948701, "ki": 0.00129},
-            "twin_state": {},
             "guards_state": {},
             "ac_state": {},
         }
@@ -601,7 +597,6 @@ class TestSmartPIRebootBehavior:
             "db_state": {},
             "cal_state": {},
             "gs_state": {},
-            "twin_state": {},
             "guards_state": {},
             "ac_state": {},
         }

@@ -17,8 +17,6 @@
 {% set learning = spi.get('learning', {}) %}
 {% set gov = spi.get('governance', {}) %}
 {% set ff = spi.get('feedforward', {}) %}
-{% set fftrim = ff.get('fftrim', {}) %}
-{% set fftrim_ownership = fftrim.get('command_ownership', {}) %}
 {% set setpoint = spi.get('setpoint', {}) %}
 {% set autocalib = spi.get('autocalib', {}) %}
 {% set calibration = spi.get('calibration', {}) %}
@@ -28,7 +26,6 @@
 {% set analysis_deadtime = analysis.get('deadtime', {}) %}
 {% set analysis_governance = analysis.get('governance', {}) %}
 {% set analysis_ff = analysis.get('feedforward', {}) %}
-{% set analysis_twin = analysis.get('twin', {}) %}
 {% set has_analysis = analysis | count > 0 %}
 
 {% set phase = control.get('phase', 'unknown') %}
@@ -86,87 +83,8 @@
 {% set thermal_decision = gov.get('thermal_update_decision', 'unknown') %}
 {% set thermal_reason = gov.get('thermal_update_reason', 'none') %}
 
-{% set ff3_status = ff.get('ff3_status', 'unknown') %}
-{% set ff3_twin_usable = ff.get('ff3_twin_usable', false) %}
-{% set twin_status = ff.get('twin_status', 'unavailable') %}
 {% set deadband_source = ff.get('deadband_power_source', 'none') %}
-{% set fftrim_stationary = fftrim.get('stationary', {}) %}
-{% set fftrim_periodic = fftrim.get('periodic', {}) %}
-{% set fftrim_transfer = fftrim.get('transfer', {}) %}
-{% set fftrim_last_result = fftrim.get('last_result') or {} %}
-{% set fftrim_last_transaction = fftrim.get('last_transaction') or {} %}
-{% set fftrim_state = fftrim_stationary.get('state') %}
-{% set fftrim_observation_mode = fftrim_last_result.get('observation_mode', fftrim.get('observation_mode')) %}
-{% set fftrim_last_result_reason = fftrim_last_result.get('reason') %}
-{% set fftrim_periodic_state = fftrim_periodic.get('state') %}
-{% set fftrim_periodic_window_duration_s = fftrim_periodic.get('window_duration_s') %}
-{% set fftrim_periodic_target_duration_s = fftrim_periodic.get('target_duration_s') %}
-{% set fftrim_periodic_measurement_count = fftrim_periodic.get('measurement_count') %}
-{% set fftrim_periodic_amplitude_c = fftrim_periodic.get('amplitude_c') %}
-{% set fftrim_periodic_closure_error_c = fftrim_periodic.get('closure_error_c') %}
-{% set fftrim_periodic_last_reject_reason = fftrim_periodic.get('last_reject_reason') %}
-{% set fftrim_last_reject_reason = fftrim.get('last_reject_reason') %}
-{% set fftrim_last_update_reason = fftrim.get('last_update_reason') %}
-{% set fftrim_windows_since_update = fftrim.get('windows_since_update') %}
-{% set fftrim_window_duration_s = fftrim_stationary.get('window_duration_s', fftrim.get('window_duration_s')) %}
-{% set fftrim_window_target_duration_s = fftrim_stationary.get('window_target_duration_s', fftrim.get('window_target_duration_s')) %}
-{% set fftrim_measurement_count = fftrim_stationary.get('measurement_count', fftrim.get('measurement_count')) %}
-{% set fftrim_alignment_delay_s = fftrim_last_result.get('alignment_delay_s', fftrim_stationary.get('alignment_delay_s')) %}
-{% set fftrim_power_coverage_ratio = fftrim_last_result.get('power_coverage_ratio') %}
-{% set fftrim_mean_causal_power = fftrim_last_result.get('mean_causal_power') %}
-{% set fftrim_mean_ff1 = fftrim_last_result.get('mean_ff1') %}
-{% set fftrim_mean_temperature = fftrim_last_result.get('mean_temperature') %}
-{% set fftrim_mean_error = fftrim_last_result.get('mean_error') %}
-{% set fftrim_mean_slope_h = fftrim_last_result.get('mean_slope_h') %}
-{% set fftrim_observed_hold_power = fftrim_last_result.get('observed_hold_power') %}
-{% set fftrim_target_trim = fftrim_last_result.get('target_trim') %}
-{% set fftrim_correction = fftrim_last_result.get('correction') %}
-{% set fftrim_mean_p_power = fftrim_last_result.get('mean_p_power') %}
-{% set fftrim_mean_i_power = fftrim_last_result.get('mean_i_power') %}
-{% set fftrim_mean_delivery_residual = fftrim_last_result.get('mean_delivery_residual') %}
-{% set fftrim_physical_power_deficit = fftrim_last_result.get('physical_power_deficit') %}
-{% set fftrim_decomposed_correction = fftrim_last_result.get('decomposed_correction') %}
-{% set fftrim_requested_trim_delta = fftrim_transfer.get('requested_trim_delta') %}
-{% set fftrim_applied_trim_delta = fftrim_transfer.get('applied_trim_delta') %}
-{% set fftrim_applied_i_transfer = fftrim_transfer.get('applied_i_transfer') %}
-{% set fftrim_net_command_delta = fftrim_transfer.get('net_command_delta') %}
-{% set fftrim_transfer_state = fftrim_transfer.get('state') %}
-{% set fftrim_transfer_reason = fftrim_transfer.get('reason') %}
-{% set fftrim_transfer_pending = fftrim_transfer.get('pending_engagement', false) %}
-{% set fftrim_transfer_quality = fftrim_transfer.get('quality') %}
-{% set fftrim_last_transaction_timestamp = fftrim_last_transaction.get('timestamp_utc') %}
-{% set fftrim_last_transaction_mode = fftrim_last_transaction.get('observation_mode') %}
-{% set fftrim_last_transaction_state = fftrim_last_transaction.get('state') %}
-{% set fftrim_last_transaction_reason = fftrim_last_transaction.get('reason') %}
-{% set fftrim_last_transaction_trim = fftrim_last_transaction.get('applied_trim_delta') %}
-{% set fftrim_last_transaction_i = fftrim_last_transaction.get('applied_i_transfer') %}
-{% set ownership_receipts = fftrim_ownership.get('receipts_supported') %}
-{% set ownership_status = fftrim_ownership.get('status') %}
-{% set ownership_reason = fftrim_ownership.get('reason') %}
-{% set ownership_sequence = fftrim_ownership.get('request_sequence') %}
-{% set ownership_kind = fftrim_ownership.get('kind') %}
-{% set ownership_requested_power = fftrim_ownership.get('requested_power') %}
-{% set ownership_realized_power = fftrim_ownership.get('realized_power') %}
-{% set ownership_power_delta = fftrim_ownership.get('power_delta') %}
-{% set ownership_realized_on = fftrim_ownership.get('realized_on_time_sec') %}
-{% set ownership_realized_off = fftrim_ownership.get('realized_off_time_sec') %}
-{% set ownership_alterations = fftrim_ownership.get('alterations') or [] %}
 
-{% set fftrim_state_label = {
-  'warming_up': 'initialisation',
-  'collecting': 'collecte',
-  'waiting_deadtime': 'attente du temps mort',
-  'ready': 'prêt',
-  'rejected': 'rejeté'
-}.get(fftrim_state, fftrim_state) %}
-{% set fftrim_periodic_state_label = {
-  'warming_up': 'initialisation',
-  'collecting': 'collecte',
-  'waiting_deadtime': 'attente du temps mort',
-  'waiting_phase': 'attente de fermeture de phase',
-  'ready': 'prêt',
-  'rejected': 'rejeté'
-}.get(fftrim_periodic_state, fftrim_periodic_state) %}
 
 
 {% set autocalib_state = autocalib.get('state', 'unknown') %}
@@ -267,66 +185,10 @@
 {% set ff_reason = analysis_ff.get('reason', '—') %}
 {% set u_ff1 = analysis_ff.get('u_ff1', 0) | float %}
 {% set ff_raw = u_ff1 %}
-{% set u_ff2 = analysis_ff.get('u_ff2', 0) | float %}
-{% set u_ff3 = analysis_ff.get('u_ff3', 0) | float %}
 {% set u_ff_final = analysis_ff.get('u_ff_final', 0) | float %}
 {% set u_ff_eff = analysis_ff.get('u_ff_effective', u_ff_final) | float %}
 {% set u_db_nominal = u_ff_final %}
-{% set ff2_authority = analysis_ff.get('ff2_authority') %}
-{% set ff2_frozen = analysis_ff.get('ff2_frozen', false) %}
-{% set ff2_freeze_reason = analysis_ff.get('ff2_freeze_reason', 'none') %}
-{% set ff2_trim_delta = analysis_ff.get('ff2_trim_delta', 0) | float %}
-{% set ff3_enabled = ff3_status == 'active' %}
-{% set ff3_reason = ff3_status.split(':', 1)[1] if ':' in ff3_status else 'none' %}
-{% set ff3_raw_reason = analysis_ff.get('ff3_raw_reason_disabled', ff3_reason) %}
-{% set ff3_selected_candidate = analysis_ff.get('ff3_selected_candidate') %}
-{% set ff3_horizon = analysis_ff.get('ff3_horizon_cycles', 1) %}
-{% set ff3_deadtime_cycles = analysis_ff.get('ff3_deadtime_cycles', 0) %}
-{% set ff3_horizon_capped = analysis_ff.get('ff3_horizon_capped', false) %}
-{% set ff3_action_sensitivity = analysis_ff.get('ff3_action_sensitivity') %}
-{% set ff3_prediction_quality = analysis_ff.get('ff3_prediction_quality', 'unavailable') %}
-{% set ff3_authority_factor = analysis_ff.get('ff3_authority_factor') %}
-{% set ff3_disturbance_active = analysis_ff.get('ff3_disturbance_active', false) %}
-{% set ff3_disturbance_reason = analysis_ff.get('ff3_disturbance_reason', '—') %}
-{% set ff3_disturbance_kind = analysis_ff.get('ff3_disturbance_kind', 'none') %}
-{% set ff3_residual_persistent = analysis_ff.get('ff3_residual_persistent', false) %}
-{% set ff3_dynamic_coherent = analysis_ff.get('ff3_dynamic_coherent', false) %}
-{% set pred = analysis_twin %}
-{% set twin_t_hat = pred.get('twin_T_hat') %}
-{% set twin_t_pred = pred.get('twin_T_pred') %}
-{% set twin_innovation = pred.get('twin_innovation') %}
-{% set twin_rmse_30 = pred.get('twin_rmse_30') %}
-{% set twin_rmse_pure = pred.get('twin_rmse_pure') %}
-{% set twin_model_reliable = pred.get('twin_model_reliable') %}
-{% set twin_perturbation = pred.get('twin_perturbation_dTdt') %}
-{% set twin_cusum_pos = pred.get('twin_cusum_pos') %}
-{% set twin_cusum_neg = pred.get('twin_cusum_neg') %}
-{% set twin_external_gain = pred.get('twin_external_gain') %}
-{% set twin_external_loss = pred.get('twin_external_loss') %}
-{% set twin_t_steady = pred.get('twin_T_steady') %}
-{% set twin_t_steady_reliable = pred.get('twin_T_steady_reliable') %}
-{% set twin_t_steady_max = pred.get('twin_T_steady_max') %}
-{% set twin_setpoint_reachable = pred.get('twin_setpoint_reachable') %}
-{% set twin_setpoint_reachable_max = pred.get('twin_setpoint_reachable_max') %}
-{% set twin_emitter_saturated = pred.get('twin_emitter_saturated') %}
-{% set twin_cooling_model_available = pred.get('twin_cooling_model_available') %}
-{% set twin_d_hat_fresh = pred.get('twin_d_hat_fresh') %}
-{% set twin_warming_up = pred.get('twin_warming_up') %}
-{% set twin_u_eff = pred.get('twin_u_eff') %}
-{% set twin_deadtime_s = pred.get('twin_deadtime_s') %}
-{% set twin_dead_steps = pred.get('twin_dead_steps') %}
-{% set twin_t_hat_error = pred.get('twin_T_hat_error') %}
-{% set twin_innovation_bias = pred.get('twin_innovation_bias') %}
-{% set twin_bias_warning = pred.get('twin_bias_warning', false) %}
-{% set twin_auto_reset = pred.get('twin_auto_reset_triggered', false) %}
-{% set twin_reset_count = pred.get('twin_reset_count', 0) %}
-{% set eta_s = pred.get('eta_s') %}
-{% set eta_u = pred.get('eta_u') %}
-{% set eta_reason = pred.get('eta_reason') %}
-{% set twin_d_hat = pred.get('twin_d_hat') %}
 {% set ff1_pct = (u_ff1 * 100) | round(1) %}
-{% set ff2_pct = (u_ff2 * 100) | round(1) %}
-{% set ff3_pct = (u_ff3 * 100) | round(1) %}
 {% set ffinal_pct = (u_ff_final * 100) | round(1) %}
 {% set ffeff_pct = (u_ff_eff * 100) | round(1) %}
 {% set dbnom_pct = (u_db_nominal * 100) | round(1) %}
@@ -344,54 +206,6 @@
   'SAT_HI': '🔴 butée haute',
   'SAT_LO': '🔵 butée basse'
 } %}
-{% set ff3_label = {
-  'none': 'actif',
-  'config_disabled': 'config off',
-  'first_cycle_after_restart': '1er cycle',
-  'cool_mode': 'mode cool',
-  'missing_ext_temp': 'ext absente',
-  'tau_not_reliable': 'tau non fiable',
-  'twin_not_initialized': 'twin non initialisé',
-  'twin_not_reliable': 'twin non fiable',
-  'twin_unavailable': 'twin indisponible',
-  'twin_steady_invalid': 'état stable invalide',
-  'calibration': 'calibration',
-  'power_shedding': 'shedding',
-  'recent_setpoint_change': 'consigne récente',
-  'deadband': 'deadband',
-  'not_near_band': 'hors near-band',
-  'pending_cycle_boundary': 'frontière de cycle',
-  'saturated_high': 'saturation haute',
-  'system_not_stable': 'instable',
-  'score_not_better': 'gain insuffisant',
-  'authority_zero': 'autorité nulle',
-  'authority_tapered_to_zero': 'autorité effacée',
-  'horizon_no_candidate_effect': 'horizon sans effet candidat',
-  'simulation_invalid_params': 'simulation paramètres invalides',
-  'simulation_invalid_prediction': 'simulation invalide',
-  'twin_not_ready': 'twin indisponible',
-  'twin_warming_up': 'twin en warm-up',
-  'residual_not_persistent': 'résidu non persistant',
-  'disturbance_unclassified': 'perturbation non classée',
-  'dynamic_incoherent': 'dynamique incohérente',
-  'no_disturbance_context': 'pas de contexte perturbation'
-}.get(ff3_reason, ff3_reason) %}
-{% set ff3_disturbance_reason_label = {
-  'none': 'contexte valide',
-  'twin_not_ready': 'twin indisponible',
-  'twin_unavailable': 'twin indisponible',
-  'twin_warming_up': 'twin en warm-up',
-  'twin_not_reliable': 'twin non fiable',
-  'twin_steady_invalid': 'état stable invalide',
-  'residual_not_persistent': 'résidu non persistant',
-  'disturbance_unclassified': 'perturbation non classée',
-  'dynamic_incoherent': 'dynamique incohérente'
-}.get(ff3_disturbance_reason, ff3_disturbance_reason) %}
-{% set ff3_disturbance_kind_label = {
-  'none': 'aucune',
-  'gain': 'apport externe',
-  'loss': 'perte externe'
-}.get(ff3_disturbance_kind, ff3_disturbance_kind) %}
 {% set restart_reason_label = {
   'none': 'aucun',
   'external_force': 'force externe',
@@ -411,10 +225,8 @@
 {{ regime_icon }} **{{ regime | replace('_', ' ') | upper }}** · `{{ phase | upper }}`
 {%- if has_analysis %} · {{ cycle_min }} min{% endif %}
  · `{{ mode }}`
-{%- if ff3_status == 'active' %} · 🔮 FF3{% endif %}
 {%- if has_analysis and control.get('in_deadband', false) %} · 💤 DB{% elif has_analysis and control.get('in_near_band', false) %} · 〰️ NB{% endif %}
 {%- if autocalib_degraded %} · ⚠️ modèle dégradé{% endif %}
-{%- if has_analysis and twin_status == 'ok' %} · 🧠 TWIN{% endif %}
 
 ---
 
@@ -541,51 +353,7 @@
 | Régime | `{{ regime }}` |
 | Décision thermique | `{{ thermal_decision }}` |
 | Raison thermique | `{{ thermal_reason }}` |
-| FF3 | `{{ ff3_status }}` |
-| Twin utilisable | {% if ff3_twin_usable %}oui{% else %}non{% endif %} |
-{% if not has_analysis -%}
-| Twin status | `{{ twin_status }}` |
-{% endif -%}
 | Source deadband | `{{ deadband_source }}` |
-
----
-
-### 🧭 FF trim causal
-
-| Signal | Valeur |
-|---|---:|
-| Observateur stationnaire live | {% if fftrim_state is not none %}`{{ fftrim_state_label }}`{% else %}—{% endif %} |
-| Mode / raison du dernier résultat | {% if fftrim_observation_mode is not none %}`{{ fftrim_observation_mode }}`{% else %}—{% endif %} / {% if fftrim_last_result_reason is not none %}`{{ fftrim_last_result_reason }}`{% else %}—{% endif %} |
-| Fenêtre thermique | {% if fftrim_window_duration_s is not none and fftrim_window_target_duration_s is not none %}{{ (fftrim_window_duration_s | float / 60) | round(1) }} / {{ (fftrim_window_target_duration_s | float / 60) | round(1) }} min{% else %}—{% endif %} |
-| Mesures distinctes | {% if fftrim_measurement_count is not none %}{{ fftrim_measurement_count }}{% else %}—{% endif %} |
-| Observateur périodique | {% if fftrim_periodic_state is not none %}`{{ fftrim_periodic_state_label }}`{% else %}—{% endif %} |
-| Fenêtre périodique | {% if fftrim_periodic_window_duration_s is not none and fftrim_periodic_target_duration_s is not none %}{{ (fftrim_periodic_window_duration_s | float / 60) | round(1) }} / {{ (fftrim_periodic_target_duration_s | float / 60) | round(1) }} min · {{ fftrim_periodic_measurement_count }} mesures{% else %}—{% endif %} |
-| Amplitude / erreur de fermeture | {% if fftrim_periodic_amplitude_c is not none %}{{ fftrim_periodic_amplitude_c | float | round(3) }}°C{% else %}—{% endif %} / {% if fftrim_periodic_closure_error_c is not none %}{{ fftrim_periodic_closure_error_c | float | round(3) }}°C{% else %}—{% endif %} |
-| Dernier rejet périodique | {% if fftrim_periodic_last_reject_reason is not none %}`{{ fftrim_periodic_last_reject_reason }}`{% else %}—{% endif %} |
-| Alignement du temps mort | {% if fftrim_alignment_delay_s is not none %}{{ fftrim_alignment_delay_s | float | round(1) }} s{% else %}—{% endif %} |
-| Couverture de puissance | {% if fftrim_power_coverage_ratio is not none %}{{ (fftrim_power_coverage_ratio | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| Puissance causale / FF1 | {% if fftrim_mean_causal_power is not none %}{{ (fftrim_mean_causal_power | float * 100) | round(1) }}%{% else %}—{% endif %} / {% if fftrim_mean_ff1 is not none %}{{ (fftrim_mean_ff1 | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| Température / erreur moyennes | {% if fftrim_mean_temperature is not none %}{{ fftrim_mean_temperature | float | round(2) }}°C{% else %}—{% endif %} / {% if fftrim_mean_error is not none %}{{ '%+.2f' | format(fftrim_mean_error | float) }}°C{% else %}—{% endif %} |
-| Pente moyenne | {% if fftrim_mean_slope_h is not none %}{{ '%+.3f' | format(fftrim_mean_slope_h | float) }}°C/h{% else %}—{% endif %} |
-| Puissance de maintien observée | {% if fftrim_observed_hold_power is not none %}{{ (fftrim_observed_hold_power | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| Trim cible | {% if fftrim_target_trim is not none %}{{ '%+.3f' | format(fftrim_target_trim | float * 100) }}%{% else %}—{% endif %} |
-| Correction proposée | {% if fftrim_correction is not none %}{{ '%+.3f' | format(fftrim_correction | float * 100) }}%{% else %}—{% endif %} |
-| Propriété P / I moyenne | {% if fftrim_mean_p_power is not none %}{{ '%+.3f' | format(fftrim_mean_p_power | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_mean_i_power is not none %}{{ '%+.3f' | format(fftrim_mean_i_power | float * 100) }}%{% else %}—{% endif %} |
-| Déficit physique / correction décomposée | {% if fftrim_physical_power_deficit is not none %}{{ '%+.3f' | format(fftrim_physical_power_deficit | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_decomposed_correction is not none %}{{ '%+.3f' | format(fftrim_decomposed_correction | float * 100) }}%{% else %}—{% endif %} |
-| Delta trim demandé / visible live | {% if fftrim_requested_trim_delta is not none %}{{ '%+.3f' | format(fftrim_requested_trim_delta | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_applied_trim_delta is not none %}{{ '%+.3f' | format(fftrim_applied_trim_delta | float * 100) }}%{% else %}—{% endif %} |
-| Transfert I / commande nette live | {% if fftrim_applied_i_transfer is not none %}{{ '%+.3f' | format(fftrim_applied_i_transfer | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_net_command_delta is not none %}{{ '%+.3f' | format(fftrim_net_command_delta | float * 100) }}%{% else %}—{% endif %} |
-| Dernière transaction appliquée | {% if fftrim_last_transaction_timestamp is not none %}`{{ fftrim_last_transaction_timestamp }}` · `{{ fftrim_last_transaction_mode }}` · `{{ fftrim_last_transaction_state }}`{% else %}—{% endif %} |
-| Raison de la dernière transaction | {% if fftrim_last_transaction_reason is not none %}`{{ fftrim_last_transaction_reason }}`{% else %}—{% endif %} |
-| Derniers trim / transfert I appliqués | {% if fftrim_last_transaction_trim is not none %}{{ '%+.3f' | format(fftrim_last_transaction_trim | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_last_transaction_i is not none %}{{ '%+.3f' | format(fftrim_last_transaction_i | float * 100) }}%{% else %}—{% endif %} |
-| Résidu de propriété / qualité | {% if fftrim_mean_delivery_residual is not none %}{{ '%+.3f' | format(fftrim_mean_delivery_residual | float * 100) }}%{% else %}—{% endif %} / {% if fftrim_transfer_quality is not none %}`{{ fftrim_transfer_quality }}`{% else %}—{% endif %} |
-| Propriété de commande | {% if ownership_status is not none %}`{{ ownership_status }}`{% else %}—{% endif %}{% if ownership_reason is not none %} · `{{ ownership_reason }}`{% endif %}{% if ownership_kind is not none %} · `{{ ownership_kind }}`{% endif %}{% if ownership_sequence is not none %} · requête {{ ownership_sequence }}{% endif %}{% if ownership_receipts == false %} · VT sans reçus de commande{% endif %} |
-| Puissance demandée / appliquée | {% if ownership_requested_power is not none %}{{ (ownership_requested_power | float * 100) | round(3) }}%{% else %}—{% endif %} / {% if ownership_realized_power is not none %}{{ (ownership_realized_power | float * 100) | round(3) }}%{% else %}—{% endif %}{% if ownership_power_delta is not none %} · {{ '%+.3f' | format(ownership_power_delta | float * 100) }}%{% endif %} |
-| Timing appliqué / altérations | {% if ownership_realized_on is not none %}{{ ownership_realized_on }} / {{ ownership_realized_off }} s{% else %}—{% endif %}{% if ownership_alterations %} · `{{ ownership_alterations | join(', ') }}`{% endif %} |
-| Transaction bumpless | {% if fftrim_transfer_state is not none %}`{{ fftrim_transfer_state }}`{% else %}—{% endif %}{% if fftrim_transfer_pending %} · attente engagement actionneur{% endif %} |
-| Raison de transaction | {% if fftrim_transfer_reason is not none %}`{{ fftrim_transfer_reason }}`{% else %}—{% endif %} |
-| Dernière mise à jour | {% if fftrim_last_update_reason is not none %}`{{ fftrim_last_update_reason }}`{% else %}—{% endif %} |
-| Dernier rejet | {% if fftrim_last_reject_reason is not none %}`{{ fftrim_last_reject_reason }}`{% else %}—{% endif %} |
-| Fenêtres depuis la mise à jour | {% if fftrim_windows_since_update is not none %}{{ fftrim_windows_since_update }}{% else %}—{% endif %} |
 
 ---
 
@@ -627,32 +395,14 @@
 | `u_pi` | {{ (u_pi * 100) | round(1) }}% |
 | PI théorique | {{ (u_pi_th * 100) | round(1) }}% |
 | `u_ff1` | **{{ ff1_pct }}%** |
-| `u_ff2` | **{{ ff2_pct }}%** |
 | `u_ff_final` | **{{ ffinal_pct }}%** |
-| `u_ff3` | **{{ ff3_pct }}%** |
 | `u_ff_eff` | **{{ ffeff_pct }}%** |
 | `u_db_nominal` | **{{ dbnom_pct }}%** |
 
 | Statut FF | Valeur |
 |---|---|
 | Raison FF | `{{ ff_reason }}` |
-| FF2 autorité | {% if ff2_authority is not none %}{{ (ff2_authority | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| FF2 gelé | {% if ff2_frozen %}🔒 oui{% else %}✅ non{% endif %} · `{{ ff2_freeze_reason }}` |
-| FF2 signal trim | `{{ '%+.3f' | format(ff2_trim_delta * 100) }}%` |
 | FF warmup | {{ ff_ok }}/{{ ff_cyc }} |
-| État FF3 | {% if ff3_enabled %}🔮 actif{% else %}⚪ inactif{% endif %} |
-| Raison FF3 | `{{ ff3_label }}` |
-| Raison brute FF3 | `{{ ff3_raw_reason }}` |
-| Qualité prédiction | `{{ ff3_prediction_quality }}` |
-| Autorité FF3 | {% if ff3_authority_factor is not none %}{{ (ff3_authority_factor | float * 100) | round(0) }}%{% else %}—{% endif %} |
-| Contexte perturbation | {% if ff3_disturbance_active %}✅ actif{% else %}non{% endif %} |
-| Raison contexte | `{{ ff3_disturbance_reason_label }}` |
-| Type perturbation | `{{ ff3_disturbance_kind_label }}` |
-| Résidu persistant | {% if ff3_residual_persistent %}oui{% else %}non{% endif %} |
-| Cohérence dynamique | {% if ff3_dynamic_coherent %}oui{% else %}non{% endif %} |
-| Horizon FF3 | {{ ff3_horizon }} cycle · temps mort {{ ff3_deadtime_cycles }} · {% if ff3_horizon_capped %}capé{% else %}non capé{% endif %} |
-| Sensibilité FF3 | {% if ff3_action_sensitivity is not none %}{{ ff3_action_sensitivity | float | round(6) }} °C{% else %}—{% endif %} |
-| Candidat FF3 | {% if ff3_selected_candidate is not none %}{{ (ff3_selected_candidate | float * 100) | round(1) }}%{% else %}—{% endif %} |
 
 ---
 
@@ -676,39 +426,6 @@
 | `deadtime_state` | `{{ deadtime_state }}` |
 | `deadtime_last_power` | {% if deadtime_last_power is not none %}{{ (deadtime_last_power | float * 100) | round(1) }}%{% else %}—{% endif %} |
 
----
-
-### 🧠 Twin
-
-{% if pred %}
-| Signal | Valeur |
-|---|---|
-| Status | `{{ twin_status }}` |
-| Modèle fiable | {% if twin_model_reliable %}oui{% else %}non{% endif %} |
-| Warming up | {% if twin_warming_up %}oui{% else %}non{% endif %} |
-| `T_hat / T_pred` | {% if twin_t_hat is not none %}{{ twin_t_hat }}°C{% else %}—{% endif %} / {% if twin_t_pred is not none %}{{ twin_t_pred }}°C{% else %}—{% endif %} |
-| Innovation | {% if twin_innovation is not none %}{{ twin_innovation }}{% else %}—{% endif %} |
-| RMSE 30 / pure | {% if twin_rmse_30 is not none %}{{ twin_rmse_30 }}{% else %}—{% endif %} / {% if twin_rmse_pure is not none %}{{ twin_rmse_pure }}{% else %}—{% endif %} |
-| `T_hat_error` | {% if twin_t_hat_error is not none %}{{ twin_t_hat_error }}{% else %}—{% endif %} |
-| Biais innovation | {% if twin_innovation_bias is not none %}{{ twin_innovation_bias }}{% else %}—{% endif %}{% if twin_bias_warning %} ⚠️{% endif %} |
-| Perturbation dT/dt | {% if twin_perturbation is not none %}{{ twin_perturbation }}{% else %}—{% endif %} |
-| CUSUM + / - | {% if twin_cusum_pos is not none %}{{ twin_cusum_pos }}{% else %}—{% endif %} / {% if twin_cusum_neg is not none %}{{ twin_cusum_neg }}{% else %}—{% endif %} |
-| Gain / perte externe | {% if twin_external_gain %}gain{% else %}non{% endif %} / {% if twin_external_loss %}perte{% else %}non{% endif %} |
-| `T_steady / T_steady_max` | {% if twin_t_steady is not none %}{{ twin_t_steady }}°C{% else %}—{% endif %} / {% if twin_t_steady_max is not none %}{{ twin_t_steady_max }}°C{% else %}—{% endif %} |
-| `T_steady_reliable` | {% if twin_t_steady_reliable %}oui{% else %}non{% endif %} |
-| Setpoint reachable | {% if twin_setpoint_reachable is not none %}{{ twin_setpoint_reachable }}{% else %}—{% endif %} |
-| Setpoint reachable max | {% if twin_setpoint_reachable_max is not none %}{{ twin_setpoint_reachable_max }}{% else %}—{% endif %} |
-| Emitter saturated | {% if twin_emitter_saturated %}oui{% else %}non{% endif %} |
-| Cooling model | {% if twin_cooling_model_available %}oui{% else %}non{% endif %} |
-| `u_eff` | {% if twin_u_eff is not none %}{{ (twin_u_eff | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| `deadtime_s / dead_steps` | {% if twin_deadtime_s is not none %}{{ twin_deadtime_s }} s{% else %}—{% endif %} / {% if twin_dead_steps is not none %}{{ twin_dead_steps }}{% else %}—{% endif %} |
-| `d_hat / d_hat_fresh` | {% if twin_d_hat is not none %}{{ twin_d_hat }}{% else %}—{% endif %} / {% if twin_d_hat_fresh %}oui{% else %}non{% endif %} |
-| ETA / raison | {% if eta_s is not none %}{{ eta_s }} s{% else %}—{% endif %} / `{{ eta_reason if eta_reason is not none else '—' }}` |
-| ETA puissance | {% if eta_u is not none %}{{ (eta_u | float * 100) | round(1) }}%{% else %}—{% endif %} |
-| Auto reset | {% if twin_auto_reset %}oui{% else %}non{% endif %} · {{ twin_reset_count }} |
-{% else %}
-<ha-alert alert-type="info">Le jumeau thermique n'est pas encore exploitable ou n'expose pas de données d'analyse.</ha-alert>
-{% endif %}
 {% endif %}
 
 {% endif %}

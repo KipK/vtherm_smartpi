@@ -1,6 +1,6 @@
 ---
 name: smartpi-developer
-description: "Default implementation agent for a well-specified SmartPI change (bug fix, small feature, refactor into smartpi/ modules, diagnostics field, config option). Writes the code and its tests. Escalate to smartpi-senior-developer when the change touches regulation behaviour, learning gates, persistence or command ownership without a precise spec."
+description: "Default implementation agent for a well-specified SmartPI change (bug fix, small feature, refactor into smartpi/ modules, diagnostics field, config option). Writes the code and its tests. Escalate to smartpi-senior-developer when the change touches regulation behaviour, learning gates or persistence without a precise spec."
 tools: Read, Grep, Glob, Bash, Edit, Write
 model: sonnet
 effort: medium

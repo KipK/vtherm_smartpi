@@ -299,8 +299,6 @@ Near the target temperature, SmartPI tries to avoid constant micro-corrections. 
 
 SmartPI anticipates the temperature, in HEAT and in COOL: the proportional and integral branches read the measured temperature plus the distance the room is about to travel during the time between a command and its effect, estimated from the slope of the temperature. This lowers the command before the room reaches the setpoint, which limits the overshoot of slow emitters (underfloor heating, hydronic radiators) and of cooling that keeps acting after it stops. The horizon is the emitter lag measured by the heating balance in HEAT; until one is measured, and always in COOL, it is derived from the dead times: the longer of the dead time of the active mode and half the dead time of the passive response. The correction is limited to 1 °C, and fades in as the room approaches the setpoint from far away, so that a rise or a fall from far from the setpoint is not slowed. When the room enters the deadband around the setpoint, the correction is kept until it dies out, then there is none as long as the room stays there: the command does not step at the arrival, and a small quick move of the sensor does not move it afterwards. Both branches use the raw setpoint.
 
-With `FF3`, enabled by default, SmartPI can also apply a small predictive correction near the setpoint when it detects a credible external disturbance context.
-
 ### Automatic recalibration
 
 SmartPI keeps watching the quality of its model over time.
@@ -345,7 +343,7 @@ The learning uses only quiet periods: stretches without sun, at a constant setpo
   - Half the learned value shorter than the reference: the gains keep the reference. A learned value alone never makes the gains more aggressive than the reference.
   - Between 1 and 2 times the reference: the gains use half the learned value.
   - Above 2 times the reference: the gains use half the learned value only when the fast value and the identification value (the refined value, else the `τe` of the last evaluation whose two fits agree) agree within a factor of 1.25. Otherwise they use twice the reference. A lower bound is never confirmed this way.
-- When the gains use the learned value, the near band, the integral hold after a heater start or a resume, FF3 and the thermal twin use the learned value itself as their heating dead time (`applied_s`); otherwise they keep the bootstrap dead time. The learning of `a` and `b`, the feed-forward trim, the calibration and AutoCalib always keep the bootstrap dead time.
+- When the gains use the learned value, the near band and the integral hold after a heater start or a resume use the learned value itself as their heating dead time (`applied_s`); otherwise they keep the bootstrap dead time. The learning of `a` and `b`, the calibration and AutoCalib always keep the bootstrap dead time.
 - The bootstrap dead time is never modified. Without a learned value the regulation uses it as it is.
 
 **Data quality**
@@ -405,7 +403,7 @@ The holding power is the part of the command that compensates the losses for the
 - **Model published but no heat balance in force yet, or a heat balance that came into force later and whose slope differs from the model's `b_eq / a` by more than 5 %:** the holding power of the A/B model, unchanged, without the wall extra power.
 - **Nothing published, cooling or valves:** the holding power of the A/B model, unchanged. The heat balance alone is not used: without the wall extra power it would give the wrong holding power in a room with heavy walls.
 
-The room model holding power applies at once at full weight, and the slow feed-forward correction (FF2) is set to zero and stays frozen while it is in force: the model replaces the bias that correction learns. A change of the static loss (switch between the A/B model and the room model, between the simple model and the model with walls, or a new heat balance value) is absorbed by the integral, so the command does not jump; the integral then gives its share back at the pace of the regulation. The wall extra power is never absorbed by the integral: when it starts, stops (tracking no longer `ok`, after an open window for example) or changes with a new publication, it moves gradually over 30 minutes from its last value to the new one. After a window, the morning rise therefore gets its wall power back within 30 minutes once the tracking is `ok` again. The source in force and the wall power being applied are kept across restarts.
+The room model holding power applies at once at full weight. A change of the static loss (switch between the A/B model and the room model, between the simple model and the model with walls, or a new heat balance value) is absorbed by the integral, so the command does not jump; the integral then gives its share back at the pace of the regulation. The wall extra power is never absorbed by the integral: when it starts, stops (tracking no longer `ok`, after an open window for example) or changes with a new publication, it moves gradually over 30 minutes from its last value to the new one. After a window, the morning rise therefore gets its wall power back within 30 minutes once the tracking is `ok` again. The source in force and the wall power being applied are kept across restarts.
 
 The cost is a slight overshoot, around 0.1 °C, at the end of a morning rise in a room with heavy walls.
 
@@ -440,7 +438,7 @@ A restart is bridged when all of these hold:
 
 The decision is taken at the first calculation that has the indoor temperature: a sensor that reports a few seconds after the restart does not prevent it, and the stop counts up to that moment. While SmartPI waits for that temperature, it keeps the command of before the stop as long as the other conditions above hold; the heating is not interrupted. If the temperature is still missing 10 minutes after the stop, the command goes to 0 until it comes and the restart is not bridged.
 
-After a bridged restart, the measurements in progress resume (dead time, learning windows, emitter lag, the windows already counted by the slow feed-forward correction), the heater is taken as unchanged over the stop, nothing is excluded from the emitter lag learning or the room model (both heating only), and learning is not paused. A setpoint changed during the stop is handled at the first tick like any setpoint change. After any other restart SmartPI starts again carefully: the measurements in progress are dropped, learning pauses for one cycle, and only the stop itself is excluded from the learning data.
+After a bridged restart, the measurements in progress resume (dead time, learning windows, emitter lag), the heater is taken as unchanged over the stop, nothing is excluded from the emitter lag learning or the room model (both heating only), and learning is not paused. A setpoint changed during the stop is handled at the first tick like any setpoint change. After any other restart SmartPI starts again carefully: the measurements in progress are dropped, learning pauses for one cycle, and only the stop itself is excluded from the learning data.
 
 The diagnostic sensor shows the last restart in `control.last_restart`.
 
@@ -451,7 +449,6 @@ Default settings are suitable for most installations.
 Start simple:
 
 - keep the default hysteresis thresholds if your sensor is accurate and reports often (see below otherwise),
-- keep `FF3` enabled unless you have a specific reason to disable it,
 - adjust the deadband first if the temperature oscillates too much around the target,
 - enable the Versatile Thermostat window detection (window sensor or automatic detection).
 
@@ -501,7 +498,6 @@ These values come from simulations of each installation type. A cycle within one
 | **Minimal activation delay**   | Minimum time the heater stays on once activated. Switch outputs only; ignored for valves.                                                  | `0 s`         |
 | **Minimal deactivation delay** | Minimum time the heater stays off once deactivated. Switch outputs only; ignored for valves.                                               | `0 s`         |
 | **Deadband**                   | Tolerance zone around the setpoint.                                                               | `0.05°C`      |
-| **FF3**                        | Enables short-horizon predictive correction near the setpoint in disturbance recovery conditions. | `enabled`     |
 | **Allow P inside deadband**    | Allows the proportional branch to remain active inside the deadband.                              | `disabled`    |
 | **Allow PWM cycle restart on band transitions** | Allows SmartPI to restart the current PWM cycle when entering or leaving deadband or near-band. | `disabled` |
 | **Hysteresis on** | Restart threshold during bootstrap learning: heating restarts at setpoint − threshold in HEAT, cooling restarts at setpoint + threshold in COOL. | `0.3°C`       |
@@ -551,7 +547,7 @@ Other useful blocks under `live`:
 - `power`: current and next cycle command information,
 - `temperature`: measured temperature, error, integral state,
 - `model`: learned `a`, `b`, confidence, and dead times,
-- `feedforward`: feed-forward and FF3 status,
+- `feedforward`: holding power source and wall part,
 - `setpoint`: setpoint boost state,
 - `autocalib`: automatic supervision state,
 - `calibration`: forced calibration state.

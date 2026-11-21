@@ -9,7 +9,7 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 
 | Subsystem | Code | Regulation reads it? |
 |---|---|---|
-| Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | Yes (HEAT, PWM only): gives the dead time in force used by gains, near band, I-hold, FF3, twin |
+| Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | Yes (HEAT, PWM only): gives the dead time in force used by gains, near band, I-hold |
 | Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the two learnings above and below |
 | Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1). Forecasts, forecast errors, `a`/`b_eq` display: no |
 | Emitter lag on constant-power heating phases | `smartpi/response_lag.py` | Yes: delivered-power model for the `a` learning |
@@ -17,7 +17,6 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 | Restart bridge | `smartpi/restart_bridge.py` | Yes: decides resume vs conservative restart for every component |
 | Resume hold | `smartpi/resume_hold.py` | Yes: temporary I-hold after window / power-shedding resume; `recovery_error_floor_c` (residual error under which a recovery counts as closed) |
 | Job abort | `smartpi/job_abort.py` | Plumbing for executor jobs |
-| Thermal measurement | `smartpi/thermal_measurement.py` | Plumbing for the FF trim coordinator only |
 | Lazy numpy/scipy | `smartpi/tar_learning/deps.py` | Gate: without them nothing is learned |
 
 Wiring: `algo.py::SmartPI` owns `tar_learning: TarLearningManager` and `room_model: RoomModelManager` (the
@@ -128,9 +127,9 @@ Policy (`policy.py`):
 - Without a reliable bootstrap dead time, or when inactive, the bootstrap value stays (`source = bootstrap`).
 
 What it influences (`algo.py::SmartPI.regulation_dead_time`, `gain_dead_time`): in HEAT only, a
-`RegulationDeadTime` view replaces the HEAT active dead time. Gains use `gains_s`; near band, I-hold, FF3, twin
+`RegulationDeadTime` view replaces the HEAT active dead time. Gains use `gains_s`; near band, I-hold
 and the room-model emitter first moment use `applied_s`. The bootstrap/calibration value is never modified;
-`a`/`b` learning, FF trim, calibration and AutoCalib keep the bootstrap value.
+`a`/`b` learning, calibration and AutoCalib keep the bootstrap value.
 Observation only: `refined.last_evaluation.a` and `.b` ("information only, never applied"), `refined.k_per_s`,
 `refined.tau_w_h` (the room-model identification does not read them; room class is used inside tar morning
 fits), `night_room_class`, `pending_steps`, `history_h`, `fast.last_morning`.
@@ -218,7 +217,6 @@ What it influences (REGULATION):
   The fitted `b_eq/a` itself is never the static loss; the observer's disturbance `d` is not used.
 - Static-part discrete changes are moved bumplessly into the integral (`HoldingTransfer.update`); the wall part
   is never moved into the integral, it blends over `RM_WALL_FADE_S = 30 min`.
-- While a room-model source is in force FF2 is zeroed and frozen (`ff2_freeze_reason = room_model`).
 - `algo.py` also passes `static_model` (slope, free gain) to the setpoint manager as equilibrium of the braking
   prediction (`SmartPISetpointManager.filter_setpoint`).
 - Source in force and applied wall part persist with the PI state (`ff_source`, `ff_wall`).
@@ -301,7 +299,7 @@ bridge only in HEAT (`RestartDecision.heat_bridged`).
   committed command of before the stop while the restart is pending, as long as `command_holdable` stays true
   (stop plus wait <= 600 s). Past that the output goes to 0 until the temperature comes and the restart is
   not bridged (`indoor temperature unknown`). The heater cut during the wait is the reason it cannot be bridged.
-- Consumers (`SmartPI._apply_restart_decision`): dead-time detection, learning window, FF trim, emitter lag on constant-power phases,
+- Consumers (`SmartPI._apply_restart_decision`): dead-time detection, learning window, emitter lag on constant-power phases,
   heating balance, bootstrap hysteresis output, tar history, room model resume (bridged) or take the
   conservative path (other restart). Component behaviour table: technical_doc.md section 5.4 "Restarts".
 - Persistence: context of the last tick and committed power in the algorithm store (`restart`), plus last ticks of
@@ -314,15 +312,8 @@ After a window or power-shedding resume (`ResumeHoldSource.WINDOW_RESUME`, `POWE
 integral hold (`start_integral_hold`) covering the active dead time of the resumed episode, so the integral does
 not accumulate while the emitter has not answered. It ends when the dead-time window ends, when no reliable
 active dead time exists, or immediately when the residual error is already within the recovery floor. Not
-persisted (cleared on reset). While active it flags FF-trim windows as `recovery` (`ff_trim_runtime.py`). The hold
+persisted (cleared on reset). The hold
 source is reported as `control.integral_hold_source` / `integral_hold_mode`.
-
-## 8. Thermal measurement (`smartpi/thermal_measurement.py`)
-
-`ThermalMeasurementSource.observe` returns an immutable `ThermalMeasurement` only for a new distinct VT
-measurement identity (a repeated value is not new); `reset` bumps an epoch. Consumer: the FF trim coordinator
-(`ff_trim_runtime.py::record_thermal_measurement`). Not used by tar learning or the room model (they have their own
-change detection: history change records, observer `meas_key`). No persistence, no diagnostic.
 
 ## Design stance (project rules, user decisions)
 

@@ -7,7 +7,7 @@ effort: high
 ---
 
 Role: independent review of the working tree or a given range (use `git --no-pager diff`/`log`, never the pager). Read .agents/context/principles.md, pitfalls.md and decisions.md first.
-Checklist: behaviour change outside the task; signs and ranges; bit-identical-when-silent claims; time handling (monotonic vs wall, patched `time` in tests); persisted vs transient state; command ownership; diagnostics schema fixture and docs/cards; translations FR/EN; English comments, no 'new/changed' wording, no plan/bench vocabulary; privacy (no personal data); algo.py/handler.py growth; memory diff matches the code diff (.agents/context files per the trigger table, status.md, obsolete content pruned, check_memory.py clean); tests that prove the claim rather than mirror the code.
+Checklist: behaviour change outside the task; signs and ranges; bit-identical-when-silent claims; time handling (monotonic vs wall, patched `time` in tests); persisted vs transient state; applied-command receipts; diagnostics schema fixture and docs/cards; translations FR/EN; English comments, no 'new/changed' wording, no plan/bench vocabulary; privacy (no personal data); algo.py/handler.py growth; memory diff matches the code diff (.agents/context files per the trigger table, status.md, obsolete content pruned, check_memory.py clean); tests that prove the claim rather than mirror the code.
 Output: findings ranked by severity with path::symbol and a concrete failure scenario each; say explicitly what you verified and what you could not. Do not edit files.
 This profile is read-only by instruction: do not create, edit or delete repository files, including through shell commands.
 

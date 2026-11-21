@@ -61,7 +61,7 @@ def _running(holder: dict, publish: bool = True):
 
 
 def test_published_room_model_gives_the_holding_power() -> None:
-    """A published simple model replaces the learned holding power (full weight, no trim) with the
+    """A published simple model replaces the learned holding power (full weight) with the
     energy-balance ratio in force as static gain, never its own b_eq / a.
 
     The run differs from the reference from the first cycle on: the learned holding power
@@ -87,13 +87,11 @@ def test_published_room_model_gives_the_holding_power() -> None:
     assert diag["wall_extra_power_percent"] is None
     assert published["feedforward"]["source"] == "room model (simple)"
     assert published["feedforward"]["wall_power_percent"] is None
-    # Holding power at full weight from the first cycle: EB ratio (T_sp - T_ext), no trim
+    # Holding power at full weight from the first cycle: EB ratio (T_sp - T_ext)
     gain = EB_RATIO
     for row in rows[:60]:
         t = sim.WALL0 + row[0]
         assert row[7] == pytest.approx(gain * (sim._setpoint(t) - sim.T_EXT), abs=1e-12)
-    assert algo._ff_trim.u_ff_trim == 0.0
-    assert algo._ff_trim.freeze_reason == "room_model"
     assert algo.dt_est.deadtime_heat_s == 480.0
     assert "room_model" not in algo.save_state()
 

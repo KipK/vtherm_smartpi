@@ -69,8 +69,6 @@ class FakeReceiptCycleScheduler(FakeCycleScheduler):
         hvac_mode,
         on_percent: float,
         force: bool = False,
-        *,
-        request_id: int | None = None,
     ) -> None:
         """Apply the request and emit its receipt when it is applied."""
         from helpers import make_receipt
@@ -83,7 +81,6 @@ class FakeReceiptCycleScheduler(FakeCycleScheduler):
         if not self.is_valve_mode:
             applied = int(applied * self.cycle_duration_sec) / self.cycle_duration_sec
         receipt = make_receipt(
-            request_id,
             applied,
             kind="update" if running and not force else "cycle_start",
             hvac_mode=str(hvac_mode),

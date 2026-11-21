@@ -26,7 +26,6 @@ def force_smartpi_stable_mode(algo) -> None:
 
 
 def make_receipt(
-    request_id: int | None,
     applied: float,
     *,
     kind: str = "cycle_start",
@@ -36,7 +35,7 @@ def make_receipt(
     alterations: tuple[str, ...] = (),
     cycle_duration_sec: float = 120.0,
 ):
-    """Build an applied-command receipt as the VT cycle scheduler emits it."""
+    """Build an applied-command receipt of an untagged request, as the VT cycle scheduler emits it."""
     from vtherm_api.command_receipt import (
         AppliedCommandReceipt,
         CommandAlteration,
@@ -46,7 +45,7 @@ def make_receipt(
     on_time_sec = int(applied * cycle_duration_sec)
     return AppliedCommandReceipt(
         kind=CommandReceiptKind(kind),
-        request_id=request_id,
+        request_id=None,
         hvac_mode=hvac_mode,
         requested_on_percent=applied if requested is None else requested,
         applied_on_percent=applied,

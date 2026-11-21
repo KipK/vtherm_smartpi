@@ -65,7 +65,7 @@ The `live` block is organized by responsibility:
 | `model` | A/B model, confidence, time constant and dead times |
 | `learning` | Learning stage, bootstrap progress, accepted updates and drift state |
 | `governance` | Thermal regime and model-update decision |
-| `feedforward` | Holding power source, FF3 status, dead-band source and canonical FFTrim diagnostics |
+| `feedforward` | Holding power source, wall part of the holding power and dead-band source |
 | `setpoint` | Setpoint boost state |
 | `autocalib` | Automatic calibration supervisor state |
 | `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
@@ -85,7 +85,7 @@ and for a thermostat that starts without saved data.
 | `reason` | Why the restart was not bridged, `null` when it was: `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (also when the command went to 0 while the temperature was awaited), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, or an exclusion before the stop or after the restart (for example `window open before the stop`, `safety mode after the restart`) |
 
 `analysis` groups the advanced live values into `control`, `learning`,
-`deadtime`, `governance`, `feedforward` and, when available, `twin`.
+`deadtime`, `governance` and `feedforward`.
 
 `analysis.control` publishes, among the error terms and the band geometry, the
 anticipation of the temperature, in heating and in cooling:
@@ -156,7 +156,7 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | Field | Meaning |
 |---|---|
 | `status` | `active`, `checking_dependencies` (until the thermostat has started), `dependencies_unavailable` (numpy/scipy cannot be loaded: bootstrap value in use) or `valve_mode_not_supported` |
-| `applied_s` | HEAT active dead time in force for the regulation (near band, integral hold, FF3, thermal twin), in seconds: the learned emitter lag when the gains use it, else `bootstrap_s` |
+| `applied_s` | HEAT active dead time in force for the regulation (near band, integral hold), in seconds: the learned emitter lag when the gains use it, else `bootstrap_s` |
 | `source` | Origin of `applied_s` and `gains_s`: `bootstrap`, `fast`, `refined` or `lower_bound` (a lower bound from comfort steps cut by sunrise) |
 | `gains_s` | Dead time used by the gains, in seconds: half of `applied_s` for a learned emitter lag; otherwise `reference_s` when it is shorter, twice `reference_s` when it is longer and not confirmed, `bootstrap_s` without a learned emitter lag |
 | `bootstrap_s` | Bootstrap/calibration heating dead time (`model.deadtime_heat_s`), never modified |
@@ -224,26 +224,7 @@ feed-forward):
 | `source` | `learned model` (the A/B model, `model.b / model.a`), `room model (air and walls)` (published model with walls, tracking `ok`: static part plus the wall extra power), `room model (static part)` (published model with walls while the tracking is not `ok`: static part only) or `room model (simple)` (published model without walls). The static part of a room model source is `room_model.energy_balance_loss_per_c` × (setpoint − outdoor temperature) − `room_model.energy_balance_free_gain_percent` / 100; while no heat balance is in force, or while its `energy_balance_loss_per_c` differs from the published `b_eq / a` by more than 5 %, the source stays `learned model` |
 | `wall_power_percent` | Wall extra power applied in the holding power, in % of full power (negative when the walls give heat back). When the wall term starts, stops or changes with a new publication, the applied value moves over 30 minutes from its last value to the new one, so it can differ from `room_model.wall_extra_power_percent` and stay non-zero for 30 minutes after `source` leaves `room model (air and walls)`; `null` when no wall part is applied |
 
-While a room model source is in force, `analysis.feedforward.ff2_frozen` is
-`true` with `ff2_freeze_reason` `room_model`, and `u_ff2` is `0`.
-
-FFTrim uses nested canonical blocks:
-
-```yaml
-live:
-  feedforward:
-    fftrim:
-      stationary: {}
-      periodic: {}
-      transfer: {}
-      command_ownership: {}
-      observation_mode: ...
-      last_reject_reason: ...
-      last_update_reason: ...
-      last_result: ...
-      last_transaction: ...
-      windows_since_update: ...
-```
+`analysis.feedforward` publishes `u_ff1`, the holding power injected into the command, and its `reason`; `u_ff_final` and `u_ff_effective` carry the same value.
 
 ## Publication cadence
 

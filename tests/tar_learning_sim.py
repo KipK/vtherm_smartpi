@@ -80,7 +80,6 @@ def run(hours: float = 30.0, *, tar_learning: bool | None = None, room_model: bo
             minimal_activation_delay=0,
             minimal_deactivation_delay=0,
             name="TarSim",
-            use_ff3=True,
             **kwargs,
         )
         seed_stable(algo)
@@ -110,7 +109,7 @@ def run(hours: float = 30.0, *, tar_learning: bool | None = None, room_model: bo
                     algo.observe_room_model(published, T_EXT, VThermHvacMode_HEAT, measure_id=pub_time)
                 if k == 0:
                     on_percent = algo.on_percent
-                    algo._commit_applied_command(on_percent, VThermHvacMode_HEAT, None, cycle_start=True)
+                    algo._commit_applied_command(on_percent, VThermHvacMode_HEAT, cycle_start=True)
                 rows.append([
                     round(clock["t"] - WALL0, 1), out, algo.on_percent, algo.Kp, algo.Ki, algo.integral,
                     str(algo.phase), algo.u_ff, algo.deadband_mgr.near_band_below_deg,

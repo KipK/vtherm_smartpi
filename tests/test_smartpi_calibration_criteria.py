@@ -362,22 +362,11 @@ def test_reachability_margin_is_applied_to_the_outdoor_temperature(phase, mode, 
     assert _calc(_manager(phase), enough, mode).result == SmartPICalibrationResult.PENDING
 
 
-def test_the_twin_never_vetoes_the_cycle():
-    """The cycle depends on the outdoor temperature only, not on any twin state held by the algorithm."""
+def test_the_cycle_depends_on_the_outdoor_temperature_only():
+    """A calibration at a reachable outdoor temperature starts with the passive cool-down."""
     from test_smartpi_calibration import create_smartpi
 
     algo = create_smartpi()
-    algo._last_twin_diag = {
-        "status": "ok",
-        "model_reliable": True,
-        "warming_up": False,
-        "T_steady_passive": 27.7,
-        "T_steady_passive_valid": True,
-        "T_steady_max": 15.0,
-        "T_steady_max_valid": True,
-        "d_hat_fresh": True,
-        "Text_used": 12.0,
-    }
     algo.force_calibration()
 
     algo.calculate(

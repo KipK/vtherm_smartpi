@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Feed-forward: the holding power is the only feed-forward. The "Use FF3"
+  option, the slow feed-forward trim, the thermal twin and its time-to-setpoint
+  estimate are removed. The diagnostics groups `feedforward.fftrim`,
+  `analysis.twin` and the FF2 and FF3 fields (`feedforward.ff3_status`,
+  `feedforward.ff3_twin_usable`, `feedforward.twin_status`,
+  `analysis.feedforward.u_ff2`, `u_ff3`, `ff2_*` and `ff3_*`) are removed;
+  `analysis.feedforward.u_ff_final` and `u_ff_effective` equal `u_ff1`. Saved
+  states and configurations load unchanged, and the Markdown cards no longer
+  show these groups.
 - Calibration: switching the thermostat off during a calibration, for example
   while a window is open, no longer cancels it. The calibration waits in its
   phase and continues when the same mode comes back within 10 minutes; after a
@@ -91,6 +100,10 @@ All notable changes to this project will be documented in this file.
 - Documentation and cards: two names only, dead time (the time before the room
   temperature first moves after a command) and emitter lag (the mean time the
   commanded heat takes to arrive in the room), with a glossary.
+- Anticipation: the slope of the temperature is read over a window equal to the
+  delay between a command and its effect, between 10 and 30 minutes. A sensor
+  that moves by steps of 0.05 to 0.1 °C makes the command swing much less.
+  Rooms with a long delay may overshoot slightly more.
 
 ## [0.6.7]
 

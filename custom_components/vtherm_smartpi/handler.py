@@ -25,7 +25,6 @@ from .const import (
     CONF_MINIMAL_ACTIVATION_DELAY,
     CONF_MINIMAL_DEACTIVATION_DELAY,
     CONF_SMART_PI_DEADBAND,
-    CONF_SMART_PI_USE_FF3,
     CONF_SMART_PI_HYSTERESIS_ON,
     CONF_SMART_PI_HYSTERESIS_OFF,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
@@ -109,7 +108,6 @@ class SmartPIHandler:
 
         # SmartPI specific
         deadband = entry[CONF_SMART_PI_DEADBAND]
-        use_ff3 = entry[CONF_SMART_PI_USE_FF3]
         hyst_on = entry[CONF_SMART_PI_HYSTERESIS_ON]
         hyst_off = entry[CONF_SMART_PI_HYSTERESIS_OFF]
         deadband_allow_p = entry[CONF_SMART_PI_DEADBAND_ALLOW_P]
@@ -142,7 +140,6 @@ class SmartPIHandler:
             name=t.name,
             max_on_percent=max_on_percent,
             deadband_c=deadband,
-            use_ff3=use_ff3,
             hysteresis_on=hyst_on,
             hysteresis_off=hyst_off,
             deadband_allow_p=deadband_allow_p,
@@ -373,7 +370,7 @@ class SmartPIHandler:
                 valve_mode=bool(getattr(scheduler, "is_valve_mode", False)),
             )
             self._remove_receipt_callback()
-            # Capability check before any request_id reaches start_cycle (older VT raise TypeError)
+            # Older VT versions do not report applied commands
             if hasattr(scheduler, "register_command_receipt_callback"):
                 self._receipt_remove = scheduler.register_command_receipt_callback(
                     algo.on_command_receipt
@@ -381,12 +378,10 @@ class SmartPIHandler:
             else:
                 _LOGGER.warning(
                     "%s - Versatile Thermostat does not report applied commands: "
-                    "SmartPI runs without command ownership (no bumpless transfer, "
-                    "no periodic feed-forward trim)",
+                    "SmartPI takes the applied power from the cycle start notifications",
                     self._thermostat,
                 )
                 scheduler.register_cycle_start_callback(self._on_legacy_cycle_started)
-            algo.receipts_supported = self._receipt_remove is not None
             scheduler.register_cycle_end_callback(algo.on_cycle_completed)
 
     def _synchronize_scheduler_timing(
@@ -607,20 +602,10 @@ class SmartPIHandler:
                 or (t.prop_algorithm.phase == SmartPIPhase.HYSTERESIS and on_percent_changed)
             )
 
-            # An untagged request (no request_id) is never owned.
-            request_kwargs = {}
-            if algo is not None:
-                if abs(on_percent - algo.on_percent) > 1e-6:
-                    # VT override (e.g. safety default): not owned by the SmartPI request.
-                    algo.reset_command_ownership("runtime_power_override")
-                elif self._receipt_remove is not None:
-                    request_kwargs = {"request_id": algo.stage_command(t.vtherm_hvac_mode)}
-
             await t.cycle_scheduler.start_cycle(
                 t.vtherm_hvac_mode,
                 on_percent,
                 force_cycle,
-                **request_kwargs,
             )
             if (
                 algo is not None

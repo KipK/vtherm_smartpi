@@ -18,8 +18,6 @@ from .const import (
     AB_HISTORY_SIZE,
     AB_MIN_SAMPLES_A,
     AB_MIN_SAMPLES_B,
-    FF_TRIM_EPSILON,
-    FF_TRIM_RHO,
     RESPONSE_LAG_RESOLVE_EPISODES,
     clamp,
 )
@@ -27,7 +25,6 @@ from .const import (
 if TYPE_CHECKING:
     from ..algo import SmartPI
     from .ab_estimator import TauReliability
-    from .ff_trim_runtime import FFTrimCoordinator
 
 
 def _round_optional(value: float | None, digits: int) -> float | None:
@@ -261,207 +258,15 @@ def _build_governance(algo: SmartPI) -> Dict[str, Any]:
     }
 
 
-def _effective_ff3_reason_disabled(algo: SmartPI) -> str:
-    """Return an FF3 disabled reason consistent with the current runtime state."""
-    if algo.ff3_state.reason_disabled == "config_disabled":
-        return "config_disabled"
-
-    if algo.ff3_state.enabled or abs(algo.u_ff3) > 1e-9:
-        return "none"
-    if algo.deadband_mgr.in_deadband:
-        return "deadband"
-    if not algo.deadband_mgr.in_near_band:
-        return "not_near_band"
-    if algo.ff3_state.reason_disabled in {"deadband", "not_near_band"}:
-        return "pending_cycle_boundary"
-    return algo.ff3_state.reason_disabled
-
-
-def _build_ff3_status(algo: SmartPI) -> str:
-    """Return a compact FF3 runtime status for the published summary."""
-    if algo.ff3_state.enabled is True:
-        return "active"
-
-    reason = _effective_ff3_reason_disabled(algo) or "disabled"
-    if reason == "none":
-        return "inactive"
-    return f"disabled:{reason}"
-
-
-def _build_fftrim_stationary(observer: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the stationary FF trim observer window."""
-    alignment_delay_s = observer["current_alignment_delay_s"]
-    return {
-        "state": observer["state"],
-        "window_duration_s": round(float(observer["window_duration_s"]), 3),
-        "window_target_duration_s": round(
-            float(observer["window_target_duration_s"]), 3
-        ),
-        "measurement_count": int(observer["measurement_count"]),
-        "alignment_delay_s": (
-            round(float(alignment_delay_s), 3)
-            if alignment_delay_s is not None
-            else None
-        ),
-        "last_reject_reason": observer["last_reject_reason"],
-    }
-
-
-def _build_fftrim_periodic(observer: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the periodic FF trim observer window."""
-    return {
-        "state": observer["state"],
-        "window_duration_s": round(float(observer["window_duration_s"]), 3),
-        "target_duration_s": round(float(observer["window_target_duration_s"]), 3),
-        "measurement_count": int(observer["measurement_count"]),
-        "amplitude_c": round(float(observer["amplitude_c"]), 6),
-        "closure_error_c": round(float(observer["closure_error_c"]), 6),
-        "last_reject_reason": observer["last_reject_reason"],
-    }
-
-
-def _build_fftrim_result(result: Any | None) -> Dict[str, Any] | None:
-    """Build a stable public snapshot of one admissible FF trim result."""
-    if result is None:
-        return None
-
-    return {
-        "reason": str(result.reason),
-        "observation_mode": str(result.observation_mode),
-        "duration_s": round(float(result.duration_s), 3),
-        "measurement_count": int(result.measurement_count),
-        "alignment_delay_s": _round_float(result.alignment_delay_s, 3),
-        "power_coverage_ratio": round(float(result.power_coverage_ratio), 6),
-        "mean_causal_power": _round_float(result.mean_causal_power),
-        "mean_ff1": _round_float(result.mean_ff1),
-        "mean_temperature": _round_float(result.mean_temperature),
-        "mean_error": _round_float(result.mean_error),
-        "mean_slope_h": _round_float(result.mean_slope_h),
-        "observed_hold_power": _round_float(result.observed_hold_power),
-        "target_trim": _round_float(result.target_trim),
-        "correction": _round_float(result.correction),
-        "mean_p_power": _round_float(result.mean_p_power),
-        "mean_i_power": _round_float(result.mean_i_power),
-        "mean_visible_ff_power": _round_float(result.mean_visible_ff_power),
-        "mean_delivery_residual": _round_float(result.mean_delivery_residual),
-        "physical_power_deficit": _round_float(result.physical_power_deficit),
-        "decomposed_correction": _round_float(result.decomposed_correction),
-    }
-
-
-def _build_fftrim_transaction(transaction: Any | None) -> Dict[str, Any] | None:
-    """Build a stable public snapshot of one applied FF trim transaction."""
-    if transaction is None:
-        return None
-
-    return {
-        "timestamp_utc": str(transaction.timestamp_utc),
-        "observation_mode": str(transaction.observation_mode),
-        "state": str(transaction.state),
-        "reason": str(transaction.reason),
-        "quality": str(transaction.quality),
-        "requested_trim_delta": round(
-            float(transaction.requested_trim_delta), 6
-        ),
-        "stored_trim_delta": round(float(transaction.stored_trim_delta), 6),
-        "applied_trim_delta": round(float(transaction.applied_trim_delta), 6),
-        "transferable_i_power": round(
-            float(transaction.transferable_i_power), 6
-        ),
-        "requested_i_transfer": round(
-            float(transaction.requested_i_transfer), 6
-        ),
-        "applied_i_transfer": round(float(transaction.applied_i_transfer), 6),
-        "net_command_delta": round(float(transaction.net_command_delta), 6),
-    }
-
-
-def _build_fftrim_transfer(coord: FFTrimCoordinator) -> Dict[str, Any]:
-    """Return the latest FF trim and bumpless integral transfer amounts."""
-    return {
-        "requested_trim_delta": round(coord.requested_trim_delta, 6),
-        "stored_trim_delta": round(coord.stored_trim_delta, 6),
-        "applied_trim_delta": round(coord.applied_trim_delta, 6),
-        "transferable_i_power": round(coord.transferable_i_power, 6),
-        "requested_i_transfer": round(coord.requested_i_transfer, 6),
-        "applied_i_transfer": round(coord.applied_i_transfer, 6),
-        "net_command_delta": round(coord.net_command_delta, 6),
-        "state": coord.transfer_state,
-        "reason": coord.transfer_reason,
-        "pending_engagement": coord.transfer_pending_request_id is not None,
-        "quality": coord.transfer_quality,
-    }
-
-
-def _build_command_ownership(algo: SmartPI) -> Dict[str, Any]:
-    """Build the latest request-to-receipt binding diagnostics."""
-    tracker = algo._command_ownership
-    binding = tracker.last_binding
-
-    requested = binding.requested_power
-    realized = binding.realized_power
-    return {
-        "receipts_supported": algo.receipts_supported,
-        "status": binding.status.value,
-        "reason": binding.reason,
-        "request_sequence": binding.request_id,
-        "kind": binding.kind,
-        "requested_power": _round_float(requested),
-        "realized_power": _round_float(realized),
-        "power_delta": (
-            _round_float(realized - requested)
-            if realized is not None and requested is not None
-            else None
-        ),
-        "realized_on_time_sec": binding.realized_on_time_sec,
-        "realized_off_time_sec": binding.realized_off_time_sec,
-        "alterations": list(binding.alterations),
-        "forced_by_timing": (
-            "min_on_off" in binding.alterations if binding.kind is not None else None
-        ),
-        "rejection_counts": dict(tracker.rejection_counts),
-    }
-
-
-def _build_fftrim(algo: SmartPI) -> Dict[str, Any]:
-    """Return the FF trim observers, the last update and the command ownership."""
-    coord = algo.fftrim_coord
-    return {
-        "stationary": _build_fftrim_stationary(algo._fftrim_observer.diagnostics),
-        "periodic": _build_fftrim_periodic(
-            algo._fftrim_periodic_observer.diagnostics
-        ),
-        "observation_mode": coord.observation_mode,
-        "last_reject_reason": coord.last_reject_reason,
-        "last_update_reason": coord.last_update_reason,
-        "last_result": _build_fftrim_result(
-            algo._fftrim_observer.last_admissible_result
-        ),
-        "last_transaction": _build_fftrim_transaction(algo._ff_trim.last_transaction),
-        "windows_since_update": int(coord.windows_since_update),
-        "transfer": _build_fftrim_transfer(coord),
-        "command_ownership": _build_command_ownership(algo),
-    }
-
-
-def _build_feedforward(algo: SmartPI, twin_diag: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the holding power source, the FF3 and twin status, the deadband power path and the FF trim."""
-    twin_status = twin_diag.get("status", "unavailable")
+def _build_feedforward(algo: SmartPI) -> Dict[str, Any]:
+    """Return the holding power source and the deadband power path."""
     holding = algo._ff_holding
     wall = holding.wall_shown
     return {
         "source": holding.source.plain,
         "wall_power_percent": round(100.0 * wall, 1) if wall is not None else None,
-        "ff3_status": _build_ff3_status(algo),
-        "ff3_twin_usable": (
-            twin_status == "ok"
-            and twin_diag.get("model_reliable") is True
-            and twin_diag.get("warming_up") is not True
-        ),
-        "twin_status": twin_status,
         "deadband_power_source": algo.ctl.deadband_power_source,
         "deadband_p_mode": algo.ctl.deadband_p_mode,
-        "fftrim": _build_fftrim(algo),
     }
 
 
@@ -598,84 +403,18 @@ def _heating_balance_diag(balance) -> Dict[str, Any]:
 
 
 def _build_analysis_feedforward(algo: SmartPI) -> Dict[str, Any]:
-    """Return the FF signal chain, the FF trim authority and the FF3 decision."""
+    """Return the FF1 holding power."""
     ff_result = algo._last_ff_result
-    ff3 = algo.ff3_state
-    u_ff1 = ff_result.u_ff1 if ff_result else 0.0
-    u_ff2 = ff_result.u_ff2 if ff_result else 0.0
-    u_ff_final = ff_result.u_ff_final if ff_result else 0.0
-    u_ff3 = ff_result.u_ff3 if ff_result else algo.u_ff3
+    u_ff1 = round(ff_result.u_ff1, 6) if ff_result else 0.0
     return {
         "reason": algo._last_ff_reason,
-        "u_ff1": round(u_ff1, 6),
-        "u_ff2": round(u_ff2, 6),
-        "u_ff3": round(u_ff3, 6),
-        "u_ff_final": round(u_ff_final, 6),
-        "u_ff_effective": round(ff_result.u_ff_eff, 6) if ff_result else 0.0,
-        "ff2_authority": round(FF_TRIM_RHO * max(u_ff1, FF_TRIM_EPSILON), 6),
-        "ff2_frozen": algo._ff_trim.frozen,
-        "ff2_freeze_reason": algo._ff_trim.freeze_reason,
-        "ff2_trim_delta": round(algo.fftrim_coord.last_ff_trim_delta, 6),
-        "ff3_raw_reason_disabled": ff3.raw_reason_disabled,
-        "ff3_selected_candidate": round(ff3.selected_candidate, 6),
-        "ff3_horizon_cycles": ff3.horizon_cycles,
-        "ff3_deadtime_cycles": ff3.deadtime_cycles,
-        "ff3_horizon_capped": ff3.horizon_capped,
-        "ff3_action_sensitivity": round(ff3.action_sensitivity, 6),
-        "ff3_prediction_quality": ff3.prediction_quality,
-        "ff3_authority_factor": round(ff3.authority_factor, 6),
-        "ff3_disturbance_active": ff3.disturbance_active,
-        "ff3_disturbance_reason": ff3.disturbance_reason,
-        "ff3_disturbance_kind": ff3.disturbance_kind,
-        "ff3_residual_persistent": ff3.residual_persistent,
-        "ff3_dynamic_coherent": ff3.dynamic_coherent,
+        "u_ff1": u_ff1,
+        "u_ff_final": u_ff1,
+        "u_ff_effective": u_ff1,
     }
 
 
-def _build_analysis_twin(twin_diag: Dict[str, Any]) -> Dict[str, Any] | None:
-    """Return the thermal twin and ETA fields, None unless the twin status is ok."""
-    if twin_diag.get("status") != "ok":
-        return None
-    return {
-        "twin_status": twin_diag["status"],
-        "twin_T_hat": round(twin_diag.get("T_hat_next", 0), 3),
-        "twin_T_pred": round(twin_diag.get("T_pred", 0), 3),
-        "twin_innovation": round(twin_diag.get("innovation", 0), 3),
-        "twin_rmse_30": twin_diag.get("rmse_30"),
-        "twin_model_reliable": twin_diag.get("model_reliable"),
-        "twin_perturbation_dTdt": twin_diag.get("perturbation_dTdt"),
-        "twin_cusum_pos": twin_diag.get("cusum_pos"),
-        "twin_cusum_neg": twin_diag.get("cusum_neg"),
-        "twin_external_gain": twin_diag.get("external_gain_detected"),
-        "twin_external_loss": twin_diag.get("external_loss_detected"),
-        "twin_T_steady": twin_diag.get("T_steady"),
-        "twin_T_steady_reliable": twin_diag.get("T_steady_reliable"),
-        "twin_T_steady_max": twin_diag.get("T_steady_max"),
-        "twin_T_steady_immediate": twin_diag.get("T_steady_immediate"),
-        "twin_T_steady_passive": twin_diag.get("T_steady_passive"),
-        "twin_setpoint_reachable": twin_diag.get("setpoint_reachable"),
-        "twin_setpoint_reachable_max": twin_diag.get("setpoint_reachable_max"),
-        "twin_emitter_saturated": twin_diag.get("emitter_saturated"),
-        "twin_cooling_model_available": twin_diag.get("cooling_model_available"),
-        "twin_d_hat_fresh": twin_diag.get("d_hat_fresh"),
-        "twin_warming_up": twin_diag.get("warming_up"),
-        "twin_u_eff": twin_diag.get("u_eff"),
-        "twin_deadtime_s": twin_diag.get("deadtime_s"),
-        "twin_dead_steps": twin_diag.get("dead_steps"),
-        "twin_T_hat_error": twin_diag.get("T_hat_error"),
-        "twin_rmse_pure": twin_diag.get("rmse_pure"),
-        "twin_innovation_bias": twin_diag.get("innovation_bias"),
-        "twin_bias_warning": twin_diag.get("bias_warning", False),
-        "twin_auto_reset_triggered": twin_diag.get("auto_reset_triggered", False),
-        "twin_reset_count": twin_diag.get("reset_count", 0),
-        "eta_s": twin_diag.get("eta_eta_s"),
-        "eta_u": twin_diag.get("eta_u"),
-        "eta_reason": twin_diag.get("eta_reason"),
-        "twin_d_hat": twin_diag.get("d_hat_ema"),
-    }
-
-
-def _build_analysis(algo: SmartPI, twin_diag: Dict[str, Any]) -> Dict[str, Any]:
+def _build_analysis(algo: SmartPI) -> Dict[str, Any]:
     """Return advanced diagnostics that remain useful to live consumers."""
     gov = algo.gov
     analysis = {
@@ -695,9 +434,6 @@ def _build_analysis(algo: SmartPI, twin_diag: Dict[str, Any]) -> Dict[str, Any]:
         },
         "feedforward": _build_analysis_feedforward(algo),
     }
-    twin = _build_analysis_twin(twin_diag)
-    if twin is not None:
-        analysis["twin"] = twin
     return analysis
 
 
@@ -734,7 +470,6 @@ def _build_room_model(algo: SmartPI) -> Dict[str, Any]:
 def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
     """Return the canonical SmartPI live diagnostics."""
     tau_info = algo.est.tau_reliability()
-    twin_diag = algo._last_twin_diag or {}
     tree = {
         "control": _build_control(algo),
         "power": _build_power(algo),
@@ -742,11 +477,11 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "model": _build_model(algo, tau_info),
         "learning": _build_learning(algo, tau_info.reliable),
         "governance": _build_governance(algo),
-        "feedforward": _build_feedforward(algo, twin_diag),
+        "feedforward": _build_feedforward(algo),
         "setpoint": _build_setpoint(algo),
         "autocalib": _build_autocalib(algo),
         "calibration": _build_calibration(algo),
-        "analysis": _build_analysis(algo, twin_diag),
+        "analysis": _build_analysis(algo),
         "valve": _build_valve_diagnostics(algo),
     }
     if getattr(algo, "tar_learning", None) is not None:

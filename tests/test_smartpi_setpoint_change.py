@@ -99,7 +99,6 @@ def test_smartpi_feedforward_and_integral_keep_the_raw_setpoint_with_an_anticipa
             ext_current_temp=ext_temp,
             hvac_mode=VThermHvacMode_HEAT,
             error=error_i,
-            current_temp=current_temp,
             e_p=e_p,
         )
 

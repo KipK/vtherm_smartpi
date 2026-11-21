@@ -15,7 +15,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from custom_components.vtherm_smartpi.algo import SmartPI
-from custom_components.vtherm_smartpi.smartpi.ff_trim import CausalFFTrimResult
 
 FIXTURE = Path(__file__).parent / "fixtures" / "published_diagnostics_paths.json"
 
@@ -41,32 +40,6 @@ def _representative_smartpi() -> SmartPI:
         minimal_deactivation_delay=0,
         name="Published diagnostics schema",
     )
-    result = CausalFFTrimResult(
-        admissible=True,
-        reason="periodic_window_ready",
-        correction=-0.01,
-        target_trim=-0.01,
-        mean_causal_power=0.04,
-        mean_ff1=0.08,
-        mean_temperature=20.0,
-        mean_error=0.0,
-        mean_slope_h=0.0,
-        observed_hold_power=0.04,
-        duration_s=1800.0,
-        measurement_count=7,
-        alignment_delay_s=120.0,
-        power_coverage_ratio=1.0,
-        transfer_eligible=False,
-        transfer_reason="periodic_equilibrium",
-        transfer_quality="valve_segmented_linear",
-        observation_mode="periodic",
-    )
-    # Repeated proposals commit one FF trim transaction.
-    for _ in range(3):
-        algo.fftrim_coord.apply_observer_result(result, count_window=False)
-    algo._fftrim_observer.publish_external_result(result)
-    # A healthy twin adds the analysis.twin subtree.
-    algo._last_twin_diag = {"status": "ok", "model_reliable": True}
     # Valve mode adds the valve subtree.
     algo.valve_config_diag = {
         "vt_dpercent": 0.0,
@@ -81,9 +54,20 @@ def test_published_diagnostics_key_paths_match_fixture() -> None:
     published = _representative_smartpi().get_published_diagnostics()
     actual = sorted(_paths(published))
 
-    assert published["feedforward"]["fftrim"]["last_result"] is not None
-    assert published["feedforward"]["fftrim"]["last_transaction"] is not None
-    assert "twin" in published["analysis"]
+    # The feed-forward trim, the short-horizon feed-forward and the thermal twin are not published.
+    assert set(published["feedforward"]) == {
+        "source",
+        "wall_power_percent",
+        "deadband_power_source",
+        "deadband_p_mode",
+    }
+    assert set(published["analysis"]["feedforward"]) == {
+        "reason",
+        "u_ff1",
+        "u_ff_final",
+        "u_ff_effective",
+    }
+    assert "twin" not in published["analysis"]
 
     if os.environ.get("SMARTPI_UPDATE_DIAG_PATHS") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)

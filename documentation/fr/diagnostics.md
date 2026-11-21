@@ -65,7 +65,7 @@ Le bloc `live` est organisé par responsabilité :
 | `model` | Modèle A/B, confiance, constante de temps et temps morts |
 | `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
-| `feedforward` | Source de la puissance de maintien, état FF3, source de bande morte et diagnostics FFTrim canoniques |
+| `feedforward` | Source de la puissance de maintien, part des murs de la puissance de maintien et source de bande morte |
 | `setpoint` | État du boost de consigne |
 | `autocalib` | État du superviseur de calibration automatique |
 | `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
@@ -85,7 +85,7 @@ redémarrage, et pour un thermostat qui démarre sans données sauvegardées.
 | `reason` | Raison pour laquelle le redémarrage n'a pas été ponté, `null` lorsqu'il l'a été : `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (aussi lorsque la commande est passée à 0 pendant que la température était attendue), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, ou une exclusion avant l'arrêt ou après le redémarrage (par exemple `window open before the stop`, `safety mode after the restart`) |
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
-`deadtime`, `governance`, `feedforward` et, lorsqu'il est disponible, `twin`.
+`deadtime`, `governance` et `feedforward`.
 
 `analysis.control` publie, parmi les termes d'erreur et la géométrie de bande,
 l'anticipation de la température, en chauffage et en refroidissement :
@@ -154,7 +154,7 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | Champ | Signification |
 |---|---|
 | `status` | `active`, `checking_dependencies` (jusqu'au démarrage du thermostat), `dependencies_unavailable` (numpy/scipy ne peuvent pas être chargés : valeur du bootstrap utilisée) ou `valve_mode_not_supported` |
-| `applied_s` | Temps mort HEAT actif en vigueur pour la régulation (bande proche, maintien de l'intégrale, FF3, jumeau thermique), en secondes : le retard de l'émetteur appris lorsque les gains l'utilisent, sinon `bootstrap_s` |
+| `applied_s` | Temps mort HEAT actif en vigueur pour la régulation (bande proche, maintien de l'intégrale), en secondes : le retard de l'émetteur appris lorsque les gains l'utilisent, sinon `bootstrap_s` |
 | `source` | Origine de `applied_s` et de `gains_s` : `bootstrap`, `fast`, `refined` ou `lower_bound` (une borne inférieure issue de montées de confort coupées par le lever) |
 | `gains_s` | Temps mort utilisé par les gains, en secondes : la moitié de `applied_s` pour un retard de l'émetteur appris ; sinon `reference_s` lorsqu'il est plus court, deux fois `reference_s` lorsqu'il est plus long et non confirmé, `bootstrap_s` sans retard de l'émetteur appris |
 | `bootstrap_s` | Temps mort de chauffe du bootstrap/calibration (`model.deadtime_heat_s`), jamais modifié |
@@ -222,26 +222,7 @@ feed-forward structurel) :
 | `source` | `learned model` (le modèle A/B, `model.b / model.a`), `room model (air and walls)` (modèle publié avec murs, suivi `ok` : partie statique plus la puissance supplémentaire des murs), `room model (static part)` (modèle publié avec murs alors que le suivi n'est pas `ok` : partie statique seule) ou `room model (simple)` (modèle publié sans murs). La partie statique d'une source de modèle de pièce vaut `room_model.energy_balance_loss_per_c` × (consigne − température extérieure) − `room_model.energy_balance_free_gain_percent` / 100 ; tant qu'aucun bilan thermique n'est en vigueur, ou tant que son `energy_balance_loss_per_c` s'écarte de plus de 5 % du `b_eq / a` publié, la source reste `learned model` |
 | `wall_power_percent` | Puissance supplémentaire des murs appliquée dans la puissance de maintien, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur). Lorsque le terme des murs démarre, s'arrête ou change avec une nouvelle publication, la valeur appliquée passe en 30 minutes de sa dernière valeur à la nouvelle ; elle peut donc différer de `room_model.wall_extra_power_percent` et rester non nulle pendant 30 minutes après que `source` a quitté `room model (air and walls)` ; `null` lorsqu'aucune part des murs n'est appliquée |
 
-Tant qu'une source du modèle de pièce est en vigueur, `analysis.feedforward.ff2_frozen` vaut
-`true` avec `ff2_freeze_reason` `room_model`, et `u_ff2` vaut `0`.
-
-FFTrim utilise des blocs canoniques imbriqués :
-
-```yaml
-live:
-  feedforward:
-    fftrim:
-      stationary: {}
-      periodic: {}
-      transfer: {}
-      command_ownership: {}
-      observation_mode: ...
-      last_reject_reason: ...
-      last_update_reason: ...
-      last_result: ...
-      last_transaction: ...
-      windows_since_update: ...
-```
+`analysis.feedforward` publie `u_ff1`, la puissance de maintien injectée dans la commande, et sa `reason` ; `u_ff_final` et `u_ff_effective` portent la même valeur.
 
 ## Fréquence de publication
 

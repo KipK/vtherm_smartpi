@@ -58,9 +58,9 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
   `dependencies_importable`), room model state. Failures are logged and never block startup.
 - `on_scheduler_ready(scheduler)`: re-syncs timing and valve curve, then
   - receipts supported (`hasattr(scheduler, "register_command_receipt_callback")`): registers
-    `SmartPI.on_command_receipt`, `algo.receipts_supported = True`;
-  - else legacy: warning, `_on_legacy_cycle_started` as cycle-start callback, no ownership (no bumpless
-    transfer, no periodic FF trim), valve position read back from `thermostat.valve_open_percent`;
+    `SmartPI.on_command_receipt`;
+  - else legacy: warning, `_on_legacy_cycle_started` as cycle-start callback, valve position read back from
+    `thermostat.valve_open_percent`;
   - always registers `SmartPI.on_cycle_completed` as cycle-end callback.
 - `async_startup`: `valve_config_check.apply_valve_config_check` (Repairs issues on VT valve filters, observation
   only), then `on_state_changed(True)`.
@@ -70,17 +70,12 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
   suspend a running calibration (`CalibrationManager.suspend`).
 - `control_heating(timestamp, force)`: one tick, section 4. `should_publish_intermediate()` tells VT whether to
   write climate state (true for a periodic `timestamp`, `force`, a changed input signature or committed output).
-- Command receipts and ownership (`smartpi/command_ownership.py`):
-  - If VT `on_percent` differs from `algo.on_percent` (VT override: safety default, `max_on_percent` clamp) the
-    request is untagged and `reset_command_ownership("runtime_power_override")` runs. Otherwise, with receipts,
-    `request_id = algo.stage_command(hvac_mode)` goes to `cycle_scheduler.start_cycle(..., request_id=)`.
-  - `CommandOwnershipTracker.stage` freezes the control decomposition (`CommandOwnershipSnapshot`) under a strictly
-    increasing id (starts at `time.monotonic_ns()`, last 32 kept). VT echoes the id in `AppliedCommandReceipt`
-    (`kind` CYCLE_START or UPDATE, `alterations`). `bind_receipt` owns a receipt only for a known id, same HVAC mode,
-    no `MIN_ON_OFF`/`VALVE_RETAINED` alteration, no "timing" flag; a rejection is sticky per request.
+- Applied-command receipts: SmartPI sends `cycle_scheduler.start_cycle(hvac_mode, on_percent, force)` without any
+  request tag and only consumes VT's `AppliedCommandReceipt` (`kind` CYCLE_START or UPDATE) through
+  `SmartPI.on_command_receipt`.
   - `SmartPI._commit_applied_command` commits the applied power (valve curve inverted to linear) and feeds the
-    causal power trace, emitter lag learning, room model; on a cycle start it resets per-cycle governance. Legacy path
-    (`on_cycle_started`, `on_applied_power_updated`) commits the same way with no snapshot.
+    dead-time episode status, the emitter lag learning and the room model; on a cycle start it resets per-cycle
+    governance. The legacy path (`on_cycle_started`, `on_applied_power_updated`) commits the same way.
 - VT overrides: safety (`safety_manager.is_safety_detected`) sets `algo.vt_safety_override` (integral held, source
   `vt_safety`); power shedding (`is_overpowering_detected`) forces output off; window and OFF go through
   `_validate_and_handle_off`. `_control_exclusion` names why the applied command is not SmartPI's (window,
@@ -136,12 +131,12 @@ Pipeline inside `calculate`, in execution order:
 9. Phase HYSTERESIS (bootstrap): `ctl.calculate_hysteresis` bang-bang, committed at once, return.
 10. `_update_control_context` (error filter, deadband, near-band), `resume_hold.update`.
 11. Governance: `gov.determine_regime`, `decide_update` for gains and thermal.
-12. `_apply_gains_and_ff` (gain scheduler, FF1/FF2/FF3 incl. `_select_holding_power`), then integral-hold decisions
+12. `_apply_gains_and_ff` (gain scheduler, FF1 incl. `_select_holding_power`), then integral-hold decisions
     (deadtime, deadband shell, no outdoor value, `vt_safety`).
 13. `ctl.compute_pwm` (PI + FF, anti-windup, `u_max` = `max_on_percent` in linear space), `track_output_limit`.
 14. `_apply_soft_constraints`: rate limit (`MAX_STEP_PER_MINUTE`, boost rate), clamp to `[0, max_on]`.
 15. `update_timing_constraints`: min activation delay zeroes a too-short switch ON; skipped in valve mode.
-16. `_set_linear_output`, `ctl.finalize_cycle`, bookkeeping, FF trim freeze/measurement, `_update_twin_diagnostics`.
+16. `_set_linear_output`, `ctl.finalize_cycle`, bookkeeping.
 - After return, VT's `on_percent` applies the safety default and its own `max_on_percent` clamp on the actuator
   value. SmartPI has no `update_realized_power`; it learns the applied command from receipts.
 
@@ -150,17 +145,17 @@ Pipeline inside `calculate`, in execution order:
 - VT owns the master cycle (`versatile_thermostat/cycle_scheduler.py::CycleScheduler`): PWM timers for switches, a
   valve-position cycle for valves, length `cycle_min`. SmartPI never switches an underlying, except turning the
   device off in HVAC OFF.
-- Hand-over: `start_cycle(hvac_mode, on_percent, force, request_id=)`, `on_percent` = actuator fraction (curve
+- Hand-over: `start_cycle(hvac_mode, on_percent, force)`, `on_percent` = actuator fraction (curve
   applied). `calculate_cycle_times` applies the min activation/deactivation delays, written to the scheduler by
   `_synchronize_scheduler_timing`.
 - Running switch cycle without `force`: the request waits for the next automatic repeat (no receipt until applied);
-  with `force` it restarts (CYCLE_START receipt, same id on automatic repeats). Running valve cycle: position
+  with `force` it restarts (CYCLE_START receipt). Running valve cycle: position
   updated at once (UPDATE receipt).
 - Cycle end (`_on_master_cycle_end` restarts with `start_cycle(force=True)`, whose cancel fires the end callbacks)
-  calls `SmartPI.on_cycle_completed(e_eff, elapsed_ratio)`: FF trim close, cycle counter,
+  calls `SmartPI.on_cycle_completed(e_eff, elapsed_ratio)`: cycle counter,
   `_cycle_boundary_pending = True` (next `calculate` is a cycle boundary).
-- Timing is applied twice: SmartPI zeroes a too-short ON, the scheduler flags `MIN_ON_OFF` (receipt not owned).
-  Valve mode ignores min delays, but VT's valve resolver may retain a position (`VALVE_RETAINED`, not owned).
+- Timing is applied twice: SmartPI zeroes a too-short ON, the scheduler reports the applied (constrained) power in the receipt.
+  Valve mode ignores min delays, but VT's valve resolver may retain a position; the receipt carries the applied position.
 
 ## 6. Persistence
 
@@ -169,11 +164,10 @@ Pipeline inside `calculate`, in execution order:
   (read only when the primary is empty, then copied to the primary); `vtherm_smartpi.{}.tar_learning` (state v3);
   `vtherm_smartpi.{}.room_model` (state v2).
 - Persisted: learning flag, last active wall time, model a/b, dead time, governance, controller (integral,
-  u_prev), setpoint manager, learning window, deadband, calibration, gain scheduler, twin, guards, AutoCalib, FF
-  trim and holding source, tint filter, hysteresis output, and the restart context (last tick, mode, cycle config,
+  u_prev), setpoint manager, learning window, deadband, calibration, gain scheduler, guards, AutoCalib, FF
+  holding source, tint filter, hysteresis output, and the restart context (last tick, mode, cycle config,
   exclusion, temperature, committed command, wall times).
-- Transient, empty after load (`load_state`): committed power (0 unless bridged), command ownership/pending
-  requests, FF trim observation runtime, integral hold, learning resume timestamp, cycle
+- Transient, empty after load (`load_state`): committed power (0 unless bridged), integral hold, learning resume timestamp, cycle
   state. Without a bridge, the first tick freezes learning for one cycle (`_startup_grace_period`).
 - Save throttling: `schedule_save` runs every tick but uses `Store.async_delay_save` with a 300 s window
   (`SAVE_DELAY_SEC`), not re-armed while pending; the snapshot is taken when the write runs. emitter lag learning and room model
@@ -184,7 +178,7 @@ Pipeline inside `calculate`, in execution order:
   indoor temperature (until then the pre-stop command is held when still holdable). Bridged when downtime <=
   `RESTART_BRIDGE_MAX_GAP_S` (600 s, from the oldest last tick of all stores), same HEAT/COOL mode and cycle
   config, committed/heater state saved, no exclusion before or after, no temperature jump, no clock jump. Then the
-  committed command is restored and learning window, dead-time and FF-trim work go on; the HEAT-only histories
+  committed command is restored and learning window and dead-time work go on; the HEAT-only histories
   (emitter lag learning, room model) go on only when bridged in HEAT. Otherwise conservative handling. Published as
   `restart.public()`.
 - Long OFF: after more than 5760 min (96 h, `PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN`) without activity the

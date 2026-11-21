@@ -193,7 +193,7 @@ RECOVERY_ERROR_FLOOR_DEADBAND_RATIO = 2.0  # Residual error (multiples of the de
 # Anticipation of the measured temperature (heating and cooling)
 ANTICIPATION_MAX_C = 1.0                 # °C — largest correction added to the measured temperature
 ANTICIPATION_MIN_WINDOW_S = 600.0        # s — shortest window of the least-squares slope
-ANTICIPATION_WINDOW_FRAC = 1.0 / 3.0     # Fraction of the horizon used as slope window when longer than the minimum
+ANTICIPATION_MAX_WINDOW_S = 1800.0       # s — longest slope window: beyond 30 min the slope comes too late for long-horizon rooms
 
 # Error filter time constant
 ERROR_FILTER_TAU = 25.0 # Minutes (matches alpha ~0.35 at 10min)
@@ -386,7 +386,7 @@ CALIBRATION_TIMEOUT_MIN = 600  # 10 hours timeout
 # A calibration survives a stop of the thermostat shorter than this (minutes)
 # when the same mode comes back; a longer stop cancels it
 CALIBRATION_PAUSE_MAX_MIN = 10
-# A calibration threshold is reachable when the twin equilibrium of the phase
+# A calibration threshold is reachable when the equilibrium of the phase
 # lies at least this far beyond it (deg C)
 CALIBRATION_REACHABILITY_MARGIN_C = 0.5
 
@@ -418,7 +418,7 @@ AUTOCALIB_MAX_RETRIES = 3                  # Max retries before declaring model 
 AUTOCALIB_RETRY_DELAY_H = 6               # Hours between a failed attempt and its retry
 AUTOCALIB_EXIT_NEW_OBS_MIN = 1            # Minimum new observations (a/b) for positive exit
 
-# --- FFv2 Governance Enums ---
+# --- AB confidence ---
 
 class ABConfidenceState(str, Enum):
     """Confidence state for a,b model parameters."""
@@ -432,60 +432,8 @@ class ABConfidenceState(str, Enum):
 AB_CONFIDENCE_MIN_SAMPLES_A = 11
 AB_CONFIDENCE_MIN_SAMPLES_B = 11
 
-# --- FFv2 Normative Constants ---
-
-# Trim slow correction
-FF_TRIM_RHO = 0.15        # Max trim authority relative to u_ff_ab (dimensionless ratio)
-FF_TRIM_LAMBDA = 0.05     # Trim EMA learning rate per admissible episode
-FF_TRIM_EPSILON = 0.02    # Min u_ff_ab denominator for relative budget (avoids div-by-~0)
-FF_TRIM_REBOOT_FREEZE_CYCLES = 3  # Freeze trim learning for a few cycles after reboot
-FF_TRIM_MAX_ERROR_C = 0.3         # Max |error| (°C) across an admissible thermal window
-FF_TRIM_MAX_SLOPE_H = 0.6        # Max |mean slope| (°C/h) for an admissible thermal window
-FF_TRIM_PERSISTENCE = 3          # Same-direction independent windows required before applying trim
-FF_TRIM_BUFFER_SIZE = 5          # Rolling sample count used for median trim correction
-FF_TRIM_DELTA_EPSILON = 0.001    # Ignore power corrections below actuator precision scale
-FF_TRIM_PI_STABILITY_EPSILON = 0.01  # Max PI output range across a near-band trim window
-FF_TRIM_MIN_WINDOW_MIN = 30.0
-FF_TRIM_MIN_WINDOW_CYCLES = 6
-FF_TRIM_DEADTIME_WINDOW_FACTOR = 2.0
-FF_TRIM_MIN_DISTINCT_MEASUREMENTS = 3
-FF_TRIM_MIN_POWER_COVERAGE = 0.995
-FF_TRIM_PERIODIC_MIN_DISTINCT_MEASUREMENTS = 5
-FF_TRIM_PERIODIC_MIN_POWER_RANGE = 0.01
-FF_TRIM_PERIODIC_ALLOWED_REGIMES = frozenset({  # Regimes in which a phase-closed periodic cycle may feed the trim
-    GovernanceRegime.NEAR_BAND,
-    GovernanceRegime.DEAD_BAND,
-    GovernanceRegime.HOLD,
-    GovernanceRegime.SATURATED,
-})
-FF_TRIM_PERIODIC_NEGLIGIBLE_LIMIT_S = 5.0
-# Trim freeze reasons a periodic cycle tolerates: its samples, pending proposals
-# and proposal collection survive them; the trim itself is never mutated while frozen.
-FF_TRIM_PERIODIC_TOLERATED_FREEZE_REASONS = frozenset({"saturated"})
-FF_TRIM_TRANSFER_MAX_ERROR_C = 0.10
-FF_TRIM_TRANSFER_MAX_SLOPE_H = 0.10
-FF_TRIM_TRANSFER_MAX_P_POWER = 0.01
-FF_TRIM_TRANSFER_MAX_POWER_RANGE = 0.005
-FF_TRIM_TRANSFER_MAX_DELIVERY_RESIDUAL = 0.005
-FF_TRIM_TRANSFER_COMMAND_EPSILON = 0.001
-
 # Deadband output shaping
 DEADBAND_EDGE_PERSISTENCE = 2
-
-# --- FF3 conservative pseudo-MPC constants ---
-FF3_DELTA_U = 0.05
-FF3_MAX_AUTHORITY = 0.20
-FF3_NEARBAND_GAIN = 0.50
-FF3_MIN_HORIZON_CYCLES = 2
-FF3_RESPONSE_LOOKAHEAD_CYCLES = 2
-FF3_MAX_HORIZON_CYCLES = 8
-FF3_ACTION_SENSITIVITY_EPS_C = 1e-4
-FF3_COST_TRACKING_WEIGHT = 1.0
-FF3_COST_TERMINAL_WEIGHT = 2.0
-FF3_COST_OVERSHOOT_WEIGHT = 4.0
-FF3_COST_DU_WEIGHT = 0.05
-FF3_SCORE_EPS_COST = 1e-4
-FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR = 0.5
 
 # --- Adaptive T_int Filter ---
 ENABLE_ADAPTIVE_TINT_FILTER = True

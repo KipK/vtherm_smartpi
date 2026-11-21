@@ -1,5 +1,5 @@
 name = "smartpi-senior-developer"
-description = "Implementation agent for SmartPI changes that need judgement: regulation behaviour (PI, gains, anti-windup, setpoint trajectory, feed-forward), learning gates and windows, persistence/restart, command ownership, bootstrap. Use when the change cannot be fully specified in advance."
+description = "Implementation agent for SmartPI changes that need judgement: regulation behaviour (PI, gains, anti-windup, setpoint trajectory, feed-forward), learning gates and windows, persistence/restart, bootstrap. Use when the change cannot be fully specified in advance."
 model = "gpt-6.1-sol"
 model_reasoning_effort = "high"
 developer_instructions = """

@@ -18,7 +18,7 @@ Sibling folders of the workspace (paths relative to the workspace root, which co
 | `versatile_thermostat` | VT integration (upstream project) | read-only reference; changes go through upstream PRs |
 | `vtherm_api` | plugin API between VT and algorithms | upstream-bound: no plan/phase/review vocabulary in comments, docs or tests |
 | `vtherm_hysteresis` | simple hysteresis plugin | scaffold example for VT plugins |
-| `vtherm_adaptive_tpi` | adaptive TPI plugin (1R1C, learns Kint/Kext) | a "mini SmartPI" without the integral and FF2/FF3 |
+| `vtherm_adaptive_tpi` | adaptive TPI plugin (1R1C, learns Kint/Kext) | a "mini SmartPI" without the integral |
 | `versatile-thermostat-ui-card` | official VT card | |
 | `equinox` | dashboard card for VT climates, reads SmartPI diagnostics | branch `smartpi-0.7` follows dev-0.7; a second local checkout of Equinox (a worktree on its release branch) follows the release; `dist/equinox-card.js` is tracked: rebuild with `npm run build` and commit with the source |
 

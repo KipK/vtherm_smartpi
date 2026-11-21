@@ -9,7 +9,6 @@ from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.const import GovernanceRegime, SmartPIPhase
 from custom_components.vtherm_smartpi.smartpi.feedforward import compute_ff
-from custom_components.vtherm_smartpi.smartpi.ff_trim import FFTrim
 
 T0 = 1000.0
 DAY_S = 86400.0
@@ -18,27 +17,19 @@ DAY_S = 86400.0
 # ---------------------------------------------------------------------------
 # Feedforward without outdoor temperature (FF-02)
 # ---------------------------------------------------------------------------
-def _ff(ext_temp, trim_value: float):
-    trim = FFTrim()
-    trim.u_ff_trim = trim_value
-    return compute_ff(k_ff=0.05, target_temp_ff=20.0, ext_temp=ext_temp, warmup_scale=1.0, trim=trim)
+def _ff(ext_temp):
+    return compute_ff(k_ff=0.05, target_temp_ff=20.0, ext_temp=ext_temp, warmup_scale=1.0)
 
 
-def test_trim_is_applied_with_outdoor_temperature() -> None:
-    result = _ff(5.0, 0.05)
+def test_ff1_is_applied_with_outdoor_temperature() -> None:
+    result = _ff(5.0)
     assert result.u_ff1 == pytest.approx(0.75)
-    assert result.u_ff2 == pytest.approx(0.05)
-    assert result.u_ff_final == pytest.approx(0.80)
-    assert result.trim_applied is True
+    assert result.ff_reason == "ff_none"
 
 
-def test_trim_is_not_applied_without_outdoor_temperature() -> None:
-    result = _ff(None, 0.05)
+def test_ff1_is_zero_without_outdoor_temperature() -> None:
+    result = _ff(None)
     assert result.u_ff1 == 0.0
-    assert result.u_ff2 == 0.0
-    assert result.u_ff_trim == 0.0
-    assert result.u_ff_final == 0.0
-    assert result.trim_applied is False
     assert result.ff_reason == "ff_no_ext_temp"
 
 
@@ -96,7 +87,6 @@ def _ticks(pi: SmartPI, schedule: list[tuple[float, float | None]]) -> list[dict
                 "hold_source": pi.ctl.last_integral_hold_source,
                 "integral_moved": pi.ctl.integral != i_before,
                 "ff_reason": pi._last_ff_result.ff_reason,
-                "trim_applied": pi._last_ff_result.trim_applied,
                 "ff_ext": list(ff_ext),
                 "last_ext": pi._last_ext_temp,
                 "learning_ext": list(learning_ext),
@@ -111,8 +101,7 @@ def test_dropout_keeps_the_last_valid_value_and_runs_the_integral(age_s: float) 
     tick = ticks[-1]
     assert tick["ff_ext"] == [5.0]  # control path uses the last valid reading, without age limit
     assert tick["ff_reason"] == "ff_none"
-    assert tick["trim_applied"] is True
-    assert tick["regime"] == GovernanceRegime.DEGRADED  # gains, learning and trim stay frozen
+    assert tick["regime"] == GovernanceRegime.DEGRADED  # gains and learning stay frozen
     assert tick["i_mode"] == "I:RUN"
     assert tick["hold_source"] == "none"
     assert tick["integral_moved"] is True
@@ -124,7 +113,6 @@ def test_startup_without_outdoor_value_drops_ff_and_holds_the_integral() -> None
     for tick in ticks[1:]:
         assert tick["ff_ext"] == [None]
         assert tick["ff_reason"] == "ff_no_ext_temp"
-        assert tick["trim_applied"] is False
         assert tick["regime"] == GovernanceRegime.DEGRADED
         assert tick["i_mode"] == "I:HOLD"
         assert tick["hold_source"] == "governance_sensor_invalid"
@@ -161,15 +149,4 @@ def test_returning_outdoor_temperature_leaves_degraded() -> None:
     assert ticks[2]["regime"] == GovernanceRegime.DEGRADED
     assert ticks[3]["regime"] != GovernanceRegime.DEGRADED
     assert ticks[3]["ff_ext"] == [4.0]
-    assert ticks[3]["trim_applied"] is True
-
-
-def test_ownership_snapshot_excludes_a_trim_that_is_not_applied() -> None:
-    pi = _make_pi()
-    _ticks(pi, [(0.0, None), (60.0, None)])
-    pi._ff_trim.u_ff_trim = 0.05
-    snapshot = pi.fftrim_coord.build_command_snapshot(VThermHvacMode_HEAT)
-    assert snapshot.u_ff_visible == 0.0
-    assert snapshot.u_ff3 == 0.0
-    assert snapshot.trim_stored == pytest.approx(0.05)
-    assert "ff3" not in snapshot.constraint_flags
+    assert ticks[3]["ff_reason"] == "ff_none"

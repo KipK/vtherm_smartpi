@@ -24,7 +24,7 @@ Codex custom agents inherit the parent's sandbox, and Claude read-only profiles 
 
 ## Routing rules
 
-1. Default to the cheapest adequate profile. Escalate when a cheaper agent reports it cannot decide, or the change touches regulation behaviour, learning gates, persistence or command ownership.
+1. Default to the cheapest adequate profile. Escalate when a cheaper agent reports it cannot decide, or the change touches regulation behaviour, learning gates or persistence.
 2. Typical flow for a feature: architect (spec) -> developer(s) (code) -> test-engineer -> reviewer -> docs-writer -> translator. For a regulation change add: control-researcher (method), bench-engineer (frozen declaration then run).
 3. Typical flow for a user problem: debugger -> (data-analyst for exports) -> architect/researcher if it is a design limit -> developer for the fix.
 4. **Fable** is an unanchored second opinion for unclear cross-cutting or blocking research questions. Never for coding, benches or routine checks. Ask the user before each use unless they asked for it. Give it evidence files and precise questions, not your conclusions.

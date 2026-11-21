@@ -393,7 +393,6 @@ class LearningWindowManager:
         in_near_band: bool,
         t_heat_episode_start: float | None,
         t_cool_episode_start: float | None,
-        ff3_active: bool = False,
         deadtime_skip_count_a: int = 0,
         deadtime_skip_count_b: int = 0,
         is_calibrating: bool = False,
@@ -460,7 +459,6 @@ class LearningWindowManager:
                 in_near_band,
                 t_heat_episode_start,
                 t_cool_episode_start,
-                ff3_active=ff3_active,
                 deadtime_skip_count_a=deadtime_skip_count_a,
                 deadtime_skip_count_b=deadtime_skip_count_b,
                 is_calibrating=is_calibrating,
@@ -603,7 +601,6 @@ class LearningWindowManager:
         in_near_band: bool,
         t_heat_episode_start: float | None,
         t_cool_episode_start: float | None,
-        ff3_active: bool = False,
         deadtime_skip_count_a: int = 0,
         deadtime_skip_count_b: int = 0,
         is_calibrating: bool = False,
@@ -631,7 +628,6 @@ class LearningWindowManager:
             in_near_band: Whether the system is in near-band.
             t_heat_episode_start: Monotonic timestamp of heating episode start.
             t_cool_episode_start: Monotonic timestamp of cooling episode start.
-            ff3_active: True when FF3 was active for the current cycle.
             deadtime_skip_count_a: Counter for heating deadtime skips (returned).
             deadtime_skip_count_b: Counter for cooling deadtime skips (returned).
             hvac_mode: Current HVAC mode.
@@ -653,13 +649,6 @@ class LearningWindowManager:
             return deadtime_skip_count_a, deadtime_skip_count_b
 
         dt_s = dt_min * 60.0
-
-        if ff3_active:
-            estimator.learn_skip_count += 1
-            estimator.learn_last_reason = "skip: ff3_active"
-            if self._active:
-                self.reset()
-            return deadtime_skip_count_a, deadtime_skip_count_b
 
         # Setpoint changes do not reset an active window by themselves: the
         # ON/A gate below closes a window that started ON (u_first > U_ON_MIN)

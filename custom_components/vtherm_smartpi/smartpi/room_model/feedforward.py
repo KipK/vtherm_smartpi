@@ -298,7 +298,7 @@ class HoldingTransfer:
         discrete change).
 
         now: wall clock time (s) of this cycle, the time base of the blend.
-        learned_power: learned holding power (after FF2) at this cycle, the static part of the learned source.
+        learned_power: learned holding power at this cycle, the static part of the learned source.
             Both sides of the step are evaluated at the current setpoint and outdoor temperature with the wall
             part applied at this cycle, so the step holds the static part only.
         heat: heating mode; the wall part is dropped on the learned source outside heating.

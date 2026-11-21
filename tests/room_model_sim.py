@@ -253,7 +253,7 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
     with patch("time.time", lambda: clock["t"]), patch("time.monotonic", lambda: clock["t"] - 1.7e9):
         def new_algo():
             return SmartPI(hass=MagicMock(), cycle_min=cycle_min, minimal_activation_delay=0,
-                           minimal_deactivation_delay=0, name="RoomSim", use_ff3=True, tar_learning=True,
+                           minimal_deactivation_delay=0, name="RoomSim", tar_learning=True,
                            room_model=True)
 
         algo = new_algo()
@@ -299,7 +299,7 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
                 algo.observe_room_model(meas, te, VThermHvacMode_HEAT, measure_id=pub_time)
                 if kk == 0:
                     on_percent = algo.on_percent
-                    algo._commit_applied_command(on_percent, VThermHvacMode_HEAT, None, cycle_start=True)
+                    algo._commit_applied_command(on_percent, VThermHvacMode_HEAT, cycle_start=True)
                 out["t"].append(t)
                 out["sp"].append(sp)
                 out["ta"].append(float(x[0]))

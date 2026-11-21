@@ -44,7 +44,6 @@ from __future__ import annotations
 import logging
 import math
 import time
-from dataclasses import replace
 from datetime import datetime
 from math import exp
 from typing import Any, Dict, Optional
@@ -66,7 +65,6 @@ from .smartpi.const import (
     MAX_STEP_PER_MINUTE,
     SETPOINT_BOOST_RATE,
     SETPOINT_MODE_DELTA_C,
-    SMARTPI_RECALC_INTERVAL_SEC,
     LEARNING_PAUSE_RESUME_MIN,
     PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN,
     HYST_UPPER_C,
@@ -91,7 +89,6 @@ from .smartpi.deadtime_estimator import (
     update_episode_starts,
 )
 from .smartpi.ab_estimator import ABEstimator
-from .smartpi.thermal_twin_1r1c import ThermalTwin1R1C
 from .smartpi.diagnostics import build_published_diagnostics
 from .smartpi.governance import SmartPIGovernance
 from .smartpi.setpoint import SmartPISetpointManager
@@ -109,20 +106,7 @@ from .smartpi.feedforward import (
     compute_ff_warmup_scale,
     compute_room_ff,
 )
-from .smartpi.ff3 import FF3Result, FF3RuntimeState, compute_ff3
-from .smartpi.ff3_eligibility import (
-    build_ff3_disturbance_context,
-)
-from .smartpi.causal_power_trace import CausalPowerTrace
-from .smartpi.thermal_measurement import ThermalMeasurementSource
-from .smartpi.ff_trim import CausalFFTrimObserver, FFTrim
-from .smartpi.ff_trim_periodic import PeriodicFFTrimObserver
-from .smartpi.ff_trim_runtime import FFTrimCoordinator
 from .smartpi.ff_ab_confidence import ABConfidence
-from .smartpi.command_ownership import (
-    CommandOwnershipSnapshot,
-    CommandOwnershipTracker,
-)
 from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.resume_hold import ResumeDeadtimeHold, ResumeHoldSource
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
@@ -182,7 +166,6 @@ class SmartPI:
         ff_warmup_ok_count: int = 30,
         ff_warmup_cycles: int = 6,
         near_band_deg: float = DEFAULT_NEAR_BAND_DEG,
-        use_ff3: bool = False,
         hysteresis_on: float = HYST_LOWER_C,
         hysteresis_off: float = HYST_UPPER_C,
         deadband_allow_p: bool = False,
@@ -218,7 +201,6 @@ class SmartPI:
 
         # 2DOF / scheduling parameters
         self.near_band_deg = max(float(near_band_deg), 0.0)
-        self._use_ff3 = bool(use_ff3)
 
         # --- Sub-Systems ---
         self.gov = SmartPIGovernance(name)
@@ -251,13 +233,9 @@ class SmartPI:
         self._last_u_ff: float = 0.0
         self._last_u_pi: float = 0.0
         self._last_ff_reason: str = "ff_none"
-        self._last_u_ff3: float = 0.0
-        self.ff3_state = FF3RuntimeState()
         # Holding power source in force (learned b / a or room model) and the
         # bumpless transfer of its discrete changes
         self._ff_holding = HoldingTransfer()
-
-        self._cycle_boundary_pending: bool = True  # Force boundary on first run
 
         self._tau_reliable: bool = False
 
@@ -295,10 +273,6 @@ class SmartPI:
         self._last_u_cmd: float = 0.0       # command after [0,1] clamp
         self._last_u_limited: float = 0.0   # after rate-limit and max_on_percent
         self._last_u_applied: float = 0.0   # candidate output after timing constraints
-        self._command_ownership = CommandOwnershipTracker()
-        self.fftrim_coord = FFTrimCoordinator(self)
-        # True/False once the scheduler is known to emit receipts (or not).
-        self.receipts_supported: bool | None = None
         self._last_forced_by_timing: bool = False  # True when timing forced 0%/100%
         self._output_initialized: bool = False # True once calculate() runs successfully
 
@@ -318,9 +292,6 @@ class SmartPI:
             self.room_model = RoomModelManager(
                 name, time_zone if isinstance(time_zone, str) else None, self.tar_learning
             )
-        # --- Thermal Twin 1R1C (diagnostics-only) ---
-        self.twin = self._new_thermal_twin()
-        self._last_twin_diag: dict = {}
         self._t_heat_episode_start: float | None = None
         self._t_cool_episode_start: float | None = None
         self._deadtime_skip_count_a: int = 0
@@ -335,20 +306,12 @@ class SmartPI:
         # --- AutoCalibTrigger (supervision) ---
         self.autocalib = AutoCalibTrigger(name)
 
-        # --- FFv2: trim bias + AB confidence ---
-        self._ff_trim: FFTrim = FFTrim()
-        self._causal_power_trace = CausalPowerTrace()
-        self._thermal_measurements = ThermalMeasurementSource()
-        self._fftrim_observer = CausalFFTrimObserver(
-            cycle_min,
-            self._causal_power_trace,
-        )
-        self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
+        # --- AB confidence ---
         self._ab_confidence = ABConfidence()
         self._last_restart_reason: str = "none"
         self.resume_hold = ResumeDeadtimeHold()
 
-        # Last complete FFResult (used by diagnostics and on_cycle_completed)
+        # Last FFResult (used by diagnostics)
         self._last_ff_result: FFResult | None = None
 
         # Bootstrap on/off output saved before a restart (monotonic time),
@@ -381,11 +344,6 @@ class SmartPI:
     #                                                                      #
     ########################################################################
 
-    @staticmethod
-    def _new_thermal_twin() -> ThermalTwin1R1C:
-        """Create the diagnostics-only thermal twin with its fixed settings."""
-        return ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
-
     def reset_learning(self) -> None:
         """Reset all learned parameters to defaults."""
         self.est.reset()
@@ -403,17 +361,12 @@ class SmartPI:
         self._last_u_ff = 0.0
         self._last_u_pi = 0.0
         self._last_ff_reason = "ff_none"
-        self._last_u_ff3 = 0.0
-        self.ff3_state.reset("reset")
-        self.ff3_state.clear_disturbance_context()
         self._last_u_cmd = 0.0
         self._last_u_limited = 0.0
         self._last_u_applied = 0.0
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
-        self.fftrim_coord.reset()
         self._ff_holding.reset()
-        self._command_ownership.reset()
         self._e_filt = None
         self._cycles_since_reset = 0
 
@@ -428,10 +381,6 @@ class SmartPI:
 
         # Learning window state is managed by learn_win component
         self.tint_filter.reset()
-
-        # Reset Thermal Twin
-        self.twin = self._new_thermal_twin()
-        self._last_twin_diag = {}
 
         # Reset Dead Time Estimator
         self.dt_est.reset()
@@ -455,8 +404,6 @@ class SmartPI:
         self.calibration_mgr.reset()
         self.autocalib.reset()  # its snapshot and counters describe the model that is discarded
         self.gain_scheduler.reset()
-        self._ff_trim.reset()
-        self.fftrim_coord.reset_observation_runtime()
         self._ab_confidence.reset()
         self._last_restart_reason = "none"
         self.resume_hold.clear()
@@ -533,10 +480,6 @@ class SmartPI:
         The CycleScheduler will re-drive cycle start/end via its own timer.
         """
         self._reset_learning_window()
-        self._ff_trim.clear_pending()
-        self._ff_trim.clear_last_transaction()
-        self.fftrim_coord.reset_observation_runtime()
-        self.reset_command_ownership("ownership_discontinuity")
         _LOGGER.debug("%s - SmartPI: cycle state reset (learning window cleared)", self._name)
 
     @property
@@ -604,7 +547,6 @@ class SmartPI:
             current_temp=current_temp,
             ext_temp=ext_temp,
             u_active=u_active,
-            ff3_active=self.ff3_state.active_cycle,
             estimator=self.est,
             dt_est=self.dt_est,
             governance=self.gov,
@@ -719,33 +661,11 @@ class SmartPI:
             a_learning_block_reason="skip: guard cut",
         )
 
-    def stage_command(self, hvac_mode: VThermHvacMode) -> int:
-        """Freeze the control context of the next scheduler request and return its id."""
-        return self._command_ownership.stage(
-            self.fftrim_coord.build_command_snapshot(hvac_mode),
-            self.on_percent,
-        )
-
-    def reset_command_ownership(self, reason: str = "ownership_discontinuity") -> None:
-        """Discard all transient ownership requests and bindings."""
-        self._command_ownership.reset(reason)
-        self.fftrim_coord.transfer_pending_request_id = None
-
     async def on_command_receipt(self, receipt: AppliedCommandReceipt) -> None:
-        """Commit one command applied by the scheduler and bind its frozen request."""
-        binding = self._command_ownership.bind_receipt(receipt)
-        snapshot = binding.owned_snapshot
-        coord = self.fftrim_coord
-        if (
-            snapshot is not None
-            and coord.transfer_pending_request_id is not None
-            and binding.request_id > coord.transfer_pending_request_id
-        ):
-            coord.transfer_pending_request_id = None
+        """Commit one command applied by the scheduler."""
         self._commit_applied_command(
             receipt.applied_on_percent,
             receipt.hvac_mode,
-            snapshot,
             cycle_start=receipt.kind == CommandReceiptKind.CYCLE_START,
         )
 
@@ -757,14 +677,13 @@ class SmartPI:
         hvac_mode: str,
         physical_on_percent: float | None = None,
     ) -> None:
-        """Commit a cycle start reported by a scheduler without receipts (no ownership)."""
+        """Commit a cycle start reported by a scheduler without receipts."""
         del on_time_sec, off_time_sec
         self._commit_applied_command(
             physical_on_percent
             if self._valve_mode_enabled and physical_on_percent is not None
             else on_percent,
             hvac_mode,
-            None,
             cycle_start=True,
         )
 
@@ -773,48 +692,21 @@ class SmartPI:
         on_percent: float | None,
         hvac_mode: VThermHvacMode,
     ) -> None:
-        """Commit a mid-cycle valve position read without receipts (no ownership)."""
+        """Commit a mid-cycle valve position read without receipts."""
         if on_percent is None:
-            self._causal_power_trace.mark_unobserved_power(
-                time.monotonic(), "missing_valve_position"
-            )
             return
-        self._commit_applied_command(on_percent, hvac_mode, None, cycle_start=False)
+        self._commit_applied_command(on_percent, hvac_mode, cycle_start=False)
 
     def _commit_applied_command(
         self,
         actuator_power: float,
         hvac_mode: object,
-        snapshot: CommandOwnershipSnapshot | None,
         *,
         cycle_start: bool,
     ) -> None:
-        """Commit applied actuator power and its ownership to the causal trace."""
+        """Commit the applied actuator power to the deadtime and learning components."""
         now = time.monotonic()
-        if cycle_start:
-            self.ff3_state.start_cycle()
         linear_power = self._set_committed_actuator_output(actuator_power)
-        valve = self._valve_mode_enabled
-        ownership = FFTrimCoordinator.to_control_ownership_snapshot(
-            snapshot,
-            linear_power,
-            quality="valve_segmented_linear" if valve else "switch_cycle_equivalent",
-        )
-        trace_quality = "valve_segmented_linear" if valve else "switch_cycle_average"
-        if cycle_start:
-            self._causal_power_trace.start_applied_cycle(
-                now_monotonic=now,
-                linear_power=linear_power,
-                ownership=ownership,
-                quality=trace_quality,
-            )
-        else:
-            self._causal_power_trace.update_applied_power(
-                now_monotonic=now,
-                linear_power=linear_power,
-                ownership=ownership,
-                quality=trace_quality,
-            )
         self._update_deadtime_episode_status(linear_power, hvac_mode, now)
         # The learning components resume their histories once the restart is decided.
         if self.tar_learning is not None and not self.restart.pending:
@@ -839,15 +731,10 @@ class SmartPI:
 
     async def on_cycle_completed(self, e_eff: float = None, elapsed_ratio: float = 1.0, **_kw) -> None:
         """Handle end of cycle (learning)."""
-        self.fftrim_coord.on_cycle_completed(
-            cycle_end_now=time.monotonic(),
-            e_eff=e_eff,
-            elapsed_ratio=elapsed_ratio,
-        )
+        del e_eff, elapsed_ratio
 
         # Cycle accepted -> Count it
         self._cycles_since_reset += 1
-        self._cycle_boundary_pending = True
 
     @property
     def a(self) -> float:
@@ -955,11 +842,6 @@ class SmartPI:
     def u_ff(self) -> float:
         """Last feed-forward value."""
         return self._last_u_ff
-
-    @property
-    def u_ff3(self) -> float:
-        """Last FF3 value injected into the command path."""
-        return self._last_u_ff3
 
     @property
     def u_pi(self) -> float:
@@ -1328,13 +1210,8 @@ class SmartPI:
             "db_state": self.deadband_mgr.save_state(),
             "cal_state": self.calibration_mgr.save_state(),
             "gs_state": self.gain_scheduler.save_state(),
-            "twin_state": self.twin.save_state(),
             "guards_state": self.guards.save_state(),
             "ac_state": self.autocalib.save_state(),
-            # FFv2 components
-            "ff_v2_trim": self._ff_trim.save_state(),
-            "ff_trim_delta": self.fftrim_coord.last_ff_trim_delta,
-            "ff_trim_last_result": self._fftrim_observer.save_admissible_result(),
             # Holding power source the restored integral complements
             "ff_source": self._ff_holding.save(),
             "ff_wall": self._ff_holding.save_wall(),
@@ -1491,7 +1368,6 @@ class SmartPI:
         bridged = decision.bridged
         self.dt_est.resume_after_restart(bridged)
         self.learn_win.resume_after_restart(bridged)
-        self.fftrim_coord.resume_after_restart(bridged)
         # The learning histories are HEAT-only: in COOL they keep their handling outside heating.
         if self.tar_learning is not None:
             self.tar_learning.on_restart(decision.heat_bridged, decision.t_resume)
@@ -1603,12 +1479,9 @@ class SmartPI:
 
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
-        self.reset_command_ownership("ownership_discontinuity")
-        self.fftrim_coord.reset_observation_runtime()
         self._last_u_applied = 0.0
         self._last_restart_reason = "none"
         self.resume_hold.clear()
-        self.twin.load_state(state.get("twin_state", {}))
         self._hysteresis_restore = self._load_hysteresis_output(state.get("hysteresis_output"))
         # The restart is decided at the first tick (resolve_restart); until then
         # the transient state above stays as after a cold start.
@@ -1633,16 +1506,10 @@ class SmartPI:
         self.guards.load_state(state.get("guards_state", {}))
         self.autocalib.load_state(state.get("ac_state", {}))
 
-        # Load FF trim state; freeze for a few cycles after reboot
-        self._ff_trim.load_state(state.get("ff_v2_trim", {}))
-        self.fftrim_coord.last_ff_trim_delta = float(state.get("ff_trim_delta", 0.0))
-        self._fftrim_observer.load_admissible_result(state.get("ff_trim_last_result"))
         # The restored integral complements this holding power source: a different
         # source at the first cycle is transferred like any change of source.
         self._ff_holding.load(state.get("ff_source"), state.get("ff_wall"))
         self.tint_filter.load_state(state.get("tint_filter_state", {}))
-        # Freeze trim learning briefly after reboot.
-        self.fftrim_coord.freeze_after_reboot()
 
         self.set_learning_enabled(bool(state.get("learning_enabled", True)))
 
@@ -1677,21 +1544,11 @@ class SmartPI:
                 self._cycles_since_reset, self.ff_warmup_cycles,
             )
 
-    def _force_off_output(
-        self,
-        reason: str,
-        invalidated_hvac_mode: VThermHvacMode | None,
-    ) -> None:
-        """Zero the output and committed command; drop FF3, FF trim and episode context."""
+    def _force_off_output(self) -> None:
+        """Zero the output and committed command; drop the episode context."""
         self._set_linear_output(0.0)
         self._committed_on_percent = 0.0
         self._actuator_committed_on_percent = 0.0
-        self.ff3_state.reset(reason)
-        self.fftrim_coord.invalidate_context(
-            reason,
-            now_monotonic=time.monotonic(),
-            hvac_mode=invalidated_hvac_mode,
-        )
         self._last_u_applied = 0.0
         self.ctl.u_prev = 0.0
         self._last_u_cmd = 0.0
@@ -1730,11 +1587,6 @@ class SmartPI:
                     "%s - No indoor temperature yet after the restart: command of before the stop kept (%.0f %%)",
                     self._name, 100.0 * held,
                 )
-            self.fftrim_coord.invalidate_context(
-                "missing_sensor",
-                now_monotonic=time.monotonic(),
-                hvac_mode=self._last_hvac_mode,
-            )
             self._set_linear_output(0.0 if held is None else held)
             self._last_u_cmd = 0.0
             self._last_u_pi = 0.0
@@ -1744,7 +1596,7 @@ class SmartPI:
             return True
 
         if hvac_mode == VThermHvacMode_OFF:
-            self._force_off_output("hvac_off", self._last_hvac_mode)
+            self._force_off_output()
             self.ctl.last_i_mode = "I:FREEZE(hvac_off)"
             self.deadband_mgr.in_deadband = False
             self.deadband_mgr.in_near_band = False
@@ -1757,7 +1609,7 @@ class SmartPI:
 
         # Handle explicit force off (shedding, windows)
         if power_shedding:
-            self._force_off_output("power_shedding", hvac_mode)
+            self._force_off_output()
             # We update regime to PERTURBED but SKIP PID calculation
             self.gov.on_cycle_start()
             self.gov.update_regime(GovernanceRegime.PERTURBED)
@@ -1840,68 +1692,6 @@ class SmartPI:
             self._ff_holding.reset()
         self._last_active_wall_ts = now_wall
         return expired
-
-    def _compute_ff3_for_cycle(
-        self,
-        *,
-        cycle_boundary: bool,
-        target_temp: float,
-        current_temp: float,
-        ext_current_temp: float | None,
-        hvac_mode: VThermHvacMode,
-        slope_h: float | None,
-        setpoint_changed: bool,
-        startup_first_run: bool,
-        u_base: float,
-    ) -> float:
-        """Return the FF3 value to inject in the current calculation."""
-        if not cycle_boundary:
-            return self.ff3_state.u_cycle
-
-        ff3_context = build_ff3_disturbance_context(
-            twin_diag=self._last_twin_diag,
-            measured_slope_h=slope_h,
-        )
-        twin_reliable = ff3_context.prediction_usable
-        ff3_result: FF3Result = compute_ff3(
-            enabled=self._use_ff3,
-            twin=self.twin,
-            twin_reliable=twin_reliable,
-            twin_initialized=self.twin.T_hat is not None,
-            twin_disabled_reason=ff3_context.twin_unavailability_reason,
-            tau_reliable=self._tau_reliable,
-            ext_temp=ext_current_temp,
-            hvac_mode=hvac_mode,
-            regime=self.gov.regime,
-            in_deadband=self.deadband_mgr.in_deadband,
-            in_near_band=self.deadband_mgr.in_near_band,
-            disturbance_context_active=ff3_context.disturbance_active,
-            disturbance_context_reason=ff3_context.reason,
-            authority_factor=ff3_context.authority_factor,
-            prediction_quality=ff3_context.prediction_quality,
-            setpoint_changed=setpoint_changed,
-            startup_first_run=startup_first_run,
-            last_sat=self.ctl.last_sat,
-            u_base=u_base,
-            current_temp=current_temp,
-            setpoint=target_temp,
-            deadband_c=self.deadband_c,
-            near_band_below_deg=self.deadband_mgr.near_band_below_deg,
-            near_band_above_deg=self.deadband_mgr.near_band_above_deg,
-            cycle_min=self._cycle_min,
-            a=self.est.a,
-            b=self.est.b,
-            deadtime_heat_s=self.regulation_dead_time(hvac_mode).deadtime_heat_s,
-        )
-        return self.ff3_state.record(ff3_result, ff3_context)
-
-    def _disable_ff3_for_next_cycle_in_deadband(self) -> None:
-        """Keep the current FF3 contribution but prevent it from being reused next cycle."""
-        if self.ff3_state.disable_pending():
-            _LOGGER.debug(
-                "%s - Deadband active: disabling pending FF3 for the next cycle",
-                self._name,
-            )
 
     def _manage_setpoint(
         self,
@@ -1993,12 +1783,7 @@ class SmartPI:
         ext_current_temp: float | None,
         hvac_mode: VThermHvacMode,
         error: float,
-        current_temp: float,
         e_p: float,
-        slope_h: float | None = None,
-        setpoint_changed: bool = False,
-        cycle_boundary: bool = False,
-        startup_first_run: bool = False,
     ) -> float:
         """Calculate gains and feedforward and return the runtime feedforward."""
         # Capture old Ki for bumpless integral rescaling
@@ -2031,14 +1816,14 @@ class SmartPI:
                 self._name, old_ki, new_ki, self.ctl.integral
             )
 
-        # --- FFv2: AB confidence ---
+        # --- AB confidence ---
         self._ab_confidence.evaluate(
             tau_reliable=self._tau_reliable,
             learn_ok_count_a=self.est.learn_ok_count_a,
             learn_ok_count_b=self.est.learn_ok_count_b,
         )
 
-        # --- FFv2: compute signed k_ff from the active mono-mode model ---
+        # --- Signed k_ff from the active mono-mode model ---
         k_ff = compute_ff_gain(self.est, hvac_mode, self._tau_reliable)
         warmup_scale = compute_ff_warmup_scale(
             learn_ok_count=self.est.learn_ok_count,
@@ -2047,53 +1832,18 @@ class SmartPI:
             ff_warmup_cycles=self.ff_warmup_cycles,
         )
 
-        # Save previous FF state before computing the new FFResult
-        prev_ff_result = self._last_ff_result
-
-        # --- FFv2: nominal FF1 + FF2 path (basis for FF3) ---
-        nominal_ff_result = compute_ff(
+        ff_result = compute_ff(
             k_ff=k_ff,
             target_temp_ff=target_temp_ff,
             ext_temp=ext_current_temp,
             warmup_scale=warmup_scale,
-            trim=self._ff_trim,
         )
-        nominal_ff_result = self._select_holding_power(
-            nominal_ff_result, target_temp_ff, ext_current_temp, hvac_mode
-        )
-
-        u_ff3 = self._compute_ff3_for_cycle(
-            cycle_boundary=cycle_boundary,
-            target_temp=target_temp_ff,
-            current_temp=current_temp,
-            ext_current_temp=ext_current_temp,
-            hvac_mode=hvac_mode,
-            slope_h=slope_h,
-            setpoint_changed=setpoint_changed,
-            startup_first_run=startup_first_run,
-            u_base=nominal_ff_result.u_ff_final,
-        )
-
-        # --- FFv2 + FF3: inject FF3 on top of FF1 + FF2 ---
-        ff_result = replace(
-            nominal_ff_result,
-            u_ff3=u_ff3,
-            u_ff_eff=clamp(nominal_ff_result.u_ff_final + u_ff3, 0.0, 1.0),
+        ff_result = self._select_holding_power(
+            ff_result, target_temp_ff, ext_current_temp, hvac_mode
         )
         self._last_ff_result = ff_result
         self._last_ff_reason = ff_result.ff_reason
-        self._last_u_ff3 = ff_result.u_ff3
-
-        # Deadband must keep the structural hold power only: FF1 + FF2.
-        # FF3 remains a predictive transient action and must not be maintained
-        # around the setpoint.
-        runtime_ff = (
-            ff_result.u_ff_final
-            if self.deadband_mgr.in_deadband
-            else ff_result.u_ff_eff
-        )
-
-        return runtime_ff
+        return ff_result.u_ff1
 
     def _select_holding_power(
         self,
@@ -2103,28 +1853,22 @@ class SmartPI:
         hvac_mode: VThermHvacMode,
         now: float | None = None,
     ) -> FFResult:
-        """Return the FF1 + FF2 result of the holding power source in force.
+        """Return the FF1 result of the holding power source in force.
 
         A published room model with a qualified energy-balance ratio replaces
         the learned branch in heating with PWM heaters. A discrete change of the
         static part (source, model structure, published parameters, new
         energy-balance ratio) is moved into the integral, so that
-        the command does not jump; entering a room model source hands the FF2
-        trim over through the same transfer. The wall part is never moved: it
+        the command does not jump. The wall part is never moved: it
         is blended over a fixed time when it is switched on or off or its
         parameters change (room_model/feedforward.py).
         """
         source = select_source(self.room_model, hvac_mode, self._valve_mode_enabled)
         holding = self._ff_holding
-        if not source.room:
-            if holding.room_in_force:
-                self.fftrim_coord.hand_back_from_room_model()
-        elif not holding.room_in_force:
-            self.fftrim_coord.hand_over_to_room_model()
         delta = holding.update(
             source,
             now=time.time() if now is None else now,
-            learned_power=learned_ff_result.u_ff_final,
+            learned_power=learned_ff_result.u_ff1,
             target_temp=target_temp_ff,
             ext_temp=ext_current_temp,
             heat=hvac_mode == VThermHvacMode_HEAT,
@@ -2197,6 +1941,9 @@ class SmartPI:
     ) -> float:
         """
         Compute the next duty-cycle command.
+
+        cycle_boundary and temperature_measure_id are part of the calling
+        contract of Versatile Thermostat; the regulation does not use them.
         """
         self.ctl.last_integral_hold_source = "none"
         self.ctl.last_aw_du = 0.0
@@ -2217,8 +1964,6 @@ class SmartPI:
                 self.ctl.reset()
                 self._anticipation.reset()
                 self._ff_holding.reset()
-                self._ff_trim.clear_pending()
-                self._ff_trim.clear_last_transaction()
                 _LOGGER.info(
                     "%s - HVAC mode changed (%s → %s): PI state reset",
                     self._name, previous_mode, hvac_mode
@@ -2226,19 +1971,13 @@ class SmartPI:
             self._last_hvac_mode = hvac_mode
             model_reset = self.est.ensure_hvac_mode(hvac_mode)
             self.dt_est.ensure_hvac_mode(hvac_mode)
-            if mode_changed or model_reset is True:
-                self.fftrim_coord.reset_observation_runtime()
-                self.reset_command_ownership("ownership_context_changed")
             if model_reset is True:
                 self._ab_confidence.reset()
-                self._ff_trim.reset()
                 self._cycles_since_reset = 0
                 self._session_learn_ok_count_base = self.est.learn_ok_count
                 self._session_learn_skip_count_base = self.est.learn_skip_count
-                self.twin = self._new_thermal_twin()
-                self._last_twin_diag = {}
                 _LOGGER.info(
-                    "%s - HVAC signed-model migration: reset mode-dependent A, FF trim and twin state",
+                    "%s - HVAC signed-model migration: reset mode-dependent A",
                     self._name,
                 )
 
@@ -2293,11 +2032,6 @@ class SmartPI:
                     target_temp=target_temp,
                     hvac_mode=hvac_mode,
                 )
-            self.fftrim_coord.invalidate_context(
-                "guard_cut",
-                now_monotonic=now,
-                hvac_mode=hvac_mode,
-            )
             self.ctl.last_i_mode = "I:OVERRIDE(guard_cut)"
             self._unwind_integral_during_guard_cut(now, target_temp, current_temp)
             self._set_linear_output(0.0)
@@ -2317,14 +2051,7 @@ class SmartPI:
             t_int_clean = current_temp
 
         # --- 2. Update Time Tracking ---
-        dt_min, _resumed_from_off, startup_first_run, resume_hold_source = self._update_time_tracking(now)
-
-        # --- 2. Predict Cycle Trigger ---
-        # Evaluate if we need to cross a cycle boundary (bridged from on_cycle_completed or forced).
-        if self._cycle_boundary_pending:
-            cycle_boundary = True
-            self._cycle_boundary_pending = False
-            _LOGGER.debug("%s - Cycle boundary triggered for FF3 prediction", self._name)
+        dt_min, _resumed_from_off, _startup_first_run, resume_hold_source = self._update_time_tracking(now)
 
         # --- 3. Setpoint Management ---
         # The anticipated temperature feeds the P and I errors only; the deadband,
@@ -2403,11 +2130,6 @@ class SmartPI:
         )
 
         if self.calibration_mgr.is_calibrating:
-            self.fftrim_coord.invalidate_context(
-                "calibration",
-                now_monotonic=now,
-                hvac_mode=hvac_mode,
-            )
             self.ctl.clear_integral_hold()
             self._calculate_forced_calibration(
                 target_temp,
@@ -2421,19 +2143,11 @@ class SmartPI:
             self._last_target_temp = target_temp
             self._last_current_temp = current_temp
             self._last_ext_temp = ext_current_temp
-            # Refresh tau_reliable for twin diagnostics
             self._tau_reliable = self.est.tau_reliability().reliable
-            # Update Twin Diagnostics even in calibration
-            self._update_twin_diagnostics(current_temp, ext_current_temp, target_temp, hvac_mode, dt_s=dt_min * 60.0)
             return
 
         # --- 5. Hysteresis Phase ---
         if self.phase == SmartPIPhase.HYSTERESIS:
-            self.fftrim_coord.invalidate_context(
-                "hysteresis",
-                now_monotonic=now,
-                hvac_mode=hvac_mode,
-            )
             out = self.ctl.calculate_hysteresis(target_temp, current_temp, hvac_mode, self._hyst_off, self._hyst_on)
             if out is None and hysteresis_restore is not None:
                 # Inside the band after a short restart: resume the saved
@@ -2459,8 +2173,6 @@ class SmartPI:
                     hvac_mode=hvac_mode,
                 )
 
-            # Update Twin Diagnostics even in hysteresis
-            self._update_twin_diagnostics(current_temp, ext_current_temp, target_temp, hvac_mode, dt_s=dt_min * 60.0)
             self._last_current_temp = current_temp
             self._last_ext_temp = ext_current_temp
             return
@@ -2485,8 +2197,6 @@ class SmartPI:
             ctl=self.ctl,
             in_deadtime_window=lambda: self.in_deadtime_window,
         )
-        if in_deadband_now and not cycle_boundary:
-            self._disable_ff3_for_next_cycle_in_deadband()
 
         # --- 6b. Integral freeze during deadtime window ---
         integrator_hold = self.in_deadtime_window
@@ -2514,12 +2224,7 @@ class SmartPI:
             self._ext_control,
             hvac_mode,
             error_i,
-            current_temp,
             e_p,
-            slope,
-            setpoint_changed=setpoint_changed,
-            cycle_boundary=cycle_boundary,
-            startup_first_run=startup_first_run,
         )
         # After the deadtime hold: deadband shell, then no outdoor value yet; a dropout freezes gains/learning only
         if not integrator_hold and self.deadband_mgr.in_deadband and not in_core_deadband:
@@ -2590,49 +2295,6 @@ class SmartPI:
                 "%s - SAT_HI exit: integral stays at %.2f (natural post-conditional-integration)",
                 self._name, self.ctl.integral
             )
-
-        # --- 14c. FFv2: freeze management for trim ---
-        self.fftrim_coord.update_trim_freeze(regime)
-
-        # --- 14d. Causally aligned FF trim observation ---
-        self.fftrim_coord.record_thermal_measurement(
-            now_monotonic=now,
-            measurement_id=temperature_measure_id,
-            current_temp=current_temp,
-            target_temp=target_temp,
-            ext_current_temp=ext_current_temp,
-            hvac_mode=hvac_mode,
-            setpoint_changed=setpoint_changed,
-        )
-
-        # --- 15. Thermal Twin & ETA (diagnostics-only) ---
-        self._update_twin_diagnostics(current_temp, ext_current_temp, target_temp, hvac_mode, dt_s=dt_min * 60.0)
-
-    def _update_twin_diagnostics(
-        self,
-        current_temp: float,
-        ext_current_temp: float | None,
-        target_temp: float,
-        hvac_mode: VThermHvacMode,
-        dt_s: float = 0.0,
-    ) -> None:
-        """Update thermal twin and compute ETA best-case (diagnostics-only)."""
-        mode = "heat" if hvac_mode == VThermHvacMode_HEAT else "cool"
-        self._last_twin_diag = self.twin.update_with_eta(
-            tin=current_temp,
-            text=ext_current_temp,
-            target=target_temp,
-            on_percent=self._on_percent,
-            tau_reliable=self._tau_reliable,
-            a=self.est.a,
-            b=self.est.b,
-            mode=mode,
-            deadtime_heat_s=self.regulation_dead_time(hvac_mode).deadtime_heat_s,
-            deadtime_cool_s=self.dt_est.deadtime_cool_s,
-            deadtime_heat_reliable=self.dt_est.deadtime_heat_reliable,
-            deadtime_cool_reliable=self.dt_est.deadtime_cool_reliable,
-            dt_s=dt_s,
-        )
 
     def _update_deadtime_episode_status(self, u_applied: float, hvac_mode: VThermHvacMode, now: float) -> None:
         """Update the heating/cooling episode starts used by in_deadtime_window."""

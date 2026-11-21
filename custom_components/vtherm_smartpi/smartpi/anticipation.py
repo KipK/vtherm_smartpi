@@ -15,8 +15,8 @@ from typing import Callable, Iterable, NamedTuple, Tuple
 from ..hvac_mode import VThermHvacMode_COOL
 from .const import (
     ANTICIPATION_MAX_C,
+    ANTICIPATION_MAX_WINDOW_S,
     ANTICIPATION_MIN_WINDOW_S,
-    ANTICIPATION_WINDOW_FRAC,
     clamp,
 )
 
@@ -74,9 +74,11 @@ def correction_c(
 ) -> float:
     """Return the correction (°C) added to the measured temperature for the P and I errors.
 
-    The correction is the least-squares slope of the raw temperature history over
-    the last max(ANTICIPATION_MIN_WINDOW_S, horizon * ANTICIPATION_WINDOW_FRAC)
-    times the horizon, limited to +/- ANTICIPATION_MAX_C. It is 0 when the horizon
+    The correction is the least-squares slope of the raw temperature history times
+    the horizon, limited to +/- ANTICIPATION_MAX_C. The slope is read over a window
+    equal to the horizon, bounded to [ANTICIPATION_MIN_WINDOW_S,
+    ANTICIPATION_MAX_WINDOW_S] (a window shorter than the horizon would turn a quick
+    sensor step into a large correction). It is 0 when the horizon
     is 0, when ``active`` is false (the caller passes the stable phase),
     with fewer than 3 samples, or when the samples span less than half of the window.
 
@@ -87,7 +89,7 @@ def correction_c(
     """
     if horizon_s <= 0.0 or not active:
         return 0.0
-    window = max(ANTICIPATION_MIN_WINDOW_S, horizon_s * ANTICIPATION_WINDOW_FRAC)
+    window = min(max(ANTICIPATION_MIN_WINDOW_S, horizon_s), ANTICIPATION_MAX_WINDOW_S)
     points = [(t, v) for t, v in tin_history if now - window <= t <= now]
     if not points or points[-1][0] < now:
         points.append((now, float(current_temp)))  # the current tick is not in the history yet

@@ -8,6 +8,7 @@ from custom_components.vtherm_smartpi.const import (
     DEFAULT_OPTIONS,
     DOMAIN,
 )
+from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
 from fakes.fake_thermostat_runtime import FakeThermostatRuntime
 
@@ -77,3 +78,22 @@ def test_disabled_global_entry_does_not_hide_enabled_dedicated_entry():
 
     assert applied is dedicated
     assert config[CONF_SMART_PI_DEADBAND] == DEDICATED_DEADBAND
+
+
+def test_entry_with_the_removed_ff3_option_sets_up():
+    """A stored entry that still holds the removed feed-forward option is applied without it."""
+    thermostat = FakeThermostatRuntime()
+    thermostat.hass.config_entries._entries.append(
+        SimpleNamespace(
+            unique_id=DOMAIN,
+            data={"smart_pi_use_ff3": False},
+            options={"smart_pi_use_ff3": True, CONF_SMART_PI_DEADBAND: GLOBAL_DEADBAND},
+            disabled_by=None,
+        )
+    )
+    handler = SmartPIHandler(thermostat)
+
+    handler.init_algorithm()
+
+    assert isinstance(thermostat.prop_algorithm, SmartPI)
+    assert thermostat.prop_algorithm.deadband_c == GLOBAL_DEADBAND
