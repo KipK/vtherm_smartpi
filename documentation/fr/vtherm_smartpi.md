@@ -267,6 +267,8 @@ Le bootstrap prend donc plus de temps dans les pièces lentes ou avec des sondes
 
 SmartPI quitte le bootstrap et bascule en régulation normale une fois que `a` et `b` disposent de suffisamment d'observations pour publier un premier modèle thermique.
 
+Pendant ses chauffes et ses arrêts du bootstrap, SmartPI lit aussi chaque phase de chauffe complète et le pic de température qui la suit, dans leur ensemble. Lorsque deux lectures concordent, leur vitesse de chauffe et leur taux de pertes servent de valeurs de départ du modèle tant que l'apprentissage continu n'a pas les siennes. Elles sont remplacées par les valeurs apprises dès que celles-ci sont disponibles.
+
 Les buffers d'observation continuent ensuite à se remplir jusqu'à 31 échantillons pendant la régulation normale, ce qui permet au modèle de continuer à se consolider après le bootstrap. La confiance complète reste plus stricte que la sortie de bootstrap — tant que le nombre d'observations n'est pas suffisant pour cette confiance complète, SmartPI régule avec le modèle publié tout en gardant certaines corrections internes gelées.
 
 Ce qu'il faut retenir pendant le bootstrap :

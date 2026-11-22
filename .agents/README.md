@@ -12,7 +12,7 @@ Versioned, tool-neutral memory of the SmartPI project. `AGENTS.md` (repo root) i
 | `context/theory.md` | Control theory and thermal physics background (Astrom-Hagglund, 1R1C, tuning, estimation) |
 | `context/architecture.md` | Verified code map, tests by area, "where do I change X?", names that do not exist |
 | `context/runtime-flow.md` | Setup, config resolution, handler lifecycle, tick pipeline, persistence, services, sensor |
-| `context/algorithm-core.md` | PI, gains, setpoint, A/B learning, dead time, bootstrap, calibration, feed-forward, guards |
+| `context/algorithm-core.md` | PI, gains, setpoint, A/B learning, dead time, bootstrap, measurement events and starting values, calibration, feed-forward, guards |
 | `context/algorithm-room-model.md` | 0.7 subsystems: emitter lag learning, room model, quiet periods, heating balance, restart bridge |
 | `context/diagnostics.md` | How to read published diagnostics, symptom table, status strings, triage |
 | `context/pitfalls.md` | Durable traps by theme (regulation, learning, persistence, VT/HA, tests/benches, sensors) |

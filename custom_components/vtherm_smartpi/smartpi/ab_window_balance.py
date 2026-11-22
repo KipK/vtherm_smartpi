@@ -300,7 +300,7 @@ class ABWindowBalance:
     ) -> bool:
         """Submit the pooled balance once its uncertainty is low enough."""
         pool = self._pools[param]
-        if param == "a" and len(estimator.b_meas_hist) < AB_A_SOFT_GATE_MIN_B:
+        if param == "a" and len(estimator.b_meas_hist) < AB_A_SOFT_GATE_MIN_B and not estimator.start.standing("b"):
             return False
 
         dt_min = sum(s.dt_min for s in pool)

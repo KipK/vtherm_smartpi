@@ -61,7 +61,7 @@ def _build_control(algo: SmartPI) -> Dict[str, Any]:
     ki = round(algo.Ki, 6)
     return {
         "phase": phase,
-        "mode": "hysteresis" if phase == SmartPIPhase.HYSTERESIS else "smartpi",
+        "mode": "hysteresis" if algo.command_is_hysteresis else "smartpi",
         "hysteresis_state": algo.ctl.hysteresis_state,
         "kp": kp,
         "ki": ki,

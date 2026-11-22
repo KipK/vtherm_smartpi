@@ -27,6 +27,7 @@ from .const import (
 from .ab_window_balance import ABWindowBalance
 from .learning_outcomes import LearningOutcomes
 from .heating_balance import HeatingBalance
+from .measure_event import MeasureEventDetector
 from .response_lag import ResponseLagEstimator
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
@@ -170,6 +171,11 @@ class LearningWindowManager:
     def heating_balance(self) -> HeatingBalance:
         """Return the heating balance (diagnostics)."""
         return self._heating_balance
+
+    @property
+    def events(self) -> MeasureEventDetector:
+        """Return the detector of the measurement events (it feeds the heating balance)."""
+        return self._heating_balance.events
 
     def outcomes_summary(self, now: float) -> dict[str, list[list]]:
         """Return the most frequent window outcomes of the sliding period."""
@@ -430,6 +436,7 @@ class LearningWindowManager:
                     else "bootstrap" if is_hysteresis
                     else "regulation"
                 ),
+                ext=ext_temp,
             )
             self._follow_power_model(
                 estimator, _active_deadtime_s(dt_est, hvac_mode), hvac_mode
@@ -710,9 +717,18 @@ class LearningWindowManager:
                 if self._active:
                     self.reset()
                 return deadtime_skip_count_a, deadtime_skip_count_b
+            peak = dt_est.passive_by_peak is True
+            if peak:
+                # A passive window of the learning stage starts once the peak of the stop is confirmed,
+                # whether or not a dead time after a stop was published before.
+                passive_deadtime_reliable = dt_est.stop_peak_confirmed
             if u_active < U_OFF_MAX and not passive_deadtime_reliable:
                 estimator.learn_skip_count += 1
-                estimator.learn_last_reason = "skip: bootstrap - passive deadtime not yet learned"
+                estimator.learn_last_reason = (
+                    "skip: bootstrap - peak after the stop not yet confirmed"
+                    if peak
+                    else "skip: bootstrap - passive deadtime not yet learned"
+                )
                 if self._active:
                     self.reset()
                 return deadtime_skip_count_a, deadtime_skip_count_b

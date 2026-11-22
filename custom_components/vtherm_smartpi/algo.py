@@ -71,8 +71,6 @@ from .smartpi.const import (
     HYST_LOWER_C,
     DEFAULT_DEADBAND_C,
     INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL,
-    AB_MIN_SAMPLES_A,
-    AB_MIN_SAMPLES_B,
     DEFAULT_NEAR_BAND_DEG,
     CALIBRATION_TIMEOUT_MIN,
     ERROR_FILTER_TAU,
@@ -83,6 +81,7 @@ from .smartpi.const import (
 )
 from .smartpi.anticipation import AnticipationHorizon, DeadbandGate, anticipated_error, correction_c, select_horizon
 from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
+from .smartpi.learning_start import LearningStart
 from .smartpi.deadtime_estimator import (
     DeadTimeEstimator,
     deadtime_window_active,
@@ -173,6 +172,7 @@ class SmartPI:
         valve_curve_params: ValveCurveParams | None = None,
         tar_learning: bool = False,
         room_model: bool = False,
+        learning_start: str = "bootstrap",
     ) -> None:
         self._name = name
         self._cycle_min = cycle_min
@@ -277,7 +277,9 @@ class SmartPI:
         self._output_initialized: bool = False # True once calculate() runs successfully
 
         # --- Dead Time (L) Support ---
-        self.dt_est = DeadTimeEstimator()
+        self.learning_start = learning_start  # "bootstrap" or "direct" (smartpi/learning_start.py)
+        self._start = LearningStart(learning_start, self)
+        self.dt_est = DeadTimeEstimator(self._start.direct, self._start.measures_start)
         # Learning of the HEAT active dead time (None when the algorithm runs without it)
         self.tar_learning: TarLearningManager | None = None
         if tar_learning:
@@ -400,6 +402,7 @@ class SmartPI:
         self.learn_win.reset_all()
         self.est.a_model_ready = self.learn_win.response_lag.resolved
         self._hysteresis_restore = None
+        self._start.reset()
         self.deadband_mgr.reset()
         self.calibration_mgr.reset()
         self.autocalib.reset()  # its snapshot and counters describe the model that is discarded
@@ -432,16 +435,15 @@ class SmartPI:
 
     @property
     def phase(self) -> SmartPIPhase:
-        if self.calibration_mgr.state != SmartPICalibrationPhase.IDLE:
-            return SmartPIPhase.CALIBRATION
-        if (
-            (len(self.est.a_meas_hist) < AB_MIN_SAMPLES_A and self.est.learn_ok_count_a == 0)
-            or len(self.est.b_meas_hist) < AB_MIN_SAMPLES_B
-            # The first a publication waits for the delivered power model.
-            or (not self.est.a_model_ready and self.est.learn_ok_count_a == 0)
-        ):
-            return SmartPIPhase.HYSTERESIS
-        return SmartPIPhase.STABLE
+        return self._start.phase
+
+    @property
+    def command_is_hysteresis(self) -> bool:
+        return self._start.command_is_hysteresis
+
+    @property
+    def command_is_on_off(self) -> bool:
+        return self._start.command_is_on_off
 
     @property
     def meas_count_a(self) -> int:
@@ -566,6 +568,7 @@ class SmartPI:
             raw_temp=raw_temp,
             min_active_window_min=self._cycle_min,
         )
+        self._start.zero_integral()
 
     def _unwind_integral_during_guard_cut(
         self,
@@ -663,11 +666,9 @@ class SmartPI:
 
     async def on_command_receipt(self, receipt: AppliedCommandReceipt) -> None:
         """Commit one command applied by the scheduler."""
-        self._commit_applied_command(
-            receipt.applied_on_percent,
-            receipt.hvac_mode,
-            cycle_start=receipt.kind == CommandReceiptKind.CYCLE_START,
-        )
+        self._start.note_receipt(receipt, self._valve_mode_enabled)
+        self._commit_applied_command(receipt.applied_on_percent, receipt.hvac_mode,
+                                     cycle_start=receipt.kind == CommandReceiptKind.CYCLE_START)
 
     async def on_cycle_started(
         self,
@@ -945,7 +946,10 @@ class SmartPI:
     def anticipation_horizon(self, hvac_mode: VThermHvacMode | None = None) -> AnticipationHorizon:
         """Horizon (s) of the anticipation read now and its source (see smartpi/anticipation.py)."""
         mode = hvac_mode if hvac_mode is not None else self._last_hvac_mode
-        return select_horizon(self.learn_win.heating_balance.kept_lag_s, lambda: self.gain_dead_time(mode), mode)
+        return select_horizon(
+            self.learn_win.heating_balance.kept_lag_s, lambda: self.gain_dead_time(mode), mode,
+            self._start.kept_lag_s(mode),
+        )
 
     @property
     def anticipation_horizon_in_use_s(self) -> float:
@@ -1224,6 +1228,7 @@ class SmartPI:
                 "wall_ts": monotonic_to_wall_ts(hysteresis["ts"]),
                 "hvac_mode": hysteresis["hvac_mode"],
             }
+        state.update(self._start.save(time.monotonic()))
         restart = self._restart_context()
         if restart is not None:
             state["restart"] = restart
@@ -1402,7 +1407,7 @@ class SmartPI:
             # Not yet applied: no calculation since the previous restart.
             return self._hysteresis_restore
         if (
-            self.phase != SmartPIPhase.HYSTERESIS
+            not self.command_is_hysteresis
             or self._last_calculate_time is None
             or self._last_hvac_mode not in (VThermHvacMode_HEAT, VThermHvacMode_COOL)
             or self._committed_on_percent not in (0.0, 1.0)
@@ -1483,6 +1488,7 @@ class SmartPI:
         self._last_restart_reason = "none"
         self.resume_hold.clear()
         self._hysteresis_restore = self._load_hysteresis_output(state.get("hysteresis_output"))
+        self._start.load(state)
         # The restart is decided at the first tick (resolve_restart); until then
         # the transient state above stays as after a cold start.
         self.restart.load(state.get("restart"))
@@ -1596,6 +1602,7 @@ class SmartPI:
             return True
 
         if hvac_mode == VThermHvacMode_OFF:
+            self._start.interrupt(time.monotonic(), "thermostat stopped")
             self._force_off_output()
             self.ctl.last_i_mode = "I:FREEZE(hvac_off)"
             self.deadband_mgr.in_deadband = False
@@ -1609,6 +1616,7 @@ class SmartPI:
 
         # Handle explicit force off (shedding, windows)
         if power_shedding:
+            self._start.interrupt(time.monotonic(), "power shedding")
             self._force_off_output()
             # We update regime to PERTURBED but SKIP PID calculation
             self.gov.on_cycle_start()
@@ -1748,7 +1756,8 @@ class SmartPI:
             e_p, the error used by the P term.
         """
         tau_info = self.est.tau_reliability()
-        self._tau_reliable = tau_info.reliable
+        # Until the first model is published (PI-driven learning stage) no reader takes it as reliable.
+        self._tau_reliable = tau_info.reliable and self.phase != SmartPIPhase.HYSTERESIS
 
         e_p = error_p
         alpha_err = 1.0 - exp(-max(dt_min, 0.001) / ERROR_FILTER_TAU)
@@ -1803,6 +1812,7 @@ class SmartPI:
             cycle_min=self._cycle_min,
             valve_mode_enabled=self._valve_mode_enabled,
             hvac_mode=hvac_mode,
+            pre_model_a=self._start.pre_model_a(hvac_mode),
         )
         new_ki = self.gain_scheduler.ki
 
@@ -1826,7 +1836,7 @@ class SmartPI:
         # --- Signed k_ff from the active mono-mode model ---
         k_ff = compute_ff_gain(self.est, hvac_mode, self._tau_reliable)
         warmup_scale = compute_ff_warmup_scale(
-            learn_ok_count=self.est.learn_ok_count,
+            learn_ok_count=self.est.ramp_count,
             ff_warmup_ok_count=self.ff_warmup_ok_count,
             cycles_since_reset=self._cycles_since_reset,
             ff_warmup_cycles=self.ff_warmup_cycles,
@@ -1952,6 +1962,7 @@ class SmartPI:
 
         now = time.monotonic()
         self._ext_control = self._ext_control if ext_current_temp is None else ext_current_temp
+        self._start.begin(hvac_mode)
 
         # --- 0. HVAC mode transition (HEAT↔COOL) → reset integral ---
         # Track active modes BEFORE validation so that missing presets in COOL
@@ -2015,7 +2026,7 @@ class SmartPI:
             # detection, the learning and the published temperature follow the cut.
             if current_temp is not None:
                 t_int_lp, t_int_clean = self.tint_filter.update(current_temp, now)
-                if self.phase != SmartPIPhase.HYSTERESIS and not self.calibration_mgr.is_calibrating:
+                if not self.command_is_on_off and not self.calibration_mgr.is_calibrating:
                     self.dt_est.update(
                         now=now,
                         tin=t_int_lp,
@@ -2054,9 +2065,11 @@ class SmartPI:
         dt_min, _resumed_from_off, _startup_first_run, resume_hold_source = self._update_time_tracking(now)
 
         # --- 3. Setpoint Management ---
+        # Measurement pulses of the direct start: the command of a pulse replaces the PI.
+        self._start.advance(now, target_temp, current_temp, hvac_mode, self._on_percent)
         # The anticipated temperature feeds the P and I errors only; the deadband,
         # guards, feed-forward and learning keep the measured temperature.
-        anticipating = self.phase == SmartPIPhase.STABLE
+        anticipating = self.phase != SmartPIPhase.CALIBRATION and not self.command_is_on_off
         anticipation_c = self._anticipation.apply(correction_c(
             self.anticipation_horizon(hvac_mode).seconds if anticipating else 0.0,
             now, current_temp, target_temp, self.dt_est.tin_history, anticipating,
@@ -2085,7 +2098,7 @@ class SmartPI:
         # --- 4. Learning & Calibration ---
         if (
             self._learning_enabled
-            and self.phase != SmartPIPhase.HYSTERESIS
+            and not self.command_is_on_off
             and not self.calibration_mgr.is_calibrating
         ):
             # During forced calibration, the deadtime estimator must be driven
@@ -2146,9 +2159,11 @@ class SmartPI:
             self._tau_reliable = self.est.tau_reliability().reliable
             return
 
-        # --- 5. Hysteresis Phase ---
-        if self.phase == SmartPIPhase.HYSTERESIS:
-            out = self.ctl.calculate_hysteresis(target_temp, current_temp, hvac_mode, self._hyst_off, self._hyst_on)
+        # --- 5. Hysteresis command (or the full-power phase of the start mode) ---
+        if self.command_is_on_off:
+            out = self._start.output
+            if out is None:
+                out = self.ctl.calculate_hysteresis(target_temp, current_temp, hvac_mode, self._hyst_off, self._hyst_on)
             if out is None and hysteresis_restore is not None:
                 # Inside the band after a short restart: resume the saved
                 # on/off state instead of starting from OFF.

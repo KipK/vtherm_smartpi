@@ -63,15 +63,24 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `ab_aggregator.py`: published a_hat / b_hat aggregation.
 - `ab_drift.py`: persistent drift helpers.
 - `ab_window_balance.py`: integral-balance pools for windows without a robust slope.
-- `heating_balance.py`: heating-balance estimator (its median kept emitter lag is the HEAT horizon of the anticipation; the rest is observation only).
+- `heating_balance.py`: heating-balance estimator reading the HEAT events of the detector (its median kept emitter lag is the HEAT horizon of the anticipation; the rest is observation only).
 - `learning_window.py`: `LearningWindowManager`: multi-cycle learning windows, acceptance.
 - `learning_outcomes.py`: bounded counters of window outcomes.
 - `tint_filter.py`: adaptive filter on indoor temperature (`t_int_lp`, `t_int_clean`).
 
 **Dead time and emitter lag**
-- `deadtime_estimator.py`: heating/cooling dead time by state machine on power transitions.
+- `deadtime_estimator.py`: heating/cooling dead time by state machine on power transitions; in peak mode (direct start only) the dead time after a stop is read on the `peak_search.py` peak.
 - `deadtime_trend.py`: free-running trend before a power start.
 - `response_lag.py`: emitter lag estimator over the constant-power heating phases of the learning windows.
+
+**Measurement events and starting values** (one reading chain; see `algorithm-core.md` section 6b)
+- `peak_search.py`: `PeakSearch`, the one search of the temperature peak after a cut (300 s bins, earliest strictly highest mean, confirmed by a closed bin 1800 s later, 4 h limit). Used by the detector (so by the heating balance) and by the dead-time estimator in peak mode.
+- `measure_event.py`: `MeasureEventDetector` (rest, constant power, stop until the peak, HEAT and COOL, each event tagged with its source: pulse, bootstrap, calibration, regulation) and `MeasureRecord` (bounded record of power, room and outdoor temperature on change; for a switch the power channel holds the real on/off edges from the applied-command receipts).
+- `event_reading.py`: `EventReader`, reads the closed events of source pulse or bootstrap on the record; queues the fit, keeps two agreeing readings.
+- `event_fit.py`: the fit job (pure delay, first-order lag, `a`, losses `b`; numpy/scipy lazily imported) and the agreement rule.
+- `starting_values.py`: `StartingValues`, `a` and `b` standing for the learning's own until it has them; the warm-up credit.
+- `learning_start.py`: `LearningStart`, option `learning_start` (bootstrap or direct), phase of the algorithm, source of the command, hand-over of the kept values, saved keys; `command_is_on_off`.
+- `measure_pulse.py`: `MeasurePulse`, the light measurement pulses of the direct start (not reachable by users: the handler does not pass the option).
 
 **Calibration**
 - `calibration.py`: `CalibrationManager`: forced calibration state machine.
@@ -112,6 +121,7 @@ Find a test by module name: `tests/test_<module>.py` or `tests/test_smartpi_<top
 | Root modules | `test_config_flow`, `test_factory`, `test_init_lifecycle`, `test_services`, `test_sensor`, `test_valve_config_check`, `test_device_link`, `test_vtherm_compatibility`, `test_handler_*`, `test_smartpi_handler_*`, `test_smartpi_vt_recalculate_contract` |
 | Control core | `test_smartpi_{antiwindup,bumpless_transfer,feedback,gain_transfer,governance,guards,guard_cut_*,integral_hold,max_on_percent,pause,shedding,robustness*}`, `test_algo_{deadband_hysteresis,off_mode}` |
 | Setpoint / deadband | `test_smartpi_setpoint*`, `test_algo_setpoint_boost`, `test_smartpi_deadband_output`, `test_smartpi_near_band_unwind`, `test_smartpi_nearband_model`, `test_smartpi_valve_curve`, `test_smartpi_valve_runtime_sync` |
+| Measurement events | `test_smartpi_{peak_search,measure_event,event_reading,starting_values,learning_start}` |
 | Learning A/B | `test_ab_window_balance`, `test_smartpi_ab_*`, `test_smartpi_learning_*`, `test_learning_outcomes`, `test_smartpi_heating_balance`, `test_smartpi_b_heat_learning_guard`, `test_smartpi_hysteresis_learning`, `test_smartpi_tin_history_coverage` |
 | Dead time / emitter lag / calibration | `test_smartpi_deadtime_*`, `test_smartpi_response_lag*`, `test_smartpi_calibration*` |
 | Feed-forward | `test_smartpi_feedforward`, `test_room_model_feedforward` |
@@ -144,7 +154,12 @@ Support files:
 | Add a Repairs issue | `valve_config_check.py` or `smartpi/compatibility.py`; `translations` `issues`; tests |
 | Change the landing on the setpoint (anticipation) / boost | `smartpi/anticipation.py` (rule), `algo.py::SmartPI.calculate` (wiring), `smartpi/setpoint.py` (boost) |
 | Change restart behavior | `smartpi/restart_bridge.py`, `handler.py` (`_restart_exclusion`) |
-| Add a numerical learning job | new module in `smartpi/<pkg>/jobs.py` style (snapshot in, plain data out, executor, `job_abort.check`); numpy/scipy imported lazily in the job only |
+| Add a numerical learning job | new module in `smartpi/<pkg>/jobs.py` style (snapshot in, plain data out, executor, `job_abort.check`); numpy/scipy imported lazily in the job only; give its manager `active`, `async_run`, `stop`, `dirty` and add it to `SmartPIHandler._learning_jobs` (one background loop runs them one after the other) |
+| Change the peak search after a cut | `smartpi/peak_search.py` only (its constants `HEATING_BALANCE_PEAK_*` live in `const.py`); callers are `measure_event.py` and `deadtime_estimator.py` |
+| Change what a heating event is (rest, phase, cut, source) | `smartpi/measure_event.py`; consumers pick events by source (`heating_balance.py`, `event_reading.py`) |
+| Change the fit of an event or the agreement rule | `smartpi/event_fit.py` (fit), `smartpi/event_reading.py` (windows, queue, kept values) |
+| Change the starting values, their release or the warm-up credit | `smartpi/starting_values.py`, hand-over in `smartpi/learning_start.py`, release calls in `smartpi/ab_estimator.py` |
+| Change the start of the learning (bootstrap or direct) | `smartpi/learning_start.py`; `algo.py` only wires it (`self._start`); a user option needs `handler.py`, `config_flow.py`, translations and docs as well (none exists yet) |
 | Release / CI | `.github/workflows/*.yml`, `manifest.json`, `CHANGELOG.md` |
 
 Rules for any user-visible change: update `documentation/en` and `documentation/fr` together; docs describe the current behavior only.
@@ -153,9 +168,9 @@ Rules for any user-visible change: update `documentation/en` and `documentation/
 
 `algo.py` and `handler.py` must not grow. New logic goes into a new or existing module under `smartpi/`; `algo.py` only wires it (construct, call, persist, publish), and `handler.py` only bridges VT. Extract before adding.
 
-Current sizes (lines): `algo.py` 2312, `handler.py` 812, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 19885. Largest `smartpi/` files: `learning_window.py` 1161, `ab_estimator.py` 1031, `response_lag.py` 842.
+Current sizes (lines): `algo.py` 2327, `handler.py` 808, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 21877. Largest `smartpi/` files: `learning_window.py` 1177, `ab_estimator.py` 1103, `response_lag.py` 849, `measure_event.py` 732.
 
 ## 7. Names that do not exist (do not look for them)
 
 Mentioned by stale notes, absent from the code:
-`reference_governor.py`, `reference_governor_authority.py`, `reference_governor_runtime.py`, `governor_falsification.py`, `braking_release.py`, `integral_guard.py` (its resume hold lives in `smartpi/resume_hold.py`), `eris_tuning.py`, `ff_trim.py`, `ff3.py`, `thermal_twin_1r1c.py`, `command_ownership.py`, `gain_observation.py`, `trajectory.py`, `recovery_plateau.py` (the setpoint trajectory and its plateau detector; the landing is the anticipation).
+`reference_governor.py`, `reference_governor_authority.py`, `reference_governor_runtime.py`, `governor_falsification.py`, `braking_release.py`, `integral_guard.py` (its resume hold lives in `smartpi/resume_hold.py`), `eris_tuning.py`, `ff_trim.py`, `ff3.py`, `thermal_twin_1r1c.py`, `command_ownership.py`, `gain_observation.py`, `trajectory.py`, `recovery_plateau.py` (the setpoint trajectory and its plateau detector; the landing is the anticipation), `stop_peak.py` (the peak after a cut is `peak_search.py`).

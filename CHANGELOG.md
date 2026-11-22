@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Bootstrap: the heating phases of the hysteresis bootstrap and the temperature
+  peak that follows each of them are now read as a whole; two agreeing readings
+  give the model starting values for the heating rate and the loss rate when the
+  bootstrap ends, until the continuous learning has its own. The regulation
+  during the bootstrap is unchanged.
+- The curve fits of these readings run in the background, one at a time with
+  the emitter lag learning and the room model, and never delay the regulation.
 - Feed-forward: the holding power is the only feed-forward. The "Use FF3"
   option, the slow feed-forward trim, the thermal twin and its time-to-setpoint
   estimate are removed. The diagnostics groups `feedforward.fftrim`,

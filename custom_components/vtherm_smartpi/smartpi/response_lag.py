@@ -180,6 +180,8 @@ class ResponseLagEstimator:
         # (lag, standard deviation) of the recent estimates, in s.
         self._estimates: deque[Tuple[float, float]] = deque(maxlen=RESPONSE_LAG_HISTORY)
         self._published: float | None = None
+        # Lag given from outside, used while the estimator has no published lag of its own
+        self._given: float | None = None
         self._durations: deque[float] = deque(maxlen=RESPONSE_LAG_HISTORY)
         # Heating phases ended since the start of the learning: active episodes
         # separated by less than RESPONSE_LAG_PHASE_MIN_OFF_S of power cut
@@ -218,7 +220,12 @@ class ResponseLagEstimator:
         estimates: an inconsistent set keeps it, so that dispersed estimates do
         not switch the delivered power model on and off.
         """
-        return self._published
+        return self._published if self._published is not None else self._given
+
+    def give_lag(self, lag_s: float | None) -> None:
+        """Lag (s) given from outside, None to withdraw it. It stands for the published lag while the estimator
+        has none of its own and is never mixed into its estimates: a lag the estimator publishes later replaces it."""
+        self._given = lag_s if lag_s is not None and lag_s > 0.0 else None
 
     def _consistent_median(self) -> float | None:
         """Weighted median of the estimates when it is precise enough, else None.
@@ -250,11 +257,11 @@ class ResponseLagEstimator:
     def resolved(self) -> bool:
         """Whether the delivered power model is settled for the a learning.
 
-        It is once a lag is published, or once RESPONSE_LAG_RESOLVE_EPISODES
+        It is once a lag is published or given, or once RESPONSE_LAG_RESOLVE_EPISODES
         heating phases have ended without a publication (the installation
         does not resolve its lag: the applied power is used).
         """
-        return self._published is not None or self._episodes >= RESPONSE_LAG_RESOLVE_EPISODES
+        return self.lag_s is not None or self._episodes >= RESPONSE_LAG_RESOLVE_EPISODES
 
     @property
     def estimates_count(self) -> int:

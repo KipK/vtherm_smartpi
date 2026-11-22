@@ -227,16 +227,65 @@ def test_remove_stops_the_learning_computations_and_cancels_their_tasks():
     algo = thermostat.prop_algorithm
     algo.tar_learning = MagicMock()
     algo.room_model = MagicMock()
-    tar_task, room_task = MagicMock(), MagicMock()
-    tar_task.done.return_value = room_task.done.return_value = False
-    handler._tar_task, handler._room_task = tar_task, room_task
+    task = MagicMock()
+    task.done.return_value = False
+    handler._learning_task = task
 
     handler.remove()
 
     algo.tar_learning.stop.assert_called_once_with()
     algo.room_model.stop.assert_called_once_with()
-    tar_task.cancel.assert_called_once_with()
-    room_task.cancel.assert_called_once_with()
-    assert handler._tar_task is None and handler._room_task is None
+    assert algo._start.reading._abort.is_set()
+    task.cancel.assert_called_once_with()
+    assert handler._learning_task is None
     for call in thermostat.hass.async_create_task.call_args_list:
         call.args[0].close()
+
+
+def _managers(*active: bool):
+    managers = [MagicMock() for _ in active]
+    for manager, flag in zip(managers, active):
+        manager.active = flag
+        manager.dirty = False
+        manager.async_run = AsyncMock()
+    return managers
+
+
+def test_one_background_loop_serves_the_three_executor_jobs():
+    """T_ar, room model and the fit of the readings are started by one task, once while it runs."""
+    handler, thermostat, _store = _build_handler()
+    algo = thermostat.prop_algorithm
+    tar, room, reading = _managers(True, True, True)
+    algo.tar_learning, algo.room_model, algo._start.reading = tar, room, reading
+    thermostat.hass.async_create_background_task = MagicMock(side_effect=lambda coro, name: coro.close() or MagicMock(done=lambda: False))
+
+    handler._process_learning(algo)
+    handler._process_learning(algo)
+
+    thermostat.hass.async_create_background_task.assert_called_once()
+    assert thermostat.hass.async_create_background_task.call_args.args[1].endswith("_learning")
+
+
+def test_no_loop_starts_without_a_due_job():
+    handler, thermostat, _store = _build_handler()
+    algo = thermostat.prop_algorithm
+    algo.tar_learning, algo.room_model, algo._start.reading = _managers(False, False, False)
+    thermostat.hass.async_create_background_task = MagicMock()
+
+    handler._process_learning(algo)
+
+    thermostat.hass.async_create_background_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_loop_runs_the_active_managers_one_after_the_other():
+    handler, thermostat, _store = _build_handler()
+    tar, room, reading = _managers(True, False, True)
+    order = []
+    tar.async_run.side_effect = lambda hass: order.append("tar")
+    reading.async_run.side_effect = lambda hass: order.append("reading")
+
+    await handler._run_learning([tar, room, reading])
+
+    assert order == ["tar", "reading"]
+    room.async_run.assert_not_called()

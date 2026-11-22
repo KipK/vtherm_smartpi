@@ -104,6 +104,12 @@ Hors de la bande, les seuils décident. Après tout autre redémarrage, et pour 
 état sauvegardé sans cet état, la sortie repart à 0. Une phase de chauffe ou de
 refroidissement en cours peut ainsi reprendre après un redémarrage court.
 
+Les phases de chauffe de l'hystérésis sont des événements de mesure : elles sont
+enregistrées et lues dans leur ensemble, et à la fin du bootstrap les lectures
+donnent à l'apprentissage des valeurs de départ pour `a` et `b` (3.7, Événements
+de mesure et valeurs de départ). La commande d'hystérésis, l'ordre ci-dessus et
+la règle de sortie sont les mêmes avec ou sans elles.
+
 La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dérive repose sur `b_converged_for_a()` :
 
 1. `learn_ok_count_b >= 11`,
@@ -306,11 +312,11 @@ Le retard de l'émetteur est appris sur des épisodes à puissance constante, qu
 
 #### Bilan de chauffe
 
-`HeatingBalance` (`heating_balance.py`) mesure, sur chaque phase de chauffe suivie d'un arrêt, la vitesse de chauffe `a` (°C/min à pleine puissance) et le retard de l'émetteur à partir d'un bilan énergétique de la pièce. Il est publié ; la régulation ne lit que la médiane des derniers retards de l'émetteur qu'il a mesurés, comme horizon de l'anticipation (voir la section 4.3). Il ne fonctionne qu'en mode chauffage, à partir des mêmes observations que le retard de l'émetteur sur les phases de chauffe à puissance constante.
+`HeatingBalance` (`heating_balance.py`) mesure, sur chaque phase de chauffe suivie d'un arrêt, la vitesse de chauffe `a` (°C/min à pleine puissance) et le retard de l'émetteur à partir d'un bilan énergétique de la pièce. Il est publié ; la régulation ne lit que la médiane des derniers retards de l'émetteur qu'il a mesurés, comme horizon de l'anticipation (voir la section 4.3). Il ne fonctionne qu'en mode chauffage, à partir des événements de chauffe du détecteur d'événements de mesure (3.7, Événements de mesure et valeurs de départ).
 
 Une phase commence au premier intervalle où la puissance dépasse 1 % et se termine après sa coupure. Les chauffes séparées de moins de `HEATING_BALANCE_PHASE_MIN_OFF_S` (10 minutes) sans chauffage appartiennent à la même phase. Avant la phase, le repos (chauffage éteint) doit durer au moins `HEATING_BALANCE_MIN_REST_S = 1800 s`. Une référence, la droite des moindres carrés des échantillons de température sur la fin du repos (au plus `HEATING_BALANCE_BASELINE_SPAN_S = 3600 s`, au moins 4 échantillons), tient lieu de trajectoire passive : $T_0(t) = T_0 + s\,(t - t_{start})$. Pendant la phase, l'estimateur cumule le temps à pleine puissance $t_{on}$ (somme de la puissance × intervalle) et l'aire $A$ de $T - T_0(t)$ en °C·min.
 
-Après la coupure, il cherche le pic de température : les échantillons sont regroupés en tranches consécutives de `HEATING_BALANCE_PEAK_BIN_S = 300 s` à partir de la coupure, et la tranche à la moyenne la plus élevée est le pic, confirmé lorsqu'une tranche se ferme au moins `HEATING_BALANCE_PEAK_CONFIRM_S = 1800 s` après son début. La phase se termine sans mesure lorsque la chauffe reprend alors que la meilleure tranche est la dernière à contenir des échantillons, ou lorsque `HEATING_BALANCE_PEAK_MAX_S = 4 h` s'écoulent sans pic confirmé. Avec $\Delta_p = T_{peak} - T_0(t_{peak})$, $A_p$ l'aire au pic, $b$ le taux de perte publié (0 lorsqu'il est inconnu) et $t_{on}$ en minutes :
+Après la coupure, il cherche le pic de température : les échantillons sont regroupés en tranches consécutives de `HEATING_BALANCE_PEAK_BIN_S = 300 s` à partir de la coupure, et la première tranche à la moyenne strictement la plus élevée est le pic, confirmé lorsqu'une tranche fermée se trouve au moins `HEATING_BALANCE_PEAK_CONFIRM_S = 1800 s` après elle. La phase se termine sans mesure lorsque la chauffe reprend alors que la meilleure tranche est la dernière à contenir des échantillons, ou lorsque `HEATING_BALANCE_PEAK_MAX_S = 4 h` s'écoulent sans pic confirmé. Avec $\Delta_p = T_{peak} - T_0(t_{peak})$, $A_p$ l'aire au pic, $b$ le taux de perte publié (0 lorsqu'il est inconnu) et $t_{on}$ en minutes :
 
 $$a = \frac{\Delta_p + b\,A_p}{t_{on}}$$
 
@@ -327,6 +333,59 @@ $$a(\tau) = \frac{\Delta_p + b\,A_p + p\,\tau/60}{t_{on}}$$
 La vitesse de chauffe et le retard de l'émetteur sont résolus ensemble : en partant de $\tau = 0$, le déficit calculé avec $a(\tau)$ donne le $\tau$ suivant, jusqu'à ce que deux valeurs successives diffèrent de moins de 1 s, en 60 pas au plus. Le retard de l'émetteur est inconnu lorsque l'itération ne se stabilise pas. La mesure conserve $a(\tau)$ comme vitesse de chauffe. Sans ce terme, le retard de l'émetteur est lu trop court dans une pièce dont les murs absorbent la chaleur, où le pic survient alors que l'émetteur est encore chaud.
 
 L'état est publié dans `analysis.learning.heating_balance` et persisté avec l'état d'apprentissage. Les mesures sont restaurées après un redémarrage ; la phase en cours reprend après un redémarrage ponté et est abandonnée sinon. Les retards de l'émetteur retenus sont restaurés également.
+
+#### Événements de mesure et valeurs de départ
+
+Un détecteur unique (`measure_event.py`, `MeasureEventDetector`) surveille la puissance
+appliquée à l'émetteur et la température de la pièce, en chauffage et en refroidissement.
+Un événement est un repos, une phase de puissance supérieure à 1 % (les coupures plus courtes
+que `HEATING_BALANCE_PHASE_MIN_OFF_S` appartiennent à la phase) et une coupure, puis la
+recherche du pic de température. La recherche du pic (`peak_search.py`) est celle décrite pour
+le bilan de chauffe : tranches de 300 s, première moyenne strictement la plus élevée (la plus
+basse en refroidissement), confirmée par une tranche fermée 1800 s plus tard, abandonnée après
+4 heures. Chaque événement porte la source qui commandait au début de sa phase : impulsion de
+mesure, hystérésis du bootstrap, calibration ou régulation. Le bilan de chauffe lit les
+événements de chauffe ; le lecteur ci-dessous lit ceux du bootstrap.
+
+Jusqu'à ce que des valeurs soient retenues, pendant la phase d'apprentissage ou une lecture, un
+enregistrement borné (`MeasureRecord`) conserve la puissance appliquée, la température de la pièce
+et la température extérieure sous forme de points de changement : 6000 points au plus par canal et
+environ 30,5 heures. Pour un contacteur, le canal de puissance contient les vrais fronts de marche et
+d'arrêt de chaque cycle que l'ordonnanceur a appliqué (d'après les accusés de commande appliquée) ;
+pour une vanne, ou un ordonnanceur sans accusés, il contient la fraction de cycle. L'enregistrement
+est sauvegardé.
+
+Un événement fermé du bootstrap ouvre une lecture (`event_reading.py`). Sa fenêtre commence
+1800 s avant l'échelon de chauffe et se termine d'abord à la fermeture de l'événement : elle contient
+donc les échantillons qu'attendait la confirmation du pic. Un ajustement (`event_fit.py`) explique
+ensuite la température enregistrée avec toute la chaîne : l'émetteur donne à la pièce la puissance
+appliquée retardée d'un retard pur $D$ et filtrée par un retard du premier ordre $\tau$, et la pièce
+suit $dT/dt = a\,q - b\,(T - T_{out})$. Il trouve $D$, $\tau$ et $b$ par recherche et $a$ par
+moindres carrés ; le retard de l'émetteur de la lecture vaut $D + \tau$. L'ajustement s'exécute en
+arrière-plan, hors de la régulation : c'est l'un des travaux de la boucle d'arrière-plan unique qui
+exécute aussi l'apprentissage du retard de l'émetteur et le modèle de pièce, un travail à la fois, et
+le calcul suivant en applique le résultat. Après chaque ajustement, la fenêtre est prolongée à six
+retards du résultat, au plus 8 ajustements, et la lecture est complète lorsque la fenêtre en couvre 90 %.
+numpy et scipy sont chargés au premier ajustement.
+
+Deux lectures complètes concordent lorsque leur `a` et leur retard de l'émetteur diffèrent chacun d'au
+plus 20 % du plus grand. Les moyennes de deux lectures concordantes sont retenues, sauvegardées, et
+effacées par une réinitialisation de l'apprentissage. Un arrêt du thermostat, un changement de mode ou
+une calibration termine les lectures en cours.
+
+**Valeurs de départ.** Le `a` retenu et le `b` moyen sont donnés une seule fois à l'apprentissage de
+`a` et `b` comme valeurs de départ à la fin du bootstrap. Elles tiennent lieu des valeurs propres de
+l'apprentissage et n'écrivent aucun historique de mesures : `a` cesse de tenir lieu à la première
+publication de `a` par l'apprentissage lui-même, et `b` lorsque la constante de temps propre de
+l'apprentissage devient fiable. Un changement de mode HVAC abandonne le `a` en place et conserve `b`.
+Chaque valeur donnée rapporte 5 mesures de crédit de montée en charge du feedforward (4.2), conservé
+lorsqu'elle est relâchée. Le retard de l'émetteur des lectures est publié avec elles ; il ne fixe ni
+l'horizon de l'anticipation ni le retard de l'émetteur des phases à puissance constante.
+
+L'enregistrement, les lectures en cours et les valeurs retenues sont sauvegardés (`measure_events`,
+`event_reading`, et `starting_values` dans `est_state`) ; un état sauvegardé sans eux se charge. Après un
+redémarrage ponté, les lectures reprennent (un ajustement en cours est remis en file) ; sinon les
+lectures en cours se terminent et l'enregistrement est abandonné.
 
 ### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur
 
@@ -437,6 +496,11 @@ Le compteur de cycles est conservé au redémarrage. L'intégrale restaurée ne
 porte que la part de la charge que le feedforward ne couvrait pas : le
 feedforward repart donc au niveau qu'il avait avant le redémarrage, sans
 à-coup.
+
+Le nombre d'apprentissages valides est le plus grand des mesures admises et du
+crédit des valeurs de départ (3.7, Événements de mesure et valeurs de départ) :
+chaque valeur de départ donnée compte pour 5 mesures et garde ce crédit lorsqu'elle
+est relâchée, si bien que la montée en charge ne recule jamais.
 
 $k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (`a` non publié avec moins de 5 mesures, ou moins de 5 mesures de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
 
@@ -743,6 +807,12 @@ Un arrêt du thermostat (mode HVAC autre que heat ou cool, par exemple VT qui l'
 | `ab_window_balance.py` | bilan intégral des fenêtres sans pente robuste et pools `a/b` |
 | `response_lag.py`      | `ResponseLagEstimator` : retard de l'émetteur sur les phases de chauffe à puissance constante, portes de stabilisation et modèle de puissance délivrée |
 | `heating_balance.py`   | `HeatingBalance` : vitesse de chauffe et retard de l'émetteur mesurés sur les phases de chauffe |
+| `peak_search.py`       | recherche du pic de température après une coupure |
+| `measure_event.py`     | détecteur des événements de mesure et enregistrement de la puissance et des températures |
+| `event_reading.py`     | lecture des événements du bootstrap, valeurs retenues |
+| `event_fit.py`         | ajustement de la réponse de la pièce à un événement de chauffe (travail d'arrière-plan) |
+| `starting_values.py`   | valeurs de départ de `a` et `b`, relâchement et crédit de montée en charge |
+| `learning_start.py`    | début de l'apprentissage (phase de l'algorithme, source de la commande, transmission des valeurs retenues) |
 | `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis, transferts d'intégrale |
@@ -812,6 +882,8 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "ff_wall": {...},  # part des murs appliquée et son fondu
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap uniquement
+    "measure_events": {...},  # enregistrement de la puissance et des températures (3.7)
+    "event_reading": {...},  # lectures en cours et valeurs retenues (3.7)
     "restart": {...},  # dernier calcul, puissance engagée (pontage du redémarrage)
 }
 ```
@@ -856,6 +928,7 @@ Chaque composant consulte cette décision ; aucun ne décide seul. L'état trans
 | Fenêtre d'apprentissage a/b | la fenêtre en cours reprend avec ses accumulateurs ; son segment de bilan intégral recommence | effacée |
 | Retard de l'émetteur (phases à puissance constante) | période passive ou épisode repris (3.7) | épisode compté comme interrompu |
 | Bilan de chauffe | période passive ou phase en cours reprise (3.7, bilan de chauffe) | phase abandonnée, mesures conservées |
+| Lectures de mesure | l'enregistrement, les lectures en cours et la phase du détecteur reprennent (3.7) | les lectures en cours se terminent, l'enregistrement est abandonné, les valeurs retenues restent |
 | Sortie tout-ou-rien du bootstrap | reprise dans la bande (3.1) | repart à 0 |
 | Historique du retard de l'émetteur (HEAT uniquement ; en COOL comme un autre redémarrage) | la durée d'arrêt est un échantillon manquant (pas d'intervalle invalide) ; l'état du chauffage à l'arrêt est tenu jusqu'à la première commande qui suit, sans aucun front | la période de chauffe est close au dernier calcul, et seule la durée d'arrêt est invalide |
 | Modèle de pièce (HEAT uniquement ; en COOL comme un autre redémarrage) | la commande appliquée à l'arrêt est tenue pendant la durée d'arrêt ; l'état est propagé à travers elle et les prévisions en cours se poursuivent | le chauffage est considéré comme éteint d'après l'état sauvegardé, l'incertitude est rouverte et les prévisions en cours sont abandonnées |

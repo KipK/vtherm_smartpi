@@ -69,6 +69,7 @@ from .const import (
     U_ON_MIN,
     clamp,
 )
+from .starting_values import StartingValues
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,6 +120,8 @@ class ABEstimator:
 
         self.a = a_init
         self.b = b_init
+        # Starting values of a and b standing for the learning's own until it has them (smartpi/starting_values.py)
+        self.start = StartingValues()
         self.model_hvac_mode: str | None = None
         self._state_loaded = False
 
@@ -179,6 +182,7 @@ class ABEstimator:
         """Reset learned parameters and history to initial values."""
         self.a = self.A_INIT
         self.b = self.B_INIT
+        self.start.reset()
         self.model_hvac_mode = None
         self._state_loaded = False
         self.learn_ok_count = 0
@@ -213,6 +217,7 @@ class ABEstimator:
         """Reset only mode-dependent actuation learning while preserving losses."""
         mode_sign = self._mode_sign(hvac_mode)
         self.a = mode_sign * abs(self.A_INIT)
+        self.start.release("a")
         self.learn_ok_count = max(0, self.learn_ok_count - self.learn_ok_count_a)
         self.learn_ok_count_a = 0
         self.a_meas_hist.clear()
@@ -222,6 +227,54 @@ class ABEstimator:
         self.diag_a_mad_over_med = None
         self.diag_a_last_reason = "reset: hvac mode contract"
         self.learn_last_reason = "reset: hvac mode contract"
+
+    @property
+    def usable_a(self) -> bool:
+        """Whether a is usable: published by the learning, or a starting value stands."""
+        return self.learn_ok_count_a > 0 or self.start.standing("a")
+
+    @property
+    def usable_b(self) -> bool:
+        """Whether b is usable for the model: a starting value stands, or the learning's own time constant has been
+        reliable."""
+        return self.start.standing("b") or self.start.own_b
+
+    @property
+    def ramp_count(self) -> int:
+        """Measures the feed-forward ramp reads: the larger of the credit of the starting values and the accepted ones."""
+        return self.start.ramp_count(self.learn_ok_count)
+
+    def give_starting_values(self, a: float | None, b: float | None, mode: str, mode_sign: float) -> None:
+        """Give the starting values measured in ``mode`` (``a`` as a magnitude in C/min at full power, ``b`` in 1/min),
+        once per blank start. ``a`` takes the sign of the mode and the usual bounds; a ``b`` outside them is not given.
+        A quantity the learning already has of its own is released at once. Nothing is written for it: the learning's
+        own value stays."""
+        a = None if a is None else mode_sign * clamp(abs(a), self.A_MIN, self.A_MAX)
+        b = b if b is not None and self.B_MIN <= b <= self.B_MAX else None
+        if not self.start.give(a, b, mode):
+            return
+        if self.learn_ok_count_a > 0:
+            self.start.release("a")
+        elif a is not None:
+            self.a = a
+        if self.start.own_b:
+            self.start.release("b")
+        elif b is not None:
+            changed = b != self.b
+            self.b = b
+            if changed:
+                self._replay_a_measurements(mode_sign)
+
+    def _release_b(self, mode_sign: float) -> None:
+        """The learning's own time constant is reliable: the starting value of b stops standing, b takes the value the
+        learning published last and the a measurements follow it."""
+        self.start.own_b = True
+        if self.start.release("b") and self._b_hat_hist:
+            new_b = self._b_hat_hist[-1]
+            changed = new_b != self.b
+            self.b = new_b
+            if changed:
+                self._replay_a_measurements(mode_sign)
 
     def ensure_hvac_mode(self, hvac_mode: VThermHvacMode | None) -> bool:
         """Ensure persisted actuation data follows the signed mono-mode contract.
@@ -691,15 +744,18 @@ class ABEstimator:
             )
             new_b = clamp(new_b, self.B_MIN, self.B_MAX)
 
-            b_changed = new_b != self.b
-            self.b = new_b
-            if b_changed:
-                self._replay_a_measurements(mode_sign)
+            if not self.start.standing("b"):
+                b_changed = new_b != self.b
+                self.b = new_b
+                if b_changed:
+                    self._replay_a_measurements(mode_sign)
             self._b_hat_hist.append(new_b)
             self.learn_ok_count += 1
             self.learn_ok_count_b += 1
             self.learn_last_reason = f"learned b ({self.diag_ab_mode_effective})"
             self.diag_b_last_reason = decision.accepted_reason
+            if not self.start.own_b and self._learned_tau().reliable:
+                self._release_b(mode_sign)
             return
 
         # ---------- ON phase: learn a ----------
@@ -710,7 +766,7 @@ class ABEstimator:
                 self.learn_last_reason = "skip: a delta too small"
                 return
 
-            if len(self.b_meas_hist) < AB_A_SOFT_GATE_MIN_B:
+            if len(self.b_meas_hist) < AB_A_SOFT_GATE_MIN_B and not self.start.standing("b"):
                 self.learn_skip_count += 1
                 self.learn_last_reason = (
                     f"skip: a blocked (b insufficient, "
@@ -778,6 +834,7 @@ class ABEstimator:
             self._a_hat_hist.append(new_a)
             self.learn_ok_count += 1
             self.learn_ok_count_a += 1
+            self.start.release("a")
             self.learn_last_reason = f"learned a ({self.diag_ab_mode_effective})"
             self.diag_a_last_reason = decision.accepted_reason
             return
@@ -799,7 +856,7 @@ class ABEstimator:
             or not (
                 len(self.a_meas_hist) >= AB_MIN_SAMPLES_A or _consistent(list(self.a_meas_hist))
             )
-            or len(self.b_meas_hist) < AB_A_SOFT_GATE_MIN_B
+            or (len(self.b_meas_hist) < AB_A_SOFT_GATE_MIN_B and not self.start.standing("b"))
         ):
             return False
         new_a, ab_diag = ab_publish(
@@ -813,6 +870,7 @@ class ABEstimator:
         self._a_hat_hist.append(self.a)
         self.learn_ok_count += 1
         self.learn_ok_count_a += 1
+        self.start.release("a")
         self.learn_last_reason = f"learned a ({self.diag_ab_mode_effective}, collected)"
         self.diag_a_last_reason = self.learn_last_reason
         self._update_mad_diag("a", self.a_meas_hist)
@@ -896,6 +954,13 @@ class ABEstimator:
         """
         Check if tau (1/b) is statistically stable and within bounds.
         """
+        # A starting value of b stands for the time constant until the learning's own is reliable
+        if self.start.standing("b"):
+            return TauReliability(reliable=True, tau_min=1.0 / self.start.value("b"))
+        return self._learned_tau()
+
+    def _learned_tau(self) -> TauReliability:
+        """Reliability of the time constant read on the learning's own b."""
         # Enough updates?
         if self.learn_ok_count_b < 5:
             return TauReliability(reliable=False, tau_min=9999.0)
@@ -969,6 +1034,7 @@ class ABEstimator:
             "learn_seq_b": self._learn_seq_b,
             "a_drift": serialize_channel_state(self.a_drift),
             "b_drift": serialize_channel_state(self.b_drift),
+            "starting_values": self.start.save(),
         }
 
     def load_state(self, state: dict) -> None:
@@ -1029,3 +1095,9 @@ class ABEstimator:
         )
         self._update_mad_diag("a", self.a_meas_hist)
         self._update_mad_diag("b", self.b_meas_hist)
+        self.start.load(state.get("starting_values"))
+        self.start.own_b = self._learned_tau().reliable
+        if self.start.own_b:
+            self.start.release("b")
+        if self.learn_ok_count_a > 0:
+            self.start.release("a")

@@ -54,6 +54,7 @@ def test_smartpi_window_negative_integral_bug():
     algo.est.learn_ok_count_a = 20
     algo.est.learn_ok_count_b = 20
     algo.est.learn_ok_count = 50
+    algo.est.ramp_count = 50  # feed-forward warm-up count: no starting values, so the own count
     algo.est.a = 0.001
     algo.est.b = 0.001
     

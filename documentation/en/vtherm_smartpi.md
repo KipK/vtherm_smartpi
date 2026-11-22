@@ -275,6 +275,8 @@ favours an accurate `a` over a fast exit.
 
 SmartPI leaves bootstrap and switches to its normal regulation mode once both `a` and `b` have enough observations to publish a first thermal model.
 
+While it heats and stops during bootstrap, SmartPI also reads each full heating phase and the temperature peak that follows it as a whole. When two such readings agree, their heating rate and loss rate serve as starting values of the model until the continuous learning has its own. They are replaced by the learned values as soon as these are available.
+
 The observation buffers then continue filling up to 31 samples during normal regulation, so the model keeps consolidating after bootstrap. Full model confidence remains stricter than bootstrap exit — until enough observations are available for full confidence, SmartPI regulates with the published model while keeping some internal corrections frozen.
 
 What to expect during bootstrap:

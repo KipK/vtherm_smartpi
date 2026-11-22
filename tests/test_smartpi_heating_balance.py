@@ -478,7 +478,7 @@ def test_learning_window_feeds_the_heating_balance():
             hvac_mode=VThermHvacMode_HEAT, target_temp=21.0, raw_temp=19.0, **kwargs,
         )
         assert window.heating_balance.state == "heating"
-        assert window.heating_balance._phase["context"] == context
+        assert window.heating_balance.events._phase["context"] == context
 
 
 def test_diagnostics_publish_the_heating_balance():

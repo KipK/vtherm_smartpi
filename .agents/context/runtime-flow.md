@@ -76,6 +76,9 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
   - `SmartPI._commit_applied_command` commits the applied power (valve curve inverted to linear) and feeds the
     dead-time episode status, the emitter lag learning and the room model; on a cycle start it resets per-cycle
     governance. The legacy path (`on_cycle_started`, `on_applied_power_updated`) commits the same way.
+  - The receipt also feeds the measurement record (`LearningStart.note_receipt`): for a switch, the cycle it starts
+    (start, on time, duration) becomes the real on/off edges of the record's power channel; a valve or a scheduler
+    without receipts leaves the cycle fraction.
 - VT overrides: safety (`safety_manager.is_safety_detected`) sets `algo.vt_safety_override` (integral held, source
   `vt_safety`); power shedding (`is_overpowering_detected`) forces output off; window and OFF go through
   `_validate_and_handle_off`. `_control_exclusion` names why the applied command is not SmartPI's (window,
@@ -95,11 +98,13 @@ Handler order (`handler.py::control_heating`):
 3. `cycle_boundary = force or no scheduler or not cycle running`; `algo.vt_safety_override`;
    `algo.resolve_restart(...)` (once per session).
 4. `prop_algorithm.calculate(...)`, then `note_control_exclusion`, `observe_tar_learning`, `observe_room_model`
-   (background jobs via `_process_tar_learning` / `_process_room_model`).
+   (`SmartPIHandler._process_learning` then starts, when a manager is due, the single background loop that runs the
+   jobs of the emitter lag learning, the room model and the fit of the measurement readings one after the other, and
+   schedules the saves of the managers that have a store; the loop task is cancelled with the managers' `stop()` at unload).
 5. With `smart_pi_allow_pwm_cycle_force`: deadband / near-band transitions set `force`.
 6. Actuation: HVAC OFF turns the device off or cancels the cycle; `on_percent is None` keeps the switch state;
    else `cycle_scheduler.start_cycle(hvac_mode, on_percent, force_cycle, [request_id])` with
-   `force_cycle = force or phase CALIBRATION or (phase HYSTERESIS and on_percent changed)`.
+   `force_cycle = force or phase CALIBRATION or (command is on/off and on_percent changed)`; the guards read the same test as `is_bootstrap` (`learning_start.py::command_is_on_off`).
 7. Debounced save, AutoCalib completion/hourly check (events, may request a calibration), then, if publishing,
    `async_dispatcher_send(diag_update_signal(unique_id))`.
 
@@ -165,7 +170,7 @@ Pipeline inside `calculate`, in execution order:
   `vtherm_smartpi.{}.room_model` (state v2).
 - Persisted: learning flag, last active wall time, model a/b, dead time, governance, controller (integral,
   u_prev), setpoint manager, learning window, deadband, calibration, gain scheduler, guards, AutoCalib, FF
-  holding source, tint filter, hysteresis output, and the restart context (last tick, mode, cycle config,
+  holding source, tint filter, hysteresis output, the measurement record and readings with the kept starting values (`measure_events`, `event_reading`, `est_state.starting_values`; older states load without them), and the restart context (last tick, mode, cycle config,
   exclusion, temperature, committed command, wall times).
 - Transient, empty after load (`load_state`): committed power (0 unless bridged), integral hold, learning resume timestamp, cycle
   state. Without a bridge, the first tick freezes learning for one cycle (`_startup_grace_period`).

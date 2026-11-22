@@ -21,6 +21,7 @@ from .const import (
 )
 
 SOURCE_HEATING_BALANCE = "heating balance"
+SOURCE_PULSES = "measurement pulses"
 SOURCE_DEAD_TIMES = "dead times"
 SOURCE_NONE = "none"
 
@@ -32,7 +33,12 @@ class AnticipationHorizon(NamedTuple):
     source: str
 
 
-def select_horizon(kept_lag_s: float | None, dead_time_view: Callable[[], object], hvac_mode) -> AnticipationHorizon:
+def select_horizon(
+    kept_lag_s: float | None,
+    dead_time_view: Callable[[], object],
+    hvac_mode,
+    pulse_lag_s: float | None = None,
+) -> AnticipationHorizon:
     """Return the horizon of the anticipation for ``hvac_mode``.
 
     In heating it is the median of the last lags measured by the heating balance
@@ -41,8 +47,12 @@ def select_horizon(kept_lag_s: float | None, dead_time_view: Callable[[], object
     mode and half its passive dead time, each counted only when reliable and
     positive. It is 0 when none counts. ``dead_time_view`` returns the dead-time
     source of the gain rule (``active_deadtime`` and ``passive_deadtime`` by mode)
-    and is called only when the lag does not decide.
+    and is called only when the lag does not decide. ``pulse_lag_s`` (the lag kept from the readings of the
+    measurement pulses in ``hvac_mode``, None when no values are kept in that mode) is the horizon whenever it is
+    positive, in heating and in cooling; otherwise the order above applies.
     """
+    if pulse_lag_s is not None and pulse_lag_s > 0.0:
+        return AnticipationHorizon(float(pulse_lag_s), SOURCE_PULSES)
     if hvac_mode != VThermHvacMode_COOL and kept_lag_s is not None and kept_lag_s > 0.0:
         return AnticipationHorizon(float(kept_lag_s), SOURCE_HEATING_BALANCE)
     view = dead_time_view()

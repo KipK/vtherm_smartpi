@@ -22,8 +22,8 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 Wiring: `algo.py::SmartPI` owns `tar_learning: TarLearningManager` and `room_model: RoomModelManager` (the
 room model needs the tar manager: it reads its history, catalogue, status). `handler.py` creates both,
 loads their stores, injects the home position (`TarLearningManager.set_position`) and the dependency check
-(`set_dependencies`), starts the executor tasks (`_process_tar_learning`, `_process_room_model`) and schedules
-saves. Observers are called from the regulation tick (`SmartPI.observe_tar_learning`, `observe_room_model`),
+(`set_dependencies`), runs the due jobs of the three managers (emitter lag, room model, reading fit) in one background loop, one after the other (`SmartPIHandler._process_learning`, `_run_learning`, `_learning_jobs`), and schedules
+the saves of the two that have a store. Observers are called from the regulation tick (`SmartPI.observe_tar_learning`, `observe_room_model`),
 wrapped in try/except: a learning failure must never disturb the regulation.
 
 Both managers are HEAT-only. PWM heaters only: in valve mode `TAR_VALVE_MODE_SUPPORTED = False`
@@ -34,6 +34,7 @@ Both managers are HEAT-only. PWM heaters only: in valve mode `TAR_VALVE_MODE_SUP
 
 - `tar_learning/jobs.py` and `room_model/jobs.py` take a snapshot of plain Python data and return plain data;
   they never touch event-loop state. `async_run` runs one job at a time via `hass.async_add_executor_job`.
+  The fit of the measurement readings (`smartpi/event_fit.py`, `event_reading.py::EventReader`) is a third such job.
 - `numpy`/`scipy` (manifest: `numpy`, `scipy>=1.14`) are imported only inside those jobs and the numeric modules
   they call (`tar_learning/morning.py`, `response.py`, `room_mass.py`, `identification.py`, `signals.py`,
   `room_model/identification.py`). Event-loop code is pure Python (`room_model/linalg.py` is hand-written for
@@ -271,8 +272,10 @@ Diagnostics: `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`,
 
 Measures heating rate `a` (C/min at full power) and emitter lag from an energy balance of each heating phase
 followed by a stop, in HEAT, from the same observations as the emitter lag on constant-power phases (`learning_window.py` owns it).
+The phases, rests, baselines and peaks come from the measurement event detector (`smartpi/measure_event.py`, peak by
+`smartpi/peak_search.py`; `algorithm-core.md` section 6b); the balance reads its HEAT events and keeps the arithmetic.
 Conditions: rest >= `HEATING_BALANCE_MIN_REST_S = 1800`, baseline of up to 3600 s (>= 4 samples), peak search in
-`HEATING_BALANCE_PEAK_BIN_S = 300` bins confirmed after `HEATING_BALANCE_PEAK_CONFIRM_S = 1800`, wait at most
+`HEATING_BALANCE_PEAK_BIN_S = 300` bins (earliest strictly highest mean) confirmed after `HEATING_BALANCE_PEAK_CONFIRM_S = 1800`, wait at most
 `HEATING_BALANCE_PEAK_MAX_S = 4 h`, kept when full-power time >= 600 s and rise >= 0.3 C. Last
 `HEATING_BALANCE_HISTORY = 7` measurements; published values are medians; emitter lag only for constant-power phases.
 On a constant-power phase the heat still to come at the peak is counted: late power `max(0, b*rise - baseline slope)` (C/min, flat
@@ -281,7 +284,7 @@ temperature at the peak), arriving over one lag, added to the heat of the phase;
 rooms, about 60-90 % of it with wall mass (35-55 % without the term), about 30 % over with floor heating (pure delay + lag).
 Regulation consumer: only `kept_lag_s` (median of the last `HEATING_BALANCE_HISTORY` emitter lags, None while none measured), the HEAT
 horizon of the anticipation (`smartpi/anticipation.py::select_horizon`); no learning consumer. `a` and `lag_s` are observation only.
-Persistence: with the learning state (`lw_state["heating_balance"]`); phase in progress resumes after a bridged
+Persistence: with the learning state (`lw_state["heating_balance"]`); the detector's phase in progress resumes after a bridged
 restart, dropped otherwise. A saved state with a published `lag_s` but no kept emitter lag (`lags` missing or empty) keeps it as the
 single kept value. Diagnostics: `analysis.learning.heating_balance` (`state`, `measurements`, `a`,
 `lag_s`, `kept_lag_s`, `kept_lags`, `last_reason`, `last`). Silent: `a`/`lag_s` null, `last_reason` gives the refusal.

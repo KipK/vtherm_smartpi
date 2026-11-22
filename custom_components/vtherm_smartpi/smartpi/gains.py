@@ -6,6 +6,7 @@ Manages Kp/Ki gain calculation with IMC-based tuning and near-band adjustments.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,51 @@ if TYPE_CHECKING:
     from .deadtime_estimator import DeadTimeEstimator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def imc_simc_gains(
+    a_abs: float,
+    deadtime_s: float,
+    tau_min: float,
+    cycle_min: float,
+    valve_mode_enabled: bool = False,
+) -> tuple[float, float]:
+    """Kp and Ki of the IMC/SIMC rule for a heating rate ``a_abs`` (C/min at full power), a dead time
+    ``deadtime_s`` and a time constant ``tau_min`` (``math.inf`` when no loss coefficient is known: the integral
+    time is then the bound of a slow room, 4 (lambda + L))."""
+    L_min = float(deadtime_s) / 60.0
+    cycle_min_eff = max(float(cycle_min), 0.0)
+    deadtime_factor = (
+        GAIN_LAMBDA_VALVE_DEADTIME_FACTOR
+        if valve_mode_enabled
+        else GAIN_LAMBDA_DEADTIME_FACTOR
+    )
+    lambda_min = max(
+        deadtime_factor * L_min,
+        GAIN_LAMBDA_CYCLE_FACTOR * cycle_min_eff,
+        GAIN_LAMBDA_MIN_MIN,
+    )
+    kp_calc = 1.0 / (abs(float(a_abs)) * (lambda_min + L_min))
+    kp = clamp(kp_calc, KP_MIN, KP_MAX)
+    # SIMC (Skogestad 2003): the integral time of a lag-dominant
+    # (integrating) process is bounded by 4 (lambda + L), so that load
+    # disturbances are rejected within the closed-loop time scale
+    # instead of the room time constant.
+    ti = min(float(tau_min), GAIN_TI_LAMBDA_FACTOR * (lambda_min + L_min))
+    ki = clamp(kp / ti, KI_MIN, KI_MAX)
+    return kp, ki
+
+
+def pre_model_gains(
+    a_abs: float,
+    deadtime_s: float,
+    cycle_min: float,
+    valve_mode_enabled: bool = False,
+) -> tuple[float, float]:
+    """Gains of the learning stage from a measured heating rate and dead time, without a loss coefficient: the
+    rule of a slow room, neither gain above its fallback value."""
+    kp, ki = imc_simc_gains(a_abs, deadtime_s, math.inf, cycle_min, valve_mode_enabled)
+    return min(kp, KP_SAFE), min(ki, KI_SAFE)
 
 
 @dataclass
@@ -72,6 +118,7 @@ class GainScheduler:
         self._ki = KI_SAFE
         self._kp_source = "safe"
         self._ki_source = "safe"
+        self._origin = "fallback"
 
     def reset(self) -> None:
         """Reset gains to safe defaults."""
@@ -79,6 +126,7 @@ class GainScheduler:
         self._ki = KI_SAFE
         self._kp_source = "safe"
         self._ki_source = "safe"
+        self._origin = "fallback"
         _LOGGER.debug("%s: GainScheduler reset to safe defaults", self._name)
 
     def calculate(
@@ -93,6 +141,7 @@ class GainScheduler:
         cycle_min: float = 10.0,
         valve_mode_enabled: bool = False,
         hvac_mode: VThermHvacMode = VThermHvacMode_HEAT,
+        pre_model_a: float | None = None,
     ) -> GainResult:
         """Calculate Kp and Ki gains based on model and conditions.
         
@@ -107,6 +156,9 @@ class GainScheduler:
             cycle_min: PWM cycle duration in minutes.
             valve_mode_enabled: Whether valve-mode tuning should be applied.
             hvac_mode: Active mono-mode HVAC contract for A and dead time.
+            pre_model_a: Heating rate (C/min at full power) measured before the first model is published;
+                with a reliable dead time after a start it gives the gains of the learning stage
+                (``pre_model_gains``) in place of the fallback ones. None: no such rate.
             
         Returns:
             GainResult with calculated kp, ki, and their sources.
@@ -129,32 +181,27 @@ class GainScheduler:
             and active_deadtime_s > 1.0
         )
 
-        if not has_complete_model:
+        pre_model_used = (
+            not has_complete_model
+            and pre_model_a is not None
+            and pre_model_a > 0.0
+            and active_deadtime_reliable
+            and active_deadtime_s is not None
+            and active_deadtime_s > 1.0
+        )
+        if pre_model_used:
+            kp, ki = pre_model_gains(pre_model_a, float(active_deadtime_s), cycle_min, valve_mode_enabled)
+            kp_source = "pulse"
+            ki_source = "pulse"
+        elif not has_complete_model:
             kp = KP_SAFE
             ki = KI_SAFE
             kp_source = "safe"
             ki_source = "safe"
         else:
-            L_min = float(active_deadtime_s) / 60.0
-            cycle_min_eff = max(float(cycle_min), 0.0)
-            deadtime_factor = (
-                GAIN_LAMBDA_VALVE_DEADTIME_FACTOR
-                if valve_mode_enabled
-                else GAIN_LAMBDA_DEADTIME_FACTOR
+            kp, ki = imc_simc_gains(
+                estimator.a, float(active_deadtime_s), tau_min, cycle_min, valve_mode_enabled
             )
-            lambda_min = max(
-                deadtime_factor * L_min,
-                GAIN_LAMBDA_CYCLE_FACTOR * cycle_min_eff,
-                GAIN_LAMBDA_MIN_MIN,
-            )
-            kp_calc = 1.0 / (abs(float(estimator.a)) * (lambda_min + L_min))
-            kp = clamp(kp_calc, KP_MIN, KP_MAX)
-            # SIMC (Skogestad 2003): the integral time of a lag-dominant
-            # (integrating) process is bounded by 4 (lambda + L), so that load
-            # disturbances are rejected within the closed-loop time scale
-            # instead of the room time constant.
-            ti = min(float(tau_min), GAIN_TI_LAMBDA_FACTOR * (lambda_min + L_min))
-            ki = clamp(kp / ti, KI_MIN, KI_MAX)
             if valve_mode_enabled:
                 kp_source = "imc_simc_valve"
                 ki_source = "imc_simc_valve"
@@ -173,6 +220,10 @@ class GainScheduler:
             kp_source = f"{kp_source}_nearband"
             ki_source = f"{ki_source}_nearband"
         
+        # The learning stage holds the gains only while it has nothing to adapt them to
+        if pre_model_used and governance_decision == GovernanceDecision.FREEZE:
+            governance_decision = GovernanceDecision.ADAPT_ON
+
         # Apply Governance Freeze against the previously applied gains
         if governance_decision in (GovernanceDecision.HARD_FREEZE, GovernanceDecision.FREEZE):
             kp = self._kp
@@ -185,6 +236,9 @@ class GainScheduler:
             kp_source = f"{kp_source}_softfreeze"
             ki_source = f"{ki_source}_softfreeze"
         
+        if governance_decision not in (GovernanceDecision.HARD_FREEZE, GovernanceDecision.FREEZE):
+            self._origin = "pulse" if pre_model_used else ("model" if has_complete_model else "fallback")
+
         # Store current values
         self._kp = kp
         self._ki = ki
@@ -240,6 +294,12 @@ class GainScheduler:
         }
 
     # --- Properties for diagnostic access ---
+
+    @property
+    def origin(self) -> str:
+        """What the applied gains come from: "fallback" (safe values), "pulse" (heating rate of a measurement
+        pulse, before the first model) or "model" (complete model). A frozen gain keeps the origin it had."""
+        return self._origin
 
     @property
     def kp(self) -> float:

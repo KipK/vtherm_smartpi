@@ -14,6 +14,7 @@ from datetime import timedelta
 from .algo import SmartPI
 from .state_store import SmartPIRoomModelStore, SmartPIStateStore, SmartPITarStore
 from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING, RM_EXCLUDED_WINDOW, RM_SAVE_DELAY_S
+from .smartpi.learning_start import command_is_on_off
 from .smartpi.tar_learning.const import TAR_SAVE_DELAY_S
 from .smartpi.tar_learning.deps import dependencies_importable
 from .smartpi.const import (
@@ -60,9 +61,8 @@ class SmartPIHandler:
         self._thermostat = thermostat
         self._store: SmartPIStateStore | None = None
         self._tar_store: SmartPITarStore | None = None
-        self._tar_task = None
         self._room_store: SmartPIRoomModelStore | None = None
-        self._room_task = None
+        self._learning_task = None
         self._recalc_timer_remove = None
         # The recalculation timer has not started yet in this session
         self._first_timer_start = True
@@ -269,31 +269,30 @@ class SmartPIHandler:
             return RM_EXCLUDED_WINDOW
         return SmartPIHandler._tar_exclusion(t, algo)
 
-    def _process_tar_learning(self, algo) -> None:
-        """Start the due T_ar learning computations and persist its data."""
-        tar = getattr(algo, "tar_learning", None)
-        if tar is None:
-            return
-        t = self._thermostat
-        if tar.active and (self._tar_task is None or self._tar_task.done()):
-            self._tar_task = t.hass.async_create_background_task(
-                tar.async_run(t.hass), f"{DOMAIN}_tar_learning"
-            )
-        if self._tar_store is not None and tar.dirty:
-            self._tar_store.schedule_save(tar)
+    def _learning_jobs(self, algo) -> list:
+        """The (manager, store) pairs whose computations run in the executor: T_ar, room model, fit of the readings."""
+        reading = getattr(getattr(algo, "_start", None), "reading", None)
+        pairs = ((getattr(algo, "tar_learning", None), self._tar_store), (getattr(algo, "room_model", None), self._room_store),
+                 (reading, None))
+        return [(manager, store) for manager, store in pairs if manager is not None]
 
-    def _process_room_model(self, algo) -> None:
-        """Start the due room model identification and persist its data."""
-        room = getattr(algo, "room_model", None)
-        if room is None:
-            return
+    async def _run_learning(self, managers) -> None:
+        """Run the due computations of the managers, one after the other."""
+        for manager in managers:
+            if manager.active:
+                await manager.async_run(self._thermostat.hass)
+
+    def _process_learning(self, algo) -> None:
+        """Start the loop that runs the due computations and persist the data of the managers that have a store."""
         t = self._thermostat
-        if room.active and (self._room_task is None or self._room_task.done()):
-            self._room_task = t.hass.async_create_background_task(
-                room.async_run(t.hass), f"{DOMAIN}_room_model"
+        jobs = self._learning_jobs(algo)
+        if any(manager.active for manager, _ in jobs) and (self._learning_task is None or self._learning_task.done()):
+            self._learning_task = t.hass.async_create_background_task(
+                self._run_learning([manager for manager, _ in jobs]), f"{DOMAIN}_learning"
             )
-        if self._room_store is not None and room.dirty:
-            self._room_store.schedule_save(room)
+        for manager, store in jobs:
+            if store is not None and manager.dirty:
+                store.schedule_save(manager)
 
     async def async_startup(self):
         """Startup actions."""
@@ -339,14 +338,11 @@ class SmartPIHandler:
 
     def _stop_learning_tasks(self) -> None:
         """Stop the learning computations: the executor jobs end early, the tasks are cancelled."""
-        algo = self._thermostat.prop_algorithm
-        for manager in (getattr(algo, "tar_learning", None), getattr(algo, "room_model", None)):
-            if manager is not None:
-                manager.stop()
-        for task in (self._tar_task, self._room_task):
-            if task is not None and not task.done():
-                task.cancel()
-        self._tar_task = self._room_task = None
+        for manager, _ in self._learning_jobs(self._thermostat.prop_algorithm):
+            manager.stop()
+        if self._learning_task is not None and not self._learning_task.done():
+            self._learning_task.cancel()
+        self._learning_task = None
 
     def _remove_receipt_callback(self) -> None:
         """Unregister the applied-command receipt callback, if any."""
@@ -484,7 +480,7 @@ class SmartPIHandler:
                 is_device_active=t.is_device_active,
                 hvac_mode=t.vtherm_hvac_mode,
                 is_calibration=(algo.phase == SmartPIPhase.CALIBRATION),
-                is_bootstrap=(algo.phase == SmartPIPhase.HYSTERESIS),
+                is_bootstrap=command_is_on_off(algo),
             )
 
             if guard_cut_action == GuardAction.CUT_TRIGGER:
@@ -500,7 +496,7 @@ class SmartPIHandler:
                 on_percent=algo.calculated_on_percent,
                 hvac_mode=t.vtherm_hvac_mode,
                 is_calibration=(algo.phase == SmartPIPhase.CALIBRATION),
-                is_bootstrap=(algo.phase == SmartPIPhase.HYSTERESIS),
+                is_bootstrap=command_is_on_off(algo),
             )
 
             if guard_kick_action == GuardAction.KICK_TRIGGER:
@@ -543,7 +539,6 @@ class SmartPIHandler:
                     t.vtherm_hvac_mode,
                     excluded=self._tar_exclusion(t, algo),
                 )
-                self._process_tar_learning(algo)
             if isinstance(algo, SmartPI) and getattr(algo, "room_model", None) is not None:
                 algo.observe_room_model(
                     t.current_temperature,
@@ -552,7 +547,8 @@ class SmartPIHandler:
                     excluded=self._room_model_exclusion(t, algo),
                     measure_id=getattr(t, "last_temperature_measure", None),
                 )
-                self._process_room_model(algo)
+            if isinstance(algo, SmartPI):
+                self._process_learning(algo)
 
             # Force cycle restart on deadband and near-band transitions so the
             # physically engaged PWM follows the zone change quickly.
@@ -599,7 +595,7 @@ class SmartPIHandler:
             force_cycle = (
                 force
                 or (t.prop_algorithm.phase == SmartPIPhase.CALIBRATION)
-                or (t.prop_algorithm.phase == SmartPIPhase.HYSTERESIS and on_percent_changed)
+                or (command_is_on_off(t.prop_algorithm) and on_percent_changed)
             )
 
             await t.cycle_scheduler.start_cycle(

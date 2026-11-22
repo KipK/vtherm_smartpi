@@ -106,6 +106,12 @@ band, the thresholds decide. After any other restart, and for a state saved
 without it, the output starts at 0. A heating or cooling phase in progress can
 thus resume after a short restart.
 
+The heating phases of the hysteresis are measurement events: they are recorded
+and read as a whole, and when the bootstrap ends the readings give the learning
+starting values for `a` and `b` (3.7, Measurement events and starting values).
+The hysteresis command, the order above and the exit rule are the same with or
+without them.
+
 The `b` convergence used for drift-aware `a` learning relies on `b_converged_for_a()`:
 
 1. `learn_ok_count_b >= 11`,
@@ -376,8 +382,8 @@ installation already out of the bootstrap rarely provides one.
 by a stop, the heating rate `a` (°C/min at full power) and the emitter lag from
 an energy balance of the room. It is published; the regulation reads only the
 median of the last emitter lags it measured, as the horizon of the anticipation (see
-section 4.3). It works in heating mode only, from the same observations as the
-emitter lag on constant-power heating phases.
+section 4.3). It works in heating mode only, from the heating events of the
+measurement event detector (3.7, Measurement events and starting values).
 
 A phase starts at the first interval with a power above 1 % and ends after its
 cut. Heating runs separated by less than `HEATING_BALANCE_PHASE_MIN_OFF_S`
@@ -391,8 +397,8 @@ power × interval) and the area $A$ of $T - T_0(t)$ in °C·min.
 
 After the cut it looks for the temperature peak: the samples are grouped in
 consecutive bins of `HEATING_BALANCE_PEAK_BIN_S = 300 s` from the cut, and the
-bin with the highest mean is the peak, confirmed when a bin closes at least
-`HEATING_BALANCE_PEAK_CONFIRM_S = 1800 s` after its start. The phase ends without
+earliest bin with the strictly highest mean is the peak, confirmed when a closed
+bin lies at least `HEATING_BALANCE_PEAK_CONFIRM_S = 1800 s` after it. The phase ends without
 a measurement when the heating restarts while the best bin is the last one
 holding samples, or when `HEATING_BALANCE_PEAK_MAX_S = 4 h` elapse without a
 confirmed peak. With $\Delta_p = T_{peak} - T_0(t_{peak})$, $A_p$ the area at
@@ -441,6 +447,63 @@ The state is published in `analysis.learning.heating_balance` and persisted with
 the learning state. The measurements are restored after a restart; the phase in
 progress resumes after a bridged restart and is dropped otherwise. The kept emitter lags
 are restored too.
+
+#### Measurement events and starting values
+
+One detector (`measure_event.py`, `MeasureEventDetector`) watches the power
+applied to the emitter and the room temperature, in heating and in cooling. An
+event is a rest, a phase of power above 1 % (cuts shorter than
+`HEATING_BALANCE_PHASE_MIN_OFF_S` belong to the phase) and a cut, then the
+search of the temperature peak. The peak search (`peak_search.py`) is the one
+described for the heating balance: 300 s bins, the earliest strictly highest
+mean (the lowest in cooling), confirmed by a closed bin 1800 s later, abandoned
+after 4 hours. Each event carries the source that drove the command when its
+phase began: measurement pulse, bootstrap hysteresis, calibration or
+regulation. The heating balance reads the heating events; the reader below
+reads those of the bootstrap.
+
+Until values are kept, during the learning stage or a reading, a bounded record (`MeasureRecord`) keeps
+the applied power, the room temperature and the outdoor temperature as change
+points: at most 6000 points per channel and about 30.5 hours. For a switch, the
+power channel holds the real on and off edges of each cycle the scheduler
+applied (from the applied-command receipts); for a valve, or a scheduler
+without receipts, it holds the cycle fraction. The record is saved.
+
+A closed event of the bootstrap opens a reading (`event_reading.py`). Its window
+starts 1800 s before the heating step and first ends when the event closes, so
+it holds the samples that the confirmation of the peak waited for. A fit
+(`event_fit.py`) then explains the recorded room temperature with the whole
+chain: the emitter gives the room the applied power delayed by a pure delay $D$
+and filtered by a first-order lag $\tau$, and the room follows
+$dT/dt = a\,q - b\,(T - T_{out})$. It finds $D$, $\tau$ and $b$ by search and
+$a$ by least squares; the emitter lag of the reading is $D + \tau$. The fit
+runs in the background, outside the regulation: it is one of the jobs of the
+single background loop that also runs the emitter lag learning and the room
+model, one job at a time, and the next calculation applies its result. After
+each fit the window is extended to six lags of the result, up to 8 fits, and the
+reading is complete when the window covers 90 % of that. numpy and scipy are
+loaded when the first fit runs.
+
+Two complete readings agree when their `a` and their emitter lag each differ by
+at most 20 % of the larger. The means of two agreeing readings are kept, saved,
+and dropped by a reset of the learning. A stop of the thermostat, a change of
+mode or a calibration ends the readings in progress.
+
+**Starting values.** The kept `a` and the mean `b` are given once to the
+learning of `a` and `b` as starting values when the bootstrap ends. They stand
+for the learning's own values and write no measurement history: `a` stops
+standing at the first publication of `a` by the learning itself, and `b` when
+the learning's own time constant becomes reliable. A change of HVAC mode drops
+the standing `a` and keeps `b`. Each value given earns 5 measures of
+feed-forward warm-up credit (4.2), kept when it is released. The emitter lag of
+the readings is published with them and does not set the horizon of the
+anticipation nor the emitter lag of the constant-power phases.
+
+The record, the readings in progress and the kept values are saved
+(`measure_events`, `event_reading`, and `starting_values` inside `est_state`); a
+state saved without them loads. After a bridged restart the readings resume (a
+fit in flight is queued again); otherwise the readings in progress end and the
+record is dropped.
 
 ### 3.8 Quiet periods of the emitter lag learning
 
@@ -615,6 +678,11 @@ power.
 The cycle count is kept across restarts. The restored integral only holds the
 share of the load that the feed-forward did not cover, so the feed-forward
 comes back at the level it had before the restart, without a bump.
+
+The number of valid learning episodes is the larger of the accepted measures
+and the credit of the starting values (3.7, Measurement events and starting
+values): each starting value given counts for 5 measures and keeps that credit
+when it is released, so the ramp never drops.
 
 $k_{ff}$ is zero, and therefore $u_{ff1}$ is zero, whenever the model is not
 ready (`a` not published with fewer than 5 measurements, or fewer than 5 `b`
@@ -1049,6 +1117,12 @@ A stop of the thermostat (HVAC mode other than heat or cool, for example VT swit
 | `ab_window_balance.py` | integral balance of windows without a robust slope and `a/b` pools |
 | `response_lag.py`      | `ResponseLagEstimator`: emitter lag on constant-power heating phases, settling gates and delivered power model |
 | `heating_balance.py`   | `HeatingBalance`: heating rate and emitter lag measured on heating phases |
+| `peak_search.py`       | the search of the temperature peak after a cut |
+| `measure_event.py`     | detector of the measurement events and record of the power and temperatures |
+| `event_reading.py`     | reading of the events of the bootstrap, kept values |
+| `event_fit.py`         | fit of the response of the room to a heating event (background job) |
+| `starting_values.py`   | starting values of `a` and `b`, release and warm-up credit |
+| `learning_start.py`    | start of the learning (phase of the algorithm, source of the command, hand-over of the kept values) |
 | `learning_outcomes.py` | bounded counters of learning-window outcomes                |
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis, integral transfers |
@@ -1118,6 +1192,8 @@ The current payload from `SmartPI.save_state()` notably contains:
     "ff_wall": {...},  # applied wall part and its blend
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap only
+    "measure_events": {...},  # record of the power and temperatures (3.7)
+    "event_reading": {...},  # readings in progress and kept values (3.7)
     "restart": {...},  # last tick, committed power (restart bridge)
 }
 ```
@@ -1207,6 +1283,7 @@ until the decision.
 | a/b learning window | the window in progress resumes with its accumulators; its integral balance segment starts again | cleared |
 | Emitter lag (constant-power phases) | passive period or episode resumed (3.7) | episode counted as interrupted |
 | Heating balance | rest or phase in progress resumed (3.7, heating balance) | phase dropped, measurements kept |
+| Measurement readings | the record, the readings in progress and the phase of the detector resume (3.7) | the readings in progress end, the record is dropped, the kept values stay |
 | Bootstrap on/off output | resumed inside the band (3.1) | starts at 0 |
 | Emitter lag history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |
 | Room model (HEAT only; in COOL as another restart) | the command applied at the stop is held over the downtime; the state is propagated through it and the forecasts in progress go on | the heater is taken as stopped from the saved state, the uncertainty is reopened and the forecasts in progress are dropped |
