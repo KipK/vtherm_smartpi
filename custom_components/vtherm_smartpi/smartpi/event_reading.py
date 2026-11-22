@@ -16,10 +16,13 @@ lag the fit found (no shorter than the first window, no longer than 24 hours), u
 reading is complete when the window covers ``READING_COVERAGE`` of ``READING_WINDOW_LAGS`` lags of its last fit,
 abandoned when it reaches the longest window or the last fit without that.
 
-Two complete readings agree when their ``a`` and their ``L`` each differ by at most ``READING_AGREE_REL`` of the
-larger. As soon as two readings of the same blank start agree, their means are kept: they are saved, never change
-afterwards and are dropped by a learning reset. The kept ``a`` and the mean loss coefficient ``b`` of the two readings
-are what ``LearningStart`` gives, once, to the a/b estimator as starting values (``smartpi/starting_values.py``). With
+Two complete readings of the same mode agree when their ``a`` and their ``L`` each differ by at most
+``READING_AGREE_REL`` of the larger. As soon as two readings of the same blank start and of the same mode agree, their
+means are kept for that mode: they are saved, never change afterwards and are dropped by a learning reset. The values
+are kept per mode, like the ``a`` channel of the a/b estimator, so a period in the other mode starts without kept values
+and runs its own readings. The kept ``a`` and the mean loss coefficient ``b`` of the two readings are what
+``LearningStart`` gives to the a/b estimator as starting values (``smartpi/starting_values.py``): ``a`` of each mode
+once, ``b`` (a property of the room, shared by the modes) with the first hand-over only. With
 the direct start the kept values also feed the gains before the first model (``LearningStart.pre_model_a``), the
 anticipation horizon (``smartpi/anticipation.py``) and the learning of ``a`` through the response-lag estimator
 (``ResponseLagEstimator.give_lag``), which counts as resolved with it: the learning of ``a`` then runs on its existing
@@ -96,7 +99,7 @@ class EventReader:
         self._index = 0                         # readings opened
         self._done: list[dict[str, Any]] = []   # complete readings, in the order they opened
         self._tests: list[dict[str, Any]] = []
-        self._kept: dict[str, Any] | None = None
+        self._kept: dict[str, dict[str, Any]] = {}   # by mode
         self._interrupted_at: float | None = None
         self._job: dict[str, Any] | None = None     # the fit queued or running (None: none)
         self._result: tuple[int, Any] | None = None  # (reading index, result) waiting for the next calculation
@@ -104,14 +107,15 @@ class EventReader:
 
     # -- read-only view ------------------------------------------------------------------------------------------
     @property
-    def kept(self) -> dict[str, Any] | None:
-        return None if self._kept is None else dict(self._kept)
+    def kept(self) -> dict[str, dict[str, Any]]:
+        """The kept values by mode (empty before any are kept)."""
+        return {mode: dict(values) for mode, values in self._kept.items()}
 
     def kept_for(self, hvac_mode: object) -> dict[str, Any] | None:
-        """The kept values when they were measured in ``hvac_mode``."""
-        if self._kept is None or hvac_mode is None:
+        """The kept values measured in ``hvac_mode``, None when none are kept for it."""
+        if hvac_mode is None:
             return None
-        return self._kept if self._kept["mode"] == str(hvac_mode) else None
+        return self._kept.get(str(hvac_mode))
 
     def kept_a_per_min(self, hvac_mode: object) -> float | None:
         kept = self.kept_for(hvac_mode)
@@ -128,18 +132,18 @@ class EventReader:
         kept = self.kept_for(hvac_mode)
         return None if kept is None else float(kept["lag_s"])
 
-    @property
-    def wants_pulses(self) -> bool:
-        """True while no values are kept: the pulses go on (three at most, six hours apart)."""
-        return self._kept is None
+    def wants_pulses(self, hvac_mode: object) -> bool:
+        """True while no values are kept in ``hvac_mode``: the pulses go on (three at most per mode, six hours apart)."""
+        return self.kept_for(hvac_mode) is None
 
     @property
     def in_progress(self) -> bool:
         return any(r["state"] == STATE_WAITING for r in self._readings)
 
-    def wants_record(self, learning_stage: bool) -> bool:
-        """True while the record is needed: before values are kept, during the learning stage or a reading."""
-        return self._kept is None and (learning_stage or self.in_progress)
+    def wants_record(self, learning_stage: bool, hvac_mode: object) -> bool:
+        """True while the record is needed: before values are kept in ``hvac_mode``, during the learning stage or a
+        reading."""
+        return self.kept_for(hvac_mode) is None and (learning_stage or self.in_progress)
 
     @property
     def record_rows(self) -> int:
@@ -247,9 +251,9 @@ class EventReader:
             self._job = None
         self.version += 1
 
-    def _end_in_progress(self, reason: str, now: float | None = None) -> None:
+    def _end_in_progress(self, reason: str, now: float | None = None, mode: str | None = None) -> None:
         for r in self._readings:
-            if r["state"] == STATE_WAITING:
+            if r["state"] == STATE_WAITING and (mode is None or r["mode"] == mode):
                 self._end(r, reason, now)
 
     def interrupt(self, now: float, reason: str) -> None:
@@ -314,7 +318,7 @@ class EventReader:
         rec = self._record
         if self._interrupted_at is not None and heat_start <= self._interrupted_at < now:
             entry["reason"] = "thermostat stopped"
-        elif self._kept is not None:
+        elif event.mode in self._kept:
             entry["reason"] = "values kept"
         elif rec.t0 is None or rec.t0 > heat_start:
             entry["reason"] = "no record"
@@ -375,27 +379,29 @@ class EventReader:
                     return
 
     def _keep(self, first: dict[str, Any], second: dict[str, Any], now: float) -> None:
-        self._kept = {
+        kept = self._kept[first["mode"]] = {
             "mode": first["mode"], "a_per_min": 0.5 * (first["a_per_min"] + second["a_per_min"]),
             "lag_s": 0.5 * (first["lag_s"] + second["lag_s"]),
             "b_per_min": 0.5 * (first["b_per_min"] + second["b_per_min"]), "pulses": [first["index"], second["index"]], "at_s": now,
         }
-        self._end_in_progress("values kept", now)
+        self._end_in_progress("values kept", now, first["mode"])
         self.version += 1
-        _LOGGER.info("event reading: values kept (a %.4f C/min, lag %.0f s)", self._kept["a_per_min"], self._kept["lag_s"])
+        _LOGGER.info("event reading: values kept in %s (a %.4f C/min, lag %.0f s)", kept["mode"], kept["a_per_min"], kept["lag_s"])
 
     # -- persistence -----------------------------------------------------------------------------------------------
     def save(self) -> dict[str, Any] | None:
-        """The kept values, or the complete readings and the readings in progress; the fit queued or running is not
-        saved (a restored reading queues it again). None when there is nothing to save."""
-        if self._kept is not None:
-            return {"kept": {k: v for k, v in self._kept.items() if k != "at_s"},
-                    "at_wall": monotonic_to_wall_ts(self._kept["at_s"])}
+        """The kept values by mode, the complete readings of the modes without kept values and the readings in progress;
+        the fit queued or running is not saved (a restored reading queues it again). None when there is nothing to save."""
+        saved: dict[str, Any] = {}
+        if self._kept:
+            saved["kept"] = {mode: {k: v for k, v in kept.items() if k != "at_s"} | {"at_wall": monotonic_to_wall_ts(kept["at_s"])}
+                             for mode, kept in self._kept.items()}
         waiting = [r for r in self._readings if r["state"] == STATE_WAITING]
-        if not self._index:
-            return None
-        return {"index": self._index, "mode": self._mode, "done": [dict(d) for d in self._done],
-                "readings": [self._save_reading(r) for r in waiting]}
+        if self._index and (waiting or not self._kept):
+            saved.update({"index": self._index, "mode": self._mode,
+                          "done": [dict(d) for d in self._done if d["mode"] not in self._kept],
+                          "readings": [self._save_reading(r) for r in waiting]})
+        return saved or None
 
     @staticmethod
     def _save_reading(reading: dict[str, Any]) -> dict[str, Any]:
@@ -428,19 +434,20 @@ class EventReader:
         if not isinstance(saved, dict):
             return
         kept = saved.get("kept")
-        if isinstance(kept, dict):
+        if isinstance(kept, dict) and isinstance(kept.get("mode"), str):   # one set of values, no mode key
+            kept = {kept["mode"]: dict(kept, at_wall=saved.get("at_wall"))}
+        for mode, values in (kept.items() if isinstance(kept, dict) else ()):
             if (
-                isinstance(kept.get("mode"), str) and _finite(kept.get("a_per_min")) and kept["a_per_min"] > 0.0
-                and _finite(kept.get("lag_s")) and kept["lag_s"] > 0.0
+                isinstance(values, dict) and isinstance(mode, str) and _finite(values.get("a_per_min")) and values["a_per_min"] > 0.0
+                and _finite(values.get("lag_s")) and values["lag_s"] > 0.0
             ):
-                pulses = kept.get("pulses")
-                b_kept = kept.get("b_per_min")
-                self._kept = {
-                    "mode": kept["mode"], "a_per_min": float(kept["a_per_min"]), "lag_s": float(kept["lag_s"]),
+                pulses = values.get("pulses")
+                b_kept = values.get("b_per_min")
+                self._kept[mode] = {
+                    "mode": mode, "a_per_min": float(values["a_per_min"]), "lag_s": float(values["lag_s"]),
                     "b_per_min": float(b_kept) if _finite(b_kept) and b_kept >= 0.0 else None,
-                    "pulses": list(pulses) if isinstance(pulses, list) else [], "at_s": wall_to_monotonic_ts(saved.get("at_wall")),
+                    "pulses": list(pulses) if isinstance(pulses, list) else [], "at_s": wall_to_monotonic_ts(values.get("at_wall")),
                 }
-            return
         index = _integer(saved.get("index"))
         if index is None or index < 0:
             return

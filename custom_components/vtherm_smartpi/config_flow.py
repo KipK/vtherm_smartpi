@@ -22,11 +22,13 @@ from .const import (
     CONF_SMART_PI_HYSTERESIS_ON,
     CONF_SMART_PI_KNEE_DEMAND,
     CONF_SMART_PI_KNEE_VALVE,
+    CONF_SMART_PI_LEARNING_START,
     CONF_SMART_PI_MAX_VALVE,
     CONF_SMART_PI_MIN_VALVE,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
+    LEARNING_STARTS,
 )
 
 ERROR_INVALID_VALVE_CURVE = "invalid_valve_curve"
@@ -112,6 +114,16 @@ def build_main_options_schema(
             CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
             default=defaults[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE],
         ): bool,
+        vol.Optional(
+            CONF_SMART_PI_LEARNING_START,
+            default=defaults[CONF_SMART_PI_LEARNING_START],
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(LEARNING_STARTS),
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                translation_key=CONF_SMART_PI_LEARNING_START,
+            )
+        ),
         vol.Optional(
             CONF_SMART_PI_DEBUG,
             default=defaults[CONF_SMART_PI_DEBUG],

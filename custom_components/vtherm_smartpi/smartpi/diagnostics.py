@@ -245,6 +245,7 @@ def _build_learning(algo: SmartPI, tau_reliable: bool) -> Dict[str, Any]:
         "last_reason": str(est.learn_last_reason),
         "a_drift_state": est.a_drift.state,
         "b_drift_state": est.b_drift.state,
+        "start": algo._start.public(),
     }
 
 

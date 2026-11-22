@@ -63,7 +63,7 @@ The `live` block is organized by responsibility:
 | `power` | Current and next-cycle power, PI/FF split, limits and applied power |
 | `temperature` | Indoor/outdoor temperatures, anticipated temperature (`anticipated`: indoor temperature plus the anticipation correction), errors and integral state |
 | `model` | A/B model, confidence, time constant and dead times |
-| `learning` | Learning stage, bootstrap progress, accepted updates and drift state |
+| `learning` | Learning stage, bootstrap progress, accepted updates, drift state and the start of the learning (`start`) |
 | `governance` | Thermal regime and model-update decision |
 | `feedforward` | Holding power source, wall part of the holding power and dead-band source |
 | `setpoint` | Setpoint boost state |
@@ -84,6 +84,22 @@ and for a thermostat that starts without saved data.
 | `downtime_s` | Duration of the stop, in seconds; `null` when it cannot be measured (clock jump, no saved data) |
 | `reason` | Why the restart was not bridged, `null` when it was: `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (also when the command went to 0 while the temperature was awaited), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, or an exclusion before the stop or after the restart (for example `window open before the stop`, `safety mode after the restart`) |
 
+`learning.start` summarises how the learning started and what the measurement
+pulses of the direct start gave (see the **Start of the learning** option in the
+[SmartPI documentation](vtherm_smartpi.md)). The values are those of the HVAC mode
+the model is in; the bootstrap start shows `0` pulses and no pulse in progress.
+
+| Field | Meaning |
+|---|---|
+| `mode` | Start of the learning in progress: `bootstrap` or `direct`. A thermostat that has already learned keeps the start its learning began with, whatever the option says |
+| `pulses_done` | Measurement pulses started since the learning began, in the current mode (three at most) |
+| `pulse` | The pulse in progress: `none`, `rest` (no heating, waiting for the room to drop), `full power` or `stop` (waiting for the temperature peak) |
+| `values_kept` | `true` when two agreeing readings gave values for the current mode |
+| `values_kept_at` | Local time at which the values were kept (ISO 8601), `null` when none are kept or the time is unknown |
+| `kept_a` | Kept heating rate in °C/min at full power (5 decimals), `null` when none are kept |
+| `kept_b` | Kept loss coefficient in 1/min (6 decimals), `null` when none are kept |
+| `kept_lag_s` | Kept emitter lag in seconds, `null` when none are kept |
+
 `analysis` groups the advanced live values into `control`, `learning`,
 `deadtime`, `governance` and `feedforward`.
 
@@ -94,7 +110,7 @@ anticipation of the temperature, in heating and in cooling:
 |---|---|
 | `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon or without a rising or falling slope) |
 | `anticipation_horizon_s` | Horizon of the anticipation in seconds (the time between a command and its effect), `0` when none |
-| `anticipation_horizon_source` | Where the horizon comes from: `heating balance` (median of the last emitter lags measured), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none`; the heating balance is used in heating only |
+| `anticipation_horizon_source` | Where the horizon comes from: `measurement pulses` (emitter lag kept from the measurement pulses of the direct start, in heating and in cooling), `heating balance` (median of the last emitter lags measured), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none`; the heating balance is used in heating only |
 
 `analysis.deadtime` follows the dead time detection:
 

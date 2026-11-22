@@ -50,7 +50,8 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
 
 - `init_algorithm` (entity creation): resolves config; builds the stores from the slugified thermostat name
   (`state_store.py::SmartPIStateStore`, `SmartPITarStore`, `SmartPIRoomModelStore`); writes the min delays on the
-  thermostat and scheduler; builds `algo.py::SmartPI` (`tar_learning=True`, `room_model=True`) as
+  thermostat and scheduler; builds `algo.py::SmartPI` (`tar_learning=True`, `room_model=True`,
+  `learning_start` = option `smart_pi_learning_start`, `bootstrap` when the entry has no such key) as
   `thermostat.prop_algorithm`; configures the valve curve (active only if configured and the scheduler
   `is_valve_mode`; invalid parameters disable it); sets `restart_exclusion_probe`; sends
   `SIGNAL_SMARTPI_TARGET_UPDATED` (the sensor platform reacts, section 8).
@@ -170,7 +171,7 @@ Pipeline inside `calculate`, in execution order:
   `vtherm_smartpi.{}.room_model` (state v2).
 - Persisted: learning flag, last active wall time, model a/b, dead time, governance, controller (integral,
   u_prev), setpoint manager, learning window, deadband, calibration, gain scheduler, guards, AutoCalib, FF
-  holding source, tint filter, hysteresis output, the measurement record and readings with the kept starting values (`measure_events`, `event_reading`, `est_state.starting_values`; older states load without them), and the restart context (last tick, mode, cycle config,
+  holding source, tint filter, hysteresis output, the measurement record and readings with the kept starting values (`measure_events`, `event_reading`, `measure_pulse`, `est_state.starting_values`; older states load without them) and the start the learning began with (`learning_start`, saved for the direct start only; a state with learning but without the key began with the bootstrap and keeps it, whatever the option says; a blank state and a learning reset take the configured start), and the restart context (last tick, mode, cycle config,
   exclusion, temperature, committed command, wall times).
 - Transient, empty after load (`load_state`): committed power (0 unless bridged), integral hold, learning resume timestamp, cycle
   state. Without a bridge, the first tick freezes learning for one cycle (`_startup_grace_period`).

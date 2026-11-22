@@ -76,11 +76,11 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 **Measurement events and starting values** (one reading chain; see `algorithm-core.md` section 6b)
 - `peak_search.py`: `PeakSearch`, the one search of the temperature peak after a cut (300 s bins, earliest strictly highest mean, confirmed by a closed bin 1800 s later, 4 h limit). Used by the detector (so by the heating balance) and by the dead-time estimator in peak mode.
 - `measure_event.py`: `MeasureEventDetector` (rest, constant power, stop until the peak, HEAT and COOL, each event tagged with its source: pulse, bootstrap, calibration, regulation) and `MeasureRecord` (bounded record of power, room and outdoor temperature on change; for a switch the power channel holds the real on/off edges from the applied-command receipts).
-- `event_reading.py`: `EventReader`, reads the closed events of source pulse or bootstrap on the record; queues the fit, keeps two agreeing readings.
+- `event_reading.py`: `EventReader`, reads the closed events of source pulse or bootstrap on the record; queues the fit, keeps two agreeing readings per mode (`kept_for(mode)`).
 - `event_fit.py`: the fit job (pure delay, first-order lag, `a`, losses `b`; numpy/scipy lazily imported) and the agreement rule.
-- `starting_values.py`: `StartingValues`, `a` and `b` standing for the learning's own until it has them; the warm-up credit.
-- `learning_start.py`: `LearningStart`, option `learning_start` (bootstrap or direct), phase of the algorithm, source of the command, hand-over of the kept values, saved keys; `command_is_on_off`.
-- `measure_pulse.py`: `MeasurePulse`, the light measurement pulses of the direct start (not reachable by users: the handler does not pass the option).
+- `starting_values.py`: `StartingValues`, `a` and `b` standing for the learning's own until it has them (`a` once per mode, `b` with the first hand-over); the warm-up credit.
+- `learning_start.py`: `LearningStart`, option `learning_start` (bootstrap or direct; the configured start and the start of the learning in progress), phase of the algorithm, source of the command, hand-over of the kept values per mode, saved keys; `command_is_on_off`; `public()` builds `live.learning.start`.
+- `measure_pulse.py`: `MeasurePulse`, the light measurement pulses of the direct start (three per mode); chosen by the user option `smart_pi_learning_start`, which `handler.py` passes as `SmartPI(learning_start=...)`.
 
 **Calibration**
 - `calibration.py`: `CalibrationManager`: forced calibration state machine.
@@ -121,7 +121,7 @@ Find a test by module name: `tests/test_<module>.py` or `tests/test_smartpi_<top
 | Root modules | `test_config_flow`, `test_factory`, `test_init_lifecycle`, `test_services`, `test_sensor`, `test_valve_config_check`, `test_device_link`, `test_vtherm_compatibility`, `test_handler_*`, `test_smartpi_handler_*`, `test_smartpi_vt_recalculate_contract` |
 | Control core | `test_smartpi_{antiwindup,bumpless_transfer,feedback,gain_transfer,governance,guards,guard_cut_*,integral_hold,max_on_percent,pause,shedding,robustness*}`, `test_algo_{deadband_hysteresis,off_mode}` |
 | Setpoint / deadband | `test_smartpi_setpoint*`, `test_algo_setpoint_boost`, `test_smartpi_deadband_output`, `test_smartpi_near_band_unwind`, `test_smartpi_nearband_model`, `test_smartpi_valve_curve`, `test_smartpi_valve_runtime_sync` |
-| Measurement events | `test_smartpi_{peak_search,measure_event,event_reading,starting_values,learning_start}` |
+| Measurement events | `test_smartpi_{peak_search,measure_event,event_reading,starting_values,learning_start,start_per_mode}` |
 | Learning A/B | `test_ab_window_balance`, `test_smartpi_ab_*`, `test_smartpi_learning_*`, `test_learning_outcomes`, `test_smartpi_heating_balance`, `test_smartpi_b_heat_learning_guard`, `test_smartpi_hysteresis_learning`, `test_smartpi_tin_history_coverage` |
 | Dead time / emitter lag / calibration | `test_smartpi_deadtime_*`, `test_smartpi_response_lag*`, `test_smartpi_calibration*` |
 | Feed-forward | `test_smartpi_feedforward`, `test_room_model_feedforward` |
@@ -159,7 +159,7 @@ Support files:
 | Change what a heating event is (rest, phase, cut, source) | `smartpi/measure_event.py`; consumers pick events by source (`heating_balance.py`, `event_reading.py`) |
 | Change the fit of an event or the agreement rule | `smartpi/event_fit.py` (fit), `smartpi/event_reading.py` (windows, queue, kept values) |
 | Change the starting values, their release or the warm-up credit | `smartpi/starting_values.py`, hand-over in `smartpi/learning_start.py`, release calls in `smartpi/ab_estimator.py` |
-| Change the start of the learning (bootstrap or direct) | `smartpi/learning_start.py`; `algo.py` only wires it (`self._start`); a user option needs `handler.py`, `config_flow.py`, translations and docs as well (none exists yet) |
+| Change the start of the learning (bootstrap or direct) | `smartpi/learning_start.py`; `algo.py` only wires it (`self._start`); the user option `smart_pi_learning_start` lives in `const.py`, `config_flow.py` (selector), `handler.py` (one argument) and the translations (labels, descriptions, selector values) |
 | Release / CI | `.github/workflows/*.yml`, `manifest.json`, `CHANGELOG.md` |
 
 Rules for any user-visible change: update `documentation/en` and `documentation/fr` together; docs describe the current behavior only.

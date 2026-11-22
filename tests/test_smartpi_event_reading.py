@@ -211,7 +211,7 @@ def test_other_sources_open_no_reading():
 
 def test_without_a_response_lag_the_kept_lag_is_given_to_nobody():
     rig = _Rig(source="bootstrap")
-    rig.reader._kept = {"mode": "heat", "a_per_min": 0.05, "lag_s": 300.0, "b_per_min": 0.0005, "pulses": [1, 2], "at_s": 0.0}
+    rig.reader._kept = {"heat": {"mode": "heat", "a_per_min": 0.05, "lag_s": 300.0, "b_per_min": 0.0005, "pulses": [1, 2], "at_s": 0.0}}
     lag = MagicMock()
     rig.reader.step(rig.now, VThermHvacMode_HEAT, False, None, None)
     rig.reader.step(rig.now, VThermHvacMode_HEAT, False, lag, None)
@@ -248,7 +248,7 @@ def test_a_reset_or_a_change_of_mode_discards_the_fit_in_flight():
     rig.reader.run_queued_sync()
     rig.reader.reset()
     rig.step()
-    assert _readings(rig) == [] and rig.reader.kept is None
+    assert _readings(rig) == [] and rig.reader.kept == {}
     rig = _Rig()
     rig.pulse(sync=False)
     rig.reader.run_queued_sync()
@@ -328,7 +328,7 @@ def test_complete_readings_and_kept_values_survive_an_unbridged_restart():
     kept = json.loads(json.dumps(rig.reader.save()))
     other.reader.load(kept)
     assert other.reader.kept_a_per_min("heat") == pytest.approx(0.1) and other.reader.kept_lag_s("heat") == pytest.approx(300.0)
-    assert other.reader.wants_pulses is False
+    assert other.reader.wants_pulses("heat") is False
 
 
 def test_the_kept_values_of_an_earlier_state_load():

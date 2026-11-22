@@ -110,6 +110,15 @@ donnent à l'apprentissage des valeurs de départ pour `a` et `b` (3.7, Événem
 de mesure et valeurs de départ). La commande d'hystérésis, l'ordre ci-dessus et
 la règle de sortie sont les mêmes avec ou sans elles.
 
+Cet ordre est celui du démarrage par amorçage. Avec le démarrage direct (option
+`smart_pi_learning_start`, 3.7, Démarrage direct), l'étape `HYSTERESIS` est la même étape d'apprentissage,
+mais la commande est le PI et l'étape attend `b` jusqu'à ce qu'une valeur de départ de `b` tienne lieu
+ou que la constante de temps propre de l'apprentissage ait été fiable. L'option n'agit que sur un
+démarrage vierge : un état avec des mesures, des valeurs de départ, des impulsions ou des lectures garde
+le démarrage avec lequel son apprentissage a commencé (le démarrage direct est sauvegardé sous
+`learning_start` ; un état sans cette clé a commencé par l'amorçage), et une réinitialisation de
+l'apprentissage reprend le démarrage configuré.
+
 La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dérive repose sur `b_converged_for_a()` :
 
 1. `learn_ok_count_b >= 11`,
@@ -355,7 +364,7 @@ d'arrêt de chaque cycle que l'ordonnanceur a appliqué (d'après les accusés d
 pour une vanne, ou un ordonnanceur sans accusés, il contient la fraction de cycle. L'enregistrement
 est sauvegardé.
 
-Un événement fermé du bootstrap ouvre une lecture (`event_reading.py`). Sa fenêtre commence
+Un événement fermé du bootstrap ou d'une impulsion de mesure ouvre une lecture (`event_reading.py`). Sa fenêtre commence
 1800 s avant l'échelon de chauffe et se termine d'abord à la fermeture de l'événement : elle contient
 donc les échantillons qu'attendait la confirmation du pic. Un ajustement (`event_fit.py`) explique
 ensuite la température enregistrée avec toute la chaîne : l'émetteur donne à la pièce la puissance
@@ -368,24 +377,51 @@ le calcul suivant en applique le résultat. Après chaque ajustement, la fenêtr
 retards du résultat, au plus 8 ajustements, et la lecture est complète lorsque la fenêtre en couvre 90 %.
 numpy et scipy sont chargés au premier ajustement.
 
-Deux lectures complètes concordent lorsque leur `a` et leur retard de l'émetteur diffèrent chacun d'au
-plus 20 % du plus grand. Les moyennes de deux lectures concordantes sont retenues, sauvegardées, et
-effacées par une réinitialisation de l'apprentissage. Un arrêt du thermostat, un changement de mode ou
-une calibration termine les lectures en cours.
+Deux lectures complètes du même mode concordent lorsque leur `a` et leur retard de l'émetteur diffèrent
+chacun d'au plus 20 % du plus grand. Les moyennes de deux lectures concordantes sont retenues pour leur
+mode, sauvegardées, et effacées par une réinitialisation de l'apprentissage. Les valeurs retenues sont par
+mode, comme le canal `a` de l'estimateur : une période dans l'autre mode démarre sans valeurs retenues et
+fait ses propres lectures et impulsions. Un arrêt du thermostat, un changement de mode ou une calibration
+termine les lectures en cours.
 
-**Valeurs de départ.** Le `a` retenu et le `b` moyen sont donnés une seule fois à l'apprentissage de
-`a` et `b` comme valeurs de départ à la fin du bootstrap. Elles tiennent lieu des valeurs propres de
-l'apprentissage et n'écrivent aucun historique de mesures : `a` cesse de tenir lieu à la première
-publication de `a` par l'apprentissage lui-même, et `b` lorsque la constante de temps propre de
-l'apprentissage devient fiable. Un changement de mode HVAC abandonne le `a` en place et conserve `b`.
-Chaque valeur donnée rapporte 5 mesures de crédit de montée en charge du feedforward (4.2), conservé
-lorsqu'elle est relâchée. Le retard de l'émetteur des lectures est publié avec elles ; il ne fixe ni
-l'horizon de l'anticipation ni le retard de l'émetteur des phases à puissance constante.
+**Valeurs de départ.** Le `a` retenu de chaque mode est donné une seule fois à l'apprentissage de `a` et
+`b` comme valeur de départ, et le `b` retenu (propriété de la pièce, partagé par les modes) avec la
+première transmission seulement : avec le démarrage direct à la rétention, avec le démarrage par amorçage
+à la fin du bootstrap. Elles tiennent lieu des valeurs propres de l'apprentissage et n'écrivent aucun
+historique de mesures : `a` cesse de tenir lieu à la première publication de `a` par l'apprentissage
+lui-même, et `b` lorsque la constante de temps propre de l'apprentissage devient fiable. Un changement de
+mode HVAC met de côté le `a` en place avec son canal et le restitue avec lui. Les valeurs de la première
+transmission rapportent 5 mesures de crédit de montée en charge du feedforward (4.2) par valeur donnée,
+conservé lorsqu'elle est relâchée ; une transmission ultérieure de l'autre mode n'en rapporte aucune.
+Avec le démarrage par amorçage, le retard de l'émetteur des lectures est publié avec les valeurs ; il ne
+fixe ni l'horizon de l'anticipation ni le retard de l'émetteur des phases à puissance constante.
 
-L'enregistrement, les lectures en cours et les valeurs retenues sont sauvegardés (`measure_events`,
-`event_reading`, et `starting_values` dans `est_state`) ; un état sauvegardé sans eux se charge. Après un
-redémarrage ponté, les lectures reprennent (un ajustement en cours est remis en file) ; sinon les
-lectures en cours se terminent et l'enregistrement est abandonné.
+**Démarrage direct.** Le PI commande dès le premier calcul, sur les gains de repli. Jusqu'à
+`PULSE_MAX_COUNT = 3` impulsions de mesure par mode (`measure_pulse.py`) remplacent la commande du PI
+pour une courte séquence, tant que l'étape d'apprentissage dure et que les lectures n'ont retenu aucune
+valeur dans le mode. Une impulsion démarre lorsque la pièce est à la consigne ou au plus
+`PULSE_START_UNDER_C = 0,3 °C` du côté de la demande, que la commande précédente est inférieure à
+`PULSE_START_MAX_COMMAND = 0,8` et que `PULSE_MIN_GAP_S = 6 h` se sont écoulées depuis l'impulsion
+précédente. Elle se repose (au plus `PULSE_REST_MAX_S = 45 min`, ou jusqu'à ce que la pièce soit à
+`PULSE_REST_UNDER_C = 0,5 °C` du côté de la demande), chauffe à pleine puissance jusqu'à ce que
+l'estimateur de temps mort ait détecté la réponse et qu'elle se détache de trois pas de la sonde (au plus
+`PULSE_HEAT_MAX_S = 2 h`, ou dès que la pièce est à `PULSE_HEAT_OVER_C = 0,3 °C` de l'autre côté), puis
+s'arrête jusqu'à la confirmation du pic de température (au plus `PULSE_STOP_MAX_S = 4 h` ; le PI reprend la
+main lorsque la pièce est à `PULSE_TAKEOVER_C = 0,5 °C` du côté de la demande). Une impulsion interrompue
+par un redémarrage, un arrêt, un changement de consigne, de mode ou une calibration n'est pas reprise et
+compte. Les lectures des événements que provoquent les impulsions donnent les valeurs retenues. Tant que
+l'apprentissage n'a pas publié son propre modèle, elles en tiennent lieu : `pre_model_gains` donne les
+gains à partir du `a` retenu et du temps mort actif (la règle IMC/SIMC d'une pièce lente, aucun gain
+au-dessus de sa valeur de repli), le retard de l'émetteur retenu est l'horizon de l'anticipation (source
+`measurement pulses`) et le retard de l'émetteur de l'estimateur de retard de réponse, qui compte alors
+comme résolu. Le terme intégral repart de zéro au calcul où l'étape d'apprentissage se termine.
+L'estimateur de temps mort lit le temps mort après un arrêt sur le pic de température.
+
+L'enregistrement, les lectures en cours, les valeurs retenues et les impulsions démarrées sont sauvegardés
+(`measure_events`, `event_reading`, `measure_pulse` et `learning_start`, et `starting_values` dans
+`est_state`) ; un état sauvegardé sans eux se charge. Après un redémarrage ponté, les lectures reprennent
+(un ajustement en cours est remis en file) ; sinon les lectures en cours se terminent et l'enregistrement
+est abandonné.
 
 ### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur
 
@@ -809,7 +845,8 @@ Un arrêt du thermostat (mode HVAC autre que heat ou cool, par exemple VT qui l'
 | `heating_balance.py`   | `HeatingBalance` : vitesse de chauffe et retard de l'émetteur mesurés sur les phases de chauffe |
 | `peak_search.py`       | recherche du pic de température après une coupure |
 | `measure_event.py`     | détecteur des événements de mesure et enregistrement de la puissance et des températures |
-| `event_reading.py`     | lecture des événements du bootstrap, valeurs retenues |
+| `event_reading.py`     | lecture des événements du bootstrap et des impulsions, valeurs retenues par mode |
+| `measure_pulse.py`     | impulsions de mesure du démarrage direct                 |
 | `event_fit.py`         | ajustement de la réponse de la pièce à un événement de chauffe (travail d'arrière-plan) |
 | `starting_values.py`   | valeurs de départ de `a` et `b`, relâchement et crédit de montée en charge |
 | `learning_start.py`    | début de l'apprentissage (phase de l'algorithme, source de la commande, transmission des valeurs retenues) |
@@ -962,6 +999,12 @@ bloc stable de dix-huit séries `history`. Les entités normales excluent `live`
 Recorder ; la sous-classe debug l'enregistre directement. Le mode debug ne fait que sélectionner la classe de capteur enregistrée ; il n'ajoute pas de second bloc de diagnostic.
 
 `control.last_restart` donne la décision sur le redémarrage de la session courante : `bridged`, la durée d'arrêt `downtime_s` (en secondes, `null` lorsque l'horloge a sauté ou que rien n'a été sauvegardé) et, pour un redémarrage non ponté, la `reason` en mots simples. Il vaut `null` avant le premier calcul d'un thermostat restauré depuis un stockage, et pour un thermostat sans état sauvegardé.
+
+`learning.start` est un résumé simple du démarrage de l'apprentissage (`mode`,
+`pulses_done`, `pulse`, `values_kept`, `values_kept_at`, `kept_a`, `kept_b`,
+`kept_lag_s`), construit par `LearningStart.public()` pour le mode dans lequel se
+trouve le modèle. Les états d'impulsion y sont traduits (`none`, `rest`,
+`full power`, `stop`).
 
 `analysis.learning.learn_ok_count` et `learn_skip_count` sont des compteurs
 d'exécution relatifs au processus Home Assistant courant. Les compteurs

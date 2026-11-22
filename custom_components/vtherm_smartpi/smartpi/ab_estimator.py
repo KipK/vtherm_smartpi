@@ -307,11 +307,11 @@ class ABEstimator:
 
     def give_starting_values(self, a: float | None, b: float | None, mode: str, mode_sign: float) -> None:
         """Give the starting values measured in ``mode`` (``a`` as a magnitude in C/min at full power, ``b`` in 1/min),
-        once per blank start. ``a`` takes the sign of the mode and the usual bounds; a ``b`` outside them is not given.
-        A quantity the learning already has of its own is released at once. Nothing is written for it: the learning's
-        own value stays."""
+        once per mode and blank start; ``b`` (shared by the modes) is taken from the first hand-over only. ``a`` takes the
+        sign of the mode and the usual bounds; a ``b`` outside them is not given. A quantity the learning already has of
+        its own is released at once. Nothing is written for it: the learning's own value stays."""
         a = None if a is None else mode_sign * clamp(abs(a), self.A_MIN, self.A_MAX)
-        b = b if b is not None and self.B_MIN <= b <= self.B_MAX else None
+        b = b if b is not None and self.B_MIN <= b <= self.B_MAX and not self.start.handed else None
         if not self.start.give(a, b, mode):
             return
         if self.learn_ok_count_a > 0:

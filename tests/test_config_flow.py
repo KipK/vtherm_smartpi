@@ -14,11 +14,13 @@ from custom_components.vtherm_smartpi.const import (
     CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
     CONF_SMART_PI_KNEE_DEMAND,
     CONF_SMART_PI_KNEE_VALVE,
+    CONF_SMART_PI_LEARNING_START,
     CONF_SMART_PI_MAX_VALVE,
     CONF_SMART_PI_MIN_VALVE,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
+    LEARNING_STARTS,
 )
 from custom_components.vtherm_smartpi.config_flow import (
     _validate_valve_curve_config,
@@ -399,3 +401,36 @@ async def test_thermostat_and_options_flows_do_not_offer_a_tar_learning_option(h
 
     options = await hass.config_entries.options.async_init(entry.entry_id)
     assert "smart_pi_tar_learning" not in _schema_keys(options["data_schema"])
+
+
+def test_the_start_of_the_learning_is_an_option_that_defaults_to_the_bootstrap() -> None:
+    """The global and the per-thermostat forms offer the start of the learning; the bootstrap is the default."""
+    assert DEFAULT_OPTIONS[CONF_SMART_PI_LEARNING_START] == "bootstrap"
+    assert LEARNING_STARTS == ("bootstrap", "direct")
+    schema = build_options_schema(DEFAULT_OPTIONS)
+    assert CONF_SMART_PI_LEARNING_START in _schema_keys(schema)
+    key = next(k for k in schema.schema if getattr(k, "schema", k) == CONF_SMART_PI_LEARNING_START)
+    assert key.default() == "bootstrap"
+    assert schema({})[CONF_SMART_PI_LEARNING_START] == "bootstrap"
+    assert schema({CONF_SMART_PI_LEARNING_START: "direct"})[CONF_SMART_PI_LEARNING_START] == "direct"
+    with pytest.raises(vol.Invalid):
+        schema({CONF_SMART_PI_LEARNING_START: "pulses"})
+
+
+@pytest.mark.asyncio
+async def test_an_entry_saved_before_the_option_shows_the_bootstrap_and_keeps_the_other_values(hass) -> None:
+    """An entry without the key opens with the bootstrap selected; the flow saves it with the key and nothing else changed."""
+    old = {k: v for k, v in DEFAULT_OPTIONS.items() if k != CONF_SMART_PI_LEARNING_START}
+    old[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE] = True
+    entry = MockConfigEntry(domain=DOMAIN, title="SmartPI defaults", unique_id=DOMAIN, data=old)
+    entry.add_to_hass(hass)
+
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    assert form["step_id"] == "init"
+    key = next(k for k in form["data_schema"].schema if getattr(k, "schema", k) == CONF_SMART_PI_LEARNING_START)
+    assert key.default() == "bootstrap"
+
+    done = await hass.config_entries.options.async_configure(form["flow_id"], {CONF_SMART_PI_LEARNING_START: "direct"})
+    assert done["type"] == FlowResultType.CREATE_ENTRY
+    assert done["data"][CONF_SMART_PI_LEARNING_START] == "direct"
+    assert done["data"][CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE] is True

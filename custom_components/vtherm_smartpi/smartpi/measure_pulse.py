@@ -18,7 +18,7 @@ A pulse starts at the first calculation where the room is at or on the demand si
 ``PULSE_START_UNDER_C`` on it and where the command of the previous calculation was under ``PULSE_START_MAX_COMMAND``
 (a heating already at that power is a full-power start the estimator measures; while the room is further away the PI
 regulates), at most
-``PULSE_MAX_COUNT`` times per blank start and ``PULSE_MIN_GAP_S`` after the end of the previous one, while the
+``PULSE_MAX_COUNT`` times per mode and blank start and ``PULSE_MIN_GAP_S`` after the end of the previous one, while the
 learning stage lasts and the dead time after a start or the dead time after a stop is not published. A pulse
 interrupted by a restart, a stop of the thermostat, a change of the setpoint, a change of mode or a calibration is not
 resumed and counts. A pulse whose heating step cannot be followed by the dead-time estimator (it did not arm its
@@ -75,11 +75,12 @@ class MeasurePulse:
         self.reset()
 
     def reset(self) -> None:
-        """Blank start: three pulses are available again."""
+        """Blank start: three pulses are available again in each mode."""
         self._state = STATE_IDLE
         self._cur: dict[str, Any] | None = None
         self._history: list[dict[str, Any]] = []
-        self._count = 0
+        self._count = 0                      # pulses started, all modes (index of the pulse)
+        self._mode_counts: dict[str, int] = {}   # pulses started by mode
         self._last_end_s: float | None = None
         self._calls = 0
 
@@ -104,8 +105,12 @@ class MeasurePulse:
 
     @property
     def count(self) -> int:
-        """Pulses started since the blank start (an interrupted pulse counts)."""
+        """Pulses started since the blank start, all modes (an interrupted pulse counts)."""
         return self._count
+
+    def count_for(self, hvac_mode: object) -> int:
+        """Pulses started since the blank start in ``hvac_mode``."""
+        return self._mode_counts.get(str(hvac_mode), 0)
 
     @property
     def history(self) -> list[dict[str, Any]]:
@@ -149,7 +154,7 @@ class MeasurePulse:
                 heat_or_cool
                 and learning_stage
                 and not calibrating
-                and self._count < PULSE_MAX_COUNT
+                and self.count_for(hvac_mode) < PULSE_MAX_COUNT
                 and (readings_pending or not (active_deadtime_known and passive_deadtime_known))
                 and 0.0 <= demand <= PULSE_START_UNDER_C + 1e-9
                 and previous_command < PULSE_START_MAX_COMMAND
@@ -192,6 +197,7 @@ class MeasurePulse:
 
     def _begin(self, now: float, mode: str, cooling: bool, temp: float, target: float) -> None:
         self._count += 1
+        self._mode_counts[mode] = self._mode_counts.get(mode, 0) + 1
         self._state = STATE_REST
         self._cur = {
             "index": self._count, "mode": mode, "cooling": bool(cooling), "start_s": now, "rest_start_s": now,
@@ -291,6 +297,7 @@ class MeasurePulse:
             last = now if now is not None else self._cur.get("rest_start_s")
         return {
             "count": self._count,
+            "mode_counts": dict(self._mode_counts),
             "last_end_wall": None if last is None else monotonic_to_wall_ts(last),
         }
 
@@ -300,5 +307,9 @@ class MeasurePulse:
             return
         count = saved.get("count")
         if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
-            self._count = min(count, PULSE_MAX_COUNT)
+            self._count = count
+        by_mode = saved.get("mode_counts")
+        for mode, n in (by_mode.items() if isinstance(by_mode, dict) else ()):
+            if isinstance(mode, str) and isinstance(n, int) and not isinstance(n, bool) and n >= 0:
+                self._mode_counts[mode] = min(n, PULSE_MAX_COUNT)
         self._last_end_s = wall_to_monotonic_ts(saved.get("last_end_wall"))

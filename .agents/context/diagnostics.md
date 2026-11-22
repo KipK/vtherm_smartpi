@@ -186,10 +186,14 @@ Other enums:
 | `control.phase` | `Hysteresis` (bootstrap ON/OFF: on at setpoint-0.3, off at +0.5), `Stable` (PI), `Calibration` (forced cycle: CoolDown, HeatUp, CoolDownFinal) |
 | `learning.bootstrap_status` | `step1 - deadtime: heat:<s|null> cool:<s|null>`; `step2 - collecting emeas: A:n/5 B:n/5`; `step2 - waiting response lag: estimates N, heating phases K/4` |
 | `learning.stage` | `bootstrap`, `learning` (<31 a or b samples), `monitoring` (full + tau reliable), `degraded` (full, tau unreliable) |
+| `learning.start.mode` | `bootstrap`, `direct` (the start the learning in progress began with; not the option when the thermostat had already learned) |
+| `learning.start.pulse` | `none`, `rest`, `full power`, `stop` (the measurement pulse in progress); `pulses_done` counts the pulses of the current mode (3 at most) |
+| `learning.start.{values_kept,values_kept_at,kept_a,kept_b,kept_lag_s}` | values kept from two agreeing readings for the current mode (`a` C/min, `b` 1/min, emitter lag s); `null` when none; ISO local time for `values_kept_at` |
 | `governance.regime` | `warmup`, `excited_stable`, `near_band`, `dead_band`, `hold`, `perturbed`, `degraded` (no outdoor temp), `saturated` (command <=0.1 % or >=99.9 %) |
 | `thermal_update_decision` | `adapt_on`, `freeze`, `hard_freeze` (dead_band, hold, perturbed, degraded), `soft_freeze_down` (gains only, in hold). Gains: warmup and saturation freeze; thermal learning stays on in saturation |
 | `*_reason` (freeze) | `none`, `regime_transition`, `sensor_invalid`, `dead_band`, `near_band`, `warmup`, `hold`, `perturbed`, `saturation`, `system_inefficient` |
-| `analysis.governance.kp_source` | `safe`, `imc_simc`, `imc_simc_valve`, suffix `_nearband`, `_softfreeze`, or `frozen` |
+| `analysis.governance.kp_source` | `safe`, `measurement_pulses` (direct start, before the first model), `imc_simc`, `imc_simc_valve`, suffix `_nearband`, `_softfreeze`, or `frozen` |
+| `analysis.control.anticipation_horizon_source` | `measurement pulses`, `heating balance`, `dead times`, `none` |
 | `feedforward.source` | `learned model`, `room model (air and walls)`, `room model (static part)`, `room model (simple)` |
 | `autocalib.state` | `idle`, `waiting_snapshot`, `monitoring`, `triggered` |
 | `analysis.deadtime.state` | `WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`; outcomes `detected`, `timeout`, `aborted`, `rejected`, `ignored` |

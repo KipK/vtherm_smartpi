@@ -18,8 +18,12 @@
           "smart_pi_hysteresis_off": "Hystérésis arrêt",
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
+          "smart_pi_learning_start": "Démarrage de l'apprentissage",
           "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+        },
+        "data_description": {
+          "smart_pi_learning_start": "L'amorçage fait des cycles de chauffe à pleine puissance jusqu'à ce que le modèle soit appris, puis régule. Le démarrage direct régule dès la première minute et mesure la pièce avec au plus trois impulsions légères près de la consigne ; il demande des changements de consigne programmés chaque jour pour continuer à apprendre et convient surtout à une sonde précise au 0,01 °C. Le choix s'applique quand l'apprentissage repart d'un état vierge (nouveau thermostat ou réinitialisation de l'apprentissage) ; un thermostat qui a déjà appris garde son modèle."
         }
       },
       "thermostat_valve_curve": {
@@ -55,8 +59,12 @@
           "smart_pi_hysteresis_off": "Hystérésis arrêt",
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
+          "smart_pi_learning_start": "Démarrage de l'apprentissage",
           "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
           "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+        },
+        "data_description": {
+          "smart_pi_learning_start": "L'amorçage fait des cycles de chauffe à pleine puissance jusqu'à ce que le modèle soit appris, puis régule. Le démarrage direct régule dès la première minute et mesure la pièce avec au plus trois impulsions légères près de la consigne ; il demande des changements de consigne programmés chaque jour pour continuer à apprendre et convient surtout à une sonde précise au 0,01 °C. Le choix s'applique quand l'apprentissage repart d'un état vierge (nouveau thermostat ou réinitialisation de l'apprentissage) ; un thermostat qui a déjà appris garde son modèle."
         }
       },
       "valve_curve": {
@@ -74,6 +82,14 @@
       "valve_min_not_below_knee": "L'ouverture minimale de vanne doit être inférieure à l'ouverture de vanne au coude.",
       "valve_knee_not_below_max": "L'ouverture de vanne au coude doit être inférieure à l'ouverture maximale de vanne.",
       "knee_demand_out_of_range": "La demande au coude doit être strictement comprise entre 0 et 100 %."
+    }
+  },
+  "selector": {
+    "smart_pi_learning_start": {
+      "options": {
+        "bootstrap": "Amorçage",
+        "direct": "Démarrage direct"
+      }
     }
   },
   "services": {

@@ -21,6 +21,7 @@
       - [Étape 2 — Apprentissage des déperditions (`b`)](#étape-2--apprentissage-des-déperditions-b)
       - [Étape 3 — Apprentissage du gain de chauffe (`a`)](#étape-3--apprentissage-du-gain-de-chauffe-a)
       - [Sortie du bootstrap](#sortie-du-bootstrap)
+      - [Démarrage direct](#démarrage-direct)
     - [Phase stable](#phase-stable)
     - [Recalibration automatique](#recalibration-automatique)
     - [Apprentissage du retard de l'émetteur](#apprentissage-du-retard-de-lémetteur)
@@ -221,7 +222,14 @@ SmartPI décrit le temps qui sépare une commande de son effet par deux grandeur
 
 ### Phase d'apprentissage
 
-SmartPI démarre dans une phase de bootstrap. Pendant cette phase, il utilise une stratégie de chauffe simple pour observer le comportement de la pièce, puis en extrait les paramètres physiques dont il a besoin pour réguler correctement.
+SmartPI démarre dans une phase d'apprentissage qui dure jusqu'à la publication d'un premier modèle thermique. L'option **Démarrage de l'apprentissage** choisit comment cette phase se déroule :
+
+- **Amorçage** (bootstrap, par défaut) : cycles d'hystérésis à pleine puissance, puis régulation une fois le modèle appris (de quelques heures à deux jours). Il est décrit ci-dessous.
+- **Démarrage direct** : régulation PI dès la première minute avec au plus trois impulsions de mesure légères près de la consigne (voir [Démarrage direct](#démarrage-direct)).
+
+Le choix s'applique quand l'apprentissage repart d'un état vierge : un nouveau thermostat, ou un thermostat dont l'apprentissage a été réinitialisé avec `reset_smartpi_learning`. Un thermostat qui a déjà appris garde son modèle et le démarrage avec lequel son apprentissage a commencé ; changer l'option prend effet à sa prochaine réinitialisation de l'apprentissage.
+
+Avec le démarrage par amorçage, SmartPI utilise une stratégie de chauffe simple pour observer le comportement de la pièce, puis en extrait les paramètres physiques dont il a besoin pour réguler correctement.
 
 #### Comment le bootstrap chauffe
 
@@ -278,6 +286,25 @@ Ce qu'il faut retenir pendant le bootstrap :
 - les diagnostics sont particulièrement utiles pour suivre la progression,
 - `model.confidence` indique `ab_bootstrap` jusqu'à ce que le premier modèle thermique soit disponible,
 - la vitesse dépend de la qualité des observations réelles, pas seulement du temps écoulé.
+
+#### Démarrage direct
+
+Avec le démarrage direct, il n'y a pas de cycles d'hystérésis : SmartPI régule avec son PI dès la première minute, sur des gains par défaut sûrs, et la pièce reste proche de la consigne. Pour obtenir les mesures que donnerait le bootstrap, il fait au plus trois impulsions de mesure légères par mode (chauffage ou refroidissement). Une impulsion démarre quand la pièce est à la consigne ou au plus 0,3 °C en dessous (en miroir en refroidissement), et comporte trois étapes :
+
+1. un repos sans chauffage, de 45 minutes au plus ou jusqu'à ce que la pièce soit 0,5 °C sous la consigne,
+2. une chauffe à pleine puissance jusqu'à ce que la pièce commence à répondre, pendant 2 heures au plus,
+3. un arrêt jusqu'au pic de température qui suit, pendant 4 heures au plus ; la régulation reprend la main pendant cet arrêt si la pièce tombe 0,5 °C sous la consigne.
+
+Deux impulsions sont séparées d'au moins 6 heures.
+
+SmartPI lit chaque impulsion dans son ensemble, comme les phases de chauffe du bootstrap (voir [Sortie du bootstrap](#sortie-du-bootstrap)). Lorsque deux impulsions concordent, leur vitesse de chauffe `a`, leur taux de pertes `b` et le retard de l'émetteur sont conservés. Tant que l'apprentissage n'a pas publié son propre modèle, les valeurs conservées en tiennent lieu : elles donnent les gains de la régulation, l'horizon de l'anticipation et les valeurs de départ de `a` et `b`. À la publication du premier modèle, le terme intégral de la régulation repart de zéro. En simulation, le premier modèle est publié en environ 8 à 24 heures.
+
+Ce qu'implique le démarrage direct :
+
+- la pièce est régulée dès la première minute ; il n'y a pas les oscillations du bootstrap,
+- l'apprentissage demande des changements de consigne programmés chaque jour (un abaissement quotidien suffit) pour continuer à mesurer les temps morts et à apprendre `a` et `b` : une consigne maintenue constante jour et nuit ne lui donne pas ce dont il a besoin,
+- il convient surtout à une sonde précise au 0,01 °C,
+- les impulsions et les valeurs conservées sont résumées dans `live.learning.start` (voir [Diagnostics](diagnostics.md)).
 
 ### Phase stable
 
@@ -494,14 +521,24 @@ Ces valeurs viennent de simulations de chaque type d'installation. Un cycle à u
 | **Deadband**                         | Zone de tolérance autour de la consigne.                                                               | `0.05°C`          |
 | **Autoriser P dans la deadband**     | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
 | **Autoriser le redémarrage PWM aux transitions de bande** | Permet à SmartPI de redémarrer le cycle PWM courant lors d'une entrée ou sortie de deadband ou de near-band. | `désactivé` |
-| **Hystérésis marche**                | Seuil de redémarrage pendant le bootstrap : le chauffage redémarre à consigne − seuil en HEAT, le refroidissement redémarre à consigne + seuil en COOL. | `0.3°C`           |
-| **Hystérésis arrêt**                 | Seuil d'arrêt pendant le bootstrap : le chauffage s'arrête à consigne + seuil en HEAT, le refroidissement s'arrête à consigne − seuil en COOL. | `0.5°C`           |
+| **Démarrage de l'apprentissage**     | Comment l'apprentissage démarre depuis un état vierge : `Amorçage` (cycles d'hystérésis à pleine puissance jusqu'à ce que le modèle soit appris) ou `Démarrage direct` (régulation PI dès la première minute avec des impulsions de mesure légères). Voir [Démarrage de l'apprentissage](#démarrage-de-lapprentissage). | `Amorçage`        |
+| **Hystérésis marche**                | Seuil de redémarrage pendant le bootstrap : le chauffage redémarre à consigne − seuil en HEAT, le refroidissement redémarre à consigne + seuil en COOL. Démarrage par amorçage uniquement. | `0.3°C`           |
+| **Hystérésis arrêt**                 | Seuil d'arrêt pendant le bootstrap : le chauffage s'arrête à consigne + seuil en HEAT, le refroidissement s'arrête à consigne − seuil en COOL. Démarrage par amorçage uniquement. | `0.5°C`           |
 | **Mode debug SmartPI**               | Enregistre les diagnostics live complets pour l'analyse historique.                                    | `désactivé`       |
 | **Linéarisation de courbe de vanne** | Adapte la demande SmartPI aux vannes de radiateur non linéaires.                                       | `désactivé`       |
 | **Ouverture minimale de vanne**      | Première ouverture utile lorsque la linéarisation est activée.                                         | `7%`              |
 | **Demande au coude**                 | Demande SmartPI correspondant au changement de pente de la vanne.                                      | `80%`             |
 | **Ouverture de vanne au coude**      | Ouverture physique de la vanne au changement de pente.                                                 | `15%`             |
 | **Ouverture maximale de vanne**      | Ouverture maximale autorisée lorsque la linéarisation est activée.                                     | `100%`            |
+
+### Démarrage de l'apprentissage
+
+L'option choisit comment SmartPI apprend la pièce quand il part d'un état vierge :
+
+- **Amorçage** (par défaut) : cycles d'hystérésis à pleine puissance jusqu'à ce que le modèle soit appris, de quelques heures à deux jours, puis régulation. La température oscille entre les deux seuils d'hystérésis pendant ce temps.
+- **Démarrage direct** : régulation PI dès la première minute, avec au plus trois impulsions de mesure légères près de la consigne (la pièce peut descendre au plus 0,5 °C sous la consigne avant une impulsion). Le premier modèle est publié en environ 8 à 24 heures en simulation. Il demande des changements de consigne programmés chaque jour pour continuer à apprendre, et convient surtout à une sonde précise au 0,01 °C.
+
+L'option s'applique à un nouveau thermostat et après `reset_smartpi_learning`. Un thermostat qui a déjà appris garde son modèle et le démarrage avec lequel son apprentissage a commencé ; une valeur modifiée prend effet à sa prochaine réinitialisation de l'apprentissage. Les seuils d'hystérésis ne s'appliquent qu'au bootstrap.
 
 ### Redémarrage PWM aux transitions de bande
 
@@ -531,6 +568,7 @@ Champs importants :
 - `stage` : état global comme `bootstrap`, `learning`, `monitoring` ou `degraded`,
 - `bootstrap_progress_percent` : progression du bootstrap,
 - `bootstrap_status` : étape bootstrap en cours,
+- `start` : le démarrage de l'apprentissage, les impulsions de mesure faites et les valeurs conservées (voir [Diagnostics](diagnostics.md)),
 - `accepted_updates_a` : mises à jour acceptées du modèle de chauffe,
 - `accepted_updates_b` : mises à jour acceptées du modèle de déperdition,
 - `history_target` : taille cible des buffers A/B,
@@ -591,7 +629,7 @@ Le réglage courant est disponible dans `specific_states.smartpi_learning_enable
 
 À utiliser quand le comportement thermique du logement a changé de manière importante, par exemple après des travaux d'isolation ou un changement d'émetteurs.
 
-Ce service efface l'apprentissage SmartPI et force un retour en mode bootstrap. La supervision de la calibration automatique repart de zéro avec le nouvel apprentissage.
+Ce service efface l'apprentissage SmartPI et le relance depuis un état vierge, avec le démarrage de l'apprentissage réglé dans la configuration (bootstrap par défaut). La supervision de la calibration automatique repart de zéro avec le nouvel apprentissage.
 
 ### `force_smartpi_calibration`
 

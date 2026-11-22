@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Start of the learning: a new option, **Start of the learning**, chooses how SmartPI learns a room from a blank state. **Bootstrap** (default) runs hysteresis cycles at full power until the model is learned, then regulates. **Direct start** regulates with the PI from the first minute and measures the room with at most three light measurement pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The option applies to a new thermostat and after a learning reset; a thermostat that has already learned keeps its model and its start. Existing configurations keep the bootstrap. The start, the pulses done and the values kept from them (one set per mode, heating or cooling) are published in `learning.start`.
 - Heating and cooling: a thermostat that switches between HEAT and COOL keeps what it learned for each mode (heating or cooling rate, dead times, emitter response) and gets it back when the mode returns; the heat-loss coefficient stays shared.
 - Learning: the outlier filter of the heating and loss coefficients keeps a minimum width of 2 % of its median, so a few nearly identical first measurements can no longer block the learning for days.
 - Bootstrap: the heating phases of the hysteresis bootstrap and the temperature

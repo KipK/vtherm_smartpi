@@ -92,3 +92,17 @@ def test_published_integral_time_follows_applied_gains() -> None:
 
     algo.Ki = 0.0
     assert algo.get_published_diagnostics()["control"]["ti_min"] is None
+
+
+def test_published_start_summary_has_plain_values() -> None:
+    """learning.start: the start mode, the pulses done and the pulse in progress in words, the kept values."""
+    algo = _representative_smartpi()
+    start = algo.get_published_diagnostics()["learning"]["start"]
+    assert set(start) == {
+        "mode", "pulses_done", "pulse", "values_kept", "values_kept_at", "kept_a", "kept_b", "kept_lag_s",
+    }
+    assert start["mode"] == "bootstrap" and start["pulses_done"] == 0 and start["pulse"] == "none"
+    assert start["values_kept"] is False and start["values_kept_at"] is None
+    for state, plain in (("idle", "none"), ("rest", "rest"), ("heat", "full power"), ("stop", "stop")):
+        algo._start.pulse._state = state
+        assert algo.get_published_diagnostics()["learning"]["start"]["pulse"] == plain

@@ -31,10 +31,7 @@ from .const import (
     CONF_SMART_PI_DEADBAND_ALLOW_P,
     CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
     CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
-    CONF_SMART_PI_MIN_VALVE,
-    CONF_SMART_PI_KNEE_DEMAND,
-    CONF_SMART_PI_KNEE_VALVE,
-    CONF_SMART_PI_MAX_VALVE,
+    CONF_SMART_PI_LEARNING_START, CONF_SMART_PI_MIN_VALVE, CONF_SMART_PI_KNEE_DEMAND, CONF_SMART_PI_KNEE_VALVE, CONF_SMART_PI_MAX_VALVE,
     DEFAULT_OPTIONS,
     DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
@@ -147,6 +144,7 @@ class SmartPIHandler:
             valve_curve_params=self._valve_curve_params,
             tar_learning=True,
             room_model=True,
+            learning_start=entry[CONF_SMART_PI_LEARNING_START],
         )
         t.prop_algorithm.configure_valve_linearization(
             valve_linearization_enabled,

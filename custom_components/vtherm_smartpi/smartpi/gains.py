@@ -191,8 +191,8 @@ class GainScheduler:
         )
         if pre_model_used:
             kp, ki = pre_model_gains(pre_model_a, float(active_deadtime_s), cycle_min, valve_mode_enabled)
-            kp_source = "pulse"
-            ki_source = "pulse"
+            kp_source = "measurement_pulses"
+            ki_source = "measurement_pulses"
         elif not has_complete_model:
             kp = KP_SAFE
             ki = KI_SAFE

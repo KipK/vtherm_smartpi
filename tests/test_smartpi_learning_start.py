@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.vtherm_smartpi.algo import SmartPI
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from helpers import make_receipt
 from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
 from custom_components.vtherm_smartpi.smartpi.learning_start import LearningStart
@@ -113,3 +114,63 @@ def test_a_receipt_without_cycle_timing_notes_no_cycle():
     receipt = MagicMock(spec=["on_time_sec", "cycle_duration_sec"])
     start.note_receipt(receipt, valve=False)
     assert start.record._cycles == []
+
+
+def _learned_state() -> dict:
+    """Saved state of a bootstrap thermostat whose first model is published."""
+    algo = _make()
+    algo.est.a_meas_hist.extend([0.05] * 5)
+    algo.est.b_meas_hist.extend([0.001] * 5)
+    algo.est.learn_ok_count_a = 1
+    assert algo.phase == SmartPIPhase.STABLE
+    return json.loads(json.dumps(algo.save_state()))
+
+
+def test_the_option_acts_on_a_blank_start_only_a_learned_thermostat_keeps_its_start():
+    state = _learned_state()
+    assert "learning_start" not in state                     # a bootstrap state carries no key
+    direct = _make(learning_start="direct")
+    direct.load_state(state)
+    start = direct._start
+    assert start.configured == "direct" and start.mode == "bootstrap" and direct.dt_est.passive_by_peak is False
+    assert direct.phase == SmartPIPhase.STABLE and direct.command_is_hysteresis is False
+    # no pulse and no record on a learned thermostat, whatever the room does (a blank direct start pulses here)
+    blank = _make(learning_start="direct")
+    blank._start.advance(1000.0, 20.0, 19.9, VThermHvacMode_HEAT, 0.0)
+    assert blank._start.pulse.count == 1
+    for k in range(40):
+        start.advance(1000.0 + 600.0 * k, 20.0, 19.9, VThermHvacMode_HEAT, 0.0)
+    assert start.pulse.count == 0 and start.pulse.active is False and start.record.enabled is False
+    assert start.public()["mode"] == "bootstrap" and start.public()["pulse"] == "none"
+
+
+def test_without_the_loaded_state_the_same_option_would_have_run_the_stage_again():
+    """The measurements alone, in a direct start, do not end the stage (b waits for a usable value): this is why the
+    start of the learning in progress is kept with the state."""
+    state = _learned_state()
+    bare = _make(learning_start="direct")
+    bare.est.a_meas_hist.extend([0.05] * 5)
+    bare.est.b_meas_hist.extend([0.001] * 5)
+    bare.est.learn_ok_count_a = 1
+    assert bare.phase == SmartPIPhase.HYSTERESIS and state
+
+
+def test_a_learning_begun_in_direct_goes_on_in_direct_and_a_reset_takes_the_configured_start():
+    algo = _make(learning_start="direct")
+    algo._start.pulse._count = 1
+    algo._start.pulse._mode_counts = {"heat": 1}
+    state = json.loads(json.dumps(algo.save_state()))
+    assert state["learning_start"] == "direct" and state["measure_pulse"]["mode_counts"] == {"heat": 1}
+    other = _make(learning_start="bootstrap")
+    other.load_state(state)
+    assert other._start.mode == "direct" and other.dt_est.passive_by_peak is True and other._start.pulse.count_for("heat") == 1
+    other.reset_learning()
+    assert other._start.mode == "bootstrap" and other.dt_est.passive_by_peak is False and other.command_is_hysteresis is True
+    assert other._start.pulse.count == 0
+
+
+def test_a_blank_saved_state_takes_the_configured_start():
+    state = json.loads(json.dumps(_make().save_state()))
+    direct = _make(learning_start="direct")
+    direct.load_state(state)
+    assert direct._start.mode == "direct" and direct.dt_est.passive_by_peak is True and direct.command_is_hysteresis is False

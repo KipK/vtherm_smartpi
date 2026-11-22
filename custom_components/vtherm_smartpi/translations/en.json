@@ -18,8 +18,12 @@
           "smart_pi_hysteresis_off": "Hysteresis off",
           "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
+          "smart_pi_learning_start": "Start of the learning",
           "smart_pi_debug": "Record full diagnostics (debug)",
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+        },
+        "data_description": {
+          "smart_pi_learning_start": "Bootstrap runs heating cycles at full power until the model is learned, then regulates. Direct start regulates from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The choice applies when the learning starts from a blank state (new thermostat or learning reset); a thermostat that has already learned keeps its model."
         }
       },
       "thermostat_valve_curve": {
@@ -55,8 +59,12 @@
           "smart_pi_hysteresis_off": "Hysteresis off",
           "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
+          "smart_pi_learning_start": "Start of the learning",
           "smart_pi_debug": "Record full diagnostics (debug)",
           "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+        },
+        "data_description": {
+          "smart_pi_learning_start": "Bootstrap runs heating cycles at full power until the model is learned, then regulates. Direct start regulates from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The choice applies when the learning starts from a blank state (new thermostat or learning reset); a thermostat that has already learned keeps its model."
         }
       },
       "valve_curve": {
@@ -74,6 +82,14 @@
       "valve_min_not_below_knee": "The minimum valve opening must be lower than the valve opening at knee.",
       "valve_knee_not_below_max": "The valve opening at knee must be lower than the maximum valve opening.",
       "knee_demand_out_of_range": "The demand at knee must be strictly between 0 and 100 %."
+    }
+  },
+  "selector": {
+    "smart_pi_learning_start": {
+      "options": {
+        "bootstrap": "Bootstrap",
+        "direct": "Direct start"
+      }
     }
   },
   "services": {

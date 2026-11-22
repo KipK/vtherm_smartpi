@@ -112,6 +112,15 @@ starting values for `a` and `b` (3.7, Measurement events and starting values).
 The hysteresis command, the order above and the exit rule are the same with or
 without them.
 
+This order is that of the bootstrap start. With the direct start (option
+`smart_pi_learning_start`, 3.7, Direct start) the stage `HYSTERESIS` is the
+same learning stage, but the command is the PI and the stage waits for `b` until
+a starting value of `b` stands or the learning's own time constant has been
+reliable. The option acts on a blank start only: a state with measurements,
+starting values, pulses or readings keeps the start its learning began with (the
+direct start is saved as `learning_start`; a state without it began with the
+bootstrap), and a learning reset takes the configured start.
+
 The `b` convergence used for drift-aware `a` learning relies on `b_converged_for_a()`:
 
 1. `learn_ok_count_b >= 11`,
@@ -469,7 +478,7 @@ power channel holds the real on and off edges of each cycle the scheduler
 applied (from the applied-command receipts); for a valve, or a scheduler
 without receipts, it holds the cycle fraction. The record is saved.
 
-A closed event of the bootstrap opens a reading (`event_reading.py`). Its window
+A closed event of the bootstrap or of a measurement pulse opens a reading (`event_reading.py`). Its window
 starts 1800 s before the heating step and first ends when the event closes, so
 it holds the samples that the confirmation of the peak waited for. A fit
 (`event_fit.py`) then explains the recorded room temperature with the whole
@@ -484,26 +493,56 @@ each fit the window is extended to six lags of the result, up to 8 fits, and the
 reading is complete when the window covers 90 % of that. numpy and scipy are
 loaded when the first fit runs.
 
-Two complete readings agree when their `a` and their emitter lag each differ by
-at most 20 % of the larger. The means of two agreeing readings are kept, saved,
-and dropped by a reset of the learning. A stop of the thermostat, a change of
-mode or a calibration ends the readings in progress.
+Two complete readings of the same mode agree when their `a` and their emitter
+lag each differ by at most 20 % of the larger. The means of two agreeing readings
+are kept for their mode, saved, and dropped by a reset of the learning. The kept
+values are per mode, like the `a` channel of the estimator: a period in the other
+mode starts without kept values and runs its own readings and pulses. A stop of
+the thermostat, a change of mode or a calibration ends the readings in progress.
 
-**Starting values.** The kept `a` and the mean `b` are given once to the
-learning of `a` and `b` as starting values when the bootstrap ends. They stand
-for the learning's own values and write no measurement history: `a` stops
-standing at the first publication of `a` by the learning itself, and `b` when
-the learning's own time constant becomes reliable. A change of HVAC mode drops
-the standing `a` and keeps `b`. Each value given earns 5 measures of
-feed-forward warm-up credit (4.2), kept when it is released. The emitter lag of
-the readings is published with them and does not set the horizon of the
-anticipation nor the emitter lag of the constant-power phases.
+**Starting values.** The kept `a` of each mode is given once to the learning of
+`a` and `b` as a starting value, and the kept `b` (a property of the room,
+shared by the modes) with the first hand-over only: with the direct start at the
+keep, with the bootstrap start when the bootstrap ends. They stand for the
+learning's own values and write no measurement history: `a` stops standing at
+the first publication of `a` by the learning itself, and `b` when the learning's
+own time constant becomes reliable. A change of HVAC mode sets the standing `a`
+aside with its channel and brings it back with it. The values of the first
+hand-over earn 5 measures of feed-forward warm-up credit (4.2) for each value
+given, kept when it is released; a later hand-over of the other mode earns none.
+With the bootstrap start, the emitter lag of the readings is published with the
+values and does not set the horizon of the anticipation nor the emitter lag of
+the constant-power phases.
 
-The record, the readings in progress and the kept values are saved
-(`measure_events`, `event_reading`, and `starting_values` inside `est_state`); a
-state saved without them loads. After a bridged restart the readings resume (a
-fit in flight is queued again); otherwise the readings in progress end and the
-record is dropped.
+**Direct start.** The PI is the command from the first calculation, on the
+fallback gains. Up to `PULSE_MAX_COUNT = 3` measurement pulses per mode
+(`measure_pulse.py`) replace the PI command for a short sequence, while the
+learning stage lasts and the readings have kept no values in the mode. A pulse
+starts when the room is at the setpoint or at most `PULSE_START_UNDER_C = 0.3 °C`
+on the demand side, the previous command is under `PULSE_START_MAX_COMMAND = 0.8`
+and `PULSE_MIN_GAP_S = 6 h` have passed since the previous pulse. It rests (at
+most `PULSE_REST_MAX_S = 45 min`, or until the room is `PULSE_REST_UNDER_C =
+0.5 °C` on the demand side), heats at full power until the dead-time estimator
+has detected the response and it stands three sensor steps out (at most
+`PULSE_HEAT_MAX_S = 2 h`, or as soon as the room is `PULSE_HEAT_OVER_C = 0.3 °C`
+on the other side), then stops until the temperature peak is confirmed (at most
+`PULSE_STOP_MAX_S = 4 h`; the PI takes over when the room is `PULSE_TAKEOVER_C =
+0.5 °C` on the demand side). A pulse interrupted by a restart, a stop, a change
+of setpoint, of mode or a calibration is not resumed and counts. The readings of
+the events the pulses cause give the kept values. Until the learning publishes
+its own model they stand for it: `pre_model_gains` gives the gains from the kept
+`a` and the active dead time (the IMC/SIMC rule of a slow room, neither gain
+above its fallback value), the kept emitter lag is the horizon of the
+anticipation (source `measurement pulses`) and the emitter lag of the
+response-lag estimator, which counts as resolved with it. The integral term
+starts from zero at the calculation at which the learning stage ends. The
+dead-time estimator reads the dead time after a stop on the temperature peak.
+
+The record, the readings in progress, the kept values and the pulses started are
+saved (`measure_events`, `event_reading`, `measure_pulse` and `learning_start`,
+and `starting_values` inside `est_state`); a state saved without them loads.
+After a bridged restart the readings resume (a fit in flight is queued again);
+otherwise the readings in progress end and the record is dropped.
 
 ### 3.8 Quiet periods of the emitter lag learning
 
@@ -1119,7 +1158,8 @@ A stop of the thermostat (HVAC mode other than heat or cool, for example VT swit
 | `heating_balance.py`   | `HeatingBalance`: heating rate and emitter lag measured on heating phases |
 | `peak_search.py`       | the search of the temperature peak after a cut |
 | `measure_event.py`     | detector of the measurement events and record of the power and temperatures |
-| `event_reading.py`     | reading of the events of the bootstrap, kept values |
+| `event_reading.py`     | reading of the events of the bootstrap and of the pulses, kept values per mode |
+| `measure_pulse.py`     | measurement pulses of the direct start                      |
 | `event_fit.py`         | fit of the response of the room to a heating event (background job) |
 | `starting_values.py`   | starting values of `a` and `b`, release and warm-up credit |
 | `learning_start.py`    | start of the learning (phase of the algorithm, source of the command, hand-over of the kept values) |
@@ -1338,6 +1378,11 @@ add a second diagnostic block.
 nothing was saved) and, for a restart that is not bridged, the `reason` in plain
 words. It is `null` before the first tick of a thermostat restored from a store,
 and for a thermostat without a saved state.
+
+`learning.start` is a plain summary of the start of the learning (`mode`,
+`pulses_done`, `pulse`, `values_kept`, `values_kept_at`, `kept_a`, `kept_b`,
+`kept_lag_s`), built by `LearningStart.public()` for the mode the model is in.
+The pulse states are translated there (`none`, `rest`, `full power`, `stop`).
 
 `analysis.learning.learn_ok_count` and `learn_skip_count` are runtime counters
 relative to the current Home Assistant process. Persisted model counters remain

@@ -63,7 +63,7 @@ Le bloc `live` est organisé par responsabilité :
 | `power` | Puissances du cycle courant et suivant, PI/FF, limites et puissance appliquée |
 | `temperature` | Températures intérieure/extérieure, température anticipée (`anticipated` : température intérieure plus la correction d'anticipation), erreurs et état de l'intégrale |
 | `model` | Modèle A/B, confiance, constante de temps et temps morts |
-| `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive |
+| `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées, dérive et démarrage de l'apprentissage (`start`) |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
 | `feedforward` | Source de la puissance de maintien, part des murs de la puissance de maintien et source de bande morte |
 | `setpoint` | État du boost de consigne |
@@ -84,6 +84,23 @@ redémarrage, et pour un thermostat qui démarre sans données sauvegardées.
 | `downtime_s` | Durée de l'arrêt, en secondes ; `null` lorsqu'elle ne peut pas être mesurée (saut d'horloge, pas de données sauvegardées) |
 | `reason` | Raison pour laquelle le redémarrage n'a pas été ponté, `null` lorsqu'il l'a été : `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (aussi lorsque la commande est passée à 0 pendant que la température était attendue), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, ou une exclusion avant l'arrêt ou après le redémarrage (par exemple `window open before the stop`, `safety mode after the restart`) |
 
+`learning.start` résume comment l'apprentissage a démarré et ce que les
+impulsions de mesure du démarrage direct ont donné (voir l'option **Démarrage de
+l'apprentissage** dans la [documentation SmartPI](vtherm_smartpi.md)). Les valeurs
+sont celles du mode HVAC dans lequel se trouve le modèle ; le démarrage par
+amorçage affiche `0` impulsion et aucune impulsion en cours.
+
+| Champ | Signification |
+|---|---|
+| `mode` | Démarrage de l'apprentissage en cours : `bootstrap` ou `direct`. Un thermostat qui a déjà appris garde le démarrage avec lequel son apprentissage a commencé, quelle que soit l'option |
+| `pulses_done` | Impulsions de mesure démarrées depuis le début de l'apprentissage, dans le mode courant (trois au plus) |
+| `pulse` | L'impulsion en cours : `none`, `rest` (sans chauffage, en attendant que la pièce descende), `full power` ou `stop` (attente du pic de température) |
+| `values_kept` | `true` lorsque deux lectures concordantes ont donné des valeurs pour le mode courant |
+| `values_kept_at` | Heure locale à laquelle les valeurs ont été conservées (ISO 8601), `null` si aucune n'est conservée ou si l'heure est inconnue |
+| `kept_a` | Vitesse de chauffe conservée en °C/min à pleine puissance (5 décimales), `null` si aucune n'est conservée |
+| `kept_b` | Coefficient de pertes conservé en 1/min (6 décimales), `null` si aucun n'est conservé |
+| `kept_lag_s` | Retard de l'émetteur conservé en secondes, `null` si aucun n'est conservé |
+
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `deadtime`, `governance` et `feedforward`.
 
@@ -94,7 +111,7 @@ l'anticipation de la température, en chauffage et en refroidissement :
 |---|---|
 | `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon ou sans pente montante ou descendante) |
 | `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le temps entre une commande et son effet), `0` lorsqu'il n'y en a pas |
-| `anticipation_horizon_source` | Origine de l'horizon : `heating balance` (médiane des derniers retards de l'émetteur mesurés), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` ; le bilan de chauffe n'est utilisé qu'en chauffage |
+| `anticipation_horizon_source` | Origine de l'horizon : `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct, en chauffage et en refroidissement), `heating balance` (médiane des derniers retards de l'émetteur mesurés), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` ; le bilan de chauffe n'est utilisé qu'en chauffage |
 
 `analysis.deadtime` suit la détection du temps mort :
 

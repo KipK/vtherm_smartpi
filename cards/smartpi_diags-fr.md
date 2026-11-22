@@ -78,6 +78,14 @@
 {% set last_reason = learning.get('last_reason', '—') %}
 {% set a_drift = learning.get('a_drift_state', '—') %}
 {% set b_drift = learning.get('b_drift_state', '—') %}
+{% set start = learning.get('start', {}) %}
+{% set start_mode = start.get('mode') %}
+{% set start_mode_label = {'bootstrap': 'amorçage', 'direct': 'démarrage direct'}.get(start_mode, '—') %}
+{% set start_pulses = start.get('pulses_done', 0) | int(0) %}
+{% set start_pulse = start.get('pulse', 'none') %}
+{% set start_kept_a = start.get('kept_a') %}
+{% set start_kept_b = start.get('kept_b') %}
+{% set start_kept_lag = start.get('kept_lag_s') %}
 
 {% set regime = gov.get('regime', 'unknown') %}
 {% set thermal_decision = gov.get('thermal_update_decision', 'unknown') %}
@@ -169,6 +177,7 @@
 {% set anticipation_horizon_s = analysis_control.get('anticipation_horizon_s') %}
 {% set anticipation_horizon_source = analysis_control.get('anticipation_horizon_source', 'none') %}
 {% set anticipation_horizon_source_label = {
+  'measurement pulses': 'impulsions de mesure',
   'heating balance': 'bilan de chauffe',
   'dead times': 'temps morts',
   'none': 'aucune'
@@ -338,6 +347,8 @@
 | Updates acceptés A/B | **{{ accepted_updates_a }} / {{ accepted_updates_b }}** |
 | Dérive A/B | `{{ a_drift }}` / `{{ b_drift }}` |
 | Bootstrap | {% if bootstrap_status %}`{{ bootstrap_status }}`{% else %}—{% endif %} |
+| Démarrage de l'apprentissage | {{ start_mode_label }}{% if start_mode == 'direct' %} · impulsions **{{ start_pulses }}**{% if start_pulse != 'none' %} (`{{ start_pulse }}`){% endif %}{% endif %} |
+| Valeurs conservées | {% if start.get('values_kept') %}a **{{ start_kept_a }}** °C/min{% if start_kept_b is not none %} · b **{{ start_kept_b }}** 1/min{% endif %}{% if start_kept_lag is not none %} · retard **{{ start_kept_lag }}** s{% endif %}{% else %}—{% endif %} |
 | Dernière raison | `{{ last_reason | truncate(80, true, '…') }}` |
 {% if has_analysis -%}
 | Learn ok/skip | {{ learn_ok }} / {{ learn_skip }} |

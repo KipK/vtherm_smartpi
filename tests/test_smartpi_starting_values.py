@@ -133,7 +133,7 @@ def test_starting_values_survive_a_save_and_a_load():
     est = ABEstimator()
     est.give_starting_values(A_START, B_START, "heat", 1.0)
     state = json.loads(json.dumps(est.save_state()))
-    assert state["starting_values"] == {"a": A_START, "b": B_START, "mode": "heat", "handed": True, "credit": 10}
+    assert state["starting_values"] == {"a": A_START, "b": B_START, "mode": "heat", "handed": True, "modes": ["heat"], "credit": 10}
     other = ABEstimator()
     other.load_state(state)
     assert other.start.standing("a") and other.start.standing("b") and other.ramp_count == 10 and other.start.handed
@@ -156,7 +156,7 @@ def test_a_state_of_the_earlier_tree_hands_over_the_kept_values_at_its_load():
     other = _make_direct()
     other.est.load_state(state)
     other._start.reading.load({"kept": _kept(), "at_wall": 1.0e9})
-    other._start.hand_over(other.est)
+    other._start.hand_over(other.est, "heat")
     assert other.est.start.standing("a") and other.est.start.standing("b") and other.est.ramp_count == 10
     assert other.est.a == A_START and other.est.b == B_START
     # a state whose own a had been published: a is released at the hand-over, the credit still counts both
@@ -164,21 +164,21 @@ def test_a_state_of_the_earlier_tree_hands_over_the_kept_values_at_its_load():
     third = _make_direct()
     third.est.load_state(state)
     third._start.reading.load({"kept": _kept(), "at_wall": 1.0e9})
-    third._start.hand_over(third.est)
+    third._start.hand_over(third.est, "heat")
     assert not third.est.start.standing("a") and third.est.start.standing("b") and third.est.ramp_count == 10
 
 
 def test_the_hand_over_gives_the_kept_values_once_and_not_again_after_a_release():
     algo = _make_direct()
     start: LearningStart = algo._start
-    start.hand_over(algo.est)
+    start.hand_over(algo.est, "heat")
     assert algo.est.start.handed is False                          # nothing kept: nothing given
-    start.reading._kept = dict(_kept(), at_s=0.0)
-    start.hand_over(algo.est)
+    start.reading._kept = {"heat": dict(_kept(), at_s=0.0)}
+    start.hand_over(algo.est, "heat")
     assert algo.est.start.standing("a") and algo.est.a == A_START
     algo.est.a_meas_hist.extend([0.05] * 5)
     algo.est.publish_collected_a(1.0)
-    start.hand_over(algo.est)                                      # a is not given again
+    start.hand_over(algo.est, "heat")                                      # a is not given again
     assert not algo.est.start.standing("a") and algo.est.a == pytest.approx(0.05)
 
 
@@ -196,32 +196,32 @@ def _end_the_stage(algo: SmartPI) -> None:
 
 def test_the_bootstrap_start_gives_nothing_without_kept_values():
     algo = _make_bootstrap()
-    assert algo._start.reading.kept is None
-    algo._start.hand_over(algo.est)
+    assert algo._start.reading.kept == {}
+    algo._start.hand_over(algo.est, "heat")
     assert algo.est.start.handed is False and algo.est.ramp_count == algo.est.learn_ok_count == 0
 
 
 def test_the_bootstrap_start_gives_the_kept_values_once_the_stage_has_ended():
     algo = _make_bootstrap()
-    algo._start.reading._kept = dict(_kept(), at_s=0.0)
-    algo._start.hand_over(algo.est)
+    algo._start.reading._kept = {"heat": dict(_kept(), at_s=0.0)}
+    algo._start.hand_over(algo.est, "heat")
     assert algo.phase == SmartPIPhase.HYSTERESIS and algo.est.start.handed is False      # the stage lasts: nothing given
     _end_the_stage(algo)
-    algo._start.hand_over(algo.est)
+    algo._start.hand_over(algo.est, "heat")
     start = algo.est.start
     assert start.handed and start.credit == 2 * KEPT_RAMP_MEASURES
     assert not start.standing("a")                              # the learning has published its own a: released at once
     assert start.standing("b") and algo.est.b == B_START and algo.est.usable_b
     assert algo.est.ramp_count == 10 and algo.est.tau_reliability().reliable
-    algo._start.hand_over(algo.est)
+    algo._start.hand_over(algo.est, "heat")
     assert algo.est.ramp_count == 10                            # given once
 
 
 def test_bootstrap_starting_values_follow_the_release_rules_of_the_owner():
     algo = _make_bootstrap()
-    algo._start.reading._kept = dict(_kept(), at_s=0.0)
+    algo._start.reading._kept = {"heat": dict(_kept(), at_s=0.0)}
     _end_the_stage(algo)
-    algo._start.hand_over(algo.est)
+    algo._start.hand_over(algo.est, "heat")
     est = algo.est
     for k in range(14):
         _own_b_sample(est, k)
@@ -234,7 +234,7 @@ def test_bootstrap_starting_values_follow_the_release_rules_of_the_owner():
 def test_the_lag_of_the_bootstrap_readings_is_published_not_used():
     bootstrap, direct = _make_bootstrap(), _make_direct()
     for algo in (bootstrap, direct):
-        algo._start.reading._kept = dict(_kept(), lag_s=420.0, at_s=0.0)
+        algo._start.reading._kept = {"heat": dict(_kept(), lag_s=420.0, at_s=0.0)}
     before = bootstrap.anticipation_horizon(VThermHvacMode_HEAT)
     assert bootstrap._start.kept_lag_s(VThermHvacMode_HEAT) is None
     assert bootstrap._start.reading.kept_lag_s(VThermHvacMode_HEAT) == 420.0

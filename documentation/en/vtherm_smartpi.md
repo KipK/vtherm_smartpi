@@ -21,6 +21,7 @@
       - [Step 2 — Learning heat loss (`b`)](#step-2--learning-heat-loss-b)
       - [Step 3 — Learning heating gain (`a`)](#step-3--learning-heating-gain-a)
       - [Leaving bootstrap](#leaving-bootstrap)
+      - [Direct start](#direct-start)
     - [Stable phase](#stable-phase)
     - [Automatic recalibration](#automatic-recalibration)
     - [Emitter lag learning](#emitter-lag-learning)
@@ -221,7 +222,14 @@ SmartPI describes the time between a command and its effect with two quantities 
 
 ### Learning phase
 
-SmartPI starts in a bootstrap phase. During this phase, it uses a simple heating strategy to observe how the room behaves, then extracts the physical parameters it needs to regulate properly.
+SmartPI starts in a learning phase that lasts until it has published a first thermal model. The **Start of the learning** option chooses how this phase runs:
+
+- **Bootstrap** (default): hysteresis cycles at full power, then the regulation once the model is learned (a few hours to two days). It is described below.
+- **Direct start**: PI regulation from the first minute with at most three light measurement pulses near the setpoint (see [Direct start](#direct-start)).
+
+The choice applies when the learning starts from a blank state: a new thermostat, or a thermostat whose learning was reset with `reset_smartpi_learning`. A thermostat that has already learned keeps its model and the start its learning began with; changing the option takes effect at its next learning reset.
+
+With the bootstrap start, SmartPI uses a simple heating strategy to observe how the room behaves, then extracts the physical parameters it needs to regulate properly.
 
 #### How bootstrap heats
 
@@ -286,6 +294,25 @@ What to expect during bootstrap:
 - diagnostics are especially useful to follow progress,
 - `model.confidence` reports `ab_bootstrap` until the first thermal model is available,
 - speed depends on the quality of real observations, not only on elapsed time.
+
+#### Direct start
+
+With the direct start there are no hysteresis cycles: SmartPI regulates with its PI from the first minute, on safe default gains, and the room stays close to the setpoint. To get the measurements the bootstrap would give, it makes at most three light measurement pulses per mode (heating or cooling). A pulse starts when the room is at the setpoint or at most 0.3 °C under it (mirrored in cooling), and has three steps:
+
+1. a rest without heating, for 45 minutes at most or until the room is 0.5 °C under the setpoint,
+2. heating at full power until the room starts to respond, for 2 hours at most,
+3. a stop until the temperature peak that follows, for 4 hours at most; the regulation takes back control during this stop if the room falls 0.5 °C under the setpoint.
+
+Two pulses are at least 6 hours apart.
+
+SmartPI reads each pulse as a whole, like the heating phases of the bootstrap (see [Leaving bootstrap](#leaving-bootstrap)). When two pulses agree, their heating rate `a`, loss rate `b` and emitter lag are kept. Until the learning publishes its own model, the kept values stand for it: they give the gains of the regulation, the horizon of the anticipation and the starting values of `a` and `b`. When the first model is published, the integral term of the regulation starts from zero. In simulation the first model is published in about 8 to 24 hours.
+
+What the direct start implies:
+
+- the room is regulated from the first minute; there are no swings of the bootstrap,
+- the learning needs scheduled setpoint changes every day (a daily setback is enough) to keep measuring dead times and to learn `a` and `b`: a setpoint held constant around the clock does not give it what it needs,
+- it works best with a precise sensor reporting 0.01 °C,
+- the pulses and the kept values are summarised in `live.learning.start` (see [Diagnostics](diagnostics.md)).
 
 ### Stable phase
 
@@ -502,14 +529,24 @@ These values come from simulations of each installation type. A cycle within one
 | **Deadband**                   | Tolerance zone around the setpoint.                                                               | `0.05°C`      |
 | **Allow P inside deadband**    | Allows the proportional branch to remain active inside the deadband.                              | `disabled`    |
 | **Allow PWM cycle restart on band transitions** | Allows SmartPI to restart the current PWM cycle when entering or leaving deadband or near-band. | `disabled` |
-| **Hysteresis on** | Restart threshold during bootstrap learning: heating restarts at setpoint − threshold in HEAT, cooling restarts at setpoint + threshold in COOL. | `0.3°C`       |
-| **Hysteresis off** | Stop threshold during bootstrap learning: heating stops at setpoint + threshold in HEAT, cooling stops at setpoint − threshold in COOL. | `0.5°C`       |
+| **Start of the learning** | How the learning starts from a blank state: `Bootstrap` (hysteresis cycles at full power until the model is learned) or `Direct start` (PI regulation from the first minute with light measurement pulses). See [Start of the learning](#start-of-the-learning). | `Bootstrap` |
+| **Hysteresis on** | Restart threshold during bootstrap learning: heating restarts at setpoint − threshold in HEAT, cooling restarts at setpoint + threshold in COOL. Bootstrap start only. | `0.3°C`       |
+| **Hysteresis off** | Stop threshold during bootstrap learning: heating stops at setpoint + threshold in HEAT, cooling stops at setpoint − threshold in COOL. Bootstrap start only. | `0.5°C`       |
 | **SmartPI debug mode**         | Records the complete live diagnostic payload for historical analysis.                             | `disabled`    |
 | **Valve curve linearization**  | Adapts SmartPI demand to non-linear radiator valves.                                              | `disabled`    |
 | **Minimum valve opening**      | First useful opening when linearization is enabled.                                               | `7%`          |
 | **Demand at knee**             | SmartPI demand corresponding to the valve slope change.                                           | `80%`         |
 | **Valve opening at knee**      | Physical valve opening at the slope change.                                                       | `15%`         |
 | **Maximum valve opening**      | Maximum allowed opening when linearization is enabled.                                            | `100%`        |
+
+### Start of the learning
+
+The option chooses how SmartPI learns the room when it starts from a blank state:
+
+- **Bootstrap** (default): hysteresis cycles at full power until the model is learned, a few hours to two days, then the regulation. The temperature swings between the two hysteresis thresholds meanwhile.
+- **Direct start**: PI regulation from the first minute, with at most three light measurement pulses near the setpoint (the room is allowed at most 0.5 °C under the setpoint before a pulse). The first model is published in about 8 to 24 hours in simulation. It needs scheduled setpoint changes every day to keep learning, and works best with a precise 0.01 °C sensor.
+
+The option applies to a new thermostat and after `reset_smartpi_learning`. A thermostat that has already learned keeps its model and the start its learning began with; a changed value takes effect at its next learning reset. The hysteresis thresholds only apply to the bootstrap.
 
 ### PWM cycle restart on band transitions
 
@@ -538,6 +575,7 @@ Important fields:
 - `stage`: overall state such as `bootstrap`, `learning`, `monitoring`, or `degraded`,
 - `bootstrap_progress_percent`: bootstrap progress,
 - `bootstrap_status`: current bootstrap step,
+- `start`: the start of the learning, the measurement pulses done and the values kept from them (see [Diagnostics](diagnostics.md)),
 - `accepted_updates_a`: accepted heating-model updates,
 - `accepted_updates_b`: accepted heat-loss-model updates,
 - `history_target`: target history size for the A/B buffers,
@@ -597,7 +635,7 @@ The current setting is available as `specific_states.smartpi_learning_enabled` o
 
 Use this when the thermal behavior of the room has significantly changed, for example after insulation work or after changing emitters.
 
-This service clears SmartPI learning and forces a return to bootstrap mode. The automatic calibration supervision starts again from scratch with the new learning.
+This service clears SmartPI learning and starts it again from a blank state, with the start of the learning set in the configuration (bootstrap by default). The automatic calibration supervision starts again from scratch with the new learning.
 
 ### `force_smartpi_calibration`
 

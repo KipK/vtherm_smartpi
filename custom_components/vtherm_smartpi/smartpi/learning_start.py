@@ -15,9 +15,14 @@ separate. The learning keeps its stage and everything keyed on it. ``learning_st
   a stop is read on the temperature peak (smartpi/peak_search.py). The integral term of the regulator starts from zero
   at the calculation at which the learning stage ends.
 
-The values kept from the readings are given once to the a/b estimator as starting values
-(smartpi/starting_values.py): with the direct start at the keep, which ends the stage; with the bootstrap start at the
-later of the keep and the end of the stage.
+The values kept from the readings are given to the a/b estimator as starting values (smartpi/starting_values.py),
+once per mode: with the direct start at the keep, which ends the stage; with the bootstrap start at the later of the
+keep and the end of the stage.
+
+The start mode acts on a blank start only. ``SmartPI`` is given the configured mode; a thermostat whose learning has
+begun (a saved state with measurements, starting values, pulses or readings) keeps the mode that learning began with,
+which is saved with it (a state saved without it began with the bootstrap), whatever is configured now. A learning
+reset takes the configured mode again.
 
 ``LearningStart`` holds the pulses, the record of the measurement events and their reader, and the few calls
 ``SmartPI`` makes around them. It also tells the phase of the algorithm and what drives the command. It reads the
@@ -26,17 +31,18 @@ belongs to. Times are monotonic seconds, as ``SmartPI.calculate`` reads them.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
+from ..const import LEARNING_START_BOOTSTRAP, LEARNING_START_DIRECT, LEARNING_STARTS
 from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from .const import AB_MIN_SAMPLES_A, AB_MIN_SAMPLES_B, SmartPICalibrationPhase, SmartPIPhase
 from .event_reading import EventReader
 from .measure_event import MODE_COOL, SOURCE_BOOTSTRAP, SOURCE_CALIBRATION, SOURCE_PULSE, SOURCE_REGULATION, MeasureRecord
 from .measure_pulse import MeasurePulse
+from .timestamp_utils import monotonic_to_wall_ts
 
-LEARNING_START_BOOTSTRAP = "bootstrap"
-LEARNING_START_DIRECT = "direct"
-LEARNING_STARTS = (LEARNING_START_BOOTSTRAP, LEARNING_START_DIRECT)
+_PULSE_STEPS = {"idle": "none", "rest": "rest", "heat": "full power", "stop": "stop"}   # plain words of the state
 
 
 def command_is_on_off(algo: Any) -> bool:
@@ -54,7 +60,8 @@ class LearningStart:
     def __init__(self, learning_start: str = LEARNING_START_BOOTSTRAP, owner: Any = None) -> None:
         if learning_start not in LEARNING_STARTS:
             raise ValueError(f"learning_start must be one of {LEARNING_STARTS} (got {learning_start!r})")
-        self.mode = learning_start
+        self.configured = learning_start   # the option: what a blank start uses
+        self.mode = learning_start         # the start of the learning in progress
         self._owner = owner
         self.pulse = MeasurePulse()
         self.record = MeasureRecord()
@@ -71,8 +78,15 @@ class LearningStart:
         """True when the PI, not the hysteresis, is the command during the learning stage."""
         return self.mode == LEARNING_START_DIRECT
 
+    def _use(self, mode: str) -> None:
+        """Take ``mode`` as the start of the learning in progress."""
+        self.mode = mode
+        self._owner.dt_est.passive_by_peak = self.direct
+
     def reset(self) -> None:
-        """Blank start: the pulses are available again, the kept values and the lag given to the estimator are dropped."""
+        """Blank start: the configured start, the pulses are available again, the kept values and the lag given to the
+        estimator are dropped."""
+        self._use(self.configured)
         self.pulse.reset()
         self.reading.reset()
         self._pi_stage_seen = False
@@ -129,12 +143,12 @@ class LearningStart:
         the bootstrap start, whose kept lag is published only."""
         return self.reading.kept_lag_s(hvac_mode) if self.direct else None
 
-    def hand_over(self, estimator: Any) -> None:
-        """Give the kept values to the estimator as starting values, once per blank start: ``a`` and ``b`` of the
-        two agreeing readings. With the bootstrap start they wait for the end of the learning stage. A state saved with
-        kept values and no starting values hands them over at its load."""
-        kept = self.reading.kept
-        if kept is None or estimator.start.handed or (not self.direct and self.learning_stage):
+    def hand_over(self, estimator: Any, hvac_mode: object) -> None:
+        """Give the kept values of ``hvac_mode`` to the estimator as starting values, once per mode and blank start: ``a``
+        of the two agreeing readings, and ``b`` with the first hand-over. With the bootstrap start they wait for the end
+        of the learning stage. A state saved with kept values and no starting values hands them over at its load."""
+        kept = self.reading.kept_for(hvac_mode)
+        if kept is None or estimator.start.handed_for(kept["mode"]) or (not self.direct and self.learning_stage):
             return
         sign = -1.0 if kept["mode"] == MODE_COOL else 1.0
         estimator.give_starting_values(kept["a_per_min"], kept.get("b_per_min"), kept["mode"], sign)
@@ -191,14 +205,14 @@ class LearningStart:
                 passive_deadtime_known=dt_est.passive_deadtime(hvac_mode)[1],
                 dt_est=dt_est,
                 previous_command=previous_command,
-                readings_pending=self.reading.wants_pulses,
+                readings_pending=self.reading.wants_pulses(hvac_mode),
             )
         self.reading.step(
             now, hvac_mode, calibrating=calibrating, response_lag=owner.learn_win.response_lag if self.direct else None,
             phase_start=owner.learn_win.events.phase_start,
         )
-        self.hand_over(owner.est)
-        self.record.enabled = self.reading.wants_record(learning_stage)
+        self.hand_over(owner.est, hvac_mode)
+        self.record.enabled = self.reading.wants_record(learning_stage, hvac_mode)
         if not self.record.enabled:
             self.record.clear()
         self.zero_integral()
@@ -222,11 +236,32 @@ class LearningStart:
             self._integral_zeroed = True
             self._owner.ctl.integral = 0.0
 
+    # -- published summary -------------------------------------------------------------------------------------
+    def public(self) -> dict[str, Any]:
+        """Plain summary of the start for the published diagnostics, for the mode the model is in: the start of the
+        learning in progress, the pulses done and the state of the one in progress, and the values kept from the
+        readings. Internal codes become plain words here."""
+        mode = self._owner.est.model_hvac_mode
+        kept = self.reading.kept_for(mode)
+        at = None if kept is None or kept["at_s"] is None else monotonic_to_wall_ts(kept["at_s"])
+        b = None if kept is None else kept.get("b_per_min")
+        return {
+            "mode": self.mode,
+            "pulses_done": self.pulse.count_for(mode) if mode is not None else self.pulse.count,
+            "pulse": _PULSE_STEPS.get(self.pulse.state, "none"),
+            "values_kept": kept is not None,
+            "values_kept_at": None if at is None else datetime.fromtimestamp(at).isoformat(),
+            "kept_a": None if kept is None else round(kept["a_per_min"], 5),
+            "kept_b": None if b is None else round(b, 6),
+            "kept_lag_s": None if kept is None else round(kept["lag_s"]),
+        }
+
     # -- persistence -------------------------------------------------------------------------------------------
     def save(self, now: float) -> dict[str, Any]:
-        """The pulses started (a pulse in progress is saved as ended by the restart), the record of the events and the
-        readings with their kept values."""
-        state: dict[str, Any] = {}
+        """The start of the learning when it is the direct one (a state without it began with the bootstrap), the
+        pulses started (a pulse in progress is saved as ended by the restart), the record of the events and the readings
+        with their kept values."""
+        state: dict[str, Any] = {"learning_start": self.mode} if self.direct else {}   # no key: the bootstrap
         pulse = self.pulse.save(now)
         if pulse is not None:
             state["measure_pulse"] = pulse
@@ -238,11 +273,25 @@ class LearningStart:
             state["measure_events"] = record
         return state
 
+    def _begun(self, state: dict[str, Any]) -> bool:
+        """True when the learning of a saved state has begun: measurements, starting values, pulses or readings."""
+        est = self._owner.est
+        return bool(
+            est.a_meas_hist or est.b_meas_hist or est.learn_ok_count or est.start.handed
+            or state.get("measure_pulse") or state.get("event_reading") or state.get("pulse_reading")
+        )
+
     def load(self, state: dict[str, Any]) -> None:
-        """Restore what ``save`` wrote; the pulses only with the direct start."""
+        """Restore what ``save`` wrote; the pulses only with the direct start. A learning that has begun goes on with
+        the start it began with, a blank one takes the configured start."""
+        saved = state.get("learning_start")
+        if not self._begun(state):
+            self._use(self.configured)
+        else:
+            self._use(saved if saved in LEARNING_STARTS else LEARNING_START_BOOTSTRAP)
         self._pi_stage_seen = False
         self._integral_zeroed = False
         self.pulse.load(state.get("measure_pulse") if self.direct else None)
         self.reading.load(state.get("event_reading") or state.get("pulse_reading"))
         self.record.load(state.get("measure_events"))
-        self.hand_over(self._owner.est)
+        self.hand_over(self._owner.est, self._owner.est.model_hvac_mode)
