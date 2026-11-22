@@ -119,7 +119,7 @@ cycle_boundary, off_reason, temperature_measure_id)` is the contract with VT:
 
 Pipeline inside `calculate`, in execution order:
 1. Reset per-tick markers; store slope and outdoor temperature (previous kept when None).
-2. HEAT<->COOL change resets PI/FF state; `est.ensure_hvac_mode` migrates a mode-dependent model.
+2. HEAT<->COOL change resets PI/FF state; `est.ensure_hvac_mode` (and the dead-time and lag estimators) set the mode-dependent model aside per mode (`mode_stash` key of the saved state, only after a switch).
 3. With target and indoor known: `resolve_restart` if pending, `restart.note_tick`; `_take_hysteresis_restore`.
 4. `_validate_and_handle_off`: missing sensor (output 0, or held command while a restart is pending), HVAC OFF
    (`_force_off_output`), power shedding; each returns early.

@@ -39,7 +39,7 @@
 
 SmartPI est une alternative au TPI classique pour Versatile Thermostat.
 
-Son objectif est simple : au lieu d'utiliser un comportement fixe, il apprend comment votre pièce chauffe et refroidit réellement, puis adapte automatiquement la régulation. Chaque VTherm SmartPI reste mono-mode : HEAT ou COOL, jamais les deux à la fois.
+Son objectif est simple : au lieu d'utiliser un comportement fixe, il apprend comment votre pièce chauffe et refroidit réellement, puis adapte automatiquement la régulation. Chaque VTherm SmartPI reste mono-mode : HEAT ou COOL, jamais les deux à la fois. Quand un thermostat passe de HEAT à COOL (par exemple une pompe à chaleur qui chauffe l'hiver et rafraîchit l'été par le même émetteur), SmartPI garde ce qu'il a appris pour chaque mode : la vitesse de chauffe ou de refroidissement `a`, les temps morts et la réponse de l'émetteur reviennent avec leur mode, et le coefficient de pertes `b` est commun aux deux modes.
 
 Concrètement, SmartPI apprend :
 

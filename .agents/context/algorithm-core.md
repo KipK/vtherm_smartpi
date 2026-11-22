@@ -7,7 +7,7 @@ There is no integral-guard module and no reference governor. Anti-windup is cond
 ## 0. Tick pipeline (`algo.py::SmartPI.calculate`)
 
 Order of one tick (the scheduler also calls it on a 60 s heartbeat, `SMARTPI_RECALC_INTERVAL_SEC`):
-1. HVAC-mode transition HEAT<->COOL: PI reset; a persisted model with an inconsistent `a` sign resets only the `a` channel.
+1. HVAC-mode transition HEAT<->COOL: PI reset; the mode-dependent model is kept per mode (see Invariants, Signs); a persisted model with an inconsistent `a` sign resets only the `a` channel.
 2. Validation/OFF (`_validate_and_handle_off`), guard cut (section 9), `tint_filter` (adaptive low-pass; feeds dead-time detection and learning anchors only, never the PI).
 3. `_update_time_tracking` (dt capped at one cycle), `_manage_setpoint` (error_i raw, error_p shaped).
 4. Dead-time estimator update, learning update, calibration state machine (forced calibration returns early with `I:calibration`).
@@ -121,7 +121,7 @@ One mechanism: the holding power `u_ff1`, clamped to [0,1]; runtime FF = `u_ff1`
 
 ## Invariants a change must not break
 
-- Signs: HEAT `a > 0`, COOL `a < 0`, `b > 0`; `error` is positive when more power is needed in both modes; `k_ff = b/a` carries the sign; a mode change or a sign-inconsistent persisted `a` resets only the mode-dependent channel (`ensure_hvac_mode`), `b` is kept.
+- Signs: HEAT `a > 0`, COOL `a < 0`, `b > 0`; `error` is positive when more power is needed in both modes; `k_ff = b/a` carries the sign; a sign-inconsistent persisted `a` resets only the mode-dependent channel (`ensure_hvac_mode`), `b` is kept. A mode change sets the mode-dependent part of the outgoing mode aside and takes back the one set aside for the incoming mode, a blank start without one: the `a` channel of `ABEstimator` (a, measures and observations, filtered history, counts, drift state, standing starting `a`; the measures follow the b of today), the whole `DeadTimeEstimator` learned state (its heat/cool slots swap meaning with the mode), the learned lag of `ResponseLagEstimator`; `b` and the PI state are shared or reset as before. The set-aside part is the `mode_stash` key of `est_state`, `dt_est_state` and `lw_state.response_lag`, present only after a mode change (an older state loads without it); a learning reset clears both modes.
 - Ranges: `u_*` in [0,1]; `Kp` in [0.10, 5.0], `Ki` in [0.001, 0.05]; `|I| <= 2/Ki`; `a`, `b` within their clamps; `u_ff*` clamped to [0,1].
 - Back-calculation moves the integral toward zero only and never across it (FF absorption, `absorb_feedforward_step`, is the one explicit exception).
 - Anti-windup excludes rate limit and min-activation timing; HEAT and COOL runs mirror each other exactly (tested trace equality).

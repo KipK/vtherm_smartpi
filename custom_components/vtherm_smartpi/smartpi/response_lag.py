@@ -41,7 +41,7 @@ from .const import (
 )
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
-from ..hvac_mode import VThermHvacMode_COOL
+from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 
 if TYPE_CHECKING:
     from ..hvac_mode import VThermHvacMode
@@ -190,6 +190,9 @@ class ResponseLagEstimator:
         # End of the last ended active episode (monotonic s), None if none.
         self._last_episode_end: float | None = None
         self._model_hvac_mode: str | None = None
+        # Learned lag of the HVAC mode that is not active, by mode name, as saved state. Empty for a thermostat that
+        # never changes mode.
+        self._mode_stash: dict[str, dict] = {}
         self._last_reason: str = ""
         self._clear_runtime()
 
@@ -392,7 +395,7 @@ class ResponseLagEstimator:
         mode = str(hvac_mode) if hvac_mode is not None else None
         if mode is not None and mode != self._model_hvac_mode:
             if self._model_hvac_mode is not None:
-                self.clear()
+                self._switch_mode(mode)
             self._model_hvac_mode = mode
         if dt_s <= 0.0:
             return
@@ -699,7 +702,35 @@ class ResponseLagEstimator:
     # ------------------------------------------------------------------
 
     def clear(self) -> None:
-        """Forget the estimates and the tracked episode."""
+        """Forget the estimates and the tracked episode, those set aside for the other mode included."""
+        self._mode_stash = {}
+        self._clear_active()
+
+    def _switch_mode(self, mode: str) -> None:
+        """Set the lag learned in the active mode aside and take back the one set aside for ``mode``, if any."""
+        learned = self._learned_snapshot()
+        if learned is None:
+            self._mode_stash.pop(self._model_hvac_mode, None)
+        else:
+            self._mode_stash[self._model_hvac_mode] = learned
+        self._clear_active()
+        snap = self._mode_stash.pop(mode, None)
+        if snap is not None:
+            self._load_learned(snap)
+
+    def _learned_snapshot(self) -> dict | None:
+        """The learned lag as saved state, None when nothing was learned."""
+        if not (self._estimates or self._durations or self._episodes or self._published is not None):
+            return None
+        return {
+            "estimates": [list(e) for e in self._estimates],
+            "durations": list(self._durations),
+            "published": self._published,
+            "episodes": self._episodes,
+        }
+
+    def _clear_active(self) -> None:
+        """Forget the estimates and the tracked episode of the active mode."""
         self._estimates.clear()
         self._durations.clear()
         self._episodes = 0
@@ -740,6 +771,8 @@ class ResponseLagEstimator:
             "last_episode_end_wall": monotonic_to_wall_ts(self._last_episode_end),
             "hvac_mode": self._model_hvac_mode,
         }
+        if self._mode_stash:
+            state["mode_stash"] = {mode: dict(snap) for mode, snap in self._mode_stash.items()}
         context = self._restart_context()
         if context is not None:
             episode = context["episode"]
@@ -805,15 +838,9 @@ class ResponseLagEstimator:
             },
         }
 
-    def load_state(self, state: dict | None) -> None:
-        """Restore the estimates and the passive period or episode in progress.
-
-        The saved period or episode is resumed or counted on the first
-        observation (see _resume_after_restart).
-        """
-        self.clear()
-        if not state:
-            return
+    def _load_learned(self, state: dict) -> None:
+        """Restore the estimates, durations, episode count and published lag of a saved state, ignoring what is
+        malformed."""
         for value in state.get("estimates") or []:
             if (
                 isinstance(value, (list, tuple))
@@ -829,11 +856,26 @@ class ResponseLagEstimator:
                 float(v) for v in durations
                 if isinstance(v, (int, float)) and math.isfinite(v) and v >= 0.0
             )
-        mode = state.get("hvac_mode")
-        self._model_hvac_mode = str(mode) if isinstance(mode, str) else None
         episodes = state.get("episodes")
         if isinstance(episodes, int) and episodes >= 0:
             self._episodes = episodes
+        published = state.get("published")
+        if isinstance(published, (int, float)) and math.isfinite(published) and published >= 0.0:
+            self._published = float(published)
+        self._refresh_published()
+
+    def load_state(self, state: dict | None) -> None:
+        """Restore the estimates and the passive period or episode in progress.
+
+        The saved period or episode is resumed or counted on the first
+        observation (see _resume_after_restart).
+        """
+        self.clear()
+        if not state:
+            return
+        self._load_learned(state)
+        mode = state.get("hvac_mode")
+        self._model_hvac_mode = str(mode) if isinstance(mode, str) else None
         end_wall = state.get("last_episode_end_wall")
         if (
             isinstance(end_wall, (int, float))
@@ -841,9 +883,13 @@ class ResponseLagEstimator:
             and math.isfinite(end_wall)
         ):
             self._last_episode_end = wall_to_monotonic_ts(end_wall)
-        published = state.get("published")
-        if isinstance(published, (int, float)) and math.isfinite(published) and published >= 0.0:
-            self._published = float(published)
-        self._refresh_published()
+        stash = state.get("mode_stash")
+        self._mode_stash = {
+            mode: snap
+            for mode, snap in (stash.items() if isinstance(stash, dict) else ())
+            if mode in (str(VThermHvacMode_HEAT), str(VThermHvacMode_COOL))
+            and mode != self._model_hvac_mode
+            and isinstance(snap, dict)
+        }
         if self._model_hvac_mode is not None:
             self._restore = self._load_restart(state.get("restart"))

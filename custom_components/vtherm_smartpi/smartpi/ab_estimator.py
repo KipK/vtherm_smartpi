@@ -125,6 +125,9 @@ class ABEstimator:
         self.start = StartingValues()
         self.model_hvac_mode: str | None = None
         self._state_loaded = False
+        # Mode-dependent a channel of the HVAC mode that is not active, by mode name, as saved state (see
+        # ensure_hvac_mode). Empty for a thermostat that never changes mode.
+        self._mode_stash: dict[str, dict] = {}
 
         # Robust bounds
         self.A_MIN: float = 1e-5
@@ -186,6 +189,7 @@ class ABEstimator:
         self.start.reset()
         self.model_hvac_mode = None
         self._state_loaded = False
+        self._mode_stash.clear()
         self.learn_ok_count = 0
         self.learn_ok_count_a = 0
         self.learn_ok_count_b = 0
@@ -228,6 +232,62 @@ class ABEstimator:
         self.diag_a_mad_over_med = None
         self.diag_a_last_reason = "reset: hvac mode contract"
         self.learn_last_reason = "reset: hvac mode contract"
+
+    def _a_channel_snapshot(self) -> dict | None:
+        """The mode-dependent a channel as saved state, None when nothing was learned or given for it."""
+        if not (self.learn_ok_count_a > 0 or self.a_meas_hist or self._a_hat_hist or self.start.standing("a")):
+            return None
+        return {
+            "a": self.a,
+            "b": self.b,
+            "learn_ok_count_a": self.learn_ok_count_a,
+            "learn_seq_a": self._learn_seq_a,
+            "a_meas_hist": list(self.a_meas_hist),
+            "a_obs_hist": [None if obs is None else list(obs[:3]) for obs in self._a_obs_hist],
+            "a_hat_hist": list(self._a_hat_hist),
+            "a_drift": serialize_channel_state(self.a_drift),
+            "start_a": self.start.value("a"),
+        }
+
+    def _restore_a_channel(self, snap: dict, hvac_mode: VThermHvacMode) -> bool:
+        """Take back the a channel saved for ``hvac_mode``, on top of a channel just reset. A snapshot that is
+        malformed or whose sign contradicts the mode is dropped (False) and the reset stands. The measurements follow
+        the b of today when it moved since."""
+        try:
+            a, saved_b = float(snap["a"]), float(snap["b"])
+            count, seq = int(snap["learn_ok_count_a"]), int(snap["learn_seq_a"])
+            meas = [float(v) for v in snap["a_meas_hist"]]
+            hat = [float(v) for v in snap["a_hat_hist"]]
+            raw_obs = snap["a_obs_hist"]
+            if len(raw_obs) != len(meas):
+                raw_obs = [None] * len(meas)
+            obs = [None if o is None else tuple(float(v) for v in o) for o in raw_obs]
+            if any(o is not None and len(o) != 3 for o in obs):
+                obs = [None] * len(meas)
+            start_a = snap.get("start_a")
+            start_a = None if start_a is None else float(start_a)
+            drift = deserialize_channel_state(snap.get("a_drift", {}), buffer_maxlen=AB_DRIFT_BUFFER_MAXLEN)
+        except (KeyError, TypeError, ValueError):
+            return False
+        mode_sign = self._mode_sign(hvac_mode)
+        if count < 0 or not all(mode_sign * v > 0.0 for v in [a, *meas, *hat]):
+            return False
+        self.a = a
+        self.learn_ok_count += count
+        self.learn_ok_count_a = count
+        self._learn_seq_a = seq
+        self.a_meas_hist = deque(meas, maxlen=AB_HISTORY_SIZE)
+        self._a_obs_hist = deque(obs, maxlen=AB_HISTORY_SIZE)
+        self._a_hat_hist = deque(hat, maxlen=20)
+        self.a_drift = drift
+        if start_a is not None:
+            self.start.stand("a", start_a)
+        if self.b != saved_b:
+            self._replay_a_measurements(mode_sign)
+        self._update_mad_diag("a", self.a_meas_hist)
+        self.diag_a_last_reason = "restored: hvac mode"
+        self.learn_last_reason = "restored: hvac mode"
+        return True
 
     @property
     def usable_a(self) -> bool:
@@ -280,6 +340,9 @@ class ABEstimator:
     def ensure_hvac_mode(self, hvac_mode: VThermHvacMode | None) -> bool:
         """Ensure persisted actuation data follows the signed mono-mode contract.
 
+        On a change of mode the a channel of the outgoing mode is set aside and the one set aside for the incoming
+        mode, if any, is taken back; without one the channel starts blank. b is shared.
+
         Legacy HEAT states already use a positive coefficient and remain valid.
         Legacy COOL states used the same positive bootstrap coefficient but could
         not learn a cooling coefficient; only their mode-dependent A channel is
@@ -307,8 +370,16 @@ class ABEstimator:
             or bool(self.a_meas_hist)
             or bool(self._a_hat_hist)
         )
+        if mode_changed:
+            outgoing = self._a_channel_snapshot()
+            if outgoing is None:
+                self._mode_stash.pop(self.model_hvac_mode, None)
+            else:
+                self._mode_stash[self.model_hvac_mode] = outgoing
         if reset_required:
             self._reset_a_channel(hvac_mode)
+        if mode_changed and mode_name in self._mode_stash:
+            self._restore_a_channel(self._mode_stash.pop(mode_name), hvac_mode)
 
         self.model_hvac_mode = mode_name
         return reset_required and had_mode_dependent_state
@@ -1018,7 +1089,7 @@ class ABEstimator:
 
     def save_state(self) -> dict:
         """Save state for persistence."""
-        return {
+        state = {
             "a": self.a,
             "b": self.b,
             "model_hvac_mode": self.model_hvac_mode,
@@ -1037,6 +1108,9 @@ class ABEstimator:
             "b_drift": serialize_channel_state(self.b_drift),
             "starting_values": self.start.save(),
         }
+        if self._mode_stash:
+            state["mode_stash"] = {mode: dict(snap) for mode, snap in self._mode_stash.items()}
+        return state
 
     def load_state(self, state: dict) -> None:
         """Restore state."""
@@ -1096,6 +1170,14 @@ class ABEstimator:
         )
         self._update_mad_diag("a", self.a_meas_hist)
         self._update_mad_diag("b", self.b_meas_hist)
+        stash = state.get("mode_stash")
+        self._mode_stash = {
+            mode: snap
+            for mode, snap in (stash.items() if isinstance(stash, dict) else ())
+            if mode in (str(VThermHvacMode_HEAT), str(VThermHvacMode_COOL))
+            and mode != self.model_hvac_mode
+            and isinstance(snap, dict)
+        }
         self.start.load(state.get("starting_values"))
         self.start.own_b = self._learned_tau().reliable
         if self.start.own_b:

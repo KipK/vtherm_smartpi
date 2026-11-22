@@ -59,6 +59,10 @@ class StartingValues:
         """The learning has its own value of ``quantity``: the starting value stops standing. True when it stood."""
         return self._value.pop(quantity, None) is not None
 
+    def stand(self, quantity: str, value: float) -> None:
+        """A starting value that was set aside with its HVAC mode stands again."""
+        self._value[quantity] = value
+
     def ramp_count(self, accepted: int) -> int:
         """Measures the feed-forward ramp reads: the larger of the credit and the accepted measures."""
         return max(self.credit, accepted)

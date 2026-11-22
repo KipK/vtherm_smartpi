@@ -48,6 +48,9 @@ class DeadTimeEstimator:
         self.deadtime_heat_reliable: bool = False
         self.deadtime_cool_reliable: bool = False
         self.model_hvac_mode: str | None = None
+        # Learned dead times of the HVAC mode that is not active, by mode name, as saved state (the "heat" and "cool"
+        # slots swap meaning between modes, so each mode keeps both). Empty for a thermostat that never changes mode.
+        self._mode_stash: dict[str, dict] = {}
 
         # Configuration
         self.min_off_time_seconds = 600.0
@@ -176,7 +179,12 @@ class DeadTimeEstimator:
             history.popleft()
 
     def reset(self):
-        """Reset estimator state."""
+        """Reset estimator state, the dead times set aside for the other mode included."""
+        self._mode_stash = {}
+        self._reset_active()
+
+    def _reset_active(self):
+        """Reset the state of the active mode; what is set aside for the other mode stays."""
         self.deadtime_heat_s = None
         self.deadtime_cool_s = None
         self.deadtime_heat_reliable = False
@@ -204,6 +212,42 @@ class DeadTimeEstimator:
         self._stop_from_full_power = False
         self._passive_measures.clear()
         self._passive_first_published_s = None
+
+    def _learned_snapshot(self) -> dict | None:
+        """The learned dead times as saved state, None when nothing was learned."""
+        if not (
+            self.deadtime_heat_s is not None
+            or self.deadtime_cool_s is not None
+            or self._history_heat
+            or self._history_cool
+        ):
+            return None
+        return {
+            "deadtime_heat_s": self.deadtime_heat_s,
+            "deadtime_cool_s": self.deadtime_cool_s,
+            "deadtime_heat_reliable": self.deadtime_heat_reliable,
+            "deadtime_cool_reliable": self.deadtime_cool_reliable,
+            "history_heat": list(self._history_heat),
+            "history_cool": list(self._history_cool),
+        }
+
+    def _restore_learned(self, snap: dict) -> None:
+        """Take back the dead times set aside for the mode, on top of a state just reset. A malformed snapshot is
+        dropped."""
+        try:
+            heat, cool = snap["deadtime_heat_s"], snap["deadtime_cool_s"]
+            heat = None if heat is None else float(heat)
+            cool = None if cool is None else float(cool)
+            hist_heat = [float(v) for v in snap["history_heat"]]
+            hist_cool = [float(v) for v in snap["history_cool"]]
+            heat_reliable = bool(snap["deadtime_heat_reliable"])
+            cool_reliable = bool(snap["deadtime_cool_reliable"])
+        except (KeyError, TypeError, ValueError):
+            return
+        self.deadtime_heat_s, self.deadtime_cool_s = heat, cool
+        self.deadtime_heat_reliable, self.deadtime_cool_reliable = heat_reliable, cool_reliable
+        self._history_heat = deque(hist_heat, maxlen=6)
+        self._history_cool = deque(hist_cool, maxlen=6)
 
     def reset_observation(self, current_power: float = 0.0) -> None:
         """Clear transient detection state while preserving learned dead times."""
@@ -241,27 +285,36 @@ class DeadTimeEstimator:
         Heat/cool dead times describe a rising/falling room-temperature response,
         respectively. Legacy COOL states classified them by power transition and
         are therefore reset once before the new mode-aware detector is used.
+
+        On a change of mode the dead times of the outgoing mode are set aside and
+        the ones set aside for the incoming mode, if any, are taken back.
         """
         if hvac_mode not in (VThermHvacMode_HEAT, VThermHvacMode_COOL):
             return False
 
         mode_name = str(hvac_mode)
+        mode_changed = self.model_hvac_mode is not None and self.model_hvac_mode != mode_name
         has_legacy_data = (
             self.deadtime_heat_s is not None
             or self.deadtime_cool_s is not None
             or bool(self._history_heat)
             or bool(self._history_cool)
         )
-        reset_required = (
-            self.model_hvac_mode is not None
-            and self.model_hvac_mode != mode_name
-        ) or (
+        reset_required = mode_changed or (
             self.model_hvac_mode is None
             and hvac_mode == VThermHvacMode_COOL
             and has_legacy_data
         )
+        if mode_changed:
+            outgoing = self._learned_snapshot()
+            if outgoing is None:
+                self._mode_stash.pop(self.model_hvac_mode, None)
+            else:
+                self._mode_stash[self.model_hvac_mode] = outgoing
         if reset_required:
-            self.reset()
+            self._reset_active()
+        if mode_changed and mode_name in self._mode_stash:
+            self._restore_learned(self._mode_stash.pop(mode_name))
         self.model_hvac_mode = mode_name
         return reset_required
 
@@ -715,7 +768,7 @@ class DeadTimeEstimator:
 
     def save_state(self) -> dict:
         """Save state for persistence."""
-        return {
+        state = {
             "deadtime_heat_s": self.deadtime_heat_s,
             "deadtime_cool_s": self.deadtime_cool_s,
             "deadtime_heat_reliable": self.deadtime_heat_reliable,
@@ -727,6 +780,9 @@ class DeadTimeEstimator:
             "tin_lp_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_lp_history],
             "detection": self._detection_state(),
         }
+        if self._mode_stash:
+            state["mode_stash"] = {mode: dict(snap) for mode, snap in self._mode_stash.items()}
+        return state
 
     def load_state(self, state: dict) -> None:
         """Restore state."""
@@ -745,6 +801,15 @@ class DeadTimeEstimator:
             }
             else None
         )
+
+        stash = state.get("mode_stash")
+        self._mode_stash = {
+            mode: snap
+            for mode, snap in (stash.items() if isinstance(stash, dict) else ())
+            if mode in (str(VThermHvacMode_HEAT), str(VThermHvacMode_COOL))
+            and mode != self.model_hvac_mode
+            and isinstance(snap, dict)
+        }
 
         hh = state.get("history_heat", [])
         self._history_heat = deque(hh, maxlen=6)

@@ -39,7 +39,7 @@
 
 SmartPI is an alternative to the classic TPI algorithm for Versatile Thermostat.
 
-Its goal is simple: instead of using fixed behavior, it learns how your room really heats up and cools down, then adjusts regulation automatically. Each SmartPI VTherm remains mono-mode: HEAT or COOL, never both at once.
+Its goal is simple: instead of using fixed behavior, it learns how your room really heats up and cools down, then adjusts regulation automatically. Each SmartPI VTherm remains mono-mode: HEAT or COOL, never both at once. When a thermostat switches between HEAT and COOL (for example a heat pump that heats in winter and cools in summer through the same emitter), SmartPI keeps what it learned for each mode: the heating or cooling rate `a`, the dead times and the emitter response come back when their mode returns, and the heat-loss coefficient `b` is shared by both modes.
 
 In practice, SmartPI learns:
 

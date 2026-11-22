@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Heating and cooling: a thermostat that switches between HEAT and COOL keeps what it learned for each mode (heating or cooling rate, dead times, emitter response) and gets it back when the mode returns; the heat-loss coefficient stays shared.
 - Learning: the outlier filter of the heating and loss coefficients keeps a minimum width of 2 % of its median, so a few nearly identical first measurements can no longer block the learning for days.
 - Bootstrap: the heating phases of the hysteresis bootstrap and the temperature
   peak that follows each of them are now read as a whole; two agreeing readings
