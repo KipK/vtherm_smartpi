@@ -246,6 +246,8 @@ AB_DRIFT_RECENTER_ALPHA: float = 0.25
 AB_DRIFT_RECENTER_STEP_MAX_FACTOR: float = 2.0
 AB_DRIFT_MAD_FLOOR_ABS: float = 1e-4
 AB_DRIFT_SEQ_GAP_MAX: int = 3
+# Relative floor of the outlier gate width: measures that agree closely must not shrink the gate to a sliver of the median.
+AB_MAD_REL_FLOOR: float = 0.02
 
 # --- SmartPI Learning Window Constants ---
 # Absolute timeout for a learning window (both A and B).

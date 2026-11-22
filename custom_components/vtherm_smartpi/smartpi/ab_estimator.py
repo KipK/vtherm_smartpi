@@ -39,6 +39,7 @@ from .const import (
     AB_B_CONVERGENCE_RANGE_RATIO,
     AB_HISTORY_SIZE,
     AB_MAD_K,
+    AB_MAD_REL_FLOOR,
     AB_MAD_SIGMA_MULT,
     AB_DRIFT_BUFFER_MAXLEN,
     AB_DRIFT_MAX_BUFFER_MAD_FACTOR,
@@ -502,7 +503,7 @@ class ABEstimator:
             )
 
         hist_mad = robust_mad(hist_values, hist_center)
-        hist_mad_eff = max(hist_mad or 0.0, AB_DRIFT_MAD_FLOOR_ABS)
+        hist_mad_eff = max(hist_mad or 0.0, AB_DRIFT_MAD_FLOOR_ABS, AB_MAD_REL_FLOOR * abs(hist_center))
 
         using_virtual_gate = (
             drift_channel.state == "RECENTERING"
