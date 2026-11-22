@@ -28,6 +28,18 @@ All notable changes to this project will be documented in this file.
   correction learns from no window in which the boiler withheld the room's heat
   (`central_boiler_off` in its power trace); a time without heat shorter than
   59 s is ignored.
+
+## [0.6.7]
+
+- Calibration: whether a calibration can be completed is decided from the
+  measured outdoor temperature only, no longer from the thermal twin. A
+  passive phase can only bring the room toward the outdoor temperature, so the
+  cycle ends as unreachable when the outdoor temperature is within 0.5 degC of
+  (or beyond) the passive threshold to come: the cool-down threshold, or the
+  target for the final cool-down (the mirror in cooling). The twin's
+  equilibrium can no longer cancel a calibration meant to repair it. Nothing
+  is judged while the outdoor temperature is unknown.
+
 ## [0.6.6]
 
 - Bootstrap: the initial learning ends sooner when the response lag of the
