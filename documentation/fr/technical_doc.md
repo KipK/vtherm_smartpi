@@ -141,7 +141,7 @@ Le code n'utilise plus de constante `WINDOW_MIN_MINUTES`. L'apprentissage repose
 - conserve l'apprentissage passif OFF/`b` sous ses garde-fous physiques existants ;
   les réponses dues uniquement à une perturbation ne sont pas bloquées par ce gate
   de consigne,
-- bloque la collecte en bootstrap tant que les temps morts requis ne sont pas fiables,
+- bloque la collecte en bootstrap tant que les temps morts requis ne sont pas fiables ; dans l'étape d'apprentissage du démarrage direct, une fenêtre `b` exige à la place le pic confirmé de l'arrêt (3.7, Démarrage direct) ou un retard de l'émetteur connu (publié, ou retenu par les lectures des impulsions), avec lequel elle débute `3 T_ar` après la coupure,
 - applique une pause après reprise (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - ancre le début de fenêtre après la fin du temps mort quand c'est nécessaire,
 - retarde le début de fenêtre jusqu'à l'extinction de la réponse transitoire (`skip: response transient (a|b)`) : une fois le retard de l'émetteur publié (3.7), une fenêtre `a` débute au moins `min(3 T_ar, moitié de l'épisode actif médian)` après l'échelon de puissance ; une fenêtre `b` débute après la coupure de puissance au moins du plus long de `3 T_ar` (retard de l'émetteur publié) et de `AB_SETTLE_K_PASSIVE_DEADTIME = 1.5` temps morts passifs fiables : l'émetteur continue de chauffer après une coupure, et comme la pièce ne commence à se refroidir que lorsque cette chaleur résiduelle passe sous les pertes, le temps mort passif borne sa décroissance même lorsque le retard de l'émetteur est inconnu. Pendant le bootstrap, seul le terme `3 T_ar` s'applique,
@@ -419,7 +419,15 @@ gains à partir du `a` retenu et du temps mort actif (la règle IMC/SIMC d'une p
 au-dessus de sa valeur de repli), le retard de l'émetteur retenu est l'horizon de l'anticipation (source
 `measurement pulses`) et le retard de l'émetteur de l'estimateur de retard de réponse, qui compte alors
 comme résolu. Le terme intégral repart de zéro au calcul où l'étape d'apprentissage se termine.
-L'estimateur de temps mort lit le temps mort après un arrêt sur le pic de température.
+L'estimateur de temps mort lit le temps mort après un arrêt sur le pic de température, avec la
+recherche de pic des événements de mesure et une confirmation plus précoce : le pic est aussi confirmé à
+la fermeture d'une tranche postérieure à la meilleure dont la moyenne est inférieure à la meilleure d'au
+moins le plus grand de `STOP_PEAK_DROP_MIN_C = 0,05 °C`, `STOP_PEAK_DROP_STEPS = 2` pas de la sonde (la
+plus petite variation de la dernière heure, au moins 0,01 °C) et `STOP_PEAK_DROP_RISE_FRAC = 0,5` fois la
+montée entre la coupure et la meilleure tranche ; quand la chauffe reprend, la tranche en cours est fermée
+et soumise au même test, sinon l'arrêt ne donne pas de valeur. La règle des 1800 s est la confirmation la
+plus tardive. Seuls les arrêts qui suivent un cycle à pleine puissance
+alimentent la valeur publiée.
 
 **Calibration.** Sur demande (`force_smartpi_calibration`), une fois le premier modèle publié, une
 calibration (`calibration.py`) lance des impulsions de mesure quel que soit le démarrage, avec son propre
@@ -889,6 +897,7 @@ Cette séparation évite de garder P et I gelés uniquement parce que l'hystér�
 | `response_lag.py`      | `ResponseLagEstimator` : retard de l'émetteur sur les phases de chauffe à puissance constante, portes de stabilisation et modèle de puissance délivrée |
 | `heating_balance.py`   | `HeatingBalance` : vitesse de chauffe et retard de l'émetteur mesurés sur les phases de chauffe |
 | `peak_search.py`       | recherche du pic de température après une coupure |
+| `sensor_step.py`       | pas de la sonde, lu sur la dernière heure d'échantillons |
 | `measure_event.py`     | détecteur des événements de mesure et enregistrement de la puissance et des températures |
 | `event_reading.py`     | lecture des événements du bootstrap et des impulsions, valeurs retenues par mode |
 | `measure_pulse.py`     | impulsions de mesure du démarrage direct                 |

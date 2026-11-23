@@ -84,6 +84,7 @@ def _run_cut(
     *,
     dt=None,
     lag_published=False,
+    lag_given=False,
     in_near_band=False,
     in_deadband=False,
     is_hysteresis=False,
@@ -101,6 +102,8 @@ def _run_cut(
     if lag_published:
         win.load_state({"response_lag": {"estimates": [[LAG_S, 20.0]] * 3, "durations": [],
                                          "hvac_mode": str(hvac_mode)}})
+    if lag_given:
+        win.response_lag.give_lag(LAG_S)
     sign = -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0
     t_ext = 35.0 if hvac_mode == VThermHvacMode_COOL else T_EXT
     target = 24.0 if hvac_mode == VThermHvacMode_COOL else 21.0
@@ -195,3 +198,32 @@ def test_bootstrap_windows_do_not_depend_on_the_passive_dead_time(lag_published)
     else:
         # Opens within a few ticks once the active window has closed.
         assert min(starts) < cut_ts + 5 * TICK_S
+
+
+def _direct_stage_dt_est(confirmed=False):
+    """Dead-time estimator of the direct start's learning stage: no published passive dead time."""
+    dt = _dt_est(cool_s=None, cool_reliable=False)
+    dt.passive_by_peak = True
+    dt.stop_peak_confirmed = confirmed
+    return dt
+
+
+@pytest.mark.parametrize("lag", ["published", "given"])
+def test_direct_stage_opens_passive_windows_three_lags_after_the_cut_with_a_known_lag(lag):
+    """No peak confirmed: a known lag (published, or given by the pulse readings) anchors the window at the cut
+    plus AB_SETTLE_K_PASSIVE lags."""
+    cut_ts, starts, reasons = _run_cut(
+        dt=_direct_stage_dt_est(), is_hysteresis=True,
+        lag_published=lag == "published", lag_given=lag == "given",
+    )
+    assert "skip: response transient (b)" in reasons
+    assert "skip: bootstrap - peak after the stop not yet confirmed" not in reasons
+    assert min(starts) == pytest.approx(cut_ts + AB_SETTLE_K_PASSIVE * LAG_S)
+
+
+def test_direct_stage_without_a_lag_waits_for_the_peak_of_the_stop():
+    cut_ts, starts, reasons = _run_cut(dt=_direct_stage_dt_est(), is_hysteresis=True)
+    assert not starts
+    assert reasons[-1] == "skip: bootstrap - peak after the stop not yet confirmed"
+    cut_ts, starts, reasons = _run_cut(dt=_direct_stage_dt_est(confirmed=True), is_hysteresis=True)
+    assert starts and min(starts) < cut_ts + 5 * TICK_S

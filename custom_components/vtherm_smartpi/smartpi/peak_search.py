@@ -7,6 +7,11 @@ samples, empty bins are skipped. The best bin is the earliest closed bin with th
 ``sign * temperature``). The peak is confirmed when a closed bin lies ``HEATING_BALANCE_PEAK_CONFIRM_S`` or more after
 the best one. It is at the middle of the best bin: ``peak_delay_s`` after the cut.
 
+A search built with a ``drop_floor_c`` also confirms the peak early: at the close of a bin later than the best one
+whose mean lies at least max(``drop_floor_c``, ``STOP_PEAK_DROP_RISE_FRAC`` of the rise from ``cut_value`` to the best
+bin) under the best mean. ``close_at_heating`` applies that test to the bin in progress when the heating starts again.
+Without ``drop_floor_c`` (the default) only the rule above confirms.
+
 The caller reads the outcome:
 
 - ``PEAK_CONFIRMED``: ``feed`` returned True;
@@ -26,6 +31,7 @@ from .const import (
     HEATING_BALANCE_PEAK_BIN_S,
     HEATING_BALANCE_PEAK_CONFIRM_S,
     HEATING_BALANCE_PEAK_MAX_S,
+    STOP_PEAK_DROP_RISE_FRAC,
 )
 
 PEAK_CONFIRMED = "confirmed"
@@ -38,10 +44,15 @@ _FIELDS = ("bin_k", "bin_sum", "bin_n", "best_k", "best_mean", "best_mark", "las
 class PeakSearch:
     """Peak search after one cut. Times are in the time base of the caller."""
 
-    def __init__(self, t_cut: float, sign: float = 1.0) -> None:
+    def __init__(
+        self, t_cut: float, sign: float = 1.0, drop_floor_c: float | None = None, cut_value: float | None = None,
+    ) -> None:
         self.t_cut = float(t_cut)
         # +1 when the extreme looked for is a maximum (HEAT), -1 for a minimum (COOL).
         self.sign = -1.0 if sign < 0 else 1.0
+        # Early confirmation (None: off) and the temperature at the cut, in the signed scale.
+        self.drop_floor_c = drop_floor_c
+        self.cut_value = None if cut_value is None else self.sign * cut_value
         self.bin_k: int | None = None
         self.bin_sum = 0.0
         self.bin_n = 0
@@ -77,7 +88,24 @@ class PeakSearch:
         if self.best_mean is None or mean > self.best_mean:
             self.best_k, self.best_mean, self.best_mark = k, mean, mark
         self.last_k = k
-        return (k - self.best_k) * HEATING_BALANCE_PEAK_BIN_S >= HEATING_BALANCE_PEAK_CONFIRM_S
+        return (k - self.best_k) * HEATING_BALANCE_PEAK_BIN_S >= HEATING_BALANCE_PEAK_CONFIRM_S or self._dropped(k, mean)
+
+    def _dropped(self, k: int, mean: float) -> bool:
+        """True when the closed bin ``k`` of mean ``mean`` confirms the best bin early."""
+        if self.drop_floor_c is None or k <= self.best_k:
+            return False
+        rise = 0.0 if self.cut_value is None else self.best_mean - self.cut_value
+        return self.best_mean - mean >= max(self.drop_floor_c, STOP_PEAK_DROP_RISE_FRAC * rise) - 1e-9
+
+    def close_at_heating(self) -> bool:
+        """The heating starts again: close the bin in progress; True when the early test confirms the best bin on
+        it. Always False without ``drop_floor_c``."""
+        if self.bin_k is None or self.drop_floor_c is None:
+            return False
+        k, mean = self.bin_k, self.bin_sum / self.bin_n
+        self._close_bin(0.0)
+        self.bin_k = None
+        return self._dropped(k, mean)
 
     def cut_short(self, mark: float = 0.0) -> str:
         """The heating starts again: close the bin in progress. The outcome is ``PEAK_CUT_SHORT`` when a best bin

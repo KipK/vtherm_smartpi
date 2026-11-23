@@ -709,9 +709,12 @@ class LearningWindowManager:
                 return deadtime_skip_count_a, deadtime_skip_count_b
             peak = dt_est.passive_by_peak is True
             if peak:
-                # A passive window of the learning stage starts once the peak of the stop is confirmed,
-                # whether or not a dead time after a stop was published before.
-                passive_deadtime_reliable = dt_est.stop_peak_confirmed
+                # A passive window of the learning stage starts once the peak of the stop is confirmed or, with a
+                # known lag (passive_gate_end() is known only with a lag and a cut), AB_SETTLE_K_PASSIVE lags after
+                # the cut (settle gate below), whether or not a dead time after a stop was published before.
+                passive_deadtime_reliable = (
+                    dt_est.stop_peak_confirmed or self._response_lag.passive_gate_end() is not None
+                )
             if u_active < U_OFF_MAX and not passive_deadtime_reliable:
                 estimator.learn_skip_count += 1
                 estimator.learn_last_reason = (

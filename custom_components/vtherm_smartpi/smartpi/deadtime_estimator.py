@@ -18,11 +18,14 @@ from ..hvac_mode import (
 from .const import (
     DEADTIME_ACTIVE_TIMEOUT_S,
     DEADTIME_PASSIVE_TIMEOUT_S,
+    STOP_PEAK_DROP_MIN_C,
+    STOP_PEAK_DROP_STEPS,
     TIN_HISTORY_MAX_SAMPLES,
     TIN_HISTORY_RETENTION_MIN,
 )
 from .deadtime_trend import prestart_trend
 from .peak_search import PeakSearch
+from .sensor_step import sensor_step
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 _TIN_HISTORY_RETENTION_S = TIN_HISTORY_RETENTION_MIN * 60.0
@@ -447,7 +450,10 @@ class DeadTimeEstimator:
 
         by_peak = self.passive_by_peak
         if by_peak and u_applied > 0.01:
-            # The heating runs (or starts again): a stop not yet measured gives no measure.
+            # The heating runs (or starts again): the bin in progress of a stop not yet measured is closed and may
+            # still confirm its peak early; otherwise the stop gives no measure.
+            if self._stop_peak is not None:
+                self._feed_stop_peak(now, passive_response, heating=True)
             self._stop_peak = None
             self._stop_peak_confirmed = False
 
@@ -500,7 +506,12 @@ class DeadTimeEstimator:
             )
             if by_peak:
                 # The passive response is not detected: the dead time after this stop is read on its peak.
-                self._stop_peak = PeakSearch(now, -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0)
+                history = self._tin_history
+                self._stop_peak = PeakSearch(
+                    now, -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0,
+                    drop_floor_c=max(STOP_PEAK_DROP_MIN_C, STOP_PEAK_DROP_STEPS * sensor_step(history)),
+                    cut_value=history[-1][1] if history else None,
+                )
                 self._stop_peak_confirmed = False
                 self._stop_from_full_power = self.last_power >= FULL_POWER_STOP_MIN
                 if self.state == "WAITING_HEAT_RESPONSE":
@@ -653,29 +664,35 @@ class DeadTimeEstimator:
             if self.state != "OFF" and self.state != "WAITING_COOL_RESPONSE" and self.state != "COOLING":
                 self.state = "OFF"
 
-        search = self._stop_peak
-        if by_peak and search is not None and self._tin_history and self._tin_history[-1][0] == now:
-            # The raw samples of the history feed the peak search, as they feed the heating balance. Only a
-            # confirmed peak gives a measure; none is made when the peak is not found within the wait.
-            dead_time_s = None
-            if now >= search.t_cut:
-                if search.feed(now, self._tin_history[-1][1]):
-                    dead_time_s = search.peak_delay_s
-                    self._stop_peak = None
-                elif search.expired(now):
-                    self._stop_peak = None
-            if dead_time_s is not None:
-                self._stop_peak_confirmed = True
-                self._add_passive_sample(
-                    passive_response, dead_time_s, now, "peak",
-                    fed=self._stop_from_full_power,
-                )
-                _LOGGER.info(
-                    "SmartPI: Dead time after a stop read on the peak = %.1fs (%s response)",
-                    dead_time_s, passive_response,
-                )
+        if by_peak and self._stop_peak is not None:
+            self._feed_stop_peak(now, passive_response, heating=False)
 
         self.last_power = u_applied
+
+    def _feed_stop_peak(self, now: float, passive_response: str, heating: bool) -> None:
+        """Feed the sample of ``now`` to the peak search of the last stop. ``heating``: the heating starts again,
+        the bin in progress is closed and the search ends. Only a confirmed peak gives a measure; none is made when
+        the peak is not found within the wait."""
+        search = self._stop_peak
+        confirmed = False
+        if self._tin_history and self._tin_history[-1][0] == now and now >= search.t_cut:
+            # The raw samples of the history feed the peak search, as they feed the heating balance.
+            confirmed = search.feed(now, self._tin_history[-1][1])
+            if not confirmed and search.expired(now):
+                self._stop_peak = None
+                return
+        if not confirmed and heating:
+            confirmed = search.close_at_heating()
+        if not confirmed:
+            return
+        self._stop_peak = None
+        # Confirmed at the start of a heating: the stop is over, nothing waits for its peak any more.
+        self._stop_peak_confirmed = not heating
+        dead_time_s = search.peak_delay_s
+        self._add_passive_sample(passive_response, dead_time_s, now, "peak", fed=self._stop_from_full_power)
+        _LOGGER.info(
+            "SmartPI: Dead time after a stop read on the peak = %.1fs (%s response)", dead_time_s, passive_response,
+        )
 
     def _add_passive_sample(self, response: str, dt: float, now: float, origin: str, fed: bool = True) -> None:
         """Add a sample of the dead time after a stop (median and reliability rule of the estimator); a sample that

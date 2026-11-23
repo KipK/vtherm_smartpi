@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .sensor_step import sensor_step
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 PULSE_REST_MAX_S = 45.0 * 60.0
@@ -65,19 +66,11 @@ STATE_STOP = "stop"
 
 
 PULSE_RISE_STEPS = 3.0
-_STEP_WINDOW_S = 3600.0
-_STEP_FLOOR_C = 0.01
 
 
 def _sensor_step(dt_est: Any) -> float:
     """Smallest change between two successive samples of the last hour: the step of the sensor."""
-    history = list(getattr(dt_est, "tin_history", []) or [])
-    if not history:
-        return _STEP_FLOOR_C
-    t_last = history[-1][0]
-    recent = [v for t, v in history if t >= t_last - _STEP_WINDOW_S]
-    steps = [abs(b - a) for a, b in zip(recent, recent[1:]) if b != a]
-    return max(min(steps), _STEP_FLOOR_C) if steps else _STEP_FLOOR_C
+    return sensor_step(getattr(dt_est, "tin_history", []))
 
 
 class MeasurePulse:

@@ -135,3 +135,52 @@ def test_fields_are_plain_numbers():
     search = PeakSearch(0.0)
     search.feed(10.0, 20.0)
     assert set(search.fields()) == {"bin_k", "bin_sum", "bin_n", "best_k", "best_mean", "best_mark", "last_k"}
+
+
+def _rise_then_fall(rise_c: float, rise_s: float, fall_c_per_h: float, n: int, t0: float = 20.0) -> list[float]:
+    """Samples every 60 s from the cut (t = 0): linear rise to the peak, then linear fall."""
+    out = []
+    for i in range(n):
+        t = i * 60.0
+        out.append(t0 + rise_c * min(t, rise_s) / rise_s - fall_c_per_h / 3600.0 * max(0.0, t - rise_s))
+    return out
+
+
+def _feed_from_cut(search: PeakSearch, values: list[float]) -> float | None:
+    """Feed one sample per minute from the cut; the time of the confirming sample, else None."""
+    for i, v in enumerate(values):
+        if search.feed(i * 60.0, v):
+            return i * 60.0
+    return None
+
+
+def test_early_rule_confirms_on_the_first_closed_bin_far_enough_under_the_best():
+    values = _rise_then_fall(0.12, 600.0, 3.0, 60)
+    early = PeakSearch(0.0, drop_floor_c=0.05, cut_value=values[0])
+    assert _feed_from_cut(early, values) == 3 * BIN   # bin 2 closes, 0.06 C under the best bin 1
+    assert early.peak_delay_s == pytest.approx(1.5 * BIN)
+    # Without the early rule (the measurement event's search) the same samples confirm one span after the best bin.
+    plain = PeakSearch(0.0)
+    assert _feed_from_cut(plain, values) == (1 + CONFIRM_BINS + 1) * BIN
+    assert plain.peak_delay_s == early.peak_delay_s
+
+
+def test_early_rule_needs_half_the_rise_since_the_cut():
+    values = _rise_then_fall(0.6, 600.0, 1.0, 120)   # bin 3 is 0.08 C under the best bin 2: under half the rise
+    floor_only = PeakSearch(0.0, drop_floor_c=0.05)
+    assert _feed_from_cut(floor_only, values) == 4 * BIN
+    search = PeakSearch(0.0, drop_floor_c=0.05, cut_value=values[0])
+    confirmed = _feed_from_cut(search, values)
+    assert confirmed is not None and confirmed > 4 * BIN
+    assert search.best_mean - search.cut_value == pytest.approx(0.567, abs=0.01)
+
+
+def test_close_at_heating_applies_the_early_rule_to_the_bin_in_progress():
+    values = _rise_then_fall(0.12, 600.0, 3.0, 15)   # the last samples fill bin 2, which no later sample closes
+    search = PeakSearch(0.0, drop_floor_c=0.05, cut_value=values[0])
+    assert _feed_from_cut(search, values) is None
+    assert search.close_at_heating() is True
+    assert search.peak_delay_s == pytest.approx(1.5 * BIN)
+    plain = PeakSearch(0.0)
+    assert _feed_from_cut(plain, values) is None
+    assert plain.close_at_heating() is False

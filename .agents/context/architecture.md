@@ -74,7 +74,8 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `response_lag.py`: emitter lag estimator over the constant-power heating phases of the learning windows.
 
 **Measurement events and starting values** (one reading chain; see `algorithm-core.md` section 6b)
-- `peak_search.py`: `PeakSearch`, the one search of the temperature peak after a cut (300 s bins, earliest strictly highest mean, confirmed by a closed bin 1800 s later, 4 h limit). Used by the detector (so by the heating balance) and by the dead-time estimator in peak mode.
+- `peak_search.py`: `PeakSearch`, the one search of the temperature peak after a cut (300 s bins, earliest strictly highest mean, confirmed by a closed bin 1800 s later, 4 h limit). Used by the detector (so by the heating balance) and by the dead-time estimator in peak mode (which adds the early confirmation, `drop_floor_c`).
+- `sensor_step.py`: step of the sensor (smallest change of the last hour), for the pulses and the estimator's peak search.
 - `measure_event.py`: `MeasureEventDetector` (rest, constant power, stop until the peak, HEAT and COOL, each event tagged with its source: pulse, bootstrap, calibration (a pulse of a calibration), regulation) and `MeasureRecord` (bounded record of power, room and outdoor temperature on change; for a switch the power channel holds the real on/off edges from the applied-command receipts).
 - `event_reading.py`: `EventReader`, reads the closed events of source pulse, bootstrap or calibration on the record; queues the fit, keeps two agreeing readings per mode (`kept_for(mode)`); calibration readings form their own set (`calibration_reading(mode)`, published only).
 - `event_fit.py`: the fit job (pure delay, first-order lag, `a`, losses `b`; numpy/scipy lazily imported) and the agreement rule.

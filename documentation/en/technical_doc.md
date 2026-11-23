@@ -140,7 +140,10 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
   existing dead-time, power-stability, robust-slope, and governance guards,
 - keeps passive OFF/`b` learning under its existing physical guards;
   disturbance-only responses are not blocked by this setpoint gate,
-- blocks bootstrap collection until the required dead times are reliable,
+- blocks bootstrap collection until the required dead times are reliable; in the
+  learning stage of the direct start a `b` window needs instead the confirmed peak
+  of the stop (3.7, Direct start) or a known emitter lag (published, or kept by
+  the readings of the pulses), with which it starts `3 T_ar` after the cut,
 - applies a post-resume pause (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - anchors the window start after the dead-time end when needed,
 - delays the window start until the response transient has decayed
@@ -538,7 +541,16 @@ above its fallback value), the kept emitter lag is the horizon of the
 anticipation (source `measurement pulses`) and the emitter lag of the
 response-lag estimator, which counts as resolved with it. The integral term
 starts from zero at the calculation at which the learning stage ends. The
-dead-time estimator reads the dead time after a stop on the temperature peak.
+dead-time estimator reads the dead time after a stop on the temperature peak,
+with the peak search of the measurement events and an earlier confirmation: the
+peak is also confirmed at the close of a bin later than the best one whose mean
+lies under the best mean by at least the largest of `STOP_PEAK_DROP_MIN_C =
+0.05 °C`, `STOP_PEAK_DROP_STEPS = 2` sensor steps (the smallest change of the
+last hour, at least 0.01 °C) and `STOP_PEAK_DROP_RISE_FRAC = 0.5` times the rise
+from the cut to the best bin; when the heating starts again, the bin in progress
+is closed and gets the same test, otherwise the stop gives no value. The 1800 s
+rule is the latest confirmation. Only stops after a cycle at full power feed
+the published value.
 
 **Calibration.** On request (`force_smartpi_calibration`), once the first model
 is published, a calibration (`calibration.py`) starts measurement pulses in
@@ -1212,6 +1224,7 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | `response_lag.py`      | `ResponseLagEstimator`: emitter lag on constant-power heating phases, settling gates and delivered power model |
 | `heating_balance.py`   | `HeatingBalance`: heating rate and emitter lag measured on heating phases |
 | `peak_search.py`       | the search of the temperature peak after a cut |
+| `sensor_step.py`       | the step of the sensor, read on the last hour of samples |
 | `measure_event.py`     | detector of the measurement events and record of the power and temperatures |
 | `event_reading.py`     | reading of the events of the bootstrap and of the pulses, kept values per mode |
 | `measure_pulse.py`     | measurement pulses of the direct start                      |

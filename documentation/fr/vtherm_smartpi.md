@@ -293,9 +293,11 @@ Avec le démarrage direct, il n'y a pas de cycles d'hystérésis : SmartPI régu
 
 1. un repos sans chauffage, de 45 minutes au plus ou jusqu'à ce que la pièce soit 0,5 °C sous la consigne,
 2. une chauffe à pleine puissance jusqu'à ce que la pièce ait nettement répondu et soit revenue à la consigne (au plus 0,1 °C en dessous) ; une fois que l'étape a duré 30 minutes, elle s'arrête dès que la pièce a nettement répondu ; elle dure 2 heures au plus et s'arrête quand la pièce est 0,3 °C au-dessus de la consigne,
-3. un arrêt jusqu'au pic de température qui suit, pendant 4 heures au plus ; la régulation reprend la main pendant cet arrêt dès que la pièce est 0,5 °C sous la consigne et plus basse qu'au début de l'arrêt, et dans tous les cas à 0,8 °C en dessous.
+3. un arrêt jusqu'à la confirmation du pic de température qui suit, pendant 4 heures au plus ; le pic est confirmé dès que la pièce est redescendue sous lui du plus grand de 0,05 °C, deux pas de la sonde et la moitié de sa montée depuis l'arrêt, et au plus tard environ 30 minutes après lui ; la régulation reprend la main pendant cet arrêt dès que la pièce est 0,5 °C sous la consigne et plus basse qu'au début de l'arrêt, et dans tous les cas à 0,8 °C en dessous.
 
-Deux impulsions sont séparées d'au moins 6 heures.
+Deux impulsions sont séparées d'au moins 6 heures. Le temps mort après un arrêt est lu sur ce pic, aussi sur les arrêts de la régulation : quand la chauffe reprend avant la confirmation, le pic compte encore si la pièce est déjà assez redescendue sous lui.
+
+Pendant l'étape d'apprentissage, une mesure du taux de pertes `b` après un arrêt commence une fois le pic de l'arrêt confirmé ou, quand le retard de l'émetteur est connu (appris, ou conservé des impulsions), trois retards de l'émetteur après l'arrêt.
 
 SmartPI lit chaque impulsion dans son ensemble, comme les phases de chauffe du bootstrap (voir [Sortie du bootstrap](#sortie-du-bootstrap)). Lorsque deux impulsions concordent, leur vitesse de chauffe `a`, leur taux de pertes `b` et le retard de l'émetteur sont conservés. Tant que l'apprentissage n'a pas publié son propre modèle, les valeurs conservées en tiennent lieu : elles donnent les gains de la régulation, l'horizon de l'anticipation et les valeurs de départ de `a` et `b`. À la publication du premier modèle, le terme intégral de la régulation repart de zéro. En simulation, le premier modèle est publié en environ 8 à 24 heures.
 

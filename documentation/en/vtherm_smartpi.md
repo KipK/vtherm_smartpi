@@ -301,9 +301,11 @@ With the direct start there are no hysteresis cycles: SmartPI regulates with its
 
 1. a rest without heating, for 45 minutes at most or until the room is 0.5 °C under the setpoint,
 2. heating at full power until the room has clearly responded and is back at the setpoint (at most 0.1 °C under it); once the step has lasted 30 minutes it ends as soon as the room has clearly responded; it lasts 2 hours at most and ends when the room is 0.3 °C over the setpoint,
-3. a stop until the temperature peak that follows, for 4 hours at most; the regulation takes back control during this stop once the room is 0.5 °C under the setpoint and lower than at the start of the stop, and in any case at 0.8 °C under it.
+3. a stop until the temperature peak that follows is confirmed, for 4 hours at most; the peak is confirmed once the room has fallen from it by the largest of 0.05 °C, two sensor steps and half its rise since the stop, and about 30 minutes after it at the latest; the regulation takes back control during this stop once the room is 0.5 °C under the setpoint and lower than at the start of the stop, and in any case at 0.8 °C under it.
 
-Two pulses are at least 6 hours apart.
+Two pulses are at least 6 hours apart. The dead time after a stop is read on that peak, also on the stops of the regulation: when the heating starts again before the confirmation, the peak still counts if the room has already fallen enough from it.
+
+During the learning stage, a measure of the loss rate `b` after a stop starts once the peak of the stop is confirmed or, when the emitter lag is known (learned, or kept from the pulses), three emitter lags after the stop.
 
 SmartPI reads each pulse as a whole, like the heating phases of the bootstrap (see [Leaving bootstrap](#leaving-bootstrap)). When two pulses agree, their heating rate `a`, loss rate `b` and emitter lag are kept. Until the learning publishes its own model, the kept values stand for it: they give the gains of the regulation, the horizon of the anticipation and the starting values of `a` and `b`. When the first model is published, the integral term of the regulation starts from zero. In simulation the first model is published in about 8 to 24 hours.
 
