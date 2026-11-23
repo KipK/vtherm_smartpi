@@ -16,6 +16,8 @@ from unittest.mock import MagicMock
 
 from custom_components.vtherm_smartpi.algo import SmartPI
 
+from .helpers import force_smartpi_stable_mode
+
 FIXTURE = Path(__file__).parent / "fixtures" / "published_diagnostics_paths.json"
 
 
@@ -106,3 +108,83 @@ def test_published_start_summary_has_plain_values() -> None:
     for state, plain in (("idle", "none"), ("rest", "rest"), ("heat", "full power"), ("stop", "stop")):
         algo._start.pulse._state = state
         assert algo.get_published_diagnostics()["learning"]["start"]["pulse"] == plain
+
+
+def test_published_calibration_summary_has_plain_values() -> None:
+    """calibration: its state in words, the pulses, the result, the last request, the dead times, the agreeing reading,
+    the values in force it was compared with and the quantities it corrected, in words."""
+    algo = _representative_smartpi()
+    cal = algo.get_published_diagnostics()["calibration"]
+    assert set(cal) == {
+        "state", "pulses_done", "result", "last_request", "last_time", "deadtime_start_s", "deadtime_stop_s",
+        "reading_a", "reading_b", "reading_lag_s", "in_force_a", "in_force_b", "in_force_lag_s", "corrected",
+    }
+    assert cal["state"] == "idle" and cal["pulses_done"] == 0 and cal["result"] is None
+    assert cal["last_request"] is None and cal["corrected"] == [] and cal["in_force_a"] is None
+    algo._start.calibration.in_force = {"a": 0.05, "b": 0.0003, "lag_s": 600.0}
+    algo._start.calibration.corrected = ["a", "b", "lag"]
+    cal = algo.get_published_diagnostics()["calibration"]
+    assert cal["corrected"] == ["heating rate", "loss coefficient", "emitter lag"]
+    assert (cal["in_force_a"], cal["in_force_b"], cal["in_force_lag_s"]) == (0.05, 0.0003, 600)
+    force_smartpi_stable_mode(algo)
+    algo._start.calibration.begin()
+    assert algo.get_published_diagnostics()["calibration"]["state"] == "waiting"
+    algo._start.pulse._cur = {"calibration": True}
+    for state, plain in (("rest", "rest"), ("heat", "full power"), ("stop", "stop")):
+        algo._start.pulse._state = state
+        published = algo.get_published_diagnostics()
+        assert published["calibration"]["state"] == plain and published["learning"]["start"]["pulse"] == "none"
+        assert published["control"]["phase"] == "Calibration"
+
+
+def test_published_learning_labels_name_the_pulses_with_the_direct_start_only() -> None:
+    """While the first model is not published: the bootstrap start keeps its labels, the direct start publishes plain
+    ones that name neither the bootstrap nor the hysteresis; after the stage both read the same."""
+    from custom_components.vtherm_smartpi.sensor import _get_diagnostic_state
+
+    def seen(algo: SmartPI) -> tuple:
+        live = algo.get_published_diagnostics()
+        return (
+            _get_diagnostic_state(algo), live["control"]["phase"], live["learning"]["stage"], live["model"]["confidence"],
+        )
+
+    boot = _representative_smartpi()
+    assert seen(boot) == ("bootstrap_hysteresis", "Hysteresis", "bootstrap", "ab_bootstrap")
+    direct = SmartPI(
+        hass=MagicMock(), cycle_min=2.0, minimal_activation_delay=0, minimal_deactivation_delay=0,
+        name="Published diagnostics direct", learning_start="direct",
+    )
+    state, phase, stage, confidence = seen(direct)
+    assert (state, phase, stage, confidence) == ("learning_pulses", "Learning", "measurement pulses", "ab_learning")
+    published = direct.get_published_diagnostics()
+    assert published["control"]["mode"] == "smartpi"
+    for value in (state, phase, stage, confidence):
+        assert "bootstrap" not in value.lower() and "hysteresis" not in value.lower()
+    direct._start.stage_waiting = lambda _estimator: False     # the first model is published
+    after = seen(direct)
+    assert after[:2] == ("stable", "Stable") and after[2] not in ("measurement pulses", "bootstrap")
+    assert after[3] != "ab_learning"
+
+
+def test_published_values_during_a_guard_cut_follow_the_room_in_plain_words() -> None:
+    """During a guard cut the PI is not computed: the error of the cut is published, no anticipation, and the regulation
+    mode says that the heating is cut above the setpoint; the values of the regulation come back after the cut."""
+    from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+    from custom_components.vtherm_smartpi.smartpi.guards import GUARD_CUT_I_MODE, GUARD_CUT_STATE
+
+    algo = _representative_smartpi()
+    force_smartpi_stable_mode(algo)
+    algo._last_error, algo._last_error_p, algo._anticipation.value = 0.4, 0.9, -0.5   # frozen at the cut start
+    algo._last_current_temp = 20.6
+    algo.guards._guard_cut_active = True
+    algo.ctl.last_i_mode = GUARD_CUT_I_MODE
+    algo.guards.note_cut(20.0, 20.6, VThermHvacMode_HEAT)
+    live = algo.get_published_diagnostics()
+    assert live["control"]["mode"] == GUARD_CUT_STATE == "heating cut above the setpoint"
+    assert live["temperature"]["error"] == -0.6 and live["temperature"]["anticipated"] == 20.6
+    assert live["analysis"]["control"]["error_p"] == -0.6 and live["analysis"]["control"]["anticipation_c"] == 0.0
+    assert (algo.error, algo.error_p, algo.anticipation_c) == (0.4, 0.9, -0.5)   # the regulation state is untouched
+    algo.ctl.last_i_mode = "I:FREEZE(hvac_off)"     # a calculation outside the cut (off) while the cut is held
+    live = algo.get_published_diagnostics()
+    assert live["control"]["mode"] == "smartpi" and live["temperature"]["error"] == 0.4
+    assert live["analysis"]["control"]["anticipation_c"] == -0.5

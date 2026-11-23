@@ -23,7 +23,7 @@
       - [Sortie du bootstrap](#sortie-du-bootstrap)
       - [Démarrage direct](#démarrage-direct)
     - [Phase stable](#phase-stable)
-    - [Recalibration automatique](#recalibration-automatique)
+    - [Calibration](#calibration)
     - [Apprentissage du retard de l'émetteur](#apprentissage-du-retard-de-lémetteur)
     - [Modèle de pièce](#modèle-de-pièce)
   - [Réglages conseillés](#réglages-conseillés)
@@ -284,7 +284,7 @@ Ce qu'il faut retenir pendant le bootstrap :
 - les oscillations de température sont normales et attendues,
 - la régulation est volontairement simple à ce stade,
 - les diagnostics sont particulièrement utiles pour suivre la progression,
-- `model.confidence` indique `ab_bootstrap` jusqu'à ce que le premier modèle thermique soit disponible,
+- `model.confidence` indique `ab_bootstrap` jusqu'à ce que le premier modèle thermique soit disponible (`ab_learning` avec le démarrage direct),
 - la vitesse dépend de la qualité des observations réelles, pas seulement du temps écoulé.
 
 #### Démarrage direct
@@ -292,8 +292,8 @@ Ce qu'il faut retenir pendant le bootstrap :
 Avec le démarrage direct, il n'y a pas de cycles d'hystérésis : SmartPI régule avec son PI dès la première minute, sur des gains par défaut sûrs, et la pièce reste proche de la consigne. Pour obtenir les mesures que donnerait le bootstrap, il fait au plus trois impulsions de mesure légères par mode (chauffage ou refroidissement). Une impulsion démarre quand la pièce est à la consigne ou au plus 0,3 °C en dessous (en miroir en refroidissement), et comporte trois étapes :
 
 1. un repos sans chauffage, de 45 minutes au plus ou jusqu'à ce que la pièce soit 0,5 °C sous la consigne,
-2. une chauffe à pleine puissance jusqu'à ce que la pièce commence à répondre, pendant 2 heures au plus,
-3. un arrêt jusqu'au pic de température qui suit, pendant 4 heures au plus ; la régulation reprend la main pendant cet arrêt si la pièce tombe 0,5 °C sous la consigne.
+2. une chauffe à pleine puissance jusqu'à ce que la pièce ait nettement répondu et soit revenue à la consigne (au plus 0,1 °C en dessous) ; une fois que l'étape a duré 30 minutes, elle s'arrête dès que la pièce a nettement répondu ; elle dure 2 heures au plus et s'arrête quand la pièce est 0,3 °C au-dessus de la consigne,
+3. un arrêt jusqu'au pic de température qui suit, pendant 4 heures au plus ; la régulation reprend la main pendant cet arrêt dès que la pièce est 0,5 °C sous la consigne et plus basse qu'au début de l'arrêt, et dans tous les cas à 0,8 °C en dessous.
 
 Deux impulsions sont séparées d'au moins 6 heures.
 
@@ -320,22 +320,44 @@ Près de la température cible, SmartPI cherche à éviter les micro-corrections
 
 SmartPI anticipe la température, en HEAT comme en COOL : les branches proportionnelle et intégrale lisent la température mesurée plus la distance que la pièce est sur le point de parcourir pendant le temps entre une commande et son effet, estimée à partir de la pente de la température. Cela abaisse la commande avant que la pièce n'atteigne la consigne, ce qui limite le dépassement des émetteurs lents (plancher chauffant, radiateurs à eau) et celui d'un refroidissement qui continue d'agir après son arrêt. L'horizon est le retard de l'émetteur mesuré par le bilan de chauffe en HEAT ; tant qu'aucun n'est mesuré, et toujours en COOL, il est dérivé des temps morts : le plus long entre le temps mort actif du mode et la moitié du temps mort passif de la réponse. La correction est limitée à 1 °C et s'établit progressivement lorsque la pièce approche de la consigne depuis loin, afin qu'une montée ou une descente depuis loin de la consigne ne soit pas ralentie. Lorsque la pièce entre dans la deadband autour de la consigne, la correction est conservée jusqu'à ce qu'elle s'éteigne, puis il n'y en a plus tant que la pièce y reste : la commande ne saute pas à l'arrivée, et une petite variation rapide de la sonde ne la fait pas bouger ensuite. Les deux branches utilisent la consigne brute.
 
-### Recalibration automatique
+### Calibration
 
-SmartPI continue de surveiller la qualité de son modèle dans le temps.
+Une calibration ne se lance que sur demande, avec le service [`force_smartpi_calibration`](#force_smartpi_calibration), une fois le premier modèle publié, quel que soit le démarrage de l'apprentissage. Elle mesure de nouveau la pièce avec au plus trois impulsions de mesure près de la consigne et corrige le modèle appris lorsque la mesure montre qu'il est nettement faux.
 
-Si l'apprentissage n'évolue plus suffisamment, il peut déclencher automatiquement une séquence de recalibration pour rafraîchir le modèle et les temps morts.
+Les impulsions sont dimensionnées à partir de ce que SmartPI sait déjà de la pièce (ses temps morts et l'horizon de l'anticipation) :
 
-Points utiles à connaître :
+- une impulsion démarre quand la pièce est entre 0,2 °C au-dessus de la consigne et 0,3 °C en dessous (en miroir en refroidissement) et que la commande est sous 80 % ; jusque-là la régulation fonctionne normalement,
+- repos : pas de chauffe pendant le temps mort après un arrêt plus 20 minutes, le temps dont l'apprentissage des temps morts a besoin pour mesurer le démarrage suivant ; le repos s'arrête plus tôt lorsque le point le plus bas vers lequel va la pièce (sa baisse actuelle prolongée pendant le temps mort après un démarrage) atteint 0,5 °C sous la consigne,
+- pleine puissance jusqu'à ce que la réponse au démarrage soit vue et que la pièce soit revenue à la consigne (au plus 0,1 °C en dessous), ou dès que la réponse est vue une fois que l'étape a duré 30 minutes, ou que la pièce soit 0,3 °C au-dessus de la consigne, au plus deux fois le temps mort après un démarrage plus l'horizon de l'anticipation (entre 2 et 4 heures),
+- arrêt jusqu'à ce que le pic de température qui suit la chauffe soit confirmé et que le temps mort après l'arrêt soit mesuré ; la régulation ne reprend la main plus tôt que lorsque la pièce est 0,5 °C sous la consigne et continue de baisser, et dans tous les cas à 0,8 °C en dessous,
+- aucune étape ne dure plus de 4 heures ; deux impulsions sont séparées de deux fois l'horizon de l'anticipation (entre 1 et 6 heures).
 
-- un snapshot de référence est mémorisé quand le modèle devient fiable,
-- un snapshot roulant est rafraîchi ensuite,
-- si le temps mort de refroidissement ne peut pas être appris pendant longtemps, SmartPI peut continuer avec un snapshot partiel,
-- une recalibration est jugée sur les paramètres qui l'ont déclenchée ; le `b`, qui dépend de la météo extérieure, n'est surveillé que lorsque la météo permet de l'apprendre,
-- une tentative échouée est relancée environ 6 heures plus tard,
-- un cycle de calibration (automatique ou forcé) dure plusieurs heures ; si le thermostat est éteint pendant ce temps (par exemple pendant qu'une fenêtre est ouverte), le cycle attend et reprend là où il était lorsque le même mode revient dans les 10 minutes ; après un arrêt plus long, ou dans un autre mode, il est annulé,
-- si la pièce ne peut pas atteindre un seuil de calibration (par exemple lorsqu'il fait chaud dehors), le cycle s'arrête immédiatement, aucune tentative n'est comptée et la suivante attend 24 heures,
-- après plusieurs échecs de recalibration, SmartPI continue de fonctionner et signale un modèle dégradé dans les diagnostics.
+Chaque impulsion donne à l'apprentissage des temps morts un démarrage et un arrêt depuis la pleine puissance, mesurés comme en régulation : ces temps morts rejoignent ceux qui sont appris. SmartPI lit chaque impulsion dans son ensemble, comme les impulsions du démarrage direct. Lorsque deux impulsions de la calibration concordent, leur vitesse de chauffe, leur coefficient de pertes et le retard de l'émetteur forment la lecture de la calibration, comparée aux valeurs en usage dans le mode de la calibration :
+
+- vitesse de chauffe : lorsque la valeur en usage s'écarte de la lecture de plus de 30 % de la lecture (la lecture est la meilleure estimation de la vraie valeur), l'apprentissage de la vitesse de chauffe de ce mode repart et la lecture la remplace jusqu'à ce que l'apprentissage publie sa propre valeur,
+- coefficient de pertes : il est lu et publié (`reading_b`), pas corrigé : le coefficient de pertes lu sur une impulsion est biaisé dans une pièce à murs épais. L'apprentissage garde le sien,
+- retard de l'émetteur : avec le démarrage direct, lorsque l'horizon de l'anticipation en usage s'écarte de plus de 30 % du retard lu, ce retard remplace le retard retenu au démarrage dans l'apprentissage du retard de réponse (jusqu'à ce que cet apprentissage mesure le sien) ; il ne change jamais l'horizon de l'anticipation. Avec le démarrage par bootstrap, il est seulement publié.
+
+Une valeur en usage à moins de 30 % de la lecture est laissée telle quelle : une calibration d'une pièce bien apprise ne change rien. Lorsqu'une valeur est corrigée, le changement de la puissance de maintien est reporté dans le terme intégral, si bien que le feed-forward et le terme intégral ne sautent pas (le terme proportionnel suit son nouveau gain comme d'habitude), et la progression de la rampe du feed-forward est conservée. Les valeurs corrigées sont conservées après un redémarrage. Le bilan de chauffe et l'apprentissage du retard de réponse observent les impulsions comme toute autre phase de chauffe. Pendant une calibration, l'apprentissage ne prend aucune mesure de la vitesse de chauffe (les impulsions et les remontées qui les suivent la biaiseraient) ; le coefficient de pertes et les temps morts continuent d'être appris. Après chaque impulsion, le terme intégral est figé jusqu'à ce que la pièce soit revenue à la consigne, afin que la remontée après l'impulsion n'accumule pas une intégrale qui surchaufferait la pièce ensuite.
+
+Une calibration se termine lorsque deux de ses impulsions concordent, lorsque ses trois impulsions sont faites et lues, ou après 48 heures. Lorsque cette fin arrive pendant une impulsion, une impulsion au repos rend la main à la régulation aussitôt, une impulsion qui chauffe à pleine puissance passe à son étape d'arrêt, et une impulsion dans son étape d'arrêt continue : la calibration se termine, et applique ses corrections, quand cette impulsion se termine. Une impulsion compte dès qu'elle a commencé à chauffer ; celle qui s'arrête pendant son repos (un changement de consigne, par exemple) ne compte pas. Éteindre le thermostat (ou une fenêtre, ou un délestage) termine l'impulsion en cours ; la calibration continue avec son impulsion suivante. Un passage entre chauffage et refroidissement, une réinitialisation de l'apprentissage ou une mise en pause de l'apprentissage l'annule aussitôt, avec son impulsion. Un redémarrage conserve la calibration en cours et son nombre d'impulsions ; l'impulsion en cours s'arrête.
+
+Le service peut être appelé par une automatisation : une demande qui ne peut pas lancer de calibration est refusée ou ignorée sans erreur, et la raison est publiée dans `live.calibration.last_request`. Une demande est refusée tant que le premier modèle est en apprentissage, que l'apprentissage est en pause, que le thermostat est éteint, et moins de 24 heures après la fin de la dernière calibration (une calibration annulée ne compte pas) ; elle est ignorée pendant une calibration en cours. Une fenêtre ouverte, un délestage ou une coupure de la chauffe après un dépassement ne la refusent pas : les impulsions attendent que la pièce puisse être mesurée. Par exemple, une pièce dont la consigne change rarement donne peu d'occasions de mesure à son apprentissage ; une automatisation hebdomadaire peut vérifier son modèle :
+
+```yaml
+triggers:
+  - trigger: time
+    at: "10:00:00"
+conditions:
+  - condition: time
+    weekday: sun
+actions:
+  - action: vtherm_smartpi.force_smartpi_calibration
+    target:
+      entity_id: climate.mon_thermostat
+```
+
+La calibration est résumée dans `live.calibration` (voir [Diagnostics](diagnostics.md)).
 
 ### Apprentissage du retard de l'émetteur
 
@@ -364,7 +386,7 @@ L'apprentissage n'utilise que des périodes calmes : des plages sans soleil, à 
   - Moitié de la valeur apprise plus courte que la référence : les gains gardent la référence. Une valeur apprise seule ne rend jamais les gains plus agressifs que la référence.
   - Entre 1 et 2 fois la référence : les gains utilisent la moitié de la valeur apprise.
   - Au-delà de 2 fois la référence : les gains utilisent la moitié de la valeur apprise seulement lorsque la valeur rapide et la valeur d'identification (la valeur affinée, sinon le `τe` de la dernière évaluation dont les deux ajustements concordent) concordent à un facteur 1,25 près. Sinon, ils utilisent deux fois la référence. Une borne inférieure n'est jamais confirmée de cette façon.
-- Lorsque les gains utilisent la valeur apprise, la bande proche et le maintien de l'intégrale après un démarrage ou une reprise du chauffage utilisent la valeur apprise elle-même comme temps mort de chauffe (`applied_s`) ; sinon ils gardent le temps mort du bootstrap. L'apprentissage de `a` et `b`, la calibration et AutoCalib gardent toujours le temps mort du bootstrap.
+- Lorsque les gains utilisent la valeur apprise, la bande proche et le maintien de l'intégrale après un démarrage ou une reprise du chauffage utilisent la valeur apprise elle-même comme temps mort de chauffe (`applied_s`) ; sinon ils gardent le temps mort du bootstrap. L'apprentissage de `a` et `b` garde toujours le temps mort du bootstrap.
 - Le temps mort du bootstrap n'est jamais modifié. Sans valeur apprise, la régulation l'utilise telle quelle.
 
 **Qualité des données**
@@ -559,13 +581,13 @@ C'est l'endroit principal à consulter pour savoir :
 
 - si SmartPI est encore en apprentissage ou déjà stable,
 - si le modèle est considéré comme fiable,
-- si une recalibration ou un mode dégradé a été signalé.
+- si une calibration est en cours et ce qu'elle a mesuré.
 
 Le bloc live le plus utile pendant l'apprentissage est `live.learning`.
 
 Champs importants :
 
-- `stage` : état global comme `bootstrap`, `learning`, `monitoring` ou `degraded`,
+- `stage` : état global comme `bootstrap`, `measurement pulses` (démarrage direct, premier modèle non publié), `learning`, `monitoring` ou `degraded`,
 - `bootstrap_progress_percent` : progression du bootstrap,
 - `bootstrap_status` : étape bootstrap en cours,
 - `start` : le démarrage de l'apprentissage, les impulsions de mesure faites et les valeurs conservées (voir [Diagnostics](diagnostics.md)),
@@ -582,8 +604,7 @@ Autres blocs utiles sous `live` :
 - `model` : `a`, `b`, niveau de confiance et temps morts appris,
 - `feedforward` : source de la puissance de maintien et part des murs,
 - `setpoint` : état du boost de consigne,
-- `autocalib` : état de la supervision automatique,
-- `calibration` : état d'une calibration forcée.
+- `calibration` : la calibration en cours ou la dernière : son état, ses impulsions, son résultat, la dernière demande, ses temps morts, sa lecture, les valeurs auxquelles elle a été comparée et ce qu'elle a corrigé.
 
 Le bloc `setpoint` contient :
 
@@ -629,19 +650,20 @@ Le réglage courant est disponible dans `specific_states.smartpi_learning_enable
 
 À utiliser quand le comportement thermique du logement a changé de manière importante, par exemple après des travaux d'isolation ou un changement d'émetteurs.
 
-Ce service efface l'apprentissage SmartPI et le relance depuis un état vierge, avec le démarrage de l'apprentissage réglé dans la configuration (bootstrap par défaut). La supervision de la calibration automatique repart de zéro avec le nouvel apprentissage.
+Ce service efface l'apprentissage SmartPI et le relance depuis un état vierge, avec le démarrage de l'apprentissage réglé dans la configuration (bootstrap par défaut). Une calibration en cours est annulée.
 
 ### `force_smartpi_calibration`
 
-À utiliser si vous souhaitez lancer un cycle de calibration sans attendre le déclenchement automatique.
+À utiliser si vous souhaitez que SmartPI mesure de nouveau la pièce avec quelques impulsions de mesure près de la consigne, et corrige son modèle lorsque la mesure montre qu'il est nettement faux (voir [Calibration](#calibration)).
 
 Ce service est utile si :
 
 - les temps morts affichés semblent incohérents,
 - la régulation fonctionne moins bien qu'avant,
-- vous souhaitez rafraîchir l'apprentissage après un changement important des conditions réelles.
+- vous souhaitez comparer la vitesse de chauffe, le coefficient de pertes et le retard de l'émetteur de la pièce au modèle appris,
+- la consigne de la pièce change rarement (un appel hebdomadaire depuis une automatisation).
 
-Si SmartPI est encore en phase bootstrap, la demande est ignorée.
+L'appel n'échoue jamais sur un thermostat SmartPI : la demande est refusée tant que SmartPI apprend son premier modèle, que l'apprentissage est en pause, que le thermostat est éteint, ou moins de 24 heures après la fin de la dernière calibration, et ignorée lorsqu'une calibration est déjà en cours (`live.calibration.last_request` en donne la raison). Mettre l'apprentissage en pause annule une calibration en cours.
 
 ### `reset_smartpi_integral`
 

@@ -468,7 +468,6 @@ class LearningWindowManager:
                 t_cool_episode_start,
                 deadtime_skip_count_a=deadtime_skip_count_a,
                 deadtime_skip_count_b=deadtime_skip_count_b,
-                is_calibrating=is_calibrating,
                 is_hysteresis=is_hysteresis,
                 hvac_mode=hvac_mode,
                 target_temp=target_temp,
@@ -610,7 +609,6 @@ class LearningWindowManager:
         t_cool_episode_start: float | None,
         deadtime_skip_count_a: int = 0,
         deadtime_skip_count_b: int = 0,
-        is_calibrating: bool = False,
         is_hysteresis: bool = False,
         hvac_mode: "VThermHvacMode | None" = None,
         target_temp: float | None = None,
@@ -665,19 +663,15 @@ class LearningWindowManager:
         # through a governance regime transition within the cycle.
 
         # --- Governance gate (thermal domain: a/b learning) ---
-        # During calibration, bypass governance to allow A/B learning
-        # (the system traverses deadband/nearband at 100%/0%, governance
-        # restrictions are not relevant).
-        if not is_calibrating:
-            gov_decision, gov_reason = governance.decide_update(
-                'thermal', self._learning_resume_ts, now
-            )
-            if gov_decision in (GovernanceDecision.HARD_FREEZE, GovernanceDecision.FREEZE):
-                estimator.learn_skip_count += 1
-                estimator.learn_last_reason = f"skip: governance ({gov_reason.value})"
-                if self._active:
-                    self.reset()
-                return deadtime_skip_count_a, deadtime_skip_count_b
+        gov_decision, gov_reason = governance.decide_update(
+            'thermal', self._learning_resume_ts, now
+        )
+        if gov_decision in (GovernanceDecision.HARD_FREEZE, GovernanceDecision.FREEZE):
+            estimator.learn_skip_count += 1
+            estimator.learn_last_reason = f"skip: governance ({gov_reason.value})"
+            if self._active:
+                self.reset()
+            return deadtime_skip_count_a, deadtime_skip_count_b
 
         # This gate only protects ON/A learning from contaminated setpoint
         # transients. OFF/B learning must continue through the normal guards.
@@ -685,11 +679,7 @@ class LearningWindowManager:
             self._active and self._u_first is not None and self._u_first > U_ON_MIN
         )
         blocked_a_start = not self._active and u_active > U_ON_MIN
-        if (
-            not is_calibrating
-            and not a_learning_allowed
-            and (blocked_a_window or blocked_a_start)
-        ):
+        if not a_learning_allowed and (blocked_a_window or blocked_a_start):
             estimator.learn_skip_count += 1
             estimator.learn_last_reason = (
                 a_learning_block_reason or "skip: setpoint transient"
@@ -827,13 +817,8 @@ class LearningWindowManager:
             elif u_active < U_OFF_MAX:
                 # The emitter keeps heating after a cut: the passive dead time
                 # gives a floor of this residual power decay, used with or
-                # without a published lag. The bootstrap keeps its own guards
-                # and calibration is exempt.
-                min_settle_s = (
-                    None
-                    if is_hysteresis or is_calibrating
-                    else _passive_settle_s(dt_est, hvac_mode)
-                )
+                # without a published lag. The bootstrap keeps its own guards.
+                min_settle_s = None if is_hysteresis else _passive_settle_s(dt_est, hvac_mode)
                 settle_end, settle_param = (
                     self._response_lag.passive_gate_end(min_settle_s),
                     "b",
@@ -1039,11 +1024,7 @@ class LearningWindowManager:
         # A window can start as passive and become active after power changes.
         # Recheck the effective duty before submission so such a mixed window
         # cannot bypass the transient gate.
-        if (
-            not is_calibrating
-            and not a_learning_allowed
-            and u_eff > U_ON_MIN
-        ):
+        if not a_learning_allowed and u_eff > U_ON_MIN:
             estimator.learn_skip_count += 1
             estimator.learn_last_reason = (
                 a_learning_block_reason or "skip: setpoint transient"

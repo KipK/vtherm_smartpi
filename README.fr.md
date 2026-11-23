@@ -26,7 +26,7 @@ SmartPI est un algorithme de contrôle thermique avancé basé sur un modèle de
 - **Feed-forward basé sur le modèle** : Estime la puissance de maintien nécessaire au point de consigne, introduite progressivement pendant que le modèle est appris
 - **Anticipation (chauffage et refroidissement)** : Lit la température que la pièce s'apprête à atteindre, à partir de sa pente et du temps entre une commande et son effet, pour baisser la commande en avance et limiter le dépassement des émetteurs lents
 - **Gouvernance Safety-First** : Une matrice par régime gèle ou déverrouille l'apprentissage et l'adaptation des gains selon le contexte opérationnel
-- **Auto-calibration** : Surveille la qualité du modèle et déclenche une séquence de recalibration lorsque l'apprentissage stagne
+- **Calibration sur demande** : quelques impulsions de mesure près de la consigne mesurent de nouveau la pièce et corrigent le modèle appris lorsqu'il est nettement faux ; peut être appelée par une automatisation
 - **Linéarisation de courbe de vanne** : Traduit la demande SmartPI en position de vanne adaptée au comportement non linéaire des vannes thermostatiques (TRV)
 - **Diagnostics détaillés** : Publie l'état de l'apprentissage, l'état du modèle et les données de régulation — consultable via une carte Markdown Home Assistant dédiée ou le panel de régulation [Equinox](https://github.com/KipK/equinox)
 

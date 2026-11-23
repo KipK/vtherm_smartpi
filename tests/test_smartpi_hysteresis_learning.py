@@ -86,8 +86,6 @@ class TestSmartPiIntegration:
         """Verify SmartPI feeds the dead time estimator in STABLE phase."""
         hass = MagicMock()
         pi = SmartPI(hass, 10.0, 0, 0, "test_pi")
-        import time
-        pi.calibration_mgr.last_calibration_time = time.time()
         
         pi.dt_est = MagicMock()
         pi.dt_est.deadtime_heat_s = 120.0 # Set valid float

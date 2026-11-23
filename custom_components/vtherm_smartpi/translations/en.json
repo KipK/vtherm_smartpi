@@ -109,7 +109,7 @@
     },
     "force_smartpi_calibration": {
       "name": "Force SmartPI calibration",
-      "description": "Force a SmartPI calibration cycle for a thermostat."
+      "description": "Start a SmartPI calibration for a thermostat: up to three measurement pulses near the setpoint, once the first model is published; the learned model is corrected where the measure differs from it by more than 30 %. Safe to call from an automation: a request is refused while learning the first model, while learning is paused, while the thermostat is off or within 24 hours of the last calibration, and ignored while one is running."
     },
     "reset_smartpi_integral": {
       "name": "Reset SmartPI integral",

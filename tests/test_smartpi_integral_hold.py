@@ -34,7 +34,6 @@ def _force_stable_phase(pi):
     pi.est.learn_ok_count_a = max(pi.est.learn_ok_count_a, 1)
     pi.est.learn_ok_count_b = max(pi.est.learn_ok_count_b, 1)
     pi._output_initialized = True
-    pi.calibration_mgr.last_calibration_time = time.time()
 
 
 def _set_reliable_deadtime(pi, dt_s: float):

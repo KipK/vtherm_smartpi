@@ -49,7 +49,6 @@ def force_stable_mode(smartpi):
         smartpi.dt_est.deadtime_cool_s = 600.0
         smartpi.dt_est.deadtime_heat_reliable = True
         smartpi.dt_est.deadtime_cool_reliable = True
-        smartpi.calibration_mgr.last_calibration_time = time.time()
 
 
 # =====================================================================

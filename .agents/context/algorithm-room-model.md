@@ -130,7 +130,7 @@ Policy (`policy.py`):
 What it influences (`algo.py::SmartPI.regulation_dead_time`, `gain_dead_time`): in HEAT only, a
 `RegulationDeadTime` view replaces the HEAT active dead time. Gains use `gains_s`; near band, I-hold
 and the room-model emitter first moment use `applied_s`. The bootstrap/calibration value is never modified;
-`a`/`b` learning, calibration and AutoCalib keep the bootstrap value.
+`a`/`b` learning keeps the bootstrap value.
 Observation only: `refined.last_evaluation.a` and `.b` ("information only, never applied"), `refined.k_per_s`,
 `refined.tau_w_h` (the room-model identification does not read them; room class is used inside tar morning
 fits), `night_room_class`, `pending_steps`, `history_h`, `fast.last_morning`.

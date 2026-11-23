@@ -3,6 +3,18 @@
 SmartPI exposes a dedicated Home Assistant diagnostic sensor. Its state is the
 current regulation phase and its attributes follow schema version 2.
 
+While the first model is not published, the state, `live.control.phase`,
+`live.learning.stage` and `live.model.confidence` name the start of the learning:
+
+| Start | State | `control.phase` | `learning.stage` | `model.confidence` |
+|---|---|---|---|---|
+| Bootstrap | `bootstrap_hysteresis` | `Hysteresis` | `bootstrap` | `ab_bootstrap` |
+| Direct start | `learning_pulses` | `Learning` | `measurement pulses` | `ab_learning` |
+
+Afterwards both starts publish the same values (`stable` or `calibration`,
+`Stable` or `Calibration`, `learning`, `monitoring` or `degraded`, `ab_ok`,
+`ab_degraded` or `ab_bad`).
+
 ## Attribute envelope
 
 ```yaml
@@ -67,12 +79,22 @@ The `live` block is organized by responsibility:
 | `governance` | Thermal regime and model-update decision |
 | `feedforward` | Holding power source, wall part of the holding power and dead-band source |
 | `setpoint` | Setpoint boost state |
-| `autocalib` | Automatic calibration supervisor state |
-| `calibration` | Calibration state, AutoCalib retry counter (`autocalib.retry_count`, up to `AUTOCALIB_MAX_RETRIES`) and last completion time |
+| `calibration` | The calibration in progress or the last one: state, pulses, result, last request, dead times measured, reading, values in use and corrections |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
 | `tar_learning` | Emitter lag learning |
 | `room_model` | Room model |
+
+`control.mode` is `smartpi` while the PI regulates, `hysteresis` during the
+bootstrap, and `heating cut above the setpoint` during a guard cut (the room went
+past the setpoint by the near-band above it: the heating is forced off). The PI is
+not computed during a cut: `temperature.error` and `analysis.control.error_p`
+are then the setpoint minus the temperature of the last calculation,
+`analysis.control.anticipation_c` is `0` and `temperature.anticipated` is the
+indoor temperature.
+
+`temperature.integral_hold_source` is `calibration_recovery` while the integral
+is held after a calibration pulse, until the room reaches the setpoint.
 
 `control.last_restart` describes the last restart of Home Assistant or of the
 integration. It is `null` before the first regulation tick after the restart,
@@ -92,13 +114,41 @@ the model is in; the bootstrap start shows `0` pulses and no pulse in progress.
 | Field | Meaning |
 |---|---|
 | `mode` | Start of the learning in progress: `bootstrap` or `direct`. A thermostat that has already learned keeps the start its learning began with, whatever the option says |
-| `pulses_done` | Measurement pulses started since the learning began, in the current mode (three at most) |
-| `pulse` | The pulse in progress: `none`, `rest` (no heating, waiting for the room to drop), `full power` or `stop` (waiting for the temperature peak) |
+| `pulses_done` | Measurement pulses started since the learning began, in the current mode (three at most); the pulses of a calibration are not counted |
+| `pulse` | The pulse in progress: `none`, `rest` (no heating, waiting for the room to drop), `full power` or `stop` (waiting for the temperature peak); a pulse of a calibration shows `none` here |
 | `values_kept` | `true` when two agreeing readings gave values for the current mode |
 | `values_kept_at` | Local time at which the values were kept (ISO 8601), `null` when none are kept or the time is unknown |
 | `kept_a` | Kept heating rate in °C/min at full power (5 decimals), `null` when none are kept |
 | `kept_b` | Kept loss coefficient in 1/min (6 decimals), `null` when none are kept |
 | `kept_lag_s` | Kept emitter lag in seconds, `null` when none are kept |
+
+`calibration` summarises the calibration requested with the
+`force_smartpi_calibration` service (see **Calibration** in the
+[SmartPI documentation](vtherm_smartpi.md)): the calibration in progress, or the
+last one until the next request.
+
+| Field | Meaning |
+|---|---|
+| `state` | `idle` (no calibration in progress), `waiting` (between pulses, the regulation runs), or the step of its pulse in progress: `rest`, `full power`, `stop` |
+| `pulses_done` | Pulses started by the calibration (three at most; an interrupted pulse counts) |
+| `result` | `null` before any calibration, `in progress`, `readings agree` (two pulses agree), `pulses done` (three pulses read without agreement), `time limit` (48 hours) or `cancelled` (change between heating and cooling, return of the learning stage, learning reset, learning paused) |
+| `last_request` | Answer to the last request, `null` before any: `started`, `refused: learning stage`, `refused: learning paused`, `refused: thermostat off`, `refused: too soon` (less than 24 hours after the end of the last calibration), `ignored: in progress` |
+| `last_time` | Local time at which the last calibration that was not cancelled ended (ISO 8601), `null` before |
+| `deadtime_start_s` | Last dead time after a start measured during a pulse of the calibration, in seconds, `null` when none |
+| `deadtime_stop_s` | Last dead time after a stop measured during a pulse of the calibration, in seconds, `null` when none |
+| `reading_a` | Heating rate of the two agreeing pulses in °C/min at full power (5 decimals), `null` until two pulses agree |
+| `reading_b` | Loss coefficient of the two agreeing pulses in 1/min (6 decimals), `null` until two pulses agree; published only, never corrected |
+| `reading_lag_s` | Emitter lag of the two agreeing pulses in seconds, `null` until two pulses agree |
+| `in_force_a` | Heating rate in use when the pulses agreed, in °C/min at full power (5 decimals), compared with `reading_a`; `null` until two pulses agree |
+| `in_force_b` | Loss coefficient in use when the pulses agreed, in 1/min (6 decimals); `null` until two pulses agree |
+| `in_force_lag_s` | Horizon of the anticipation in use when the pulses agreed, in seconds, compared with `reading_lag_s`; `null` until two pulses agree |
+| `corrected` | What the calibration corrected: a list of `heating rate`, `emitter lag`; empty when nothing was corrected |
+
+The dead times measured by the pulses join the learned dead times like any other
+measurement. A quantity of the reading is corrected only when it differs from
+the value in use by more than 30 % (see **Calibration** in the
+[SmartPI documentation](vtherm_smartpi.md)); the reading never sets the horizon
+of the anticipation.
 
 `analysis` groups the advanced live values into `control`, `learning`,
 `deadtime`, `governance` and `feedforward`.
@@ -108,7 +158,7 @@ anticipation of the temperature, in heating and in cooling:
 
 | Field | Meaning |
 |---|---|
-| `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon or without a rising or falling slope) |
+| `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon, without a rising or falling slope, or during a guard cut) |
 | `anticipation_horizon_s` | Horizon of the anticipation in seconds (the time between a command and its effect), `0` when none |
 | `anticipation_horizon_source` | Where the horizon comes from: `measurement pulses` (emitter lag kept from the measurement pulses of the direct start, in heating and in cooling), `heating balance` (median of the last emitter lags measured), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none`; the heating balance is used in heating only |
 

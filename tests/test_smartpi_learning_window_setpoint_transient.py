@@ -198,28 +198,6 @@ def test_allowed_on_submits_a_learning_with_existing_defaults():
     assert estimator.learn.call_args.kwargs["u"] == 0.8
 
 
-def test_calibration_bypasses_blocked_on_gate():
-    """Calibration can still submit ON/A learning when the gate is closed."""
-    window = LearningWindowManager("test")
-    estimator = _make_estimator()
-    dt_estimator = _make_dt_estimator()
-
-    with patch(
-        "custom_components.vtherm_smartpi.smartpi.ab_estimator.ABEstimator.robust_dTdt_per_min",
-        return_value=(0.1, "test_slope", 3),
-    ):
-        _update(
-            window,
-            estimator,
-            dt_estimator,
-            u_active=0.8,
-            a_learning_allowed=False,
-            is_calibrating=True,
-        )
-
-    estimator.learn.assert_called_once()
-
-
 def test_blocked_on_uses_supplied_diagnostic_reason():
     """A caller-provided reason is preserved in the learning diagnostics."""
     window = LearningWindowManager("test")

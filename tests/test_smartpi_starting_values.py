@@ -252,3 +252,26 @@ def test_the_bootstrap_start_runs_the_reader_and_no_pulse():
     algo._start.advance(1000.0, 20.0, 19.0, VThermHvacMode_HEAT, 0.0)
     assert algo._start.record.enabled is True and algo._start.pulse.active is False
     assert algo.command_is_hysteresis is True and algo._start.pulse.save(1000.0) is None
+
+
+def test_a_corrected_value_survives_a_save_and_a_load_without_a_hand_over():
+    start = StartingValues()
+    start.correct("a", 0.08)
+    start.latch(7)
+    saved = json.loads(json.dumps(start.save()))
+    assert saved["handed"] is False and saved["corrected"] == ["a"]
+    loaded = StartingValues()
+    loaded.load(saved)
+    assert loaded.standing("a") and loaded.value("a") == 0.08 and loaded.corrected == {"a"}
+    assert loaded.credit == 7 and not loaded.handed
+    loaded.release("a")
+    assert loaded.corrected == set() and "corrected" not in loaded.save()
+
+
+def test_the_latch_never_lowers_the_credit():
+    start = StartingValues()
+    start.give(0.05, 0.0003, "heat")
+    start.latch(3)
+    assert start.credit == 2 * KEPT_RAMP_MEASURES
+    start.latch(40)
+    assert start.credit == 40

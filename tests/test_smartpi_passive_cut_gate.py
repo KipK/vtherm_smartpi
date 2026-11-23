@@ -87,7 +87,6 @@ def _run_cut(
     in_near_band=False,
     in_deadband=False,
     is_hysteresis=False,
-    is_calibrating=False,
     hvac_mode=VThermHvacMode_HEAT,
     off_ticks=60,
 ):
@@ -125,7 +124,7 @@ def _run_cut(
             in_deadband=in_deadband, in_near_band=in_near_band,
             t_heat_episode_start=ep_start if hvac_mode == VThermHvacMode_HEAT else None,
             t_cool_episode_start=ep_start if hvac_mode == VThermHvacMode_COOL else None,
-            is_hysteresis=is_hysteresis, is_calibrating=is_calibrating,
+            is_hysteresis=is_hysteresis,
             hvac_mode=hvac_mode, target_temp=target, raw_temp=reading,
         )
         reasons.append(est.learn_last_reason)
@@ -181,16 +180,9 @@ def test_no_gate_without_a_reliable_passive_dead_time(dt):
 
 
 @pytest.mark.parametrize("lag_published", [False, True])
-@pytest.mark.parametrize("phase", ["hysteresis", "calibration"])
-def test_bootstrap_and_calibration_windows_do_not_depend_on_the_passive_dead_time(
-    phase, lag_published
-):
-    """The dead time floor never acts in the bootstrap or a calibration."""
-    flags = {
-        "is_hysteresis": phase == "hysteresis",
-        "is_calibrating": phase == "calibration",
-        "lag_published": lag_published,
-    }
+def test_bootstrap_windows_do_not_depend_on_the_passive_dead_time(lag_published):
+    """The dead time floor never acts in the bootstrap."""
+    flags = {"is_hysteresis": True, "lag_published": lag_published}
     runs = [
         _run_cut(dt=_dt_est(cool_s=value), **flags)
         for value in (PASSIVE_DT_S, 10.0 * PASSIVE_DT_S, 60.0)

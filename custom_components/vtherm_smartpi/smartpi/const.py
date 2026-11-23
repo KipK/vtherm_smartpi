@@ -18,21 +18,7 @@ class SmartPIPhase(str, Enum):
     """Phases of the Smart-PI algorithm."""
     HYSTERESIS = "Hysteresis"  # Learning phase with ON/OFF control
     STABLE = "Stable"          # PI control with reliable model
-    CALIBRATION = "Calibration" # Forced calibration cycle in progress
-
-class SmartPICalibrationPhase(str, Enum):
-    """Phases of the Smart-PI forced calibration."""
-    IDLE = "Idle"
-    COOL_DOWN = "CoolDown"
-    HEAT_UP = "HeatUp"
-    COOL_DOWN_FINAL = "CoolDownFinal"
-
-class SmartPICalibrationResult(str, Enum):
-    """Resolution status of a Smart-PI forced calibration cycle."""
-    PENDING = "Pending"
-    SUCCESS = "Success"
-    CANCELLED = "Cancelled"
-    UNREACHABLE = "Unreachable"
+    CALIBRATION = "Calibration" # A pulse of a calibration commands the output
 
 # ########################################################################
 #                      SAFETY-FIRST GOVERNANCE ENUMS                   #
@@ -383,42 +369,8 @@ NEAR_BAND_TAPER_KP_MIN = 0.75
 NEAR_BAND_TAPER_KI_MIN = 0.45
 
 
-# --- Forced Calibration Constants ---
-CALIBRATION_TIMEOUT_MIN = 600  # 10 hours timeout
-# A calibration survives a stop of the thermostat shorter than this (minutes)
-# when the same mode comes back; a longer stop cancels it
-CALIBRATION_PAUSE_MAX_MIN = 10
-# A calibration threshold is reachable when the equilibrium of the phase
-# lies at least this far beyond it (deg C)
-CALIBRATION_REACHABILITY_MARGIN_C = 0.5
-
-# --- AutoCalibTrigger Enums ---
-
-class AutoCalibState(str, Enum):
-    """State machine states for AutoCalibTrigger."""
-    IDLE = "idle"
-    WAITING_SNAPSHOT = "waiting_snapshot"
-    MONITORING = "monitoring"
-    TRIGGERED = "triggered"
-
-
-class AutoCalibWaitingReason(str, Enum):
-    """Reason for remaining in waiting_snapshot state."""
-    NONE = "none"
-    DEADTIME_COOL_PENDING = "deadtime_cool_pending"
-    FALLBACK_7D_COUNTDOWN = "fallback_7d_countdown"
-
-
-# --- AutoCalibTrigger Constants ---
-AUTOCALIB_SNAPSHOT_PERIOD_H = 120          # Rolling snapshot period: 5 days
-AUTOCALIB_DT_COOL_FALLBACK_DAYS = 7       # Days before fallback if cool deadtime never reliable
-AUTOCALIB_COOLDOWN_H = 24                  # Minimum hours between calibrations
-AUTOCALIB_A_MAD_THRESHOLD = 0.25          # MAD/med threshold for 'a' stagnation
-AUTOCALIB_B_MAD_THRESHOLD = 0.30          # MAD/med threshold for 'b' stagnation
-AUTOCALIB_TEXT_GRADIENT_C = 5.0           # Min Tin-Text gradient to check deadtime_cool stagnation
-AUTOCALIB_MAX_RETRIES = 3                  # Max retries before declaring model degraded
-AUTOCALIB_RETRY_DELAY_H = 6               # Hours between a failed attempt and its retry
-AUTOCALIB_EXIT_NEW_OBS_MIN = 1            # Minimum new observations (a/b) for positive exit
+# --- Calibration ---
+CALIBRATION_MAX_S = 48.0 * 3600.0  # longest calibration, from its first calculation
 
 # --- AB confidence ---
 

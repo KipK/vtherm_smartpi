@@ -75,16 +75,15 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 
 **Measurement events and starting values** (one reading chain; see `algorithm-core.md` section 6b)
 - `peak_search.py`: `PeakSearch`, the one search of the temperature peak after a cut (300 s bins, earliest strictly highest mean, confirmed by a closed bin 1800 s later, 4 h limit). Used by the detector (so by the heating balance) and by the dead-time estimator in peak mode.
-- `measure_event.py`: `MeasureEventDetector` (rest, constant power, stop until the peak, HEAT and COOL, each event tagged with its source: pulse, bootstrap, calibration, regulation) and `MeasureRecord` (bounded record of power, room and outdoor temperature on change; for a switch the power channel holds the real on/off edges from the applied-command receipts).
-- `event_reading.py`: `EventReader`, reads the closed events of source pulse or bootstrap on the record; queues the fit, keeps two agreeing readings per mode (`kept_for(mode)`).
+- `measure_event.py`: `MeasureEventDetector` (rest, constant power, stop until the peak, HEAT and COOL, each event tagged with its source: pulse, bootstrap, calibration (a pulse of a calibration), regulation) and `MeasureRecord` (bounded record of power, room and outdoor temperature on change; for a switch the power channel holds the real on/off edges from the applied-command receipts).
+- `event_reading.py`: `EventReader`, reads the closed events of source pulse, bootstrap or calibration on the record; queues the fit, keeps two agreeing readings per mode (`kept_for(mode)`); calibration readings form their own set (`calibration_reading(mode)`, published only).
 - `event_fit.py`: the fit job (pure delay, first-order lag, `a`, losses `b`; numpy/scipy lazily imported) and the agreement rule.
 - `starting_values.py`: `StartingValues`, `a` and `b` standing for the learning's own until it has them (`a` once per mode, `b` with the first hand-over); the warm-up credit.
-- `learning_start.py`: `LearningStart`, option `learning_start` (bootstrap or direct; the configured start and the start of the learning in progress), phase of the algorithm, source of the command, hand-over of the kept values per mode, saved keys; `command_is_on_off`; `public()` builds `live.learning.start`.
-- `measure_pulse.py`: `MeasurePulse`, the light measurement pulses of the direct start (three per mode); chosen by the user option `smart_pi_learning_start`, which `handler.py` passes as `SmartPI(learning_start=...)`.
+- `learning_start.py`: `LearningStart`, option `learning_start` (bootstrap or direct; the configured start and the start of the learning in progress), phase of the algorithm, source of the command, hand-over of the kept values per mode, the calibration request and its end (`request_calibration`), saved keys; `command_is_on_off`; `public()` builds `live.learning.start`, `calibration_public()` builds `live.calibration`.
+- `measure_pulse.py`: `MeasurePulse`, the light measurement pulses of the direct start (three per mode) and of a calibration (own count); chosen by the user option `smart_pi_learning_start`, which `handler.py` passes as `SmartPI(learning_start=...)`.
 
 **Calibration**
-- `calibration.py`: `CalibrationManager`: forced calibration state machine.
-- `autocalib.py`: `AutoCalibTrigger`: triggers calibration on parameter stagnation.
+- `calibration.py`: `Calibration`, held by `LearningStart`: the calibration on request (requests and refusals, pulse limits, end rules, 48 h limit, dead times measured, correction rule and its switches, persistence, plain summary). No automatic calibration.
 
 **Feed-forward**
 - `feedforward.py`: FF1 holding power (learned b / a, or the published room model) and its warm-up factor.

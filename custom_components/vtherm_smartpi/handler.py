@@ -2,7 +2,6 @@
 """SmartPI algorithm handler for the plugin runtime."""
 
 import logging
-import time
 from typing import TYPE_CHECKING
 from homeassistant.util import slugify
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
@@ -307,11 +306,6 @@ class SmartPIHandler:
                 _LOGGER.debug("%s - SmartPI state saved", t)
             except Exception as e:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
-
-    def _fire_autocalib_event(self, event):
-        """Fire an AutoCalib event: `entity_id` is the climate entity, `name` the thermostat name."""
-        self._thermostat.hass.bus.async_fire(event.event_type, {**event.payload, "entity_id": self._thermostat.entity_id})
-        _LOGGER.info("%s - AutoCalib event fired: %s", self._thermostat.name, event.event_type)
 
     def remove(self):
         """Cleanup and save state on removal."""
@@ -626,38 +620,6 @@ class SmartPIHandler:
         if self._store and t.prop_algorithm:
             self._store.schedule_save(t.prop_algorithm)
 
-        # --- AutoCalibTrigger: hourly check ---
-        if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
-            algo = t.prop_algorithm
-            now_wall = time.time()
-
-            # A calibration run ended since the previous pass
-            completed_result = algo.calibration_mgr.take_completed_result()
-            if completed_result is not None:
-                ac_event = algo.autocalib.on_calibration_complete(
-                    now_wall=now_wall,
-                    algo=algo,
-                    result=completed_result,
-                )
-                if ac_event is not None:
-                    self._fire_autocalib_event(ac_event)
-
-            # Hourly stagnation check
-            ac_event = algo.autocalib.check_hourly(
-                now_wall=now_wall,
-                algo=algo,
-                ext_temp=t.current_outdoor_temperature,
-                current_temp=t.current_temperature,
-            )
-            if ac_event is not None:
-                self._fire_autocalib_event(ac_event)
-                if ac_event.should_trigger_calibration:
-                    # AutoCalibTrigger decided to start a calibration
-                    algo.calibration_mgr.request_calibration(phase=algo.phase)
-                    _LOGGER.warning(
-                        "%s - AutoCalib: calibration requested by supervisor", t.name
-                    )
-
         if self._should_publish_intermediate:
             async_dispatcher_send(t.hass, diag_update_signal(t.unique_id))
 
@@ -683,9 +645,6 @@ class SmartPIHandler:
                     _LOGGER.debug("%s - SmartPI resumed from OFF: cycle and learning window reset", t.name)
         else:
             self._stop_recalc_timer()
-            # A running calibration is suspended; the mode that comes back decides its fate
-            if isinstance(t.prop_algorithm, SmartPI):
-                t.prop_algorithm.calibration_mgr.suspend()
 
     def _start_recalc_timer(self):
         """Start the periodic recalculation timer."""
@@ -770,25 +729,20 @@ class SmartPIHandler:
             await self._async_save()
 
     async def service_force_smartpi_calibration(self):
-        """Force calibration."""
+        """Request a calibration (measurement pulses near the setpoint)."""
         t = self._thermostat
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
-            event = t.prop_algorithm.force_calibration()
+            t.prop_algorithm.force_calibration()
             t.hass.bus.async_fire(EventType.SMART_PI_EVENT.value, {
                  "entity_id": t.entity_id,
                  "type": "force_calibration"
              })
-            if event is not None:
-                self._fire_autocalib_event(event)
-
             write_event_log(_LOGGER, t, "SmartPI forced calibration triggered")
             # Force immediate recalculation to update state
             await self.control_heating(force=True)
             self.update_attributes()
             t.async_write_ha_state()
             await self._async_save()
-
-            _LOGGER.debug("%s - AutoCalib: manual calibration triggered, will check exit on completion", t.name)
 
     async def service_reset_smartpi_integral(self):
         """Reset the integral accumulator to zero."""

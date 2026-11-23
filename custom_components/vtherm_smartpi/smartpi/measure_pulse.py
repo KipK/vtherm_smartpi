@@ -7,22 +7,31 @@ start, a heating rate and a dead time after a stop. A pulse has three steps:
 1. rest: no heating for ``PULSE_REST_MAX_S``, or until the room is ``PULSE_REST_UNDER_C`` on the demand side of the
    setpoint (under it in HEAT, over it in COOL) if that comes first;
 2. heating at full power until the dead-time estimator has detected the response to that start (its own detection,
-   unchanged), or for ``PULSE_HEAT_MAX_S`` at most, or as soon as the room is ``PULSE_HEAT_OVER_C`` on the other side
-   of the setpoint (over it in HEAT, under it in COOL); in the last two cases the pulse gives no measure of the dead
-   time after a start, and the stop step still runs;
-3. stop until the dead-time estimator has confirmed the temperature peak that follows the stop, or for
-   ``PULSE_STOP_MAX_S`` at most; the PI takes over earlier when the room is ``PULSE_TAKEOVER_C`` on the demand
-   side of the setpoint.
+   unchanged) and the rise stands out of the sensor and, while the step has lasted less than
+   ``PULSE_HEAT_EXTEND_MAX_S``, the room is back within ``PULSE_HEAT_BACK_C`` of the demand side of the setpoint (so
+   that the stop starts high and lasts long enough to show its peak; past that time the step ends on the rise alone),
+   or for ``PULSE_HEAT_MAX_S`` at most, or as soon as the room is ``PULSE_HEAT_OVER_C`` on the other side of the setpoint
+   (over it in HEAT, under it in COOL); in the last two cases the pulse gives no measure of the dead time after a
+   start, and the stop step still runs;
+3. stop until the dead-time estimator has confirmed the temperature peak that follows the stop (for a pulse of a
+   calibration: until the measurement event of the pulse is closed and the estimator no longer waits for the
+   response to the stop), or for ``PULSE_STOP_MAX_S`` at most; the PI takes over earlier when the room is
+   ``PULSE_TAKEOVER_C`` on the demand side of the setpoint and one step of the sensor lower than at the start of
+   the stop, and in any case at the cap (``PULSE_TAKEOVER_CAP_C``, or the calibration's own cap).
 
 A pulse starts at the first calculation where the room is at or on the demand side of the setpoint and no more than
 ``PULSE_START_UNDER_C`` on it and where the command of the previous calculation was under ``PULSE_START_MAX_COMMAND``
 (a heating already at that power is a full-power start the estimator measures; while the room is further away the PI
 regulates), at most
 ``PULSE_MAX_COUNT`` times per mode and blank start and ``PULSE_MIN_GAP_S`` after the end of the previous one, while the
-learning stage lasts and the dead time after a start or the dead time after a stop is not published. A pulse
-interrupted by a restart, a stop of the thermostat, a change of the setpoint, a change of mode or a calibration is not
-resumed and counts. A pulse whose heating step cannot be followed by the dead-time estimator (it did not arm its
-detection on that start) ends at once and counts.
+learning stage lasts and the dead time after a start or the dead time after a stop is not published. A calibration
+(smartpi/calibration.py) starts pulses in either start mode, with its own count and its own limits (``limits``, given
+by the calibration: start window, gap, rest, heating step and stop); those pulses do not count for the learning stage.
+A pulse interrupted by a restart, a stop of the thermostat, a change of the
+setpoint, a change of mode or the cancellation of its calibration is not resumed and counts (when its calibration
+ends, a pulse in its rest ends at once and a pulse in its heating step goes to its stop step), except a calibration pulse
+ended before its heating step: it does not count for its calibration and the next one may start at once. A pulse whose heating step cannot
+be followed by the dead-time estimator (it did not arm its detection on that start) ends at once and counts.
 The sequence is the same in COOL, mirrored.
 
 The command, the learning, the heating balance and the dead-time estimator see a pulse as an on/off command:
@@ -40,6 +49,9 @@ PULSE_REST_UNDER_C = 0.5
 PULSE_HEAT_MAX_S = 120.0 * 60.0
 PULSE_STOP_MAX_S = 4.0 * 3600.0
 PULSE_TAKEOVER_C = 0.5
+PULSE_TAKEOVER_CAP_C = 0.8  # the PI takes over at this distance on the demand side, whatever the room did since the stop
+PULSE_HEAT_BACK_C = 0.1     # the heating step goes on until the room is at most this far on the demand side ...
+PULSE_HEAT_EXTEND_MAX_S = 30.0 * 60.0   # ... while the step has lasted less than this; then it ends on the rise alone
 PULSE_START_UNDER_C = 0.3   # no pulse starts while the room is further than this on the demand side of the setpoint
 PULSE_START_MAX_COMMAND = 0.8   # nor while the command of the previous calculation is at or over this share of full power
 PULSE_HEAT_OVER_C = 0.3     # the heating step ends when the room is this far on the other side of the setpoint
@@ -83,6 +95,7 @@ class MeasurePulse:
         self._mode_counts: dict[str, int] = {}   # pulses started by mode
         self._last_end_s: float | None = None
         self._calls = 0
+        self.calibration_heated = 0          # calibration pulses that reached their heating step (never reset)
 
     # -- read-only view ------------------------------------------------------------------------------------------
     @property
@@ -93,6 +106,11 @@ class MeasurePulse:
     @property
     def state(self) -> str:
         return self._state
+
+    @property
+    def for_calibration(self) -> bool:
+        """True while the pulse in progress is one of a calibration."""
+        return self._cur is not None and self._cur["calibration"]
 
     @property
     def output(self) -> float | None:
@@ -134,53 +152,68 @@ class MeasurePulse:
         cooling: bool,
         heat_or_cool: bool,
         learning_stage: bool,
-        calibrating: bool,
         active_deadtime_known: bool,
         passive_deadtime_known: bool,
         dt_est: Any,
         previous_command: float = 0.0,
         readings_pending: bool = False,
+        calibration: bool = False,
+        calibration_pulses_left: bool = False,
+        event_stage: str | None = None,
+        limits: Any = None,
     ) -> None:
         """Advance the pulse for this calculation (called once per calculation, before the command is chosen).
 
         ``readings_pending``: the readings of the events (smartpi/event_reading.py) have not kept values yet, so the
-        pulses go on even when both dead times are known."""
+        pulses go on even when both dead times are known. ``calibration``: a calibration is in progress; its pulses
+        start while ``calibration_pulses_left``. ``event_stage``: stage of the measurement event in progress
+        (``MeasureEventDetector.phase_stage``), which ends the stop step of a calibration pulse. ``limits``: the limits of
+        the calibration pulses (``smartpi.calibration.PulseLimits``), read while a calibration is in progress."""
         self._calls += 1
         sign = -1.0 if cooling else 1.0
         demand = sign * (target - temp)           # > 0: the room is on the demand side of the setpoint
         cur = self._cur
         if cur is None:
-            if (
-                heat_or_cool
-                and learning_stage
-                and not calibrating
+            wanted = calibration_pulses_left if calibration else (
+                learning_stage
                 and self.count_for(hvac_mode) < PULSE_MAX_COUNT
                 and (readings_pending or not (active_deadtime_known and passive_deadtime_known))
-                and 0.0 <= demand <= PULSE_START_UNDER_C + 1e-9
+            )
+            own = limits if calibration else None
+            low, gap = (0.0, PULSE_MIN_GAP_S) if own is None else (-own.start_over_c - 1e-9, own.gap_s)
+            if (
+                heat_or_cool
+                and wanted
+                and low <= demand <= PULSE_START_UNDER_C + 1e-9
                 and previous_command < PULSE_START_MAX_COMMAND
-                and (self._last_end_s is None or now - self._last_end_s >= PULSE_MIN_GAP_S)
+                and (self._last_end_s is None or now - self._last_end_s >= gap)
             ):
-                self._begin(now, str(hvac_mode), cooling, temp, target)
+                self._begin(now, str(hvac_mode), cooling, temp, target, calibration, own)
                 cur = self._cur
             else:
                 return
         if str(hvac_mode) != cur["mode"] or not heat_or_cool:
             self._finish(now, "mode change")
             return
-        if calibrating:
-            self._finish(now, "calibration")
-            return
         if abs(float(target) - cur["target_last"]) > 1e-9:
             self._finish(now, "setpoint change")
             return
-        if not learning_stage:
-            self._finish(now, "model published")
+        if not (calibration if cur["calibration"] else learning_stage):
+            self._finish(now, "calibration ended" if cur["calibration"] else "model published")
             return
         cur["room_min"] = min(cur["room_min"], temp)
         cur["room_max"] = max(cur["room_max"], temp)
+        own = cur.get("_limits")
         if self._state == STATE_REST:
             reason = None
-            if demand >= PULSE_REST_UNDER_C - 1e-9:
+            if own is not None:
+                # the lowest point the room is heading to: its fall goes on during the active dead time
+                fall = (limits if limits is not None else own).fall_c_per_s
+                if demand + fall * own.trough_lead_s >= PULSE_REST_UNDER_C - 1e-9:
+                    reason = "room under the setpoint"
+                elif now - cur["rest_start_s"] >= own.rest_s:
+                    reason = "time limit"
+            elif demand >= PULSE_REST_UNDER_C - 1e-9:
                 reason = "room under the setpoint"
             elif now - cur["rest_start_s"] >= PULSE_REST_MAX_S:
                 reason = "time limit"
@@ -190,24 +223,29 @@ class MeasurePulse:
         if self._state == STATE_HEAT:
             self._advance_heat(now, temp, cooling, dt_est, demand)
             if self._state == STATE_STOP:
-                self._advance_stop(now, temp, sign, demand, dt_est)   # the PI takes over at once when the room is far under
+                # the PI takes over at once when the room is far under
+                self._advance_stop(now, temp, sign, demand, dt_est, event_stage)
             return
         if self._state == STATE_STOP:
-            self._advance_stop(now, temp, sign, demand, dt_est)
+            self._advance_stop(now, temp, sign, demand, dt_est, event_stage)
 
-    def _begin(self, now: float, mode: str, cooling: bool, temp: float, target: float) -> None:
+    def _begin(
+        self, now: float, mode: str, cooling: bool, temp: float, target: float, calibration: bool, limits: Any = None,
+    ) -> None:
         self._count += 1
-        self._mode_counts[mode] = self._mode_counts.get(mode, 0) + 1
+        if not calibration:
+            self._mode_counts[mode] = self._mode_counts.get(mode, 0) + 1
         self._state = STATE_REST
         self._cur = {
-            "index": self._count, "mode": mode, "cooling": bool(cooling), "start_s": now, "rest_start_s": now,
+            "index": self._count, "mode": mode, "cooling": bool(cooling), "calibration": bool(calibration),
+            "start_s": now, "rest_start_s": now,
             "rest_end_s": None, "rest_end_reason": None,
             "heat_start_s": None, "heat_end_s": None, "heat_end_reason": None, "heat_s": None,
             "armed": None, "outcome": None, "armed_s": None,
             "stop_start_s": None, "end_s": None, "end_reason": None,
             "temp_start": float(temp), "temp_heat_start": None, "temp_stop": None, "temp_peak": None,
             "target_start": float(target), "target_last": float(target), "room_min": float(temp), "room_max": float(temp),
-            "_heat_call": None,
+            "_heat_call": None, "_limits": limits,
         }
 
     def _enter_heat(self, now: float, reason: str, temp: float) -> None:
@@ -215,6 +253,8 @@ class MeasurePulse:
         cur["rest_end_s"], cur["rest_end_reason"] = now, reason
         cur["heat_start_s"], cur["temp_heat_start"] = now, float(temp)
         cur["_heat_call"] = self._calls
+        if cur["calibration"]:
+            self.calibration_heated += 1
         self._state = STATE_HEAT
 
     def _advance_heat(self, now: float, temp: float, cooling: bool, dt_est: Any, demand: float) -> None:
@@ -240,15 +280,25 @@ class MeasurePulse:
                 if getattr(dt_est, "state", None) != waiting:
                     outcome = getattr(dt_est, "last_outcome", {}).get("cool" if cooling else "heat")
                     cur["outcome"] = outcome
-                    # The response must stand out of the sensor: three of its steps.
-                    if sign * (temp - cur["_extreme"]) >= PULSE_RISE_STEPS * _sensor_step(dt_est) - 1e-9:
+                    # The response must stand out of the sensor: three of its steps. The step goes on until the
+                    # room is back near the setpoint, for ``PULSE_HEAT_EXTEND_MAX_S`` at most.
+                    if sign * (temp - cur["_extreme"]) >= PULSE_RISE_STEPS * _sensor_step(dt_est) - 1e-9 and (
+                        demand <= PULSE_HEAT_BACK_C + 1e-9
+                        or now - cur["heat_start_s"] >= PULSE_HEAT_EXTEND_MAX_S - 1e-9
+                    ):
                         self._enter_stop(now, "rise seen", temp)
                         return
             if demand <= -PULSE_HEAT_OVER_C + 1e-9:
                 self._enter_stop(now, "room over the setpoint", temp)
                 return
-        if now - cur["heat_start_s"] >= PULSE_HEAT_MAX_S:
+        own = cur["_limits"]
+        if now - cur["heat_start_s"] >= (PULSE_HEAT_MAX_S if own is None else own.heat_max_s):
             self._enter_stop(now, "time limit", temp)
+
+    def stop_heating(self, now: float, reason: str, temp: float | None) -> None:
+        """End the heating step of the pulse in progress now: its stop step runs and ends by its own rules."""
+        if self._state == STATE_HEAT:
+            self._enter_stop(now, reason, self._cur["temp_heat_start"] if temp is None else temp)
 
     def _enter_stop(self, now: float, reason: str, temp: float) -> None:
         cur = self._cur
@@ -259,12 +309,26 @@ class MeasurePulse:
         cur["_stop_call"] = self._calls
         self._state = STATE_STOP
 
-    def _advance_stop(self, now: float, temp: float, sign: float, demand: float, dt_est: Any) -> None:
+    def _advance_stop(
+        self, now: float, temp: float, sign: float, demand: float, dt_est: Any, event_stage: str | None,
+    ) -> None:
         cur = self._cur
         cur["temp_peak"] = max(cur["temp_peak"], temp) if sign > 0 else min(cur["temp_peak"], temp)
-        if self._calls > cur["_stop_call"] and bool(getattr(dt_est, "stop_peak_confirmed", False)):
+        if cur["calibration"]:
+            # The event of the pulse is closed once its cut has been seen and it is no longer at that stage.
+            cur["_cut_seen"] = cur.get("_cut_seen", False) or event_stage == "cut"
+            peak = cur["_cut_seen"] and event_stage != "cut" and not getattr(dt_est, "stop_response_pending", False)
+        else:
+            peak = self._calls > cur["_stop_call"] and bool(getattr(dt_est, "stop_peak_confirmed", False))
+        own = cur["_limits"]
+        # the regulation takes over once the room is far enough under the setpoint and lower than at the start of
+        # the stop (the peak has then had time to show), at the cap in any case
+        cap = PULSE_TAKEOVER_CAP_C if own is None else own.depth_cap_c
+        deeper = sign * (cur["temp_stop"] - temp) >= _sensor_step(dt_est) - 1e-9
+        under = demand >= cap - 1e-9 or (demand >= PULSE_TAKEOVER_C - 1e-9 and deeper)
+        if peak:
             self._finish(now, "peak")
-        elif demand >= PULSE_TAKEOVER_C - 1e-9:
+        elif under:
             self._finish(now, "room under the setpoint")
         elif now - cur["stop_start_s"] >= PULSE_STOP_MAX_S:
             self._finish(now, "time limit")
@@ -279,7 +343,8 @@ class MeasurePulse:
         if cur["heat_start_s"] is not None and cur["heat_end_s"] is None:
             cur["heat_end_s"], cur["heat_end_reason"] = now, reason
             cur["heat_s"] = now - cur["heat_start_s"]
-        self._last_end_s = now
+        if not (cur["calibration"] and cur["heat_start_s"] is None):
+            self._last_end_s = now      # a calibration pulse ended before heating measured nothing: no gap after it
         self._history.append({k: v for k, v in cur.items() if not k.startswith("_")})
 
     def interrupt(self, now: float, reason: str) -> None:

@@ -109,7 +109,7 @@
     },
     "force_smartpi_calibration": {
       "name": "Forcer la calibration SmartPI",
-      "description": "Force un cycle de calibration SmartPI pour un thermostat."
+      "description": "Lance une calibration SmartPI pour un thermostat : jusqu'à trois impulsions de mesure près de la consigne, une fois le premier modèle publié ; le modèle appris est corrigé là où la mesure s'en écarte de plus de 30 %. Peut être appelé par une automatisation : la demande est refusée pendant l'apprentissage du premier modèle, avec l'apprentissage en pause, avec le thermostat éteint ou moins de 24 heures après la dernière calibration, et ignorée pendant une calibration en cours."
     },
     "reset_smartpi_integral": {
       "name": "Réinitialiser l'intégrale SmartPI",

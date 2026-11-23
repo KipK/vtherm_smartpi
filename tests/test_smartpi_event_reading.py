@@ -46,7 +46,7 @@ class _Rig:
             self.reader.run_queued_sync()
 
     def step(self) -> None:
-        self.reader.step(self.now, VThermHvacMode_HEAT, False, self.lag, self.detector.phase_start)
+        self.reader.step(self.now, VThermHvacMode_HEAT, self.lag, self.detector.phase_start)
 
     def run(self, u: float, minutes: int, sync: bool = True) -> None:
         for _ in range(minutes):
@@ -202,19 +202,71 @@ def test_a_hysteresis_event_opens_a_reading_like_a_pulse_event():
     assert reading["state"] == er.STATE_WAITING and reading["fitting"] is True and rig.reader.active is True
 
 
-def test_other_sources_open_no_reading():
-    for source in ("regulation", "calibration"):
-        rig = _Rig(source=source)
-        rig.pulse()
-        assert _readings(rig) == [] and rig.reader.active is False
+def test_regulation_events_open_no_reading():
+    rig = _Rig(source="regulation")
+    rig.pulse()
+    assert _readings(rig) == [] and rig.reader.active is False
+
+
+def test_a_calibration_event_opens_a_reading_of_the_calibration_set():
+    rig = _Rig(source="calibration")
+    rig.pulse(sync=False)
+    reading = _readings(rig)[0]
+    assert reading["state"] == er.STATE_WAITING and reading.get("calibration") is True
+    assert rig.reader.calibration_in_progress is True and rig.reader.in_progress is True
+
+
+def _complete(reader: er.EventReader, index: int, a: float, calibration: bool) -> None:
+    reading = {"index": index, "mode": "heat", "result": {"a_per_min": a, "lag_s": 300.0, "b_per_min": 0.001}}
+    if calibration:
+        reading["calibration"] = True
+    reader._index = max(reader._index, index)
+    reader._complete(reading, 100.0 * index)
+
+
+def test_calibration_readings_agree_among_themselves_only_and_are_never_kept_values():
+    reader = er.EventReader(MeasureRecord())
+    _complete(reader, 1, 0.1, calibration=False)
+    _complete(reader, 2, 0.1, calibration=True)          # agrees in value with the start reading, other set
+    assert reader.kept == {} and reader.calibration_reading("heat") is None
+    _complete(reader, 3, 0.1, calibration=True)
+    cal = reader.calibration_reading("heat")
+    assert cal["a_per_min"] == pytest.approx(0.1) and cal["pulses"] == [2, 3]
+    assert reader.kept == {} and reader.kept_for("heat") is None and reader.wants_pulses("heat") is True
+    restored = er.EventReader(MeasureRecord())
+    restored.load(json.loads(json.dumps(reader.save())))
+    assert restored.calibration_reading("heat")["lag_s"] == pytest.approx(300.0) and restored.kept == {}
+    assert [d for d in restored._done if not d.get("calibration")] == [d for d in reader._done if not d.get("calibration")]
+
+
+def test_a_new_calibration_drops_the_calibration_readings_and_ends_the_start_readings():
+    rig = _Rig()
+    rig.pulse(sync=False)
+    _complete(rig.reader, 5, 0.1, calibration=True)
+    _complete(rig.reader, 6, 0.1, calibration=True)
+    assert rig.reader.calibration_reading("heat") is not None
+    rig.reader.start_calibration()
+    assert rig.reader.calibration_reading("heat") is None
+    assert not any(d.get("calibration") for d in rig.reader._done)
+    assert _readings(rig)[0]["state"] == er.STATE_ENDED and _readings(rig)[0]["reason"] == "calibration"
+
+
+def test_the_end_of_a_calibration_ends_its_readings_only():
+    start, cal = _Rig(), _Rig(source="calibration")
+    start.pulse(sync=False)
+    cal.pulse(sync=False)
+    for rig in (start, cal):
+        rig.reader.end_calibration(rig.now)
+    assert _readings(start)[0]["state"] == er.STATE_WAITING
+    assert _readings(cal)[0]["state"] == er.STATE_ENDED and _readings(cal)[0]["reason"] == "calibration ended"
 
 
 def test_without_a_response_lag_the_kept_lag_is_given_to_nobody():
     rig = _Rig(source="bootstrap")
     rig.reader._kept = {"heat": {"mode": "heat", "a_per_min": 0.05, "lag_s": 300.0, "b_per_min": 0.0005, "pulses": [1, 2], "at_s": 0.0}}
     lag = MagicMock()
-    rig.reader.step(rig.now, VThermHvacMode_HEAT, False, None, None)
-    rig.reader.step(rig.now, VThermHvacMode_HEAT, False, lag, None)
+    rig.reader.step(rig.now, VThermHvacMode_HEAT, None, None)
+    rig.reader.step(rig.now, VThermHvacMode_HEAT, lag, None)
     lag.give_lag.assert_called_once_with(300.0)
     assert rig.reader.kept_lag_s(VThermHvacMode_HEAT) == 300.0       # kept and published all the same
 

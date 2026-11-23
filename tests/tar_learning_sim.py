@@ -47,7 +47,6 @@ def seed_stable(algo: SmartPI) -> None:
     algo.dt_est.deadtime_cool_s = 900.0
     algo.dt_est.deadtime_cool_reliable = True
     algo._output_initialized = True
-    algo.calibration_mgr.last_calibration_time = WALL0
 
 
 class _SyncHass:

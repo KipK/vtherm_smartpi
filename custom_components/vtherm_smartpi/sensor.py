@@ -26,6 +26,7 @@ from .algo import SmartPI
 from .smartpi.diagnostic_history import build_diagnostic_attributes
 from .smartpi.device_link import cleanup_config_entry_devices, target_uses_smartpi
 from .smartpi.const import SmartPIPhase
+from .smartpi.learning_start import LEARNING_PULSES_STATE, learning_by_pulses
 
 _LOGGER = logging.getLogger(__name__)
 VT_DOMAIN = "versatile_thermostat"
@@ -125,6 +126,8 @@ _DIAGNOSTIC_STATE_BY_PHASE = {
 
 def _get_diagnostic_state(algo: SmartPI) -> str:
     """Return the top-level diagnostic state for the SmartPI sensor."""
+    if learning_by_pulses(algo):
+        return LEARNING_PULSES_STATE
     return _DIAGNOSTIC_STATE_BY_PHASE[algo.phase]
 
 

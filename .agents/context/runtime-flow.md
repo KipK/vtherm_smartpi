@@ -67,8 +67,8 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
   only), then `on_state_changed(True)`.
 - `on_state_changed` (VT calls it after every `update_states`): in HEAT/COOL starts the 60 s timer
   (`SMARTPI_RECALC_INTERVAL_SEC`, calls `async_control_heating(timestamp=None)`); on resume from OFF calls
-  `SmartPI.reset_cycle_state` (skipped at the first start after a bridged restart); other modes stop the timer and
-  suspend a running calibration (`CalibrationManager.suspend`).
+  `SmartPI.reset_cycle_state` (skipped at the first start after a bridged restart); other modes stop the timer
+  (a calibration pulse in progress ends at the next calculation in OFF, `_start.interrupt`).
 - `control_heating(timestamp, force)`: one tick, section 4. `should_publish_intermediate()` tells VT whether to
   write climate state (true for a periodic `timestamp`, `force`, a changed input signature or committed output).
 - Applied-command receipts: SmartPI sends `cycle_scheduler.start_cycle(hvac_mode, on_percent, force)` without any
@@ -106,7 +106,7 @@ Handler order (`handler.py::control_heating`):
 6. Actuation: HVAC OFF turns the device off or cancels the cycle; `on_percent is None` keeps the switch state;
    else `cycle_scheduler.start_cycle(hvac_mode, on_percent, force_cycle, [request_id])` with
    `force_cycle = force or phase CALIBRATION or (command is on/off and on_percent changed)`; the guards read the same test as `is_bootstrap` (`learning_start.py::command_is_on_off`).
-7. Debounced save, AutoCalib completion/hourly check (events, may request a calibration), then, if publishing,
+7. Debounced save, then, if publishing,
    `async_dispatcher_send(diag_update_signal(unique_id))`.
 
 `algo.py::SmartPI.calculate(target_temp, current_temp, ext_current_temp, slope, hvac_mode, power_shedding,
@@ -123,18 +123,21 @@ Pipeline inside `calculate`, in execution order:
 2. HEAT<->COOL change resets PI/FF state; `est.ensure_hvac_mode` (and the dead-time and lag estimators) set the mode-dependent model aside per mode (`mode_stash` key of the saved state, only after a switch).
 3. With target and indoor known: `resolve_restart` if pending, `restart.note_tick`; `_take_hysteresis_restore`.
 4. `_validate_and_handle_off`: missing sensor (output 0, or held command while a restart is pending), HVAC OFF
-   (`_force_off_output`), power shedding; each returns early.
+   (`_force_off_output`), power shedding; each returns early. OFF and shedding call `_start.interrupt`: the
+   measurement pulse in progress (of the start or of a calibration) ends and counts; a calibration goes on.
 5. Guard cut active: observe the room, unwind integral, `_set_linear_output(0)`, return.
 6. `_refresh_active_timestamp_and_expire_controller_memory` (96 h purge), `tint_filter.update`,
    `_update_time_tracking` (dt capped to one cycle, 600 s after a bridged restart).
-7. Anticipation: `correction_c` with the horizon of `SmartPI.anticipation_horizon` (STABLE phase only, else 0); then
+7. `_start.advance`: the calibration (end rules and, on agreeing readings, the corrections, `smartpi/calibration.py`;
+   on a guard-cut calculation only the end check runs, `_start.follow_calibration`), the measurement pulse (direct
+   start in its learning stage, or a calibration in either start mode with its `pulse_limits`), the readings, the
+   corrected lag given to the response lag (direct start). Anticipation: `correction_c` with the
+   horizon of `SmartPI.anticipation_horizon` (0 while the command is on/off); then
    `_manage_setpoint` (setpoint change, boost, raw error `error_i` and `error_p` on the anticipated temperature),
    `error_i_ctl` = integral error on the anticipated temperature; setpoint-change handling.
-8. Learning: `dt_est.update`, `update_learning` (learning on, not HYSTERESIS, not calibrating), calibration
-   timeout/`check_and_start`. Before step 4, `CalibrationManager.follow_mode` runs on every tick (also while OFF, which
-   returns at step 4): a stop suspends the calibration, the same mode back within `CALIBRATION_PAUSE_MAX_MIN` resumes it,
-   a longer stop or another mode cancels it (`take_completed_result` then reports it to AutoCalib). CALIBRATION: `_calculate_forced_calibration`, return.
-9. Phase HYSTERESIS (bootstrap): `ctl.calculate_hysteresis` bang-bang, committed at once, return.
+8. Learning: `dt_est.update` with the committed power (learning on, command not on/off), `update_learning`.
+9. Command on/off (bootstrap hysteresis, or a measurement pulse of the start or of a calibration): pulse output or
+   `ctl.calculate_hysteresis` bang-bang, committed at once, then one `dt_est.update` with the committed power, return.
 10. `_update_control_context` (error filter, deadband, near-band), `resume_hold.update`.
 11. Governance: `gov.determine_regime`, `decide_update` for gains and thermal.
 12. `_apply_gains_and_ff` (gain scheduler, FF1 incl. `_select_holding_power`), then integral-hold decisions
@@ -170,8 +173,8 @@ Pipeline inside `calculate`, in execution order:
   (read only when the primary is empty, then copied to the primary); `vtherm_smartpi.{}.tar_learning` (state v3);
   `vtherm_smartpi.{}.room_model` (state v2).
 - Persisted: learning flag, last active wall time, model a/b, dead time, governance, controller (integral,
-  u_prev), setpoint manager, learning window, deadband, calibration, gain scheduler, guards, AutoCalib, FF
-  holding source, tint filter, hysteresis output, the measurement record and readings with the kept starting values (`measure_events`, `event_reading`, `measure_pulse`, `est_state.starting_values`; older states load without them) and the start the learning began with (`learning_start`, saved for the direct start only; a state with learning but without the key began with the bootstrap and keeps it, whatever the option says; a blank state and a learning reset take the configured start), and the restart context (last tick, mode, cycle config,
+  u_prev), setpoint manager, learning window, deadband, gain scheduler, guards, FF
+  holding source, tint filter, hysteresis output, the measurement record and readings with the kept starting values (`measure_events`, `event_reading`, `measure_pulse`, `est_state.starting_values`; older states load without them), the calibration (`calibration`: in progress, pulses, mode, start, last request, values in force, corrections, corrected lag by mode; corrected starting values carry `corrected` in `est_state.starting_values` and load without `handed`; the former `cal_state`/`ac_state` blocks are ignored at load, so a calibration saved in progress by them is not resumed) and the start the learning began with (`learning_start`, saved for the direct start only; a state with learning but without the key began with the bootstrap and keeps it, whatever the option says; a blank state and a learning reset take the configured start), and the restart context (last tick, mode, cycle config,
   exclusion, temperature, committed command, wall times).
 - Transient, empty after load (`load_state`): committed power (0 unless bridged), integral hold, learning resume timestamp, cycle
   state. Without a bridge, the first tick freezes learning for one cycle (`_startup_grace_period`).
@@ -199,12 +202,13 @@ Pipeline inside `calculate`, in execution order:
   `services.yaml`). Targets whose `proportional_function` is not `smartpi` are skipped; none matching raises
   `ServiceValidationError` (translation key `no_smartpi_target`). Each calls a handler method (entity first, then
   `_algo_handler`); all fire `vtherm_smartpi_event` with `entity_id` and a `type`:
-  - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, emitter lag learning, room model, auto-calibration supervision), type
+  - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, emitter lag learning, room model; a calibration in progress is cancelled), type
     `learning_reset`, forced tick, attributes, state write, `save_now`.
   - `set_smartpi_learning` (`learning_enabled`: bool, required): `set_learning_enabled` (invalidates in-flight
     observations), type `learning_enabled_changed`, attributes, diagnostic refresh, `save_now`.
-  - `force_smartpi_calibration`: `force_calibration`, type `force_calibration` (+ AutoCalib event if any), forced
-    tick, `save_now`.
+  - `force_smartpi_calibration`: `force_calibration` (`LearningStart.request_calibration` -> `Calibration.request`:
+    refused in the learning stage, learning paused, thermostat off (`_last_restart_reason == "off"`), < 24 h after the
+    last end; ignored while one runs; never raises; answer in `calibration.last_request`), type `force_calibration`, forced tick, `save_now`.
   - `reset_smartpi_integral`: integral to 0, integral hold cleared, type `integral_reset`, `save_now`.
 - Climate extra state: `handler.py::update_attributes` (VT calls it in `update_custom_attributes`) writes
   `specific_states["smartpi_learning_enabled"]` (bool; True without a SmartPI algorithm) and
@@ -213,7 +217,7 @@ Pipeline inside `calculate`, in execution order:
 ## 8. Diagnostic sensor
 
 - `sensor.py::SmartPIDiagnosticSensor`: one per SmartPI thermostat, unique id `smartpi_diag_<target unique id>`,
-  diagnostic category, name "SmartPI Diagnostics", state from the phase (`bootstrap_hysteresis`, `calibration`,
+  diagnostic category, name "SmartPI Diagnostics", state from the phase (`bootstrap_hysteresis`, `learning_pulses` with the direct start, `calibration`,
   `stable`; `inactive` when the algorithm is missing).
 - Targets: the global entry serves SmartPI VT thermostats without a dedicated entry
   (`_get_default_target_unique_ids`); a dedicated entry serves its target. Both listen to

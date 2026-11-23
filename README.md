@@ -26,7 +26,7 @@ SmartPI is an advanced PI-based thermal control algorithm built around a first-o
 - **Model-Based Feed-Forward**: Estimates the steady-state power needed to hold the setpoint, ramped in progressively while the model is being learned
 - **Anticipation (heating and cooling)**: Reads the temperature the room is about to reach, from its slope and the time between a command and its effect, to lower the command early and limit the overshoot of slow emitters
 - **Safety-First Governance**: A regime-based matrix freezes or unlocks learning and gain adaptation depending on the current operating context
-- **Auto-Calibration**: Monitors model quality over time and triggers a recalibration sequence when learning stagnates
+- **Calibration on request**: a few measurement pulses near the setpoint measure the room again and correct the learned model when it is clearly off; safe to call from an automation
 - **Valve Curve Linearization**: Translates SmartPI demand into a valve position adapted to the non-linear behavior of radiator TRVs
 - **Rich Diagnostics**: Publishes detailed learning status, model state, and regulation data — viewable via a dedicated Home Assistant Markdown card or the [Equinox](https://github.com/KipK/equinox) Regulation panel
 

@@ -274,7 +274,6 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
         algo.dt_est.deadtime_cool_s = 900.0
         algo.dt_est.deadtime_cool_reliable = True
         algo._output_initialized = True
-        algo.calibration_mgr.last_calibration_time = t0
         algo.set_learning_enabled(False)
         last_pub, pub_time = None, None
         for _ in range(int(days * DAY / cycle_s)):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from math import isfinite
 
 from .const import (
@@ -9,6 +10,8 @@ from .const import (
 )
 from .deadband_output import ProportionalState
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
+
+_LOGGER = logging.getLogger(__name__)
 
 # Integral modes in which the PI drives the actuator, so its integral tracks output limits.
 _TRACKED_I_MODES = ("I:RUN", "I:SKIP", "I:CLAMP")
@@ -336,6 +339,18 @@ class SmartPIController:
             return
         integral = self.integral + delta
         self.integral = 0.0 if integral * self.integral < 0.0 else integral
+
+    def transfer_gains(self, old_ki: float, new_ki: float, name: str) -> None:
+        """Bumpless change of Ki: the integral is rescaled so that Ki * I does not move.
+
+        Any change is rescaled: with Ki above its floor the near-band taper moves it by small steps, and a threshold
+        would let Ki * I drift during holds. A change of Kp is not moved into the integral (the proportional term
+        acts on the error as usual).
+        """
+        if old_ki > 0.0 and new_ki > 0.0 and old_ki != new_ki:
+            self.integral = self.integral * (old_ki / new_ki)
+            _LOGGER.debug("%s - Ki changed from %.5f to %.5f, rescaled integral to %.4f for bumpless gain transfer",
+                          name, old_ki, new_ki, self.integral)
 
     def absorb_feedforward_step(self, *, ki: float, delta_ff: float) -> float:
         """Move a feed-forward step into the integral so that FF + I does not jump.

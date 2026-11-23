@@ -33,8 +33,13 @@ phase in progress), so that the emitter filter of a fit starts well before its w
 most; when a channel holds more than ``RECORD_MAX_POINTS`` points the oldest open reading ends. The record, the readings
 in progress and the kept values are saved. A restart that the restart bridge bridges resumes them (a job in flight is
 queued again); otherwise the readings in progress end and the record is dropped. A thermostat stop, a change of mode,
-a calibration or a learning reset ends the readings in progress; a change of the setpoint or the publication of the
-model does not.
+the start of a calibration or a learning reset ends the readings in progress; a change of the setpoint or the
+publication of the model does not.
+
+The events of the pulses of a calibration (smartpi/calibration.py) are read the same way but form a set of their own:
+they are tested among themselves only, and two agreeing readings give the calibration reading of that mode, which is
+published only (never kept as starting values, never given to the learning). A new calibration drops the previous
+calibration readings; the end of a calibration ends its readings in progress.
 """
 from __future__ import annotations
 
@@ -44,11 +49,13 @@ from typing import Any
 
 from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from . import job_abort
+from .calibration import readings_agree_on
 from .event_fit import readings_agree, run_fit
 from .measure_event import (
     MODE_COOL,
     RECORD_MAX_POINTS,
     SOURCE_BOOTSTRAP,
+    SOURCE_CALIBRATION,
     SOURCE_PULSE,
     MeasureEvent,
     MeasureRecord,
@@ -100,6 +107,7 @@ class EventReader:
         self._done: list[dict[str, Any]] = []   # complete readings, in the order they opened
         self._tests: list[dict[str, Any]] = []
         self._kept: dict[str, dict[str, Any]] = {}   # by mode
+        self._cal_kept: dict[str, dict[str, Any]] = {}   # the agreeing reading of the calibration, by mode
         self._interrupted_at: float | None = None
         self._job: dict[str, Any] | None = None     # the fit queued or running (None: none)
         self._result: tuple[int, Any] | None = None  # (reading index, result) waiting for the next calculation
@@ -131,6 +139,28 @@ class EventReader:
         """Mean emitter lag of the two agreeing readings (s) in that mode; None when none are kept."""
         kept = self.kept_for(hvac_mode)
         return None if kept is None else float(kept["lag_s"])
+
+    def calibration_reading(self, hvac_mode: object) -> dict[str, Any] | None:
+        """The agreeing reading of the calibration in ``hvac_mode``, None before."""
+        return None if hvac_mode is None else self._cal_kept.get(str(hvac_mode))
+
+    @property
+    def calibration_in_progress(self) -> bool:
+        """True while a reading of a calibration pulse waits for its window or its fit."""
+        return any(r["state"] == STATE_WAITING and r.get("calibration") for r in self._readings)
+
+    def start_calibration(self) -> None:
+        """A calibration starts: the readings of the start in progress end, the previous calibration readings are
+        dropped."""
+        self._end_in_progress("calibration", calibration=False)
+        self._end_in_progress("calibration ended", calibration=True)
+        self._done = [d for d in self._done if not d.get("calibration")]
+        self._cal_kept = {}
+        self.version += 1
+
+    def end_calibration(self, now: float) -> None:
+        """The calibration ends: its readings in progress end."""
+        self._end_in_progress("calibration ended", now, calibration=True)
 
     def wants_pulses(self, hvac_mode: object) -> bool:
         """True while no values are kept in ``hvac_mode``: the pulses go on (three at most per mode, six hours apart)."""
@@ -251,9 +281,14 @@ class EventReader:
             self._job = None
         self.version += 1
 
-    def _end_in_progress(self, reason: str, now: float | None = None, mode: str | None = None) -> None:
+    def _end_in_progress(
+        self, reason: str, now: float | None = None, mode: str | None = None, calibration: bool | None = None,
+    ) -> None:
         for r in self._readings:
-            if r["state"] == STATE_WAITING and (mode is None or r["mode"] == mode):
+            if (
+                r["state"] == STATE_WAITING and (mode is None or r["mode"] == mode)
+                and (calibration is None or bool(r.get("calibration")) == calibration)
+            ):
                 self._end(r, reason, now)
 
     def interrupt(self, now: float, reason: str) -> None:
@@ -273,14 +308,11 @@ class EventReader:
         self,
         now: float,
         hvac_mode: object,
-        calibrating: bool,
         response_lag: Any,
         phase_start: float | None,
     ) -> None:
         """Once per calculation: apply the result of the fit that ran, queue the next one that is due, trim the record
         and keep agreeing values; give the kept lag to the response-lag estimator when one is passed."""
-        if calibrating:
-            self._end_in_progress("calibration", now)
         if self._result is not None:
             index, result = self._result
             self._result = None
@@ -293,10 +325,10 @@ class EventReader:
             response_lag.give_lag(self.kept_lag_s(hvac_mode))
 
     def read_events(self, events: list[MeasureEvent], now: float) -> None:
-        """The events the detector closed or dropped at ``now``: a closed one that a pulse or the hysteresis drove opens
-        a reading, whose first fit is queued at once."""
+        """The events the detector closed or dropped at ``now``: a closed one that a pulse (of the start or of a
+        calibration) or the hysteresis drove opens a reading, whose first fit is queued at once."""
         for event in events:
-            if event.closed and event.source in (SOURCE_PULSE, SOURCE_BOOTSTRAP):
+            if event.closed and event.source in (SOURCE_PULSE, SOURCE_BOOTSTRAP, SOURCE_CALIBRATION):
                 self._take(event, now)
         self._queue_due(now)
 
@@ -313,12 +345,15 @@ class EventReader:
             "first_end_s": first_end, "window_start_s": None, "state": STATE_NONE, "reason": None,
             "fits": [], "result": None, "next_end_s": None, "end_s": None, "fitting": False,
         }
+        calibration = event.source == SOURCE_CALIBRATION
+        if calibration:
+            entry["calibration"] = True
         self._readings.append(entry)
         self.version += 1
         rec = self._record
         if self._interrupted_at is not None and heat_start <= self._interrupted_at < now:
             entry["reason"] = "thermostat stopped"
-        elif event.mode in self._kept:
+        elif event.mode in (self._cal_kept if calibration else self._kept):
             entry["reason"] = "values kept"
         elif rec.t0 is None or rec.t0 > heat_start:
             entry["reason"] = "no record"
@@ -359,13 +394,19 @@ class EventReader:
     def _complete(self, reading: dict[str, Any], now: float) -> None:
         """A reading is complete: test it against the earlier ones of the blank start, keep an agreeing pair."""
         result = reading["result"]
-        self._done.append({"index": reading["index"], "mode": reading["mode"], "a_per_min": result["a_per_min"],
-                           "lag_s": result["lag_s"], "b_per_min": result["b_per_min"]})
+        done = {"index": reading["index"], "mode": reading["mode"], "a_per_min": result["a_per_min"],
+                "lag_s": result["lag_s"], "b_per_min": result["b_per_min"]}
+        if reading.get("calibration"):
+            done["calibration"] = True
+        self._done.append(done)
         self._done.sort(key=lambda d: d["index"])
         for j in range(len(self._done)):
             for i in range(j):
                 first, second = self._done[i], self._done[j]
-                if first["mode"] != second["mode"] or reading["index"] not in (first["index"], second["index"]):
+                if (
+                    first["mode"] != second["mode"] or reading["index"] not in (first["index"], second["index"])
+                    or bool(first.get("calibration")) != bool(second.get("calibration"))
+                ):
                     continue
                 agree = readings_agree(first["a_per_min"], first["lag_s"], second["a_per_min"], second["lag_s"])
                 self._tests.append({
@@ -379,27 +420,35 @@ class EventReader:
                     return
 
     def _keep(self, first: dict[str, Any], second: dict[str, Any], now: float) -> None:
-        kept = self._kept[first["mode"]] = {
+        calibration = bool(first.get("calibration"))
+        store = self._cal_kept if calibration else self._kept
+        kept = store[first["mode"]] = {
             "mode": first["mode"], "a_per_min": 0.5 * (first["a_per_min"] + second["a_per_min"]),
             "lag_s": 0.5 * (first["lag_s"] + second["lag_s"]),
             "b_per_min": 0.5 * (first["b_per_min"] + second["b_per_min"]), "pulses": [first["index"], second["index"]], "at_s": now,
         }
-        self._end_in_progress("values kept", now, first["mode"])
+        if calibration:   # the calibration corrects the loss coefficient only when the two readings agree on it too
+            kept["b_agree"] = readings_agree_on(first["b_per_min"], second["b_per_min"])
+        self._end_in_progress("values kept", now, first["mode"], calibration)
         self.version += 1
-        _LOGGER.info("event reading: values kept in %s (a %.4f C/min, lag %.0f s)", kept["mode"], kept["a_per_min"], kept["lag_s"])
+        _LOGGER.info("event reading: %s in %s (a %.4f C/min, lag %.0f s)", "calibration reading" if calibration else "values kept",
+                     kept["mode"], kept["a_per_min"], kept["lag_s"])
 
     # -- persistence -----------------------------------------------------------------------------------------------
     def save(self) -> dict[str, Any] | None:
         """The kept values by mode, the complete readings of the modes without kept values and the readings in progress;
         the fit queued or running is not saved (a restored reading queues it again). None when there is nothing to save."""
         saved: dict[str, Any] = {}
-        if self._kept:
-            saved["kept"] = {mode: {k: v for k, v in kept.items() if k != "at_s"} | {"at_wall": monotonic_to_wall_ts(kept["at_s"])}
-                             for mode, kept in self._kept.items()}
+        for key, store in (("kept", self._kept), ("calibration_kept", self._cal_kept)):
+            if store:
+                saved[key] = {mode: {k: v for k, v in kept.items() if k != "at_s"} | {"at_wall": monotonic_to_wall_ts(kept["at_s"])}
+                              for mode, kept in store.items()}
         waiting = [r for r in self._readings if r["state"] == STATE_WAITING]
-        if self._index and (waiting or not self._kept):
+        cal_done = any(d.get("calibration") for d in self._done)
+        if self._index and (waiting or not self._kept or cal_done):
             saved.update({"index": self._index, "mode": self._mode,
-                          "done": [dict(d) for d in self._done if d["mode"] not in self._kept],
+                          "done": [dict(d) for d in self._done
+                                   if d["mode"] not in (self._cal_kept if d.get("calibration") else self._kept)],
                           "readings": [self._save_reading(r) for r in waiting]})
         return saved or None
 
@@ -424,6 +473,8 @@ class EventReader:
         reading = {"index": raw["index"], "mode": raw["mode"], "cooling": raw["mode"] == MODE_COOL, **times,
                    "state": STATE_WAITING, "reason": None, "fits": [dict(f, end_s=wall_to_monotonic_ts(f["end_s"])) for f in fits],
                    "end_s": None, "fitting": False, "result": None}
+        if raw.get("calibration") is True:
+            reading["calibration"] = True
         reading["result"] = reading["fits"][-1] if fits else None
         if _number(raw.get("target_s")) is not None:
             reading["target_s"] = float(raw["target_s"])
@@ -436,18 +487,8 @@ class EventReader:
         kept = saved.get("kept")
         if isinstance(kept, dict) and isinstance(kept.get("mode"), str):   # one set of values, no mode key
             kept = {kept["mode"]: dict(kept, at_wall=saved.get("at_wall"))}
-        for mode, values in (kept.items() if isinstance(kept, dict) else ()):
-            if (
-                isinstance(values, dict) and isinstance(mode, str) and _finite(values.get("a_per_min")) and values["a_per_min"] > 0.0
-                and _finite(values.get("lag_s")) and values["lag_s"] > 0.0
-            ):
-                pulses = values.get("pulses")
-                b_kept = values.get("b_per_min")
-                self._kept[mode] = {
-                    "mode": mode, "a_per_min": float(values["a_per_min"]), "lag_s": float(values["lag_s"]),
-                    "b_per_min": float(b_kept) if _finite(b_kept) and b_kept >= 0.0 else None,
-                    "pulses": list(pulses) if isinstance(pulses, list) else [], "at_s": wall_to_monotonic_ts(values.get("at_wall")),
-                }
+        self._load_kept(kept, self._kept)
+        self._load_kept(saved.get("calibration_kept"), self._cal_kept)
         index = _integer(saved.get("index"))
         if index is None or index < 0:
             return
@@ -456,8 +497,28 @@ class EventReader:
         for raw in saved.get("done") if isinstance(saved.get("done"), list) else []:
             if (isinstance(raw, dict) and isinstance(raw.get("mode"), str) and _integer(raw.get("index")) is not None
                     and all(_finite(raw.get(k)) for k in ("a_per_min", "lag_s", "b_per_min"))):
-                self._done.append({k: raw[k] for k in ("index", "mode", "a_per_min", "lag_s", "b_per_min")})
+                done = {k: raw[k] for k in ("index", "mode", "a_per_min", "lag_s", "b_per_min")}
+                if raw.get("calibration") is True:
+                    done["calibration"] = True
+                self._done.append(done)
         for raw in saved.get("readings") if isinstance(saved.get("readings"), list) else []:
             reading = self._load_reading(raw)
             if reading is not None:
                 self._readings.append(reading)
+
+    @staticmethod
+    def _load_kept(kept: object, store: dict[str, dict[str, Any]]) -> None:
+        for mode, values in (kept.items() if isinstance(kept, dict) else ()):
+            if (
+                isinstance(values, dict) and isinstance(mode, str) and _finite(values.get("a_per_min")) and values["a_per_min"] > 0.0
+                and _finite(values.get("lag_s")) and values["lag_s"] > 0.0
+            ):
+                pulses = values.get("pulses")
+                b_kept = values.get("b_per_min")
+                store[mode] = {
+                    "mode": mode, "a_per_min": float(values["a_per_min"]), "lag_s": float(values["lag_s"]),
+                    "b_per_min": float(b_kept) if _finite(b_kept) and b_kept >= 0.0 else None,
+                    "pulses": list(pulses) if isinstance(pulses, list) else [], "at_s": wall_to_monotonic_ts(values.get("at_wall")),
+                }
+                if values.get("b_agree") is True:
+                    store[mode]["b_agree"] = True

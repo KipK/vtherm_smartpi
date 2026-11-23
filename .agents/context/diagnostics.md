@@ -19,8 +19,8 @@ Sources of truth: `smartpi/diagnostics.py::build_published_diagnostics` (one
   (slug depends on the user's naming; unverified for renamed devices).
   The climate entity also carries `specific_states.regulation_diagnostics`
   (the exact diagnostic entity id) and `specific_states.smartpi_learning_enabled`.
-- State (`sensor.py::_get_diagnostic_state`): `bootstrap_hysteresis`,
-  `calibration`, `stable`; `inactive` (attributes empty) when the thermostat no
+- State (`sensor.py::_get_diagnostic_state`): `bootstrap_hysteresis` (first model not
+  published, bootstrap start), `learning_pulses` (same stage, direct start), `calibration`, `stable`; `inactive` (attributes empty) when the thermostat no
   longer runs SmartPI; `unknown` before the first publication.
 - Attributes (`diagnostic_history.py::build_diagnostic_attributes`):
   `schema_version` (2), `live` (full tree, section 2), `history` (stable series).
@@ -51,10 +51,12 @@ live-only, so a past incident needs debug mode or logs.
 ### 1.3 Services (domain `vtherm_smartpi`, target: a VT climate entity)
 
 `set_smartpi_learning` (`learning_enabled`), `reset_smartpi_learning` (back to
-bootstrap, clears learning), `force_smartpi_calibration` (ignored in bootstrap),
+bootstrap, clears learning), `force_smartpi_calibration` (measurement pulses, may correct the model; never raises: refused in the learning
+stage, with learning paused, with the thermostat off or within 24 h of the last end, ignored while one runs; answer in
+`calibration.last_request`),
 `reset_smartpi_integral`. Ask before suggesting a reset: it destroys the evidence.
-Events on the bus: `smartpi_autocalib_snapshot_taken|triggered|success|retry|
-degraded|unreachable` (payload `entity_id`, `name`, event fields).
+Events on the bus: `vtherm_smartpi_event` with `type` (`learning_reset`,
+`learning_enabled_changed`, `force_calibration`, `integral_reset`) and `entity_id`.
 
 ### 1.4 Logs
 
@@ -62,7 +64,7 @@ degraded|unreachable` (payload `entity_id`, `name`, event fields).
   sensor, state_store, valve_config_check) and children
   `custom_components.vtherm_smartpi.smartpi.<module>` (ab_estimator,
   learning_window, deadtime_estimator, gains, governance,
-  autocalib, calibration, setpoint, room_model.manager,
+  calibration, learning_start, setpoint, room_model.manager,
   tar_learning.manager, compatibility...). `__init__`, `hvac_mode` and
   `compatibility` use `vtherm_api.log_collector.get_vtherm_logger`.
 - Enable: `logger: logs: custom_components.vtherm_smartpi: debug` in
@@ -75,8 +77,8 @@ degraded|unreachable` (payload `entity_id`, `name`, event fields).
   lines: `Restart bridged|not bridged: <reason>`, `Reboot: state restored,
   learning frozen`, `Prolonged pause ... purging PI state`, `Target change
   detected ... invalidating learning window`, `HVAC mode changed ... PI state
-  reset`, `Heat|Cool Deadtime detected = Ns`, `AutoCalib: calibration requested`,
-  `Calibration timeout`, `Missing target or current temp, force 0`,
+  reset`, `Heat|Cool Deadtime detected = Ns`, `Calibration started|ended: <result>`,
+  `Calibration request refused: <reason>|ignored: in progress`, `Calibration ended: <result> (corrected: ...)`, `Missing target or current temp, force 0`,
   `Failed to load|save SmartPI state|T_ar learning data|room model data`,
   `Ignoring unsupported SmartPI persisted state format`, `Versatile Thermostat
   does not report applied commands`, `Invalid SmartPI valve curve parameters`,
@@ -121,12 +123,12 @@ never "zero". `tau_min` is the sentinel `9999.0` when tau is unreliable.
 | `control` | Which regime, which gains, restarts | `phase` (Hysteresis/Stable/Calibration), `mode`, `hysteresis_state`, `kp`, `ki`, `ti_min` (Kp/Ki min, null if Ki<=0), `saturation_state` (SAT_HI/SAT_LO/NO_SAT/init), `in_deadband`, `in_near_band`, `in_deadtime_window`, `restart_reason`, `last_restart.{bridged,downtime_s,reason}` |
 | `power` | What each stage commands (percent) | `pi_percent`, `ff_percent`, `command_percent` (PI+FF clamped), `limited_percent` (after rate limit and max_on_percent), `applied_percent` (after min on/off, valve curve), `current_cycle_percent` vs `next_cycle_percent`, `linear_*` (before valve curve), `hold_percent` (deadband hold), `valve_linearization_enabled` |
 | `temperature` | Inputs and integral | `indoor`, `anticipated` (indoor plus `analysis.control.anticipation_c`: what the P and I errors read), `outdoor`, `error` (setpoint minus indoor, >0 = too cold), `integral_error` (degC*min; `ki*integral_error` is its share 0-1), `integral_mode`, `integral_hold_mode`, `integral_hold_source` |
-| `model` | Learned room model | `a`, `b`, `tau_min`, `tau_reliable`, `confidence` (ab_bootstrap/ab_ok/ab_degraded/ab_bad), `deadtime_heat_s`, `deadtime_cool_s`, `deadtime_*_reliable`, `a_stability_ratio`, `b_stability_ratio` (MAD/median) |
-| `learning` | Why learning does/doesn't progress | `stage` (bootstrap/learning/monitoring/degraded), `bootstrap_progress_percent`, `bootstrap_status`, `accepted_updates_a/b` (target `history_target` 31), `last_reason`, `a_drift_state`/`b_drift_state` (NORMAL/DRIFT_SUSPECTED/RECENTERING), `learn_b_converged`, `enabled` |
+| `model` | Learned room model | `a`, `b`, `tau_min`, `tau_reliable`, `confidence` (ab_bootstrap, or ab_learning with the direct start before the first model/ab_ok/ab_degraded/ab_bad), `deadtime_heat_s`, `deadtime_cool_s`, `deadtime_*_reliable`, `a_stability_ratio`, `b_stability_ratio` (MAD/median) |
+| `learning` | Why learning does/doesn't progress | `stage` (bootstrap, or measurement pulses with the direct start before the first model/learning/monitoring/degraded), `bootstrap_progress_percent`, `bootstrap_status`, `accepted_updates_a/b` (target `history_target` 31), `last_reason`, `a_drift_state`/`b_drift_state` (NORMAL/DRIFT_SUSPECTED/RECENTERING), `learn_b_converged`, `enabled` |
 | `governance` | May a/b and gains adapt now | `regime`, `thermal_update_decision`, `thermal_update_reason` |
 | `feedforward` | Holding power | `source`, `wall_power_percent`, `deadband_power_source`, `deadband_p_mode` |
 | `setpoint` | Setpoint boost | `boost_active` |
-| `autocalib` / `calibration` | Recalibration supervisor | `autocalib.state`, `model_degraded`, `next_check_ts`, `calibration.state`, `retry_count` (max 3) |
+| `calibration` | The calibration on request (pulses) | `state`, `pulses_done` (max 3), `result`, `last_request`, `last_time`, `deadtime_start_s`, `deadtime_stop_s`, `reading_a`, `reading_b`, `reading_lag_s`, `in_force_a`, `in_force_b`, `in_force_lag_s` (horizon in use), `corrected` (`heating rate`, `loss coefficient`, `emitter lag`) |
 | `analysis.control` | Error terms, anticipation, band geometry, timing | `cycle_min`, `error_p`, `anticipation_c` (degC added to the measured temperature for P and I, 0 when off), `anticipation_horizon_s`, `anticipation_horizon_source` (`heating balance`, `dead times`, `none`), `forced_by_timing`, `near_band_below_deg`, `near_band_above_deg`, `near_band_source`, `aw_du`, `in_core_deadband`, `temperature_slope_h` |
 | `analysis.learning` | Window outcomes | `window_outcomes_24h.{a,b}` (top 8 `[reason, count]`), `balance_pool.{segments_a,segments_b,resolution_c}`, `response_lag.*`, `heating_balance.*` (incl. `kept_lag_s`, `kept_lags`: the HEAT anticipation horizon), `learn_ok_count`/`learn_skip_count` (session only) |
 | `analysis.feedforward` | Holding power | `reason`, `u_ff1`, `u_ff_final`, `u_ff_effective` (the last two equal `u_ff1`) |
@@ -161,7 +163,7 @@ supported yet`.
 | 15 | Dead time wrong / jumping | `model.deadtime_*`, `analysis.deadtime.*`, `tar_learning.{applied_s,source,bootstrap_s}`, `history.deadtime.applied_s` | detector outcomes `rejected`/`ignored` (room warming before start), cycle or emitter latency; `tar_learning.source lower_bound`; Kp uses `gains_s` not `applied_s` |
 | 16 | 0.1 degC / slow sensor behaviour | `room_model.sensor_resolution_c`, `analysis.learning.balance_pool.resolution_c`, `room_model.walls`, `response_lag.last_reason`, `heating_balance.last_reason`, `tar_learning.fast.last_morning.reason` (`temperature sensor reports too rarely`), `analysis.control.near_band_source` | quantisation steps trigger `I:UNWIND`, `I:CLAMP(near_ovr)`, guard-cut reset margin (1.5 sensor steps); few level changes starve slope windows (`skip: delta too small`, `baseline samples insufficient`); a published after 4 phases without lag; walls and room-model walls refused; expect best-effort learning and wider noise on `a`, `b`. Target sensor is 0.01 degC on change + 5 min heartbeat; coarse sensors are best effort |
 | 17 | Setpoint change ignored / slow | `setpoint.boost_active`, `temperature.{error,integral_error,integral_mode}`, `analysis.control.{error_p,anticipation_c,anticipation_horizon_s}`, `power.{pi_percent,command_percent,limited_percent}` | the regulation works on the raw setpoint: `error` is on the measured temperature, `error_p` on the anticipated one (they differ by `anticipation_c` while the room moves fast toward the setpoint; the correction fades near the setpoint); rate limit lifted only while `boost_active` (step >= 0.3 degC); a saturated command (`SAT_HI`) or an `I:HOLD` source explains a slow rise; `Target change detected` log invalidates the learning window |
-| 18 | Autocalibration loops / degraded | `autocalib.{state,model_degraded,next_check_ts}`, `calibration.{state,retry_count}`, bus events | `smartpi_autocalib_unreachable` (threshold not reachable, e.g. warm weather: waits 24 h), retries 6 h apart, max 3 then `model_degraded`; `learning.stage degraded` when tau unreliable after 31 samples |
+| 18 | Calibration never starts / ends early | `calibration.{state,pulses_done,result}`, `learning.enabled`, `control.phase`, `temperature.error`, `power.command_percent` | `calibration.last_request` gives the refusal (learning stage, learning paused, thermostat off, too soon: < 24 h after the last end); `waiting` while the room is not between 0.2 degC over and 0.3 degC under the setpoint or the command is >= 80 %, gap clamp(2 x horizon, 1-6 h) between pulses; `time limit` after 48 h; `cancelled` on a HEAT/COOL change, a learning reset or a pause; a stop ends the pulse and the calibration continues. `learning.stage degraded` (tau unreliable after 31 samples) is unrelated |
 
 ## 4. Glossary of published strings
 
@@ -173,19 +175,19 @@ Integral modes (`temperature.integral_mode`, `smartpi/controller.py`, `algo.py`)
 | `I:SKIP(SAT_HI\|SAT_LO)` | output saturated against the error: integration blocked |
 | `I:UNWIND(SAT_*)` | saturated but within 1.5 sensor steps of setpoint: integral may shrink toward 0 |
 | `I:CLAMP(near_ovr)` | error <= 0.04 degC: integral cannot grow (overshoot clamp) |
-| `I:HOLD` / `I:HOLD(<mode>)` | frozen; source in `integral_hold_source`: `deadtime` (dead-time window), `deadband_hysteresis_shell`, `governance_sensor_invalid` (no outdoor temp yet), `vt_safety` (VT safety default power), `window_resume`, `power_shedding_resume` |
+| `I:HOLD` / `I:HOLD(<mode>)` | frozen; source in `integral_hold_source`: `deadtime` (dead-time window), `deadband_hysteresis_shell`, `governance_sensor_invalid` (no outdoor temp yet), `vt_safety` (VT safety default power), `calibration_recovery` (after a calibration pulse until the setpoint), `window_resume`, `power_shedding_resume` |
 | `I:FREEZE(deadband)` | core deadband: PI frozen, hold power = FF + PI |
 | `I:FREEZE(missing_sensor)` / `I:FREEZE(hvac_off)` | no indoor temp (output 0 or kept restart command) / HVAC off |
 | `I:RESET(<reason>)` | power shedding forced off |
-| `I:OVERRIDE(guard_cut)` | overshoot guard forces 0 % until temp falls below threshold |
+| `I:OVERRIDE(guard_cut)` | overshoot guard forces 0 % until temp falls below threshold; `control.mode` is then `heating cut above the setpoint`, `temperature.error` / `analysis.control.error_p` follow the room and `anticipation_c` is 0 |
 
 Other enums:
 
 | Field | Values and meaning |
 |---|---|
-| `control.phase` | `Hysteresis` (bootstrap ON/OFF: on at setpoint-0.3, off at +0.5), `Stable` (PI), `Calibration` (forced cycle: CoolDown, HeatUp, CoolDownFinal) |
+| `control.phase` | `Hysteresis` (bootstrap ON/OFF: on at setpoint-0.3, off at +0.5), `Learning` (direct start before the first model: PI with measurement pulses), `Stable` (PI), `Calibration` (a pulse of a calibration commands the output) |
 | `learning.bootstrap_status` | `step1 - deadtime: heat:<s|null> cool:<s|null>`; `step2 - collecting emeas: A:n/5 B:n/5`; `step2 - waiting response lag: estimates N, heating phases K/4` |
-| `learning.stage` | `bootstrap`, `learning` (<31 a or b samples), `monitoring` (full + tau reliable), `degraded` (full, tau unreliable) |
+| `learning.stage` | `bootstrap`, `measurement pulses` (direct start before the first model), `learning` (<31 a or b samples), `monitoring` (full + tau reliable), `degraded` (full, tau unreliable) |
 | `learning.start.mode` | `bootstrap`, `direct` (the start the learning in progress began with; not the option when the thermostat had already learned) |
 | `learning.start.pulse` | `none`, `rest`, `full power`, `stop` (the measurement pulse in progress); `pulses_done` counts the pulses of the current mode (3 at most) |
 | `learning.start.{values_kept,values_kept_at,kept_a,kept_b,kept_lag_s}` | values kept from two agreeing readings for the current mode (`a` C/min, `b` 1/min, emitter lag s); `null` when none; ISO local time for `values_kept_at` |
@@ -195,7 +197,7 @@ Other enums:
 | `analysis.governance.kp_source` | `safe`, `measurement_pulses` (direct start, before the first model), `imc_simc`, `imc_simc_valve`, suffix `_nearband`, `_softfreeze`, or `frozen` |
 | `analysis.control.anticipation_horizon_source` | `measurement pulses`, `heating balance`, `dead times`, `none` |
 | `feedforward.source` | `learned model`, `room model (air and walls)`, `room model (static part)`, `room model (simple)` |
-| `autocalib.state` | `idle`, `waiting_snapshot`, `monitoring`, `triggered` |
+| `calibration.state` | `idle`, `waiting` (between pulses, PI regulates), `rest`, `full power`, `stop`; `calibration.result`: `in progress`, `readings agree`, `pulses done`, `time limit`, `cancelled`; `calibration.last_request`: `started`, `refused: learning stage|learning paused|thermostat off|too soon`, `ignored: in progress`; `calibration.corrected`: list of `heating rate`, `loss coefficient`, `emitter lag` |
 | `analysis.deadtime.state` | `WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`; outcomes `detected`, `timeout`, `aborted`, `rejected`, `ignored` |
 | `analysis.control.anticipation_horizon_source` | `heating balance` (HEAT, median kept emitter lag), `dead times` (longer of active and half passive dead time), `none` (no reliable horizon: no anticipation) |
 | `tar_learning.status` | `active`, `checking_dependencies`, `dependencies_unavailable`, `valve_mode_not_supported`; `source`: `bootstrap`, `fast`, `refined`, `lower_bound` |
@@ -208,7 +210,7 @@ Other enums:
 1. Establish scope: which thermostat, time window, HEAT or COOL, switch or valve,
    whether it is a regression (what changed: version, setpoints, config, weather).
 2. Read `schema_version` (expect 2), sensor state, `control.phase`. If
-   `bootstrap_hysteresis`, go to rows 1, 2 and 6 first: swings are expected.
+   `bootstrap_hysteresis`, go to rows 1, 2 and 6 first: swings are expected (`learning_pulses`: the PI regulates, only the pulses swing).
 3. Read `model` + `learning` + `tar_learning.status`: is the model plausible and reliable?
 4. Follow the command chain `power.pi_percent + ff_percent -> command_percent ->
    limited_percent -> applied_percent`: find the first stage where the value
@@ -231,7 +233,7 @@ Other enums:
 | Gains vs floors | `control.kp/ki/ti_min` against 0.10/5.0 and 0.001/0.050; `kp_source`; Ti near `4*(lambda+L)` when learned |
 | Command chain | percent values at each stage; `forced_by_timing`; `max_on_percent` effect; `valve.*` |
 | Integral and regime | `integral_mode` + hold source, `governance.regime`, `saturation_state` |
-| Learning health | `accepted_updates_a/b`, `last_reason`, outcomes top reasons, drift states, `autocalib.*` |
+| Learning health | `accepted_updates_a/b`, `last_reason`, outcomes top reasons, drift states |
 | Sensor | resolution (`sensor_resolution_c`, `resolution_c`), update period, 0.01 degC vs 0.1 degC; outdoor sensor present (`temperature.outdoor` not null) |
 | VT config | cycle length (`analysis.control.cycle_min`), min on/off delays (SmartPI options, switch only), switch vs valve, `valve.issues`, `max_on_percent`, VT safety/window/shedding, VT and vtherm_api versions (receipts support) |
 | Restarts | `control.last_restart`, `restart_reason`, uptime vs incident time |

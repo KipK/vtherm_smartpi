@@ -33,6 +33,6 @@ What real installations look like, to calibrate judgement and benches. Generic o
 
 ## Home Assistant access (for maintainers' agents)
 
-- Live diagnostics: read sub-blocks of the diagnostics sensor attribute `live` with a template and `| tojson` (e.g. `model`, `tar_learning`, `analysis.learning.response_lag`, `analysis.learning.heating_balance`, `calibration`, `autocalib`). The full attribute dump is very large: never read it whole.
+- Live diagnostics: read sub-blocks of the diagnostics sensor attribute `live` with a template and `| tojson` (e.g. `model`, `tar_learning`, `analysis.learning.response_lag`, `analysis.learning.heating_balance`, `calibration`). The full attribute dump is very large: never read it whole.
 - History: 5-minute statistics for numeric sensors (power percent, smoothed temperature which lags the raw value by minutes).
 - Never store endpoints, tokens or entity names of a real installation in this repository.

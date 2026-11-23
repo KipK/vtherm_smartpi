@@ -72,11 +72,3 @@ def test_valve_curve_cap_drives_calculate_output() -> None:
     assert algo.on_percent == pytest.approx(0.6, abs=1e-9)
     assert algo.on_percent > algo.valve_curve.apply(0.6)
 
-
-def test_calibration_receives_linear_cap() -> None:
-    """Forced calibration clamps its linear output with the linear cap."""
-    algo = _algo(0.6, valve_curve=True)
-    algo.calibration_mgr.calculate = MagicMock(return_value=MagicMock(on_percent=None))
-    algo._calculate_forced_calibration(20.0, 19.0, VThermHvacMode_HEAT)
-    kwargs = algo.calibration_mgr.calculate.call_args.kwargs
-    assert kwargs["max_on_percent"] == algo._linear_max_on()

@@ -10,7 +10,6 @@ and intentional.
 from __future__ import annotations
 
 import time
-from datetime import datetime
 from typing import Any, Dict, TYPE_CHECKING
 from .const import (
     ABConfidenceState,
@@ -21,6 +20,9 @@ from .const import (
     RESPONSE_LAG_RESOLVE_EPISODES,
     clamp,
 )
+
+from .guards import GUARD_CUT_I_MODE, GUARD_CUT_STATE
+from .learning_start import LEARNING_PULSES_CONFIDENCE, LEARNING_PULSES_PHASE, LEARNING_PULSES_STAGE, learning_by_pulses
 
 if TYPE_CHECKING:
     from ..algo import SmartPI
@@ -54,14 +56,35 @@ def _integral_time_min(kp: float, ki: float) -> float | None:
     return round(kp / ki, 1)
 
 
+def _cut_error(algo: SmartPI) -> float | None:
+    """Setpoint error of the last calculation when it was in a guard cut, None otherwise. The PI is not computed during
+    a cut: the error, the anticipation and the regulation mode are published from the cut instead of the values of
+    the last regulation calculation."""
+    if algo.guards.guard_cut_active and algo.ctl.last_i_mode == GUARD_CUT_I_MODE:
+        return algo.guards.cut_error
+    return None
+
+
+def _errors(algo: SmartPI) -> tuple[float, float, float]:
+    """Published error, error on the anticipated temperature and anticipation (0 during a guard cut)."""
+    cut = _cut_error(algo)
+    if cut is not None:
+        return cut, cut, 0.0
+    return algo.error, algo.error_p, algo.anticipation_c
+
+
 def _build_control(algo: SmartPI) -> Dict[str, Any]:
     """Return the regulation phase, gains and band flags."""
     phase = algo.phase
     kp = round(algo.Kp, 6)
     ki = round(algo.Ki, 6)
     return {
-        "phase": phase,
-        "mode": "hysteresis" if algo.command_is_hysteresis else "smartpi",
+        "phase": LEARNING_PULSES_PHASE if learning_by_pulses(algo) else phase,
+        "mode": (
+            "hysteresis" if algo.command_is_hysteresis
+            else GUARD_CUT_STATE if _cut_error(algo) is not None
+            else "smartpi"
+        ),
         "hysteresis_state": algo.ctl.hysteresis_state,
         "kp": kp,
         "ki": ki,
@@ -95,11 +118,12 @@ def _build_power(algo: SmartPI) -> Dict[str, Any]:
 def _build_temperature(algo: SmartPI) -> Dict[str, Any]:
     """Return the measured temperatures, the error and the integral state."""
     indoor = algo._last_current_temp
+    error, _, anticipation = _errors(algo)
     return {
         "indoor": indoor,
-        "anticipated": None if indoor is None else round(indoor + algo.anticipation_c, 2),
+        "anticipated": None if indoor is None else round(indoor + anticipation, 2),
         "outdoor": algo._last_ext_temp,
-        "error": round(algo.error, 4),
+        "error": round(error, 4),
         "integral_error": round(algo.integral, 6),
         "integral_mode": algo.last_i_mode,
         "integral_hold_mode": algo.ctl.integral_hold_mode,
@@ -110,7 +134,7 @@ def _build_temperature(algo: SmartPI) -> Dict[str, Any]:
 def _build_ab_confidence_state(algo: SmartPI) -> str:
     """Return the public A/B confidence state for the current phase."""
     if algo.phase == SmartPIPhase.HYSTERESIS:
-        return ABConfidenceState.AB_BOOTSTRAP.value
+        return LEARNING_PULSES_CONFIDENCE if learning_by_pulses(algo) else ABConfidenceState.AB_BOOTSTRAP.value
 
     return algo._ab_confidence.state.value
 
@@ -213,7 +237,7 @@ def _build_ab_learning_stage(
 ) -> str:
     """Return a compact AB learning stage for the published summary."""
     if algo.phase == SmartPIPhase.HYSTERESIS:
-        return "bootstrap"
+        return LEARNING_PULSES_STAGE if learning_by_pulses(algo) else "bootstrap"
 
     if samples_a < AB_HISTORY_SIZE or samples_b < AB_HISTORY_SIZE:
         return "learning"
@@ -278,32 +302,17 @@ def _build_setpoint(algo: SmartPI) -> Dict[str, Any]:
     }
 
 
-def _build_autocalib(algo: SmartPI) -> Dict[str, Any]:
-    """Return the automatic calibration trigger state."""
-    autocalib = algo.autocalib
-    return {
-        "state": autocalib.state.value,
-        "model_degraded": autocalib.model_degraded,
-        "last_trigger_ts": autocalib.last_trigger_ts_iso,
-        "next_check_ts": autocalib.next_check_ts_iso,
-        "snapshot_age_h": autocalib.snapshot_age_h,
-    }
-
-
 def _build_calibration(algo: SmartPI) -> Dict[str, Any]:
-    """Return the calibration phase, its retry count and its last run time."""
-    last_time = algo.calibration_mgr.last_calibration_time
-    return {
-        "state": algo.calibration_state,
-        "retry_count": algo.autocalib.retry_count,
-        "last_time": datetime.fromtimestamp(last_time).isoformat() if last_time else None,
-    }
+    """Return the calibration in progress or the last one: state, pulses, result, last request, dead times, reading,
+    values in force and corrections."""
+    return algo._start.calibration_public()
 
 
 def _build_analysis_control(algo: SmartPI) -> Dict[str, Any]:
     """Return the error terms, the anti-windup step and the band geometry."""
     deadband_mgr = algo.deadband_mgr
     horizon = algo.anticipation_horizon()
+    _, error_p, anticipation = _errors(algo)
     return {
         "cycle_min": round(algo.cycle_min, 3),
         "error_filtered": (
@@ -311,8 +320,8 @@ def _build_analysis_control(algo: SmartPI) -> Dict[str, Any]:
             if algo.error_filtered != 0.0 or algo._e_filt is not None
             else None
         ),
-        "error_p": round(algo.error_p, 4),
-        "anticipation_c": round(algo.anticipation_c, 4),
+        "error_p": round(error_p, 4),
+        "anticipation_c": round(anticipation, 4),
         "anticipation_horizon_s": round(horizon.seconds, 1),
         "anticipation_horizon_source": horizon.source,
         "aw_du": round(algo.aw_du, 6),
@@ -480,7 +489,6 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "governance": _build_governance(algo),
         "feedforward": _build_feedforward(algo),
         "setpoint": _build_setpoint(algo),
-        "autocalib": _build_autocalib(algo),
         "calibration": _build_calibration(algo),
         "analysis": _build_analysis(algo),
         "valve": _build_valve_diagnostics(algo),

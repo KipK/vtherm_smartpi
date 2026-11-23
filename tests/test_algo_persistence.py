@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import logging
-import time
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from custom_components.vtherm_smartpi.algo import SmartPI
-from custom_components.vtherm_smartpi.smartpi.autocalib import AutoCalibState
 from custom_components.vtherm_smartpi.smartpi.const import (
     PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN,
 )
@@ -233,8 +231,8 @@ def test_restored_learned_model_publishes_confidence_before_active_cycle() -> No
     assert published["model"]["confidence"] == "ab_ok"
 
 
-def test_save_and_load_state_restores_autocalib_and_learning_start() -> None:
-    """SmartPI persistence should restore AutoCalib and learning-start state."""
+def test_save_and_load_state_restores_the_learning_start_date() -> None:
+    """SmartPI persistence should restore the learning-start date."""
     smartpi1 = SmartPI(
         hass=MagicMock(),
         cycle_min=10,
@@ -244,14 +242,8 @@ def test_save_and_load_state_restores_autocalib_and_learning_start() -> None:
     )
 
     learning_start = datetime(2024, 1, 2, 3, 4, 5)
-    snapshot_ts = time.time() - (5 * 3600)
-
     smartpi1.learn_win._learning_start_date = learning_start
     smartpi1._learning_start_date = learning_start
-    smartpi1.autocalib._snapshot_ts = snapshot_ts
-    smartpi1.autocalib._retry_count = 2
-    smartpi1.autocalib._model_degraded = True
-    smartpi1.autocalib._triggered_params = ["a", "deadtime_heat"]
 
     saved = smartpi1.save_state()
 
@@ -265,11 +257,6 @@ def test_save_and_load_state_restores_autocalib_and_learning_start() -> None:
     )
 
     assert smartpi2._learning_start_date == learning_start
-    assert smartpi2.autocalib._snapshot_ts == snapshot_ts
-    assert smartpi2.autocalib.retry_count == 2
-    assert smartpi2.autocalib.model_degraded is True
-    assert smartpi2.autocalib.triggered_params == ["a", "deadtime_heat"]
-    assert smartpi2.autocalib.snapshot_age_h is not None
 
 
 def test_reset_learning() -> None:
@@ -293,31 +280,3 @@ def test_reset_learning() -> None:
     assert smartpi.est.b == smartpi.est.B_INIT
     assert smartpi.integral == 0.0
     assert smartpi.est.learn_ok_count == 0
-
-
-def test_reset_learning_restarts_the_automatic_calibration_supervision() -> None:
-    """A snapshot of the discarded model must not be compared with the new learning."""
-    smartpi = SmartPI(
-        hass=MagicMock(),
-        cycle_min=10,
-        minimal_activation_delay=0,
-        minimal_deactivation_delay=0,
-        name="TestSmartPI",
-    )
-    smartpi.autocalib._state = AutoCalibState.MONITORING
-    smartpi.autocalib._snapshot_ts = time.time() - 30 * 3600.0
-    smartpi.autocalib._snap_ok_count_a = 40
-    smartpi.autocalib._snap_ok_count_b = 60
-    smartpi.autocalib._last_trigger_ts = time.time() - 48 * 3600.0
-    smartpi.autocalib._retry_count = 2
-    smartpi.autocalib._model_degraded = True
-
-    smartpi.reset_learning()
-
-    assert smartpi.autocalib.state == AutoCalibState.WAITING_SNAPSHOT
-    assert smartpi.autocalib.snapshot_age_h is None
-    assert smartpi.autocalib._snap_ok_count_a == 0
-    assert smartpi.autocalib._snap_ok_count_b == 0
-    assert smartpi.autocalib.last_trigger_ts_iso is None
-    assert smartpi.autocalib.retry_count == 0
-    assert smartpi.autocalib.model_degraded is False

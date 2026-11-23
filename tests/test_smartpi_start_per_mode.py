@@ -77,12 +77,12 @@ def test_pulses_are_counted_per_mode():
         tin_history = []
     pulse, now = MeasurePulse(), 0.0
     for k in range(PULSE_MAX_COUNT + 1):
-        pulse.update(now, 20.0, 19.9, VThermHvacMode_HEAT, False, True, True, False, False, False, _Dt())
+        pulse.update(now, 20.0, 19.9, VThermHvacMode_HEAT, False, True, True, False, False, _Dt())
         assert pulse.active is (k < PULSE_MAX_COUNT)
         pulse.interrupt(now, "test")
         now += PULSE_MIN_GAP_S + 1.0
     assert pulse.count == PULSE_MAX_COUNT and pulse.count_for("heat") == PULSE_MAX_COUNT and pulse.count_for("cool") == 0
-    pulse.update(now, 20.0, 20.1, VThermHvacMode_COOL, True, True, True, False, False, False, _Dt())
+    pulse.update(now, 20.0, 20.1, VThermHvacMode_COOL, True, True, True, False, False, _Dt())
     assert pulse.active and pulse.count == PULSE_MAX_COUNT + 1 and pulse.count_for("cool") == 1
     other = MeasurePulse()
     other.load(json.loads(json.dumps(pulse.save(now))))

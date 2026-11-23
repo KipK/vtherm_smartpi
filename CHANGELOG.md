@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 - Start of the learning: a new option, **Start of the learning**, chooses how SmartPI learns a room from a blank state. **Bootstrap** (default) runs hysteresis cycles at full power until the model is learned, then regulates. **Direct start** regulates with the PI from the first minute and measures the room with at most three light measurement pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The option applies to a new thermostat and after a learning reset; a thermostat that has already learned keeps its model and its start. Existing configurations keep the bootstrap. The start, the pulses done and the values kept from them (one set per mode, heating or cooling) are published in `learning.start`.
+- Direct start: the measurement pulses of the learning stage heat until the room has clearly responded and is back at the setpoint (at most 0.1 °C under it) while the heating has lasted less than 30 minutes, past which they stop as soon as the room has clearly responded (the 2 hour and 0.3 °C over limits stay), so that the stop that follows starts high and lasts long enough to confirm the temperature peak. During the stop the regulation takes over only once the room is 0.5 °C under the setpoint and lower than at the start of the stop, and in any case at 0.8 °C under it (before, as soon as the room was 0.5 °C under, which could end the stop before the peak was confirmed and leave the dead time after a stop unmeasured). The pulses of a calibration follow the same rules.
+- Diagnostics: during a guard cut (heating forced off above the setpoint) `live.control.mode` is `heating cut above the setpoint`, `live.temperature.error` and `live.analysis.control.error_p` follow the room (setpoint minus temperature) and `live.analysis.control.anticipation_c` is 0 (`live.temperature.anticipated` is the indoor temperature); before, they kept the values of the last regulation calculation before the cut. `live.temperature.integral_hold_source` takes the value `calibration_recovery` while the integral is held after a calibration pulse.
+- Diagnostics: while the first model is not published with the direct start, the sensor state is `learning_pulses` (was `bootstrap_hysteresis`), `live.control.phase` is `Learning` (was `Hysteresis`), `live.learning.stage` is `measurement pulses` (was `bootstrap`) and `live.model.confidence` is `ab_learning` (was `ab_bootstrap`). The bootstrap start keeps its values. The Markdown cards show the new values.
 - Heating and cooling: a thermostat that switches between HEAT and COOL keeps what it learned for each mode (heating or cooling rate, dead times, emitter response) and gets it back when the mode returns; the heat-loss coefficient stays shared.
 - Learning: the outlier filter of the heating and loss coefficients keeps a minimum width of 2 % of its median, so a few nearly identical first measurements can no longer block the learning for days.
 - Bootstrap: the heating phases of the hysteresis bootstrap and the temperature
@@ -23,11 +26,44 @@ All notable changes to this project will be documented in this file.
   `analysis.feedforward.u_ff_final` and `u_ff_effective` equal `u_ff1`. Saved
   states and configurations load unchanged, and the Markdown cards no longer
   show these groups.
-- Calibration: switching the thermostat off during a calibration, for example
-  while a window is open, no longer cancels it. The calibration waits in its
-  phase and continues when the same mode comes back within 10 minutes; after a
-  longer stop, or in another mode, it is cancelled as before. Its 10-hour
-  limit still counts from the original start.
+- Calibration: the calibration requested with `force_smartpi_calibration`
+  makes at most three measurement pulses near the setpoint (in either start
+  mode) instead of driving the room down to 0.3 °C under the setpoint and up to
+  0.5 °C over it. Its pulses are sized from the dead times and the anticipation
+  horizon of the room: they may start from 0.2 °C over the setpoint, rest long
+  enough to measure the dead time after a start (ending early when the lowest
+  point the room is heading to reaches 0.5 °C under the setpoint), heat at most
+  2 to 4 hours, let the regulation take over during the stop only once the room
+  is 0.5 °C under and still falling (0.8 °C at most), and are 1 to 6 hours
+  apart. Its dead times join the learned ones. When two pulses agree, their
+  heating rate, loss coefficient and emitter lag are compared with the values
+  in use: a value more than 30 % off is corrected (the heating rate; the
+  emitter lag of the response-lag learning with the direct start, never the
+  anticipation horizon) and stands until the learning has its own; the loss
+  coefficient is read and published only, never corrected (it is biased in a
+  room with heavy walls). At a correction the step of the holding power is
+  moved into the integral, so the feed-forward and the integral term do not
+  jump; corrected values survive a restart. While a
+  calibration runs the learning takes no measure of the heating rate, and
+  after each pulse the integral is held until the room is back at the
+  setpoint. When the end comes during a pulse, a pulse at rest hands back at
+  once, one heating at full power goes to its stop step, one in its stop step
+  goes on, and the calibration ends with that pulse. The service never fails: a request is
+  refused while the first model is learned, while learning is paused, while the
+  thermostat is off or within 24 hours of the end of the last calibration, and
+  ignored while one runs; a window, power shedding or a guard cut only delays
+  the pulses. It ends when two pulses agree, after three pulses, or after 48
+  hours, and its end is also checked during a guard cut. Switching the
+  thermostat off ends the pulse in progress and the calibration goes on with
+  the next one; a change between heating and cooling, a learning reset or a
+  pause of the learning cancels it at once. The automatic calibration is removed, with
+  its `autocalib` diagnostics block and its `smartpi_autocalib_*` events.
+  `calibration.state` takes the values `idle`, `waiting`, `rest`, `full power`
+  and `stop`; `calibration.retry_count` is removed; `calibration.pulses_done`,
+  `result`, `last_request`, `deadtime_start_s`, `deadtime_stop_s`, `reading_a`,
+  `reading_b`, `reading_lag_s`, `in_force_a`, `in_force_b`, `in_force_lag_s`
+  and `corrected` are added. A calibration saved in progress by an earlier
+  version is not resumed.
 - Anticipation (heating): a saved state that holds a measured emitter lag but
   no kept lag (saved by a version that did not keep them) keeps that lag as
   the horizon of the anticipation after a restart, instead of falling back to
@@ -104,9 +140,6 @@ All notable changes to this project will be documented in this file.
   the dead time in force.
 - Requirements: `numpy` and `scipy` are installed with the integration. If they
   cannot be loaded, nothing is learned and the bootstrap value stays in use.
-- Learning reset: `reset_smartpi_learning` also restarts the supervision of the
-  automatic calibration. Its snapshot of the discarded model could otherwise
-  make the new learning look stalled and start a calibration a few days later.
 - Documentation and cards: two names only, dead time (the time before the room
   temperature first moves after a command) and emitter lag (the mean time the
   commanded heat takes to arrive in the room), with a glossary.

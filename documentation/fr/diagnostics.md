@@ -3,6 +3,18 @@
 SmartPI expose un capteur de diagnostic Home Assistant dédié. Son état indique
 la phase de régulation courante et ses attributs suivent le schéma version 2.
 
+Tant que le premier modèle n'est pas publié, l'état, `live.control.phase`,
+`live.learning.stage` et `live.model.confidence` nomment le démarrage de l'apprentissage :
+
+| Démarrage | État | `control.phase` | `learning.stage` | `model.confidence` |
+|---|---|---|---|---|
+| Amorçage | `bootstrap_hysteresis` | `Hysteresis` | `bootstrap` | `ab_bootstrap` |
+| Démarrage direct | `learning_pulses` | `Learning` | `measurement pulses` | `ab_learning` |
+
+Ensuite les deux démarrages publient les mêmes valeurs (`stable` ou `calibration`,
+`Stable` ou `Calibration`, `learning`, `monitoring` ou `degraded`, `ab_ok`,
+`ab_degraded` ou `ab_bad`).
+
 ## Enveloppe des attributs
 
 ```yaml
@@ -67,12 +79,23 @@ Le bloc `live` est organisé par responsabilité :
 | `governance` | Régime thermique et décision de mise à jour du modèle |
 | `feedforward` | Source de la puissance de maintien, part des murs de la puissance de maintien et source de bande morte |
 | `setpoint` | État du boost de consigne |
-| `autocalib` | État du superviseur de calibration automatique |
-| `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
+| `calibration` | La calibration en cours ou la dernière : état, impulsions, résultat, dernière demande, temps morts mesurés, lecture, valeurs en usage et corrections |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
 | `tar_learning` | Apprentissage du retard de l'émetteur |
 | `room_model` | Modèle de pièce |
+
+`control.mode` vaut `smartpi` lorsque le PI régule, `hysteresis` pendant le
+bootstrap, et `heating cut above the setpoint` pendant une coupure de la garde
+(la pièce a dépassé la consigne de la near-band au-dessus : le chauffage est
+forcé à l'arrêt). Le PI n'est pas calculé pendant une coupure :
+`temperature.error` et `analysis.control.error_p` sont alors la consigne moins la
+température du dernier calcul, `analysis.control.anticipation_c` vaut `0` et
+`temperature.anticipated` est la température intérieure.
+
+`temperature.integral_hold_source` vaut `calibration_recovery` tant que
+l'intégrale est figée après une impulsion de calibration, jusqu'à ce que la
+pièce atteigne la consigne.
 
 `control.last_restart` décrit le dernier redémarrage de Home Assistant ou de
 l'intégration. Il vaut `null` avant le premier calcul de la régulation après le
@@ -93,13 +116,41 @@ amorçage affiche `0` impulsion et aucune impulsion en cours.
 | Champ | Signification |
 |---|---|
 | `mode` | Démarrage de l'apprentissage en cours : `bootstrap` ou `direct`. Un thermostat qui a déjà appris garde le démarrage avec lequel son apprentissage a commencé, quelle que soit l'option |
-| `pulses_done` | Impulsions de mesure démarrées depuis le début de l'apprentissage, dans le mode courant (trois au plus) |
-| `pulse` | L'impulsion en cours : `none`, `rest` (sans chauffage, en attendant que la pièce descende), `full power` ou `stop` (attente du pic de température) |
+| `pulses_done` | Impulsions de mesure démarrées depuis le début de l'apprentissage, dans le mode courant (trois au plus) ; les impulsions d'une calibration ne sont pas comptées |
+| `pulse` | L'impulsion en cours : `none`, `rest` (sans chauffage, en attendant que la pièce descende), `full power` ou `stop` (attente du pic de température) ; une impulsion de calibration affiche `none` ici |
 | `values_kept` | `true` lorsque deux lectures concordantes ont donné des valeurs pour le mode courant |
 | `values_kept_at` | Heure locale à laquelle les valeurs ont été conservées (ISO 8601), `null` si aucune n'est conservée ou si l'heure est inconnue |
 | `kept_a` | Vitesse de chauffe conservée en °C/min à pleine puissance (5 décimales), `null` si aucune n'est conservée |
 | `kept_b` | Coefficient de pertes conservé en 1/min (6 décimales), `null` si aucun n'est conservé |
 | `kept_lag_s` | Retard de l'émetteur conservé en secondes, `null` si aucun n'est conservé |
+
+`calibration` résume la calibration demandée avec le service
+`force_smartpi_calibration` (voir **Calibration** dans la
+[documentation SmartPI](vtherm_smartpi.md)) : la calibration en cours, ou la
+dernière jusqu'à la demande suivante.
+
+| Champ | Signification |
+|---|---|
+| `state` | `idle` (aucune calibration en cours), `waiting` (entre deux impulsions, la régulation fonctionne), ou l'étape de son impulsion en cours : `rest`, `full power`, `stop` |
+| `pulses_done` | Impulsions démarrées par la calibration (trois au plus ; une impulsion interrompue compte) |
+| `result` | `null` avant toute calibration, `in progress`, `readings agree` (deux impulsions concordent), `pulses done` (trois impulsions lues sans concordance), `time limit` (48 heures) ou `cancelled` (passage entre chauffage et refroidissement, retour de la phase d'apprentissage, réinitialisation de l'apprentissage, apprentissage mis en pause) |
+| `last_request` | Réponse à la dernière demande, `null` avant toute demande : `started`, `refused: learning stage` (premier modèle en apprentissage), `refused: learning paused` (apprentissage en pause), `refused: thermostat off` (thermostat éteint), `refused: too soon` (moins de 24 heures après la fin de la dernière calibration), `ignored: in progress` (calibration en cours) |
+| `last_time` | Heure locale de fin de la dernière calibration non annulée (ISO 8601), `null` avant |
+| `deadtime_start_s` | Dernier temps mort après un démarrage mesuré pendant une impulsion de la calibration, en secondes, `null` sans mesure |
+| `deadtime_stop_s` | Dernier temps mort après un arrêt mesuré pendant une impulsion de la calibration, en secondes, `null` sans mesure |
+| `reading_a` | Vitesse de chauffe des deux impulsions concordantes en °C/min à pleine puissance (5 décimales), `null` tant que deux impulsions ne concordent pas |
+| `reading_b` | Coefficient de pertes des deux impulsions concordantes en 1/min (6 décimales), `null` tant que deux impulsions ne concordent pas ; publié seulement, jamais corrigé |
+| `reading_lag_s` | Retard de l'émetteur des deux impulsions concordantes en secondes, `null` tant que deux impulsions ne concordent pas |
+| `in_force_a` | Vitesse de chauffe en usage lorsque les impulsions ont concordé, en °C/min à pleine puissance (5 décimales), comparée à `reading_a` ; `null` tant que deux impulsions ne concordent pas |
+| `in_force_b` | Coefficient de pertes en usage lorsque les impulsions ont concordé, en 1/min (6 décimales) ; `null` tant que deux impulsions ne concordent pas |
+| `in_force_lag_s` | Horizon de l'anticipation en usage lorsque les impulsions ont concordé, en secondes, comparé à `reading_lag_s` ; `null` tant que deux impulsions ne concordent pas |
+| `corrected` | Ce que la calibration a corrigé : une liste parmi `heating rate` (vitesse de chauffe), `emitter lag` (retard de l'émetteur) ; vide si rien n'a été corrigé |
+
+Les temps morts mesurés par les impulsions rejoignent les temps morts appris
+comme toute autre mesure. Une grandeur de la lecture n'est corrigée que si elle
+s'écarte de plus de 30 % de la valeur en usage (voir **Calibration** dans la
+[documentation SmartPI](vtherm_smartpi.md)) ; la lecture ne fixe jamais
+l'horizon de l'anticipation.
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `deadtime`, `governance` et `feedforward`.
@@ -109,7 +160,7 @@ l'anticipation de la température, en chauffage et en refroidissement :
 
 | Champ | Signification |
 |---|---|
-| `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon ou sans pente montante ou descendante) |
+| `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon, sans pente montante ou descendante, ou pendant une coupure de la garde) |
 | `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le temps entre une commande et son effet), `0` lorsqu'il n'y en a pas |
 | `anticipation_horizon_source` | Origine de l'horizon : `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct, en chauffage et en refroidissement), `heating balance` (médiane des derniers retards de l'émetteur mesurés), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` ; le bilan de chauffe n'est utilisé qu'en chauffage |
 

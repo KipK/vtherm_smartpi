@@ -18,7 +18,6 @@
 {% set gov = spi.get('governance', {}) %}
 {% set ff = spi.get('feedforward', {}) %}
 {% set setpoint = spi.get('setpoint', {}) %}
-{% set autocalib = spi.get('autocalib', {}) %}
 {% set calibration = spi.get('calibration', {}) %}
 {% set analysis = spi.get('analysis', {}) %}
 {% set analysis_control = analysis.get('control', {}) %}
@@ -30,6 +29,7 @@
 
 {% set phase = control.get('phase', 'unknown') %}
 {% set mode = control.get('mode', 'unknown') %}
+{% set mode = {'heating cut above the setpoint': 'chauffe coupée au-dessus de la consigne'}.get(mode, mode) %}
 {% set hyst_state = control.get('hysteresis_state', '—') %}
 {% set restart_reason = control.get('restart_reason', 'none') %}
 {% set kp = control.get('kp') %}
@@ -95,15 +95,20 @@
 
 
 
-{% set autocalib_state = autocalib.get('state', 'unknown') %}
-{% set autocalib_degraded = autocalib.get('model_degraded', false) %}
-{% set autocalib_last = autocalib.get('last_trigger_ts') %}
-{% set autocalib_next = autocalib.get('next_check_ts') %}
-{% set autocalib_age = autocalib.get('snapshot_age_h') %}
-
 {% set calibration_state = calibration.get('state', 'unknown') %}
-{% set calibration_retry = calibration.get('retry_count', 0) %}
+{% set calibration_pulses = calibration.get('pulses_done', 0) %}
+{% set calibration_result = calibration.get('result') %}
 {% set calibration_last = calibration.get('last_time') %}
+{% set calibration_dt_start = calibration.get('deadtime_start_s') %}
+{% set calibration_dt_stop = calibration.get('deadtime_stop_s') %}
+{% set calibration_a = calibration.get('reading_a') %}
+{% set calibration_b = calibration.get('reading_b') %}
+{% set calibration_lag = calibration.get('reading_lag_s') %}
+{% set calibration_request = calibration.get('last_request') %}
+{% set calibration_in_a = calibration.get('in_force_a') %}
+{% set calibration_in_b = calibration.get('in_force_b') %}
+{% set calibration_in_lag = calibration.get('in_force_lag_s') %}
+{% set calibration_corrected = calibration.get('corrected') or [] %}
 
 {% set regime_icon = {
   'excited_stable': '🟢',
@@ -118,6 +123,7 @@
 
 {% set stage_icon = {
   'bootstrap': '🔵',
+  'measurement pulses': '🔵',
   'learning': '🟡',
   'monitoring': '🟢',
   'degraded': '🔴'
@@ -125,6 +131,7 @@
 
 {% set ab_label = {
   'ab_bootstrap': '🔵 AB_BOOTSTRAP',
+  'ab_learning': '🔵 AB_LEARNING',
   'ab_ok': '🟢 AB_OK',
   'ab_degraded': '🟡 AB_DEGRADED',
   'ab_bad': '🔴 AB_BAD'
@@ -235,7 +242,6 @@
 {%- if has_analysis %} · {{ cycle_min }} min{% endif %}
  · `{{ mode }}`
 {%- if has_analysis and control.get('in_deadband', false) %} · 💤 DB{% elif has_analysis and control.get('in_near_band', false) %} · 〰️ NB{% endif %}
-{%- if autocalib_degraded %} · ⚠️ modèle dégradé{% endif %}
 
 ---
 
@@ -372,12 +378,13 @@
 
 | Signal | Valeur |
 |---|---|
-| AutoCalib | `{{ autocalib_state }}`{% if autocalib_degraded %} · ⚠️ dégradé{% endif %} |
-| Snapshot âge | {% if autocalib_age is not none %}{{ autocalib_age }} h{% else %}—{% endif %} |
-| Dernier trigger | {% if autocalib_last %}`{{ autocalib_last }}`{% else %}—{% endif %} |
-| Prochain check | {% if autocalib_next %}`{{ autocalib_next }}`{% else %}—{% endif %} |
-| Calibration | `{{ calibration_state }}` |
-| Retries | {{ calibration_retry }} |
+| Calibration | `{{ calibration_state }}` · {{ calibration_pulses }} impulsion(s) |
+| Résultat | {% if calibration_result %}`{{ calibration_result }}`{% else %}—{% endif %} |
+| Temps morts (démarrage / arrêt) | {% if calibration_dt_start is not none %}{{ calibration_dt_start }} s{% else %}—{% endif %} / {% if calibration_dt_stop is not none %}{{ calibration_dt_stop }} s{% else %}—{% endif %} |
+| Lecture a · b · retard | {% if calibration_a is not none %}{{ calibration_a }} °C/min · {{ calibration_b }} /min · {{ calibration_lag }} s{% else %}—{% endif %} |
+| En usage a · b · retard | {% if calibration_in_a is not none %}{{ calibration_in_a }} °C/min · {{ calibration_in_b }} /min · {{ calibration_in_lag }} s{% else %}—{% endif %} |
+| Corrigé | {% if calibration_corrected %}{{ calibration_corrected | join(', ') }}{% else %}—{% endif %} |
+| Dernière demande | {% if calibration_request %}`{{ calibration_request }}`{% else %}—{% endif %} |
 | Dernière calibration | {% if calibration_last %}`{{ calibration_last }}`{% else %}—{% endif %} |
 
 {% if has_analysis %}

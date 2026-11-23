@@ -61,7 +61,6 @@ from .smartpi.const import (
     SmartPIPhase,
     GovernanceRegime,
     GovernanceDecision,
-    SmartPICalibrationPhase,
     MAX_STEP_PER_MINUTE,
     SETPOINT_BOOST_RATE,
     SETPOINT_MODE_DELTA_C,
@@ -72,7 +71,6 @@ from .smartpi.const import (
     DEFAULT_DEADBAND_C,
     INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL,
     DEFAULT_NEAR_BAND_DEG,
-    CALIBRATION_TIMEOUT_MIN,
     ERROR_FILTER_TAU,
     NEAR_SETPOINT_UNWIND_STEPS,
     NEAR_BAND_HYSTERESIS_C,
@@ -80,7 +78,6 @@ from .smartpi.const import (
     clamp,
 )
 from .smartpi.anticipation import AnticipationHorizon, DeadbandGate, anticipated_error, correction_c, select_horizon
-from .smartpi.autocalib import AutoCalibTrigger, AutoCalibEvent
 from .smartpi.learning_start import LearningStart
 from .smartpi.deadtime_estimator import (
     DeadTimeEstimator,
@@ -91,11 +88,10 @@ from .smartpi.ab_estimator import ABEstimator
 from .smartpi.diagnostics import build_published_diagnostics
 from .smartpi.governance import SmartPIGovernance
 from .smartpi.setpoint import SmartPISetpointManager
-from .smartpi.guards import SmartPIGuards
+from .smartpi.guards import GUARD_CUT_I_MODE, SmartPIGuards
 from .smartpi.controller import SmartPIController
 from .smartpi.learning_window import LearningWindowManager
 from .smartpi.deadband import DeadbandManager
-from .smartpi.calibration import CalibrationManager
 from .smartpi.gains import GainScheduler
 from .smartpi.feedforward import (
     FFResult,
@@ -213,7 +209,6 @@ class SmartPI:
         # --- New Component Managers (Phase 2.5 refactoring) ---
         self.learn_win = LearningWindowManager(name)
         self.deadband_mgr = DeadbandManager(name, near_band_deg)
-        self.calibration_mgr = CalibrationManager(name)
         self.gain_scheduler = GainScheduler(name)
         self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
 
@@ -304,9 +299,6 @@ class SmartPI:
 
         # Cycle tracking
         self._setpoint_changed_in_cycle: bool = False
-
-        # --- AutoCalibTrigger (supervision) ---
-        self.autocalib = AutoCalibTrigger(name)
 
         # --- AB confidence ---
         self._ab_confidence = ABConfidence()
@@ -404,18 +396,12 @@ class SmartPI:
         self._hysteresis_restore = None
         self._start.reset()
         self.deadband_mgr.reset()
-        self.calibration_mgr.reset()
-        self.autocalib.reset()  # its snapshot and counters describe the model that is discarded
         self.gain_scheduler.reset()
         self._ab_confidence.reset()
         self._last_restart_reason = "none"
         self.resume_hold.clear()
 
         _LOGGER.info("%s - SmartPI learning and history reset", self._name)
-
-    @property
-    def calibration_state(self) -> SmartPICalibrationPhase:
-        return self.calibration_mgr.state
 
     @property
     def Kp(self) -> float:
@@ -457,12 +443,9 @@ class SmartPI:
     def _cycle_regimes(self):
         return self.gov.cycle_regimes
 
-    def force_calibration(self) -> "AutoCalibEvent" | None:
-        """Force a calibration cycle to refresh Dead Time estimation."""
-        self.calibration_mgr.request_calibration(phase=self.phase)
-        if self.phase != SmartPIPhase.HYSTERESIS:
-            return self.autocalib.force_manual_trigger(time.time(), self)
-        return None
+    def force_calibration(self) -> bool:
+        """Request a calibration (measurement pulses, smartpi/calibration.py); False when it does not start."""
+        return self._start.request_calibration(self.phase, self._learning_enabled)
 
     # ------------------------------
     # Learning entry point
@@ -496,6 +479,8 @@ class SmartPI:
             return
 
         self._learning_enabled = enabled
+        if not enabled:
+            self._start.cancel_calibration()  # pulses would run without measuring
         self._reset_learning_window()
         self.dt_est.reset_observation(self._committed_on_percent)
         self._t_heat_episode_start = None
@@ -559,7 +544,7 @@ class SmartPI:
             t_cool_episode_start=self._t_cool_episode_start,
             deadtime_skip_count_a=self._deadtime_skip_count_a,
             deadtime_skip_count_b=self._deadtime_skip_count_b,
-            is_calibrating=self.calibration_mgr.is_calibrating,
+            is_calibrating=self.phase == SmartPIPhase.CALIBRATION,
             is_hysteresis=(self.phase == SmartPIPhase.HYSTERESIS),
             hvac_mode=hvac_mode,
             target_temp=target_temp,
@@ -1158,43 +1143,6 @@ class SmartPI:
     #                                                                      #
     ########################################################################
 
-    def _calculate_forced_calibration(
-        self,
-        target_temp: float,
-        current_temp: float,
-        hvac_mode: VThermHvacMode,
-        filtered_temp: float | None = None,
-        ext_temp: float | None = None,
-    ) -> None:
-        """Execute the forced calibration state machine.
-
-        Delegates to CalibrationManager component.
-        """
-        result = self.calibration_mgr.calculate(
-            target_temp=target_temp,
-            current_temp=current_temp,
-            hvac_mode=hvac_mode,
-            dt_est=self.dt_est,
-            max_on_percent=self._linear_max_on(),
-            ext_temp=ext_temp,
-            filtered_temp=filtered_temp,
-        )
-
-        # Apply result
-        if result.on_percent is not None:
-            self._set_linear_output(result.on_percent)
-        else:
-            self._set_linear_output(0.0)
-
-        # Update diagnostics
-        self.ctl.last_i_mode = "CALIB"
-        self.ctl.last_sat = "NO_SAT"
-        self._last_u_ff = 0.0
-        self._last_ff_reason = "ff_none"
-        self._last_u_pi = self._on_percent
-        self._last_u_cmd = self._on_percent
-        self._last_u_limited = self._on_percent
-
     def save_state(self) -> dict:
         """Save algorithm state for persistence."""
         state = {
@@ -1212,10 +1160,8 @@ class SmartPI:
             # Component states
             "lw_state": self.learn_win.save_state(),
             "db_state": self.deadband_mgr.save_state(),
-            "cal_state": self.calibration_mgr.save_state(),
             "gs_state": self.gain_scheduler.save_state(),
             "guards_state": self.guards.save_state(),
-            "ac_state": self.autocalib.save_state(),
             # Holding power source the restored integral complements
             "ff_source": self._ff_holding.save(),
             "ff_wall": self._ff_holding.save_wall(),
@@ -1478,7 +1424,6 @@ class SmartPI:
             self.est.a_model_ready = self.learn_win.response_lag.resolved
         self._learning_start_date = self.learn_win.learning_start_date
         self.deadband_mgr.load_state(state.get("db_state", {}))
-        self.calibration_mgr.load_state(state.get("cal_state", {}))
         self.gain_scheduler.load_state(state.get("gs_state", {}))
         self.ctl.clear_integral_hold()
 
@@ -1510,7 +1455,6 @@ class SmartPI:
 
         # Load Guard State
         self.guards.load_state(state.get("guards_state", {}))
-        self.autocalib.load_state(state.get("ac_state", {}))
 
         # The restored integral complements this holding power source: a different
         # source at the first cycle is transferred like any change of source.
@@ -1795,8 +1739,7 @@ class SmartPI:
         e_p: float,
     ) -> float:
         """Calculate gains and feedforward and return the runtime feedforward."""
-        # Capture old Ki for bumpless integral rescaling
-        old_ki = self.gain_scheduler.ki
+        old_ki = self.gain_scheduler.ki   # for the bumpless transfer below
         near_band_ratio = self._near_band_gain_ratio(error, hvac_mode)
 
         # Delegate gain calculation to GainScheduler component
@@ -1814,17 +1757,8 @@ class SmartPI:
             hvac_mode=hvac_mode,
             pre_model_a=self._start.pre_model_a(hvac_mode),
         )
-        new_ki = self.gain_scheduler.ki
-
-        # Bumpless Gain Scheduling: Rescale integral to preserve identical energy output.
-        # Any change is rescaled: with Ki above its floor the near-band taper moves
-        # it by small steps, and a threshold would let Ki * I drift during holds.
-        if old_ki > 0.0 and new_ki > 0.0 and old_ki != new_ki:
-            self.ctl.integral = self.ctl.integral * (old_ki / new_ki)
-            _LOGGER.debug(
-                "%s - Ki changed from %.5f to %.5f, rescaled integral to %.4f for bumpless gain transfer",
-                self._name, old_ki, new_ki, self.ctl.integral
-            )
+        # Bumpless gain change: the integral follows a change of Ki
+        self.ctl.transfer_gains(old_ki, self.gain_scheduler.ki, self._name)
 
         # --- AB confidence ---
         self._ab_confidence.evaluate(
@@ -1878,7 +1812,7 @@ class SmartPI:
         delta = holding.update(
             source,
             now=time.time() if now is None else now,
-            learned_power=learned_ff_result.u_ff1,
+            learned_power=learned_ff_result.u_ff1, learned_warmup=learned_ff_result.warmup_scale,
             target_temp=target_temp_ff,
             ext_temp=ext_current_temp,
             heat=hvac_mode == VThermHvacMode_HEAT,
@@ -2011,9 +1945,6 @@ class SmartPI:
         # decides the restart; it stays pending while a sensor is missing.
         hysteresis_restore = self._take_hysteresis_restore(hvac_mode)
 
-        # A stop suspends a calibration; the mode that comes back resumes or cancels it
-        self.calibration_mgr.follow_mode(hvac_mode, self.dt_est)
-
         # --- 1. Validation & Handle OFF ---
         if self._validate_and_handle_off(target_temp, current_temp, hvac_mode, power_shedding, off_reason):
             return
@@ -2026,7 +1957,7 @@ class SmartPI:
             # detection, the learning and the published temperature follow the cut.
             if current_temp is not None:
                 t_int_lp, t_int_clean = self.tint_filter.update(current_temp, now)
-                if not self.command_is_on_off and not self.calibration_mgr.is_calibrating:
+                if not self.command_is_on_off:
                     self.dt_est.update(
                         now=now,
                         tin=t_int_lp,
@@ -2043,7 +1974,9 @@ class SmartPI:
                     target_temp=target_temp,
                     hvac_mode=hvac_mode,
                 )
-            self.ctl.last_i_mode = "I:OVERRIDE(guard_cut)"
+            self.ctl.last_i_mode = GUARD_CUT_I_MODE
+            self.guards.note_cut(target_temp, current_temp, hvac_mode)   # published error of the cut
+            self._start.follow_calibration(now, hvac_mode, current_temp)  # the end of a calibration is checked too
             self._unwind_integral_during_guard_cut(now, target_temp, current_temp)
             self._set_linear_output(0.0)
             self._last_calculate_time = None
@@ -2065,11 +1998,11 @@ class SmartPI:
         dt_min, _resumed_from_off, _startup_first_run, resume_hold_source = self._update_time_tracking(now)
 
         # --- 3. Setpoint Management ---
-        # Measurement pulses of the direct start: the command of a pulse replaces the PI.
+        # Measurement pulses (direct start or calibration): the command of a pulse replaces the PI.
         self._start.advance(now, target_temp, current_temp, hvac_mode, self._on_percent)
         # The anticipated temperature feeds the P and I errors only; the deadband,
         # guards, feed-forward and learning keep the measured temperature.
-        anticipating = self.phase != SmartPIPhase.CALIBRATION and not self.command_is_on_off
+        anticipating = not self.command_is_on_off
         anticipation_c = self._anticipation.apply(correction_c(
             self.anticipation_horizon(hvac_mode).seconds if anticipating else 0.0,
             now, current_temp, target_temp, self.dt_est.tin_history, anticipating,
@@ -2095,17 +2028,8 @@ class SmartPI:
         elif resume_hold_source != ResumeHoldSource.NONE:
             self.resume_hold.start(resume_hold_source)
 
-        # --- 4. Learning & Calibration ---
-        if (
-            self._learning_enabled
-            and not self.command_is_on_off
-            and not self.calibration_mgr.is_calibrating
-        ):
-            # During forced calibration, the deadtime estimator must be driven
-            # only by the calibration state machine outputs. Feeding it first
-            # with the stale committed cycle value can create a false 1 -> 0 -> 1
-            # transient when calculate() is called twice before the scheduler
-            # commits the new cycle.
+        # --- 4. Learning ---
+        if self._learning_enabled and not self.command_is_on_off:
             self.dt_est.update(
                 now=now,
                 tin=t_int_lp,
@@ -2130,36 +2054,7 @@ class SmartPI:
                 raw_temp=current_temp,
             )
 
-        # Calibration state machine
-        if self.calibration_mgr.is_calibrating and self.calibration_mgr.calibration_start_time is not None:
-            elapsed = (now - self.calibration_mgr.calibration_start_time) / 60.0
-            if elapsed > CALIBRATION_TIMEOUT_MIN:
-                _LOGGER.warning("%s - Calibration timeout after %.1f minutes", self._name, elapsed)
-                self.calibration_mgr.handle_timeout()
-
-        self.calibration_mgr.check_and_start(
-            now=now,
-            phase=self.phase,
-        )
-
-        if self.calibration_mgr.is_calibrating:
-            self.ctl.clear_integral_hold()
-            self._calculate_forced_calibration(
-                target_temp,
-                current_temp,
-                hvac_mode,
-                filtered_temp=t_int_lp,
-                ext_temp=ext_current_temp,
-            )
-            self._output_initialized = True
-            self.ctl.last_i_mode = "calibration"
-            self._last_target_temp = target_temp
-            self._last_current_temp = current_temp
-            self._last_ext_temp = ext_current_temp
-            self._tau_reliable = self.est.tau_reliability().reliable
-            return
-
-        # --- 5. Hysteresis command (or the full-power phase of the start mode) ---
+        # --- 5. Hysteresis command (or a measurement pulse, of the start or of a calibration) ---
         if self.command_is_on_off:
             out = self._start.output
             if out is None:
@@ -2246,6 +2141,8 @@ class SmartPI:
             integrator_hold, integrator_hold_source = True, INTEGRAL_HOLD_SOURCE_DEADBAND_SHELL
         elif not integrator_hold and self._ext_control is None:
             integrator_hold, integrator_hold_source = True, "governance_sensor_invalid"
+        elif not integrator_hold and self._start.recovering:  # back to the setpoint after a calibration pulse
+            integrator_hold, integrator_hold_source = True, "calibration_recovery"
         if self.vt_safety_override:  # the PI does not drive the actuator
             integrator_hold, integrator_hold_source = True, "vt_safety"
 

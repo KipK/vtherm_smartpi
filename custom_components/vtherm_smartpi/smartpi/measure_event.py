@@ -16,8 +16,8 @@ Each observation returns the events that closed or were dropped during it:
 
 Every event carries the ``mode`` it was observed in, the ``context`` given at the start of its phase (the learning
 phase of the caller) and a ``source`` read from a callable of the owner at the start of the phase: ``pulse``
-(a measurement pulse drives the command), ``bootstrap`` (the hysteresis drives it), ``calibration`` or
-``regulation``. The detector does not use the source; each consumer picks the events it reads.
+(a measurement pulse of the start drives the command), ``bootstrap`` (the hysteresis drives it), ``calibration`` (a
+pulse of a calibration drives it) or ``regulation``. The detector does not use the source; each consumer picks the events it reads.
 
 The phase in progress is saved with the rest it follows and resumed after a restart that the restart bridge
 bridges (``resolve_restart``).

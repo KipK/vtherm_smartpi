@@ -21,7 +21,6 @@ def force_smartpi_stable_mode(algo) -> None:
     algo.est.learn_ok_count_b = max(algo.est.learn_ok_count_b, 1)
 
     algo._output_initialized = True
-    algo.calibration_mgr.last_calibration_time = time.time()
 
 
 

@@ -133,14 +133,13 @@ The `b` convergence used for drift-aware `a` learning relies on `b_converged_for
 The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on `LearningWindowManager` and on a sliding window that:
 
 - requires outdoor temperature to be available,
-- obeys thermal governance except during calibration,
+- obeys thermal governance,
 - rejects or resets an ON/`a` window on the exact observation where the user
   setpoint changes, so a window cannot span the old and new regimes,
 - keeps early active ascent after that observation eligible for `a` under the
   existing dead-time, power-stability, robust-slope, and governance guards,
-- keeps passive OFF/`b` learning under its existing physical guards; calibration
-  keeps its dedicated learning contract and disturbance-only responses are not
-  blocked by this setpoint gate,
+- keeps passive OFF/`b` learning under its existing physical guards;
+  disturbance-only responses are not blocked by this setpoint gate,
 - blocks bootstrap collection until the required dead times are reliable,
 - applies a post-resume pause (`LEARNING_PAUSE_RESUME_MIN = 20`),
 - anchors the window start after the dead-time end when needed,
@@ -151,8 +150,8 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
   `3 T_ar` (published emitter lag) and `AB_SETTLE_K_PASSIVE_DEADTIME = 1.5` reliable
   passive dead times: the emitter keeps heating after a cut, and since the room
   only starts to cool once this residual heat falls below the losses, the passive
-  dead time bounds its decay even when the emitter lag is unknown. In the bootstrap and
-  the calibration only the `3 T_ar` term applies,
+  dead time bounds its decay even when the emitter lag is unknown. In the bootstrap
+  only the `3 T_ar` term applies,
 - does not submit an active window shorter than one PWM cycle
   (`active_window_shorter_than_cycle`): its duration is set before its data, since
   stopping as soon as a short window looks significant favours the steepest noisy
@@ -263,7 +262,7 @@ physical room response, not the power-transition direction:
 Therefore OFF -> ON learns `heat` in HEAT mode but `cool` in COOL mode. The
 ON -> OFF transition learns the opposite passive response.
 
-Detection tracks the filtered indoor temperature, including during a forced calibration: a raw measurement that oscillates by one sensor step would otherwise detect a response as soon as the power steps. A detection in progress resumes after a bridged restart (5.4): its state, start, trough or peak, pre-start trend, last power and last power cut are persisted as wall-clock times, and its timeout still runs from the saved start. After any other restart it is dropped, and the minimum OFF duration must be observed again in the new session before a detection can be armed.
+Detection tracks the filtered indoor temperature, in regulation as during the bootstrap and the measurement pulses: a raw measurement that oscillates by one sensor step would otherwise detect a response as soon as the power steps. A detection in progress resumes after a bridged restart (5.4): its state, start, trough or peak, pre-start trend, last power and last power cut are persisted as wall-clock times, and its timeout still runs from the saved start. After any other restart it is dropped, and the minimum OFF duration must be observed again in the new session before a detection can be armed.
 
 A response is detected once the temperature has moved by `0.05 °C` from its trough (heat) or peak (cool) since the power transition. The dead time runs from the transition to the last instant within `0.01 °C` of that trough or peak, tracked during the wait, so it does not depend on the retention of the temperature history. The wait gives up after `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s` for an active response (power started) and `DEADTIME_PASSIVE_TIMEOUT_S = 43200 s` for a passive response (power cut): after a cut, an emitter with a large stored heat (floor heating) keeps warming the room, then plateaus, and the drop can come several hours later. In the bootstrap the passive wait ends by a detection or a power restart, which needs a drop the detection sees first; the limit only bounds how late a drop is still attributed to the cut. A power transition aborts a pending wait. The outcome of the last wait per response and the age of the wait in progress are published (`analysis.deadtime`).
 
@@ -467,11 +466,11 @@ search of the temperature peak. The peak search (`peak_search.py`) is the one
 described for the heating balance: 300 s bins, the earliest strictly highest
 mean (the lowest in cooling), confirmed by a closed bin 1800 s later, abandoned
 after 4 hours. Each event carries the source that drove the command when its
-phase began: measurement pulse, bootstrap hysteresis, calibration or
-regulation. The heating balance reads the heating events; the reader below
-reads those of the bootstrap.
+phase began: measurement pulse, bootstrap hysteresis, pulse of a calibration or
+regulation. The heating balance reads the heating events whatever their source;
+the reader below reads those of the bootstrap and of the pulses.
 
-Until values are kept, during the learning stage or a reading, a bounded record (`MeasureRecord`) keeps
+Until values are kept, during the learning stage, a calibration or a reading, a bounded record (`MeasureRecord`) keeps
 the applied power, the room temperature and the outdoor temperature as change
 points: at most 6000 points per channel and about 30.5 hours. For a switch, the
 power channel holds the real on and off edges of each cycle the scheduler
@@ -498,7 +497,7 @@ lag each differ by at most 20 % of the larger. The means of two agreeing reading
 are kept for their mode, saved, and dropped by a reset of the learning. The kept
 values are per mode, like the `a` channel of the estimator: a period in the other
 mode starts without kept values and runs its own readings and pulses. A stop of
-the thermostat, a change of mode or a calibration ends the readings in progress.
+the thermostat, a change of mode or the start of a calibration ends the readings in progress.
 
 **Starting values.** The kept `a` of each mode is given once to the learning of
 `a` and `b` as a starting value, and the kept `b` (a property of the room,
@@ -523,12 +522,15 @@ on the demand side, the previous command is under `PULSE_START_MAX_COMMAND = 0.8
 and `PULSE_MIN_GAP_S = 6 h` have passed since the previous pulse. It rests (at
 most `PULSE_REST_MAX_S = 45 min`, or until the room is `PULSE_REST_UNDER_C =
 0.5 °C` on the demand side), heats at full power until the dead-time estimator
-has detected the response and it stands three sensor steps out (at most
-`PULSE_HEAT_MAX_S = 2 h`, or as soon as the room is `PULSE_HEAT_OVER_C = 0.3 °C`
-on the other side), then stops until the temperature peak is confirmed (at most
+has detected the response, it stands three sensor steps out and the room is back
+within `PULSE_HEAT_BACK_C = 0.1 °C` of the demand side of the setpoint, the last
+condition only while the step has lasted less than `PULSE_HEAT_EXTEND_MAX_S =
+30 min` (at most `PULSE_HEAT_MAX_S = 2 h`, or as soon as the room is
+`PULSE_HEAT_OVER_C = 0.3 °C` on the other side), then stops until the temperature peak is confirmed (at most
 `PULSE_STOP_MAX_S = 4 h`; the PI takes over when the room is `PULSE_TAKEOVER_C =
-0.5 °C` on the demand side). A pulse interrupted by a restart, a stop, a change
-of setpoint, of mode or a calibration is not resumed and counts. The readings of
+0.5 °C` on the demand side and one sensor step lower than at the start of the stop,
+and in any case at `PULSE_TAKEOVER_CAP_C = 0.8 °C`). A pulse interrupted by a restart, a stop, a change
+of setpoint or of mode is not resumed and counts. The readings of
 the events the pulses cause give the kept values. Until the learning publishes
 its own model they stand for it: `pre_model_gains` gives the gains from the kept
 `a` and the active dead time (the IMC/SIMC rule of a slow room, neither gain
@@ -537,6 +539,93 @@ anticipation (source `measurement pulses`) and the emitter lag of the
 response-lag estimator, which counts as resolved with it. The integral term
 starts from zero at the calculation at which the learning stage ends. The
 dead-time estimator reads the dead time after a stop on the temperature peak.
+
+**Calibration.** On request (`force_smartpi_calibration`), once the first model
+is published, a calibration (`calibration.py`) starts measurement pulses in
+either start mode, with its own count (`PULSE_MAX_COUNT = 3` pulses at most);
+they do not count for the learning stage. `Calibration.request` answers every
+request without raising and publishes the answer (`last_request`): refused in
+the learning stage, with the learning paused, with the thermostat off by the user
+(the last calculation saw HVAC mode OFF without the window reason), and less than
+`CALIBRATION_MIN_INTERVAL_S = 24 h` after the end of the last calibration that
+was not cancelled; ignored while one is in progress; a window, a guard cut or a
+power shedding defers the pulses only. The pulses of a calibration have their own
+limits, computed at each calculation by `pulse_limits` from the reliable dead
+times of the mode (`La` active, `Lp` passive, 0 when not reliable), the
+anticipation horizon in use `H` and the least-squares fall rate `s` of the last
+`CALIBRATION_FALL_WINDOW_S = 900 s` of the raw temperature on the demand side
+(floored at 0); the static limits are frozen at the start of the pulse:
+
+| Step | Pulse of a calibration |
+|---|---|
+| start | demand in [-`CALIBRATION_START_OVER_C` = -0.2 °C, `PULSE_START_UNDER_C` = 0.3 °C], previous command < 0.8, `clamp(2 H, 1 h, 6 h)` after the end of the previous pulse |
+| rest | ends at `min(Lp + CALIBRATION_REST_EXTRA_S, 4 h)` (`CALIBRATION_REST_EXTRA_S` = 900 s of free-running window + 300 s), or when `demand + s La >= PULSE_REST_UNDER_C` = 0.5 °C |
+| heat | rise seen and (`demand <= PULSE_HEAT_BACK_C` = 0.1 °C or step >= `PULSE_HEAT_EXTEND_MAX_S` = 30 min), 0.3 °C over, or `clamp(2 (La + H), 2 h, 4 h)` |
+| stop | event closed and stop response not pending; takeover at `demand >= 0.5 °C` once the room is one sensor step lower than at the stop start, or at `demand >= CALIBRATION_DEPTH_CAP_C` = 0.8 °C; 4 h |
+
+The pulses of the learning stage keep the constants of `measure_pulse.py`. A
+pulse is applied as an on/off command: committed at once, then the dead-time
+estimator is fed with the committed power, once per calculation; its samples
+join the median of the dead times as any other. The phase is `Calibration` while
+a pulse of the calibration commands the output; between pulses the regulation
+runs in the stable phase. The events of the calibration pulses (source
+`calibration`) are read like the others but form a set of their own, tested
+among themselves only: two agreeing readings (`a` and lag within 20 %) give the
+reading of the calibration (`a`, `b`, emitter lag, and whether the two `b` agree
+within 20 %). At the end on that reading, `LearningStart._correct` compares each
+quantity with the value in force in the mode of the calibration (`|a|`, `b`, the
+anticipation horizon in use) and corrects it when `|reading - in force| >
+CALIBRATION_CORRECT_REL * in force` (0.30):
+
+- `a`: `ABEstimator.correct_a` resets the channel of the mode and stands the
+  reading as a starting value (`StartingValues.correct`), released at the first
+  own publication of `a`;
+- `b`: read and published only (`CALIBRATION_CORRECT_B = False`: the `b` of a
+  pulse reading is biased in a room with heavy walls). With the switch on and the
+  two `b` agreeing, `ABEstimator.correct_b` clears the `b` channel (measures,
+  published history, counter, drift, `own_b`) and stands the reading, released
+  when the own time constant is reliable again; the `a` measures are replayed
+  with it;
+- lag (direct start only): kept in `calibration.lag_s` by mode and given to the
+  response-lag estimator in place of the kept lag of the start at each
+  calculation; it never enters the anticipation horizon.
+
+With `CALIBRATION_SKIP_WHEN_OWN_AGREE = True` (off by default), `a` or `b` is not
+corrected while its drift buffer is empty and its last
+`CALIBRATION_OWN_RECENT = 3` measures are within the threshold of the value in
+force. A correction latches the feed-forward credit at the ramp count before it
+(`StartingValues.latch`) and notes the learned gain `b / a` before it in the
+holding transfer (`HoldingTransfer.note_learned_step`): at the next feed-forward
+the step of the learned holding power, evaluated at the same setpoint, outdoor
+temperature and warmup, is moved into the integral. A change of `Kp` that follows
+a correction is not moved into the integral: the proportional term acts on the error as
+usual, and a change of `Ki` only rescales the integral (`SmartPIController.transfer_gains`). A bootstrap start whose `b`
+stands from a correction does not return to its learning stage. The heating
+balance and the response-lag estimator observe the pulses as any heating phase.
+A calibration ends when two of its readings agree (`readings agree`), when its
+pulses are done and their readings have ended (`pulses done`), or
+`CALIBRATION_MAX_S = 48 h` after its first calculation (`time limit`); its
+readings in progress then end. When that end comes during a calibration pulse,
+the pulse ends first: in its rest it hands back at once, in its heating step it
+goes to its stop step (`MeasurePulse.stop_heating`, reason `calibration ended`),
+in its stop step it goes on; the calibration ends at the calculation where the
+pulse ends, before the PI computes, and the corrections apply there. The end is
+also checked on a calculation cut by the guard
+(`LearningStart.follow_calibration`). While a calibration is in progress
+(request to end) `ABEstimator.learn` takes no `a` measure: a window with
+`u > U_ON_MIN` is skipped (`skip: calibration in progress`); `b` windows, the
+dead times, the heating balance and the response lag go on. After each
+calibration pulse (`LearningStart.recovering`) the integral is held (`I:HOLD`,
+source `calibration_recovery`) until the room reaches the setpoint; the
+pulses of the learning stage do not hold it. A stop of the thermostat ends
+the pulse in progress, which counts, and the calibration goes on; a change of
+HVAC mode, a return of the learning stage, a learning reset or a pause of the
+learning cancels it (`cancelled`) and ends its pulse at once. The request, the pulses done, the mode, the
+start, the last request, the values in force, the corrections and the corrected
+lag are saved (`calibration`); corrected starting values are saved with
+`corrected` in `starting_values` and load even when nothing was handed over; a
+state saved with the former calibration blocks (`cal_state`, `ac_state`) loads
+without a calibration in progress.
 
 The record, the readings in progress, the kept values and the pulses started are
 saved (`measure_events`, `event_reading`, `measure_pulse` and `learning_start`,
@@ -1081,12 +1170,13 @@ The restart therefore keeps only useful persistent PI memory, without restoring 
 
 Additional protections currently present are:
 
-- `SmartPIGuards` (heating mode only, outside the bootstrap and the calibration): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus the larger of `NEAR_BAND_HYSTERESIS_C = 0.05°C` and `GUARD_CUT_RESET_STEPS = 1.5` observed sensor steps (a reading flickering between two levels around the threshold would otherwise re-trigger the cut, and restart the cycle, at every measurement). During a cut the output stays at 0 (`I:OVERRIDE(guard_cut)`). While the PI still requests power, a positive integral tracks the forced 0 % by back-calculation, `d(Ki·I)/dt = −v/Ti` with `v` the PI request and `Ti = Kp/Ki`, at most one cycle per tick. Its rate follows the request, not the overshoot: an integral that carries more than the heat need comes down within a few cuts, even when the room barely exceeds the threshold. It comes down until it alone would hold the room at the cut threshold minus `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`); below that point it is kept, as is the heating need left after a setpoint decrease. Without this, a bias of the integral restored the same excess power at each release and the room cycled between cut and restart. The temperature filter, the dead time detector, the published temperature and the learning keep following the room. The room then cools without heating, for example during the whole fall after a setpoint decrease: this is a passive window for `b` and for the emitter lag baseline. The governance sees a zero command outside any band, and `a` windows are blocked (`skip: guard cut`). The learning stays contiguous at the end of the cut; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized. In the bootstrap the heating runs between its own hysteresis thresholds and a running guard is released,
+- `SmartPIGuards` (heating mode only, outside the bootstrap and the pulses of a calibration): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus the larger of `NEAR_BAND_HYSTERESIS_C = 0.05°C` and `GUARD_CUT_RESET_STEPS = 1.5` observed sensor steps (a reading flickering between two levels around the threshold would otherwise re-trigger the cut, and restart the cycle, at every measurement). During a cut the output stays at 0 (`I:OVERRIDE(guard_cut)`). While the PI still requests power, a positive integral tracks the forced 0 % by back-calculation, `d(Ki·I)/dt = −v/Ti` with `v` the PI request and `Ti = Kp/Ki`, at most one cycle per tick. Its rate follows the request, not the overshoot: an integral that carries more than the heat need comes down within a few cuts, even when the room barely exceeds the threshold. It comes down until it alone would hold the room at the cut threshold minus `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`); below that point it is kept, as is the heating need left after a setpoint decrease. Without this, a bias of the integral restored the same excess power at each release and the room cycled between cut and restart. The temperature filter, the dead time detector, the published temperature and the learning keep following the room. The PI is not computed during a cut: the published error (`temperature.error`, `analysis.control.error_p`) is the setpoint minus the temperature of the calculation, the published anticipation is `0` and `control.mode` is `heating cut above the setpoint`; the internal error terms and the anticipation keep their values for the release. The room then cools without heating, for example during the whole fall after a setpoint decrease: this is a passive window for `b` and for the emitter lag baseline. The governance sees a zero command outside any band, and `a` windows are blocked (`skip: guard cut`). The learning stays contiguous at the end of the cut; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized. In the bootstrap the heating runs between its own hysteresis thresholds and a running guard is released,
 - per-tick anti-windup on the applicable upper limit (see below),
 - explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
 - `I:HOLD` with source `vt_safety` while Versatile Thermostat safety mode applies its default power instead of the SmartPI command,
 - `I:HOLD` with source `deadband_hysteresis_shell` while the hysteretic deadband state is active and the error is outside the core deadband,
 - `I:HOLD` with source `governance_sensor_invalid` while no outdoor temperature has been received yet (`DEGRADED` regime),
+- `I:HOLD` with source `calibration_recovery` after each calibration pulse until the room reaches the setpoint,
 - freeze of P and I inside the core deadband.
 
 The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower. It has two parts:
@@ -1095,41 +1185,6 @@ The anti-windup acts at every calculation, in the linear demand space, on the ap
 - back-calculation: on every tick where the integral mode is `I:RUN`, `I:SKIP` or `I:CLAMP`, the excess of the PI output (`u_ff + u_pi`, clamped to `[0, 1]`) above the linear image of `max_on_percent` corrects the integral by `beta * excess / Ki`, with `beta = dt / max(Kp/Ki, dt)` (tracking time constant equal to `Ti = Kp/Ki`). The correction only moves the integral toward zero and stops at zero, so an excess carried by the proportional term alone never winds the integral in the opposite direction. The integral stays clamped to `±2/Ki`. Only the integral changes: `u_pi` keeps the decomposition that produced the command.
 
 The following are not treated as saturation: Versatile Thermostat quantization and valve retention (`dpercent`, period), minimum on/off times, and the rate limiter. The behavior is symmetric in HEAT and COOL, does not use Versatile Thermostat command receipts, and is identical with older Versatile Thermostat versions. The `aw_du` diagnostic is the correction (excess, `<= 0`) applied at the last tick.
-
-### 4.5 Auto-calibration
-
-`AutoCalibTrigger` supervises the algorithm outside the control law.
-
-Implemented behavior:
-
-- initial snapshot when `tau`, `deadtime_heat`, and `deadtime_cool` are reliable,
-- fallback snapshot after `AUTOCALIB_DT_COOL_FALLBACK_DAYS = 7` days without reliable `deadtime_cool`,
-- rolling snapshot every `AUTOCALIB_SNAPSHOT_PERIOD_H = 120` hours,
-- hourly check loop,
-- cooldown guard `AUTOCALIB_COOLDOWN_H = 24` hours,
-- stagnation thresholds `AUTOCALIB_A_MAD_THRESHOLD = 0.25` and `AUTOCALIB_B_MAD_THRESHOLD = 0.30`,
-- `b` stagnation is only evaluated while `b` can be learned: the indoor-outdoor gradient is at least `AB_B_MIN_PASSIVE_GRADIENT_C` and the outdoor temperature is at least `AB_B_OUTDOOR_TARGET_MARGIN_C` away from the setpoint on the passive side (below it in HEAT, above it in COOL), the limits of the learning window; without an outdoor or indoor temperature `b` is not evaluated,
-- positive exit is evaluated on the parameters that triggered the calibration (`triggered_params`): a triggering `a` or `b` needs at least `AUTOCALIB_EXIT_NEW_OBS_MIN = 1` new observation, a triggering dead time must be reliable; a manual request (`manual_request`) is judged on `deadtime_heat` and `deadtime_cool`,
-- up to `AUTOCALIB_MAX_RETRIES = 3` attempts,
-- a failed attempt schedules the retry `AUTOCALIB_RETRY_DELAY_H = 6` hours later: until then the cooldown guard is replaced by this delay and the retry does not wait for the snapshot period. The scheduled time is published as `autocalib.next_check_ts` and cleared when the retry starts, when a snapshot is taken or when the stagnation that required it is gone (the retry counter is then reset).
-
-`AutoCalibTrigger` publishes its transitions on the Home Assistant event bus through the handler:
-`smartpi_autocalib_snapshot_taken`, `smartpi_autocalib_triggered`, `smartpi_autocalib_success`,
-`smartpi_autocalib_retry`, `smartpi_autocalib_degraded` and `smartpi_autocalib_unreachable`. Every event payload carries `entity_id`
-(the climate entity, for example `climate.salon`) and `name` (the thermostat name, for example `Salon`),
-followed by event-specific fields (`smartpi_autocalib_unreachable`: `triggered_params` and `retry_count`).
-
-The forced cycle is managed by `CalibrationManager`:
-
-- `COOL_DOWN` down to `sp - 0.3°C`,
-- `HEAT_UP`,
-- `COOL_DOWN_FINAL` back to `sp`.
-
-Before and during each phase the manager checks, from the measured outdoor temperature only, that the cycle can be completed; the thermal model plays no part. A passive phase can only bring the room toward the outdoor temperature, so at each calculation the manager takes the passive threshold to come: the threshold of the current phase when it is passive, otherwise the threshold of the next passive phase of the cycle. In HEAT mode `COOL_DOWN` uses `target − HYST_LOWER_C`, and `HEAT_UP` and `COOL_DOWN_FINAL` use `target` (the final cool-down that follows `HEAT_UP`). In COOL mode `COOL_DOWN` and `HEAT_UP` use `target + HYST_UPPER_C` (the passive warm-up), and `COOL_DOWN_FINAL` is not checked. The cycle is unreachable when the outdoor temperature is too close to that threshold, within `CALIBRATION_REACHABILITY_MARGIN_C = 0.5°C` or beyond it: in HEAT mode `T_ext > threshold − margin`, in COOL mode `T_ext < threshold + margin`. Nothing is judged while the outdoor temperature is unknown, nor while the current phase is passive and the measured temperature has already reached its threshold (the phase moves on). When the threshold is not reachable the cycle ends at once with the result `Unreachable`, distinct from `Cancelled` (stop longer than `CALIBRATION_PAUSE_MAX_MIN`, timeout of `CALIBRATION_TIMEOUT_MIN = 600` minutes, reset): `last_calibration_time` is not set, `AutoCalibTrigger` consumes no retry and publishes `smartpi_autocalib_unreachable`, and the next attempt waits `AUTOCALIB_COOLDOWN_H` hours (`autocalib.next_check_ts`). The result is not a published diagnostic: `calibration.state` carries the phase only.
-
-A stop of the thermostat (HVAC mode other than heat or cool, for example VT switching it off while a window is open) suspends the run: its phase is kept, nothing is commanded and the dead time detection is not fed. The run continues in its phase when the same mode comes back within `CALIBRATION_PAUSE_MAX_MIN = 10` minutes of the stop; the response detection in progress is then started again. A longer stop, or another mode coming back, cancels it (`Cancelled`, reported to `AutoCalibTrigger`). The timeout keeps counting from the original start. The check runs at each calculation, including those made while the thermostat is stopped. The time of the stop (wall clock) and the mode of the run are persisted with the calibration state (`calibration_pause_start`, `calibration_pause_mode`, `calibration_mode`), so a suspension survives a restart; the published `calibration.state` keeps the phase. A learning reset cancels the run at once.
-
-`CalibrationManager.take_completed_result()` returns, once, the result of a run that ended (`Success`, `Cancelled`, `Unreachable`), so that the handler reports every run to `AutoCalibTrigger`, including one that ends in the tick that started it.
 
 ---
 
@@ -1174,8 +1229,7 @@ A stop of the thermostat (HVAC mode other than heat or cool, for example VT swit
 | `room_model/feedforward.py` | holding power source from the published room model and the static model of the energy balance in force, bumpless transfer of the discrete changes of its static part, blend of its wall part, static gain for the braking prediction |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
 | `governance.py`        | freeze decisions                                            |
-| `calibration.py`       | forced-calibration FSM                                      |
-| `autocalib.py`         | supervision and automatic triggering                        |
+| `calibration.py`       | calibration on request: requests, pulse limits, end, correction rule, published summary |
 | `guards.py`            | `guard_cut` and `guard_kick`                                |
 | `restart_bridge.py`    | the one decision on whether a restart is bridged, consulted by every component, and the context of the last tick |
 | `quiet_periods/`       | darkness from the home position (`astral`), plateaus, setback runs, episodes, keys and regulated start of the quiet periods |
@@ -1195,13 +1249,11 @@ self.ctl = SmartPIController(name)
 self.est = ABEstimator()
 self.learn_win = LearningWindowManager(name)
 self.deadband_mgr = DeadbandManager(name, near_band_deg)
-self.calibration_mgr = CalibrationManager(name)
 self.gain_scheduler = GainScheduler(name)
 self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
 self.resume_hold = ResumeDeadtimeHold()
 self.dt_est = DeadTimeEstimator()
 self.guards = SmartPIGuards()
-self.autocalib = AutoCalibTrigger(name)
 self._ab_confidence = ABConfidence()
 self._ff_holding = HoldingTransfer()
 ```
@@ -1224,23 +1276,22 @@ The current payload from `SmartPI.save_state()` notably contains:
     "sp_mgr_state": {...},
     "lw_state": {...},
     "db_state": {...},
-    "cal_state": {...},
     "gs_state": {...},
     "guards_state": {...},
-    "ac_state": {...},
     "ff_source": {...},  # holding power source the integral complements
     "ff_wall": {...},  # applied wall part and its blend
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap only
     "measure_events": {...},  # record of the power and temperatures (3.7)
     "event_reading": {...},  # readings in progress and kept values (3.7)
+    "calibration": {...},  # calibration in progress or last one (3.7)
     "restart": {...},  # last tick, committed power (restart bridge)
 }
 ```
 
 The control loop schedules at most one delayed write of this payload per five-minute window; Home Assistant flushes a pending write at shutdown. Services and entity removal write a snapshot immediately.
 
-Past event timestamps (temperature histories, calibration start, passive period and episode of the emitter lag on constant-power heating phases) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the calibration timeout keeps running after a restart.
+Past event timestamps (temperature histories, start of a calibration, passive period and episode of the emitter lag on constant-power heating phases) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the 48-hour limit of a calibration keeps running after a restart.
 
 The emitter lag learning keeps its own store (state version 3): history,
 pending comfort steps, catalogue of quiet periods with their keys, night
@@ -1478,18 +1529,26 @@ are specific to the current Home Assistant session.
 | `SETPOINT_BOOST_THRESHOLD` | `0.3`   |
 | `SETPOINT_BOOST_ERROR_MIN` | `0.3`   |
 
-### 6.4 Auto-calibration and FF
+### 6.4 Calibration
 
-| Constant                          | Value  |
-| --------------------------------- | ------ |
-| `AUTOCALIB_SNAPSHOT_PERIOD_H`     | `120`  |
-| `AUTOCALIB_DT_COOL_FALLBACK_DAYS` | `7`    |
-| `AUTOCALIB_COOLDOWN_H`            | `24`   |
-| `AUTOCALIB_A_MAD_THRESHOLD`       | `0.25` |
-| `AUTOCALIB_B_MAD_THRESHOLD`       | `0.30` |
-| `AUTOCALIB_MAX_RETRIES`           | `3`    |
-| `AUTOCALIB_RETRY_DELAY_H`         | `6`    |
-| `AUTOCALIB_EXIT_NEW_OBS_MIN`      | `1`    |
+| Constant                          | Value     |
+| --------------------------------- | --------- |
+| `CALIBRATION_MAX_S`               | `172800`  |
+| `CALIBRATION_MIN_INTERVAL_S`      | `86400`   |
+| `CALIBRATION_CORRECT_REL`         | `0.30`    |
+| `CALIBRATION_CORRECT_B`           | `True`    |
+| `CALIBRATION_SKIP_WHEN_OWN_AGREE` | `False`   |
+| `CALIBRATION_OWN_RECENT`          | `3`       |
+| `CALIBRATION_START_OVER_C`        | `0.2`     |
+| `CALIBRATION_GAP_MIN_S`           | `3600`    |
+| `CALIBRATION_GAP_MAX_S`           | `21600`   |
+| `CALIBRATION_REST_EXTRA_S`        | `1200`    |
+| `CALIBRATION_HEAT_MIN_S`          | `7200`    |
+| `CALIBRATION_STEP_MAX_S`          | `14400`   |
+| `CALIBRATION_DEPTH_CAP_C`         | `0.8`     |
+| `CALIBRATION_FALL_WINDOW_S`       | `900`     |
+
+`CALIBRATION_MAX_S` is in `const.py`, the others in `calibration.py`. The pulses of a calibration otherwise use the constants of the measurement pulses (`measure_pulse.py`).
 
 ---
 
@@ -1514,7 +1573,7 @@ This governance is central because:
 - it avoids moving gains in poorly informative regimes,
 - it still keeps thermal learning active in some constrained regimes such as `SATURATED`.
 
-The matrix drives the gain updates and thermal learning only. A regime transition (`REGIME_TRANSITION`) freezes gains and learning but does not hold the integral. The integral is held only by the sources listed in the protections of section 4 (deadtime, resume phases, `vt_safety`) and by two governance-related sources: `deadband_hysteresis_shell` (hysteretic deadband state active, error outside the core deadband) and `governance_sensor_invalid` (`DEGRADED` regime before a first outdoor temperature has been received). When the outdoor sensor stops reporting after a first value, the regime is `DEGRADED`: gains and thermal learning stay frozen, the integral keeps integrating, and the control path uses the last valid outdoor temperature.
+The matrix drives the gain updates and thermal learning only. A regime transition (`REGIME_TRANSITION`) freezes gains and learning but does not hold the integral. The integral is held only by the sources listed in the protections of section 4 (deadtime, resume phases, `vt_safety`, `calibration_recovery`) and by two governance-related sources: `deadband_hysteresis_shell` (hysteretic deadband state active, error outside the core deadband) and `governance_sensor_invalid` (`DEGRADED` regime before a first outdoor temperature has been received). When the outdoor sensor stops reporting after a first value, the regime is `DEGRADED`: gains and thermal learning stay frozen, the integral keeps integrating, and the control path uses the last valid outdoor temperature.
 
 ---
 

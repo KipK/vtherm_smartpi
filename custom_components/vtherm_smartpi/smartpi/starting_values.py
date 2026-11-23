@@ -11,9 +11,14 @@ own:
 A released quantity takes the learning's own value. A learning reset drops what stands, and so does the reset of the
 mode-dependent channel of ``a``. A starting value is not a measurement: no history and no counter moves with it.
 
+A calibration (smartpi/calibration.py) may correct ``a`` or ``b`` once the first model is published: the channel of the
+quantity restarts and the reading of the calibration stands as its starting value (``correct``), released by the same
+rules. A corrected value is saved and restored even when the blank start handed nothing over.
+
 The feed-forward ramp counts accepted measures; the values of the first hand-over add ``KEPT_RAMP_MEASURES`` for each
 quantity given in this blank start. That credit is latched at the give and does not shrink at a release, and the ramp reads the larger of
-the credit and the accepted measures (``ramp_count``).
+the credit and the accepted measures (``ramp_count``). A correction latches the credit at the ramp count it had before
+(``latch``), so the restart of a channel never lowers the ramp.
 """
 from __future__ import annotations
 
@@ -36,6 +41,7 @@ class StartingValues:
         self._modes: set[str] = set()           # HVAC modes ``give`` has been called for in this blank start
         self.credit = 0                         # measures the ramp credits for the quantities given
         self.own_b = False                      # the learning's own time constant has been reliable
+        self.corrected: set[str] = set()        # the quantities that stand from a calibration
 
     @property
     def handed(self) -> bool:
@@ -71,7 +77,17 @@ class StartingValues:
 
     def release(self, quantity: str) -> bool:
         """The learning has its own value of ``quantity``: the starting value stops standing. True when it stood."""
+        self.corrected.discard(quantity)
         return self._value.pop(quantity, None) is not None
+
+    def correct(self, quantity: str, value: float) -> None:
+        """A calibration corrects ``quantity``: its reading stands until the learning has its own value."""
+        self._value[quantity] = value
+        self.corrected.add(quantity)
+
+    def latch(self, ramp_before: int) -> None:
+        """The ramp keeps the count it had before a correction restarted a channel."""
+        self.credit = max(self.credit, int(ramp_before))
 
     def stand(self, quantity: str, value: float) -> None:
         """A starting value that was set aside with its HVAC mode stands again."""
@@ -82,13 +98,21 @@ class StartingValues:
         return max(self.credit, accepted)
 
     def save(self) -> dict[str, Any]:
-        return {"a": self._value.get("a"), "b": self._value.get("b"), "mode": self.mode, "handed": self.handed,
-                "modes": sorted(self._modes), "credit": self.credit}
+        saved = {"a": self._value.get("a"), "b": self._value.get("b"), "mode": self.mode, "handed": self.handed,
+                 "modes": sorted(self._modes), "credit": self.credit}
+        if self.corrected:
+            saved["corrected"] = sorted(self.corrected)
+        return saved
 
     def load(self, saved: object) -> None:
-        """Restore what ``save`` wrote; anything malformed leaves a blank start (the readings give again)."""
+        """Restore what ``save`` wrote; anything malformed leaves a blank start (the readings give again). A state that
+        handed nothing over keeps its corrected values."""
         self.reset()
-        if not isinstance(saved, dict) or saved.get("handed") is not True:
+        if not isinstance(saved, dict):
+            return
+        handed = saved.get("handed") is True
+        corrected = saved.get("corrected") if isinstance(saved.get("corrected"), list) else []
+        if not handed and not corrected:
             return
         credit = saved.get("credit")
         if not isinstance(credit, int) or isinstance(credit, bool) or credit < 0:
@@ -102,8 +126,9 @@ class StartingValues:
                 return
             values[quantity] = float(raw)
         self.credit, self._value = credit, values
+        self.corrected = {q for q in corrected if q in values}
         self.mode = saved["mode"] if isinstance(saved.get("mode"), str) else None
         modes = saved.get("modes")
         self._modes = {m for m in modes if isinstance(m, str)} if isinstance(modes, list) else set()
-        if not self._modes:                      # a state saved with one hand-over and no list of modes
+        if handed and not self._modes:           # a state saved with one hand-over and no list of modes
             self._modes = {self.mode or ""}

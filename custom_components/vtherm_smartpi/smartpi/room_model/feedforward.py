@@ -36,8 +36,10 @@ The holding power has two parts, handled differently at a discontinuity:
   discrete changes are moved into the integral so that the total command
   does not jump: I <- I - dU / Ki, within the integral limits. They are a
   change between the learned source and a room model source, a change of
-  model structure, a new publication of the parameters and a new static
-  model of the energy balance in force. Only the step of
+  model structure, a new publication of the parameters, a new static
+  model of the energy balance in force and the correction of a or b by a
+  calibration (the step of the learned gain b / a, evaluated at the same
+  setpoint, outdoor temperature and warmup). Only the step of
   the static part is moved, evaluated with the wall part applied at this
   cycle.
 - Wall part. It is never moved into the integral. When the wall term in
@@ -62,6 +64,7 @@ from typing import Any
 
 from ...hvac_mode import VThermHvacMode_HEAT
 from ..const import clamp
+from ..feedforward import compute_ff
 from .const import RM_WALL_EXTRA_MAX, RM_WALL_FADE_S
 from .gates import eb_agrees
 from .model import RoomParams
@@ -215,10 +218,17 @@ class HoldingTransfer:
         self.wall_applied = 0.0
         self._fade_from = 0.0
         self._fade_start: float | None = None
+        self._learned_gain_before: float | None = None
+
+    def note_learned_step(self, gain_before: float) -> None:
+        """A calibration corrected the learned model: the next update moves the step of the learned holding power
+        from ``gain_before`` (the learned gain b / a before the correction) into the integral."""
+        self._learned_gain_before = float(gain_before)
 
     def reset(self) -> None:
         """Forget the source in force and the applied wall part (PI memory reset): the next source starts
         without transfer, its wall part from 0."""
+        self._learned_gain_before = None
         self.ref = None
         self.last_delta = 0.0
         self.wall_applied = 0.0
@@ -293,7 +303,7 @@ class HoldingTransfer:
         return clamp(learned_power + wall, 0.0, 1.0)
 
     def update(self, new: HoldingSource, *, now: float, learned_power: float, target_temp: float,
-               ext_temp: float | None, heat: bool = True) -> float:
+               ext_temp: float | None, heat: bool = True, learned_warmup: float = 1.0) -> float:
         """Take the new source and blend the wall part; return the static step dU to transfer (0 without a
         discrete change).
 
@@ -302,15 +312,21 @@ class HoldingTransfer:
             Both sides of the step are evaluated at the current setpoint and outdoor temperature with the wall
             part applied at this cycle, so the step holds the static part only.
         heat: heating mode; the wall part is dropped on the learned source outside heating.
+        learned_warmup: warmup factor of the learned holding power at this cycle (read for the step of a correction).
         """
         old = self.ref
         change = self.discrete_change(new)
+        learned_before = learned_power
+        if self._learned_gain_before is not None:
+            learned_before = compute_ff(k_ff=self._learned_gain_before, target_temp_ff=target_temp, ext_temp=ext_temp,
+                                        warmup_scale=learned_warmup).u_ff1
+            self._learned_gain_before = None
         self._blend(new, now, heat)
         delta = 0.0
-        if change:
+        if old is not None and (change or learned_before != learned_power):
             w = self.wall_applied
             delta = (self._total(new, target_temp, ext_temp, learned_power, w)
-                     - self._total(old, target_temp, ext_temp, learned_power, w))
+                     - self._total(old, target_temp, ext_temp, learned_before, w))
         self.ref = new
         self.last_delta = delta
         return delta

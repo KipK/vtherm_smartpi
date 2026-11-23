@@ -124,3 +124,31 @@ def test_b_is_learned_during_the_fall_after_a_setpoint_drop():
     assert algo.guards.guard_cut_active
     assert algo.phase == SmartPIPhase.STABLE
     assert algo.est.learn_ok_count_b > learned_before
+
+
+def test_the_published_values_of_a_cut_change_no_command_and_no_learning_value():
+    """The error published during a cut is kept apart: the same calculations without it give the same state."""
+    from custom_components.vtherm_smartpi.smartpi.guards import GUARD_CUT_STATE
+
+    def run(publish: bool) -> tuple:
+        with patch("time.time", return_value=1_700_000_000.0):
+            return _run(publish)
+
+    def _run(publish: bool) -> tuple:
+        algo = _stable_smartpi()
+        if not publish:
+            algo.guards.note_cut = lambda *_args: None
+        _start_cut_after_setpoint_drop(algo, 1000.0)
+        outputs = []
+        for i in range(1, 30):
+            _calculate(algo, 1000.0 + 60.0 * i, 19.6 - 0.05 * i)
+            outputs.append((algo.on_percent, algo.integral, algo.error, algo.error_p, algo.anticipation_c))
+        cut = algo.get_published_diagnostics()
+        learned = (algo.save_state()["est_state"], algo.ctl.integral, algo.ctl.u_i, algo.guards.guard_cut_active)
+        return outputs, learned, cut
+
+    outputs, learned, cut = run(True)
+    assert (outputs, learned) == run(False)[:2]
+    assert cut["control"]["mode"] == GUARD_CUT_STATE
+    assert cut["temperature"]["error"] == round(16.0 - (19.6 - 0.05 * 29), 4)
+    assert cut["analysis"]["control"]["anticipation_c"] == 0.0

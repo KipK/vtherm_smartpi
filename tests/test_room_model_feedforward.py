@@ -727,3 +727,18 @@ def test_closed_loop_restart_keeps_the_room_model_source(caplog) -> None:
     assert abs(out["u_ff"][i] - out["u_ff"][i - 1]) < 0.005
     assert abs(out["i_power"][i] - out["i_power"][i - 1]) < 0.005
     assert abs(out["u"][i] - out["u"][i - 1]) < 0.01
+
+
+def test_the_step_of_a_corrected_learned_gain_is_transferred_once() -> None:
+    """A calibration corrects a or b: the step of the learned holding power (old gain against new gain, same
+    setpoint, outdoor temperature and warmup) is moved into the integral at the next update, once."""
+    tr = HoldingTransfer()
+    kw = dict(target_temp=20.0, ext_temp=5.0, learned_warmup=0.5)
+    assert tr.update(LEARNED, now=0.0, learned_power=0.045, **kw) == 0.0
+    tr.note_learned_step(0.006)                   # gain before the correction: 0.006 * 15 * 0.5 = 0.045
+    new_power = compute_ff(k_ff=0.012, target_temp_ff=20.0, ext_temp=5.0, warmup_scale=0.5).u_ff1
+    assert tr.update(LEARNED, now=60.0, learned_power=new_power, **kw) == pytest.approx(0.045)
+    assert tr.update(LEARNED, now=120.0, learned_power=new_power, **kw) == 0.0
+    tr.note_learned_step(0.006)
+    tr.reset()                                    # a PI memory reset forgets it
+    assert tr.update(LEARNED, now=180.0, learned_power=new_power, **kw) == 0.0

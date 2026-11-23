@@ -123,6 +123,8 @@ class ABEstimator:
         self.b = b_init
         # Starting values of a and b standing for the learning's own until it has them (smartpi/starting_values.py)
         self.start = StartingValues()
+        # True while a calibration is in progress (set by smartpi/learning_start.py): no a measure is taken then
+        self.calibrating = False
         self.model_hvac_mode: str | None = None
         self._state_loaded = False
         # Mode-dependent a channel of the HVAC mode that is not active, by mode name, as saved state (see
@@ -325,6 +327,35 @@ class ABEstimator:
             self.b = b
             if changed:
                 self._replay_a_measurements(mode_sign)
+
+    def correct_a(self, hvac_mode: VThermHvacMode, value: float) -> None:
+        """A calibration corrects ``a`` (magnitude in C/min at full power) in ``hvac_mode``: the channel of the mode
+        restarts and the value stands until the learning publishes its own."""
+        self._reset_a_channel(hvac_mode)
+        self.a = self._mode_sign(hvac_mode) * clamp(abs(value), self.A_MIN, self.A_MAX)
+        self.start.correct("a", self.a)
+        self.diag_a_last_reason = self.learn_last_reason = "corrected: calibration"
+
+    def correct_b(self, value: float, mode_sign: float) -> bool:
+        """A calibration corrects ``b`` (1/min): the channel restarts and the value stands until the learning's own
+        time constant is reliable again; the a measurements follow it. False for a value outside the bounds."""
+        if not self.B_MIN <= value <= self.B_MAX:
+            return False
+        self.learn_ok_count = max(0, self.learn_ok_count - self.learn_ok_count_b)
+        self.learn_ok_count_b = 0
+        self._learn_seq_b = 0
+        self.b_meas_hist.clear()
+        self._b_hat_hist.clear()
+        clear_channel_state(self.b_drift)
+        self.diag_b_mad_over_med = None
+        self.start.own_b = False
+        self.start.correct("b", value)
+        changed = value != self.b
+        self.b = value
+        if changed:
+            self._replay_a_measurements(mode_sign)
+        self.diag_b_last_reason = self.learn_last_reason = "corrected: calibration"
+        return True
 
     def _release_b(self, mode_sign: float) -> None:
         """The learning's own time constant is reliable: the starting value of b stops standing, b takes the value the
@@ -833,6 +864,11 @@ class ABEstimator:
         # ---------- ON phase: learn a ----------
         # dT/dt = a*u - b*delta  =>  a = (dT/dt + b*delta) / u
         if u > U_ON_MIN:
+            if self.calibrating:
+                # the pulses of a calibration and the recoveries after them would bias a: the calibration reads it
+                self.learn_skip_count += 1
+                self.learn_last_reason = "skip: calibration in progress"
+                return
             if abs(delta) < DELTA_MIN_ON:
                 self.learn_skip_count += 1
                 self.learn_last_reason = "skip: a delta too small"

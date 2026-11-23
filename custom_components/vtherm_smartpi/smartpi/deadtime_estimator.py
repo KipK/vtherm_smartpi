@@ -91,6 +91,8 @@ class DeadTimeEstimator:
         # Last detections; the published dead time is their median so that a
         # single aberrant detection does not move it.
         self._history_heat = deque(maxlen=6)
+        # Samples added since the creation, by slot (runtime only): a reader sees what was measured since its last look.
+        self.samples_added = {"heat": 0, "cool": 0}
         self._history_cool = deque(maxlen=6)
 
         # Raw measured temperature history for external access (SmartPI learning).
@@ -152,6 +154,12 @@ class DeadTimeEstimator:
     def stop_peak_confirmed(self) -> bool:
         """True from the confirmation of the peak of a stop until the heating starts again."""
         return self._stop_peak_confirmed
+
+    @property
+    def stop_response_pending(self) -> bool:
+        """True while the response to the last stop is awaited: its detection is armed or its peak is searched."""
+        waiting = self.state in ("WAITING_HEAT_RESPONSE", "WAITING_COOL_RESPONSE") and self._waiting_power_on is False
+        return self._stop_peak is not None or waiting
 
     @property
     def tin_history(self) -> Deque[Tuple[float, float]]:
@@ -704,12 +712,19 @@ class DeadTimeEstimator:
         """Wait limit of the armed response: active after a power start, passive after a cut."""
         return self.timeout_seconds if self._waiting_power_on else self.passive_timeout_seconds
 
+    def last_sample_s(self, response: str) -> float | None:
+        """Last sample of the ``response`` slot ("heat" or "cool"), None without one."""
+        history = self._history_heat if response == "heat" else self._history_cool
+        return float(history[-1]) if history else None
+
     def _add_sample_heat(self, dt: float):
+        self.samples_added["heat"] += 1
         self._history_heat.append(dt)
         self.deadtime_heat_s = statistics.median(self._history_heat)
         self.deadtime_heat_reliable = len(self._history_heat) >= 1
 
     def _add_sample_cool(self, dt: float):
+        self.samples_added["cool"] += 1
         self._history_cool.append(dt)
         self.deadtime_cool_s = statistics.median(self._history_cool)
         self.deadtime_cool_reliable = len(self._history_cool) >= 1
