@@ -48,7 +48,8 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `gains.py`: `GainScheduler`: Kp/Ki from the model (IMC rule), near-band adjustment.
 - `governance.py`: `SmartPIGovernance`: regime (warm-up, stable, perturbed...) and whether learning/gains may adapt.
 - `guards.py`: `SmartPIGuards`: guard cut / guard kick safety actions.
-- `resume_hold.py`: `ResumeDeadtimeHold`: integral hold after window or shedding resume; `recovery_error_floor_c`.
+- `resume_hold.py`: `ResumeDeadtimeHold`: integral hold after window, shedding or heating-unavailable resume; `recovery_error_floor_c`.
+- `learning_block.py`: `LearningBlock` (`SmartPI.learning_block`): service pause and the disturbance / heating-unavailable entities block every learning; tests `test_smartpi_learning_block.py`.
 - `anticipation.py`: slope anticipation (`correction_c`, `select_horizon`, `anticipated_error`): the P and I errors read the measured temperature plus the expected travel over the horizon, in HEAT and COOL.
 - `const.py`: algorithm constants, enums, `clamp`, governance matrix.
 

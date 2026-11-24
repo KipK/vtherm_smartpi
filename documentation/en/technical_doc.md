@@ -1221,6 +1221,31 @@ during the dead time:
 
 This sequence prevents the integral from learning a resume transient that is still dominated by heating dead time.
 
+The end of a heating unavailable period (the entity turns off, heating or cooling)
+arms the same hold (`heating_unavailable_resume`); the heating or cooling episode in
+progress restarts at that instant, so the hold covers the active dead time counted
+from it. Unlike a window resume, it does not pause the learning for
+`LEARNING_PAUSE_RESUME_MIN`.
+
+**Learning block** (`learning_block.py`). The pause of `set_smartpi_learning`
+(saved), the disturbance entity and the heating unavailable entity each block every
+learning; their states are read at the start of every calculation, and only the
+state `on` counts (`off`, `unavailable`, `unknown` and an absent entity count as
+off). While blocked: `update_learning` only feeds the records of the measurement
+events (so they stay continuous) and skips the windows, the emitter lag, the heating
+balance and the event detector; the dead-time detection is suspended but the
+temperature history is fed (anticipation, pulses); the T_ar learning and the room
+model receive the block as exclusion reason (an open window keeps its own reason)
+and the handler starts none of their computations; no measurement pulse is advanced
+and no kept value is handed over; a calibration request is refused. When the
+learning becomes blocked, a calibration in progress is cancelled, the pulse in
+progress ends and the readings in progress end without result; the response-model
+reader records the block as an exclusion, so a regulation event overlapping it is
+refused. Each change of the block restarts the learning window and the dead-time
+detection, keeping the temperature history and the heating episode. The published
+reason is `learning.block_reason`. The disturbance entity leaves the integral free;
+the heating unavailable entity holds it (above).
+
 Transient catch-up states are not restored after a reboot:
 
 - any temporary `integral_hold_mode` is cleared.
@@ -1245,6 +1270,7 @@ Additional protections currently present are:
 - `I:HOLD` with source `deadband_hysteresis_shell` while the hysteretic deadband state is active and the error is outside the core deadband,
 - `I:HOLD` with source `governance_sensor_invalid` while no outdoor temperature has been received yet (`DEGRADED` regime),
 - `I:HOLD` with source `calibration_recovery` after each calibration pulse until the room reaches the setpoint,
+- `I:HOLD` with source `heating_unavailable` while the heating unavailable entity is on (`smartpi/learning_block.py`), then the explicit `I:HOLD` `heating_unavailable_resume` over the active dead time counted from the instant it turns off (the heating or cooling episode restarts then), through the resume hold below,
 - freeze of P and I inside the core deadband.
 
 The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower. It has two parts:
@@ -1289,13 +1315,14 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | `temperature_history.py` | raw and filtered room temperature history read by the learning |
 | `starting_values.py`   | starting values of `a` and `b`, release and warm-up credit |
 | `learning_start.py`    | start of the learning (phase of the algorithm, source of the command, hand-over of the kept values) |
+| `learning_block.py`    | learning block: pause of the service, disturbance and heating unavailable entities, their effects |
 | `learning_outcomes.py` | bounded counters of learning-window outcomes                |
 | `gains.py`             | gain calculation and freezing                               |
 | `controller.py`        | discrete PI, anti-windup, hold, hysteresis, integral transfers |
 | `deadband.py`          | deadband and near-band                                      |
 | `setpoint.py`          | control setpoint and setpoint boost state                   |
 | `anticipation.py`      | horizon and correction of the anticipation of the measured temperature (heating and cooling) |
-| `resume_hold.py`       | I:HOLD during the dead time after a window or power-shedding resume, residual error floor |
+| `resume_hold.py`       | I:HOLD during the dead time after a window, power-shedding or heating-unavailable resume, residual error floor |
 | `feedforward.py`       | `u_ff1` computation, signed FF gain `b/a` and warmup scale, room model FF1 |
 | `room_model/feedforward.py` | holding power source from the published room model and the static model of the energy balance in force, bumpless transfer of the discrete changes of its static part, blend of its wall part, static gain for the braking prediction |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |

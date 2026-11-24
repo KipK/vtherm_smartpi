@@ -917,6 +917,33 @@ pendant le temps mort en chauffage :
 
 Cette séquence évite de faire apprendre à l'intégrale une dynamique de reprise encore dominée par le temps mort de chauffe.
 
+La fin d'une période de chauffage indisponible (l'entité repasse à `off`, en
+chauffage ou en refroidissement) arme le même maintien (`heating_unavailable_resume`) ;
+l'épisode de chauffe ou de refroidissement en cours repart à cet instant, si bien que
+le maintien couvre le temps mort actif compté depuis lui. Contrairement à une reprise
+de fenêtre, elle ne suspend pas l'apprentissage pendant `LEARNING_PAUSE_RESUME_MIN`.
+
+**Blocage de l'apprentissage** (`learning_block.py`). La pause de
+`set_smartpi_learning` (enregistrée), l'entité de perturbation et l'entité de
+chauffage indisponible bloquent chacune tout apprentissage ; leurs états sont lus au
+début de chaque calcul, et seul l'état `on` compte (`off`, `unavailable`, `unknown` et
+une entité absente comptent comme off). Pendant le blocage : `update_learning`
+alimente seulement les enregistrements des événements de mesure (qui restent
+continus) et saute les fenêtres, le retard de l'émetteur, le bilan de chauffe et le
+détecteur d'événements ; la détection du temps mort est suspendue mais l'historique
+de température est alimenté (anticipation, impulsions) ; l'apprentissage T_ar et le
+modèle de pièce reçoivent le blocage comme raison d'exclusion (une fenêtre ouverte
+garde la sienne) et le handler ne lance aucun de leurs calculs ; aucune impulsion de
+mesure n'avance et aucune valeur retenue n'est transmise ; une demande de calibration
+est refusée. Quand l'apprentissage se bloque, une calibration en cours est annulée,
+l'impulsion en cours se termine et les lectures en cours se terminent sans résultat ;
+le lecteur du modèle de réponse enregistre le blocage comme une exclusion, si bien
+qu'un événement de régulation qui le chevauche est refusé. Chaque changement du
+blocage relance la fenêtre d'apprentissage et la détection du temps mort, en gardant
+l'historique de température et l'épisode de chauffe. La raison publiée est
+`learning.block_reason`. L'entité de perturbation laisse l'intégrale libre ; l'entité
+de chauffage indisponible la maintient (ci-dessus).
+
 Les états transitoires de rattrapage ne sont pas restaurés après reboot :
 
 - tout `integral_hold_mode` temporaire est effacé.
@@ -942,6 +969,7 @@ Les protections complémentaires actuellement présentes sont :
 - `I:HOLD` avec source `deadband_hysteresis_shell` tant que l'état de deadband hystérétique est actif et que l'erreur est hors de la deadband centrale,
 - `I:HOLD` avec source `governance_sensor_invalid` tant qu'aucune température extérieure n'a été reçue (régime `DEGRADED`),
 - `I:HOLD` avec source `calibration_recovery` après chaque impulsion de calibration jusqu'à ce que la pièce atteigne la consigne,
+- `I:HOLD` avec source `heating_unavailable` tant que l'entité de chauffage indisponible est à `on` (`smartpi/learning_block.py`), puis le `I:HOLD` explicite `heating_unavailable_resume` sur le temps mort actif compté depuis son retour à `off` (l'épisode de chauffe ou de refroidissement repart à cet instant), par le maintien de reprise ci-dessus,
 - gel de P et I dans la deadband centrale.
 
 L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse. Il comporte deux parties :
@@ -993,13 +1021,14 @@ Cette séparation évite de garder P et I gelés uniquement parce que l'hystér�
 | `temperature_history.py` | historique brut et filtré de la température de la pièce lu par l'apprentissage |
 | `starting_values.py`   | valeurs de départ de `a` et `b`, relâchement et crédit de montée en charge |
 | `learning_start.py`    | début de l'apprentissage (phase de l'algorithme, source de la commande, transmission des valeurs retenues) |
+| `learning_block.py`    | blocage de l'apprentissage : pause du service, entités de perturbation et de chauffage indisponible, leurs effets |
 | `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
 | `gains.py`             | calcul et gel des gains                                  |
 | `controller.py`        | PI discret, anti-windup, maintien, hystérésis, transferts d'intégrale |
 | `deadband.py`          | deadband et near-band                                    |
 | `setpoint.py`          | consigne de régulation et état du boost |
 | `anticipation.py`      | horizon et correction de l'anticipation de la température mesurée (chauffage et refroidissement) |
-| `resume_hold.py`       | maintien I:HOLD pendant le temps mort après reprise de fenêtre ou de délestage, plancher d'erreur résiduelle |
+| `resume_hold.py`       | maintien I:HOLD pendant le temps mort après reprise de fenêtre, de délestage ou de chauffage indisponible, plancher d'erreur résiduelle |
 | `feedforward.py`       | calcul de `u_ff1`, gain FF signé `b/a`, facteur de montée en charge et FF1 du modèle de pièce |
 | `room_model/feedforward.py` | source de puissance de maintien issue du modèle de pièce publié et du modèle statique du bilan énergétique en vigueur, transfert sans à-coup des variations discrètes de sa part statique, fondu de sa part des murs, gain statique pour la prédiction de freinage |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |

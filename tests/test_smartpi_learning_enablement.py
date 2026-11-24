@@ -82,7 +82,8 @@ def test_disabled_learning_blocks_hysteresis_deadtime_updates() -> None:
 
 
 def test_learning_change_starts_with_clean_observations() -> None:
-    """Each flag transition must discard transients but preserve learned data."""
+    """Each flag transition discards the transients of the learning but keeps the learned data, the temperature
+    history (the anticipation reads it) and the heating episode (the dead-time integral hold reads it)."""
     smartpi = _make_smartpi()
     smartpi.est.a = 0.015
     smartpi.est.b = 0.003
@@ -106,8 +107,8 @@ def test_learning_change_starts_with_clean_observations() -> None:
     assert smartpi.learn_win_active is False
     assert smartpi.dt_est.state == "OFF"
     assert smartpi.dt_est.heat_start_time is None
-    assert not smartpi.dt_est.tin_history
-    assert smartpi._t_heat_episode_start is None
+    assert list(smartpi.dt_est.tin_history) == [(100.0, 19.0)]
+    assert smartpi._t_heat_episode_start == 100.0
 
     smartpi.learn_win._active = True
     smartpi.dt_est.state = "WAITING_COOL_RESPONSE"
@@ -121,7 +122,7 @@ def test_learning_change_starts_with_clean_observations() -> None:
     assert smartpi.learn_win_active is False
     assert smartpi.dt_est.state == "OFF"
     assert smartpi.dt_est.cool_start_time is None
-    assert not smartpi.dt_est.tin_history
+    assert list(smartpi.dt_est.tin_history) == [(100.0, 19.0), (200.0, 20.0)]
     assert smartpi.dt_est.last_power == 0.8
     assert smartpi.dt_est.deadtime_heat_s == 180.0
 

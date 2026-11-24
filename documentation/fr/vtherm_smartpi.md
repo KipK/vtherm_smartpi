@@ -105,7 +105,7 @@ Pour ajouter SmartPI à un thermostat supplémentaire, ouvrez la configuration d
 
 ![SmartPI — configuration par thermostat](../../assets/screens/config_smartpi.png)
 
-Les paramètres disponibles sont identiques à ceux des valeurs par défaut globales. Tout paramètre défini ici remplace la valeur globale correspondante pour ce thermostat uniquement.
+Les paramètres disponibles sont identiques à ceux des valeurs par défaut globales, avec en plus deux entités facultatives propres à ce thermostat qui suspendent l'apprentissage (voir [Suspendre l'apprentissage](#suspendre-lapprentissage)). Tout paramètre défini ici remplace la valeur globale correspondante pour ce thermostat uniquement.
 
 Une entrée SmartPI désactivée est ignorée. Un thermostat dont l'entrée dédiée est désactivée utilise l'entrée de valeurs par défaut activée, ou les valeurs intégrées s'il n'en existe pas, et les thermostats qui dépendent d'une entrée sont rechargés lorsqu'elle est désactivée ou supprimée. Si l'entrée de valeurs par défaut a été supprimée, elle est recréée lorsque vous réajoutez l'intégration SmartPI.
 
@@ -556,6 +556,8 @@ Ces valeurs viennent de simulations de chaque type d'installation. Un cycle à u
 | **Demande au coude**                 | Demande SmartPI correspondant au changement de pente de la vanne.                                      | `80%`             |
 | **Ouverture de vanne au coude**      | Ouverture physique de la vanne au changement de pente.                                                 | `15%`             |
 | **Ouverture maximale de vanne**      | Ouverture maximale autorisée lorsque la linéarisation est activée.                                     | `100%`            |
+| **Entité de perturbation**           | Par thermostat uniquement. Un `binary_sensor` ou un `input_boolean` à `on` pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce : l'apprentissage est suspendu. Voir [Suspendre l'apprentissage](#suspendre-lapprentissage). | aucune |
+| **Entité de chauffage indisponible** | Par thermostat uniquement. Un `binary_sensor` ou un `input_boolean` à `on` pendant que l'émetteur ne peut pas produire : l'apprentissage est suspendu et l'intégrale est maintenue. Voir [Suspendre l'apprentissage](#suspendre-lapprentissage). | aucune |
 
 ### Démarrage de l'apprentissage
 
@@ -571,6 +573,23 @@ L'option s'applique à un nouveau thermostat et après `reset_smartpi_learning`.
 Lorsque cette option est désactivée, une transition de deadband ou de near-band met à jour la prochaine commande SmartPI mais n'interrompt pas le cycle PWM déjà en cours. C'est le comportement conseillé avec des cycles courts, car redémarrer trop souvent les cycles peut créer des commutations inutiles.
 
 Activez cette option uniquement sur les systèmes thermiques à très forte inertie avec des cycles PWM longs, lorsque attendre la prochaine frontière de cycle retarde trop la réponse physique après une entrée ou une sortie de deadband ou de near-band.
+
+### Suspendre l'apprentissage
+
+Trois causes suspendent tout apprentissage SmartPI, chacune à elle seule : le service [`set_smartpi_learning`](#set_smartpi_learning), l'entité de perturbation et l'entité de chauffage indisponible. Tant que l'une d'elles s'applique :
+
+- la régulation continue avec le modèle déjà appris et sa commande ne change pas (l'entité de chauffage indisponible maintient seulement l'intégrale, voir plus bas) ;
+- SmartPI n'apprend rien : ni fenêtre `a`/`b`, ni temps mort, ni retard de l'émetteur, ni bilan de chauffe, ni lecture de mesure pour les valeurs de départ ou le modèle de réponse, et l'apprentissage du retard de l'émetteur et le modèle de pièce enregistrent la période comme exclue. Leurs calculs attendent la fin de la suspension ;
+- la température de la pièce reste enregistrée, l'anticipation continue donc de fonctionner ;
+- aucune impulsion de mesure du démarrage direct n'a lieu, et une impulsion en cours se termine ;
+- une demande de calibration est refusée, et une calibration en cours est annulée.
+
+Rien de ce qui est appris n'est effacé. À la fin de la suspension, les mesures repartent d'observations neuves, avec leurs règles d'attente habituelles.
+
+Les deux entités sont facultatives et se règlent par thermostat dans la configuration SmartPI. Chacune accepte un `binary_sensor` (un capteur binaire template, par exemple) ou un `input_boolean` (une entrée booléenne pilotée par des automatisations). SmartPI lit leur état à chaque cycle de régulation, dès le premier cycle après un redémarrage. Seul l'état `on` compte : `off`, `unavailable` (indisponible), `unknown` (inconnu) et une entité qui n'existe pas comptent comme off. Les entités ne modifient jamais le réglage du service.
+
+- **Entité de perturbation** : à `on` pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce, par exemple des invités, une cheminée, un fort ensoleillement ou un chauffage d'appoint. L'intégrale reste libre, puisque c'est elle qui compense la perturbation.
+- **Entité de chauffage indisponible** : à `on` pendant que l'émetteur piloté par le thermostat ne peut pas produire, par exemple une chaudière arrêtée, une priorité eau chaude, un dégivrage de pompe à chaleur, un délestage tarifaire ou un circulateur arrêté, en chauffage comme en climatisation. L'intégrale est maintenue tant qu'elle est à `on` (`I:HOLD`, source `heating_unavailable`), pour que l'erreur de cette période ne la gonfle pas et que la reprise ne provoque pas de dépassement. Repassez-la à `off` quand l'émetteur produit de nouveau : l'intégrale reste alors maintenue pendant le temps mort de l'émetteur (source `heating_unavailable_resume`), et l'apprentissage reprend aussitôt, sans l'attente de 20 minutes qui suit une fenêtre.
 
 ## Diagnostics et carte Markdown
 
@@ -644,11 +663,11 @@ Chaque service utilise le paramètre standard `target:` de Home Assistant et acc
 
 ### `set_smartpi_learning`
 
-Utilisez ce service pour mettre en pause ou reprendre l'apprentissage thermique d'un thermostat SmartPI. Réglez le champ obligatoire `learning_enabled` sur `false` pour suspendre l'apprentissage ou sur `true` pour le reprendre.
+Utilisez ce service pour mettre en pause ou reprendre l'apprentissage d'un thermostat SmartPI. Réglez le champ obligatoire `learning_enabled` sur `false` pour suspendre l'apprentissage ou sur `true` pour le reprendre.
 
-Pendant la pause, la régulation continue avec le modèle déjà appris, mais SmartPI ne collecte plus d'observations A/B ni de temps mort. La pause n'efface ni les paramètres appris ni l'historique des temps morts. SmartPI repart avec des fenêtres d'observation vierges à chaque changement de ce réglage, qui est conservé après un redémarrage de Home Assistant.
+Pendant la pause, tout apprentissage s'arrête et la régulation continue sans changement (voir [Suspendre l'apprentissage](#suspendre-lapprentissage)). La pause n'efface pas les paramètres appris. Le réglage est conservé après un redémarrage de Home Assistant et ne dépend pas des entités de perturbation et de chauffage indisponible.
 
-Le réglage courant est disponible dans `specific_states.smartpi_learning_enabled` sur l'entité climate et dans `live.learning.enabled` dans les attributs du capteur de diagnostic.
+Le réglage courant est disponible dans `specific_states.smartpi_learning_enabled` sur l'entité climate et dans `live.learning.enabled` dans les attributs du capteur de diagnostic. `live.learning.block_reason` indique pourquoi l'apprentissage est suspendu, quelle qu'en soit la cause.
 
 ### `reset_smartpi_learning`
 

@@ -219,6 +219,7 @@ def _build_learning(algo: SmartPI, tau_reliable: bool) -> Dict[str, Any]:
     samples_b = int(est.learn_ok_count_b)
     return {
         "enabled": algo.learning_enabled,
+        "block_reason": algo.learning_block.reason,
         "stage": _build_ab_learning_stage(algo, samples_a, samples_b, tau_reliable),
         "bootstrap_progress_percent": _bootstrap_progress(algo),
         "bootstrap_status": _bootstrap_state(algo),

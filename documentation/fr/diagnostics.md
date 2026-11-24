@@ -96,7 +96,16 @@ température du dernier calcul, `analysis.control.anticipation_c` vaut `0` et
 
 `temperature.integral_hold_source` vaut `calibration_recovery` tant que
 l'intégrale est figée après une impulsion de calibration, jusqu'à ce que la
-pièce atteigne la consigne.
+pièce atteigne la consigne. Il vaut `heating_unavailable` tant que l'entité de
+chauffage indisponible est à `on`, puis `heating_unavailable_resume` tant que
+l'intégrale reste figée pendant le temps mort de l'émetteur après son retour à
+`off`.
+
+`learning.enabled` est le réglage du service `set_smartpi_learning`.
+`learning.block_reason` vaut `null` quand SmartPI apprend, sinon la raison pour
+laquelle tout apprentissage est suspendu : `heating unavailable` (entité de
+chauffage indisponible à `on`), `disturbance` (entité de perturbation à `on`) ou
+`paused` (service), dans cet ordre quand plusieurs s'appliquent.
 
 `control.last_restart` décrit le dernier redémarrage de Home Assistant ou de
 l'intégration. Il vaut `null` avant le premier calcul de la régulation après le
@@ -134,8 +143,8 @@ dernière jusqu'à la demande suivante.
 |---|---|
 | `state` | `idle` (aucune calibration en cours), `waiting` (entre deux impulsions, la régulation fonctionne), ou l'étape de son impulsion en cours : `rest`, `full power`, `stop` |
 | `pulses_done` | Impulsions démarrées par la calibration (trois au plus ; une impulsion interrompue compte) |
-| `result` | `null` avant toute calibration, `in progress`, `readings agree` (deux impulsions concordent), `pulses done` (trois impulsions lues sans concordance), `time limit` (48 heures) ou `cancelled` (passage entre chauffage et refroidissement, retour de la phase d'apprentissage, réinitialisation de l'apprentissage, apprentissage mis en pause) |
-| `last_request` | Réponse à la dernière demande, `null` avant toute demande : `started`, `refused: learning stage` (premier modèle en apprentissage), `refused: learning paused` (apprentissage en pause), `refused: thermostat off` (thermostat éteint), `refused: too soon` (moins de 24 heures après la fin de la dernière calibration), `ignored: in progress` (calibration en cours) |
+| `result` | `null` avant toute calibration, `in progress`, `readings agree` (deux impulsions concordent), `pulses done` (trois impulsions lues sans concordance), `time limit` (48 heures) ou `cancelled` (passage entre chauffage et refroidissement, retour de la phase d'apprentissage, réinitialisation de l'apprentissage, apprentissage suspendu par le service ou une entité) |
+| `last_request` | Réponse à la dernière demande, `null` avant toute demande : `started`, `refused: learning stage` (premier modèle en apprentissage), `refused: learning paused` (apprentissage suspendu par le service ou une entité), `refused: thermostat off` (thermostat éteint), `refused: too soon` (moins de 24 heures après la fin de la dernière calibration), `ignored: in progress` (calibration en cours) |
 | `last_time` | Heure locale de fin de la dernière calibration non annulée (ISO 8601), `null` avant |
 | `deadtime_start_s` | Dernier temps mort après un démarrage mesuré pendant une impulsion de la calibration, en secondes, `null` sans mesure |
 | `deadtime_stop_s` | Dernier temps mort après un arrêt mesuré pendant une impulsion de la calibration, en secondes, `null` sans mesure |

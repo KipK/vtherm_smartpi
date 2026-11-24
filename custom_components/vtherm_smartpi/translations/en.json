@@ -20,10 +20,14 @@
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
           "smart_pi_learning_start": "Start of the learning",
           "smart_pi_debug": "Record full diagnostics (debug)",
-          "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+          "smart_pi_enable_valve_linearization": "Enable valve curve linearization",
+          "smart_pi_disturbance_entity": "Disturbance entity (optional)",
+          "smart_pi_heating_unavailable_entity": "Heating unavailable entity (optional)"
         },
         "data_description": {
-          "smart_pi_learning_start": "Bootstrap runs heating cycles at full power until the model is learned, then regulates. Direct start regulates from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The choice applies when the learning starts from a blank state (new thermostat or learning reset); a thermostat that has already learned keeps its model."
+          "smart_pi_learning_start": "Bootstrap runs heating cycles at full power until the model is learned, then regulates. Direct start regulates from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The choice applies when the learning starts from a blank state (new thermostat or learning reset); a thermostat that has already learned keeps its model.",
+          "smart_pi_disturbance_entity": "A binary sensor or a toggle helper that is on while an unmeasured heat gain or loss disturbs the room (guests, fireplace, sun, auxiliary heater). While it is on, every SmartPI learning is paused and the regulation goes on unchanged. Only the state on counts: off, unavailable, unknown or a missing entity count as off.",
+          "smart_pi_heating_unavailable_entity": "A binary sensor or a toggle helper that is on while the emitter driven by this thermostat cannot produce (boiler off, hot-water priority, heat-pump defrost, tariff cut-off, circulator stopped), in heating and cooling alike. While it is on, every SmartPI learning is paused and the integral is held; the command sent is unchanged. Turn it off when the emitter produces again: the integral stays held for the dead time of the emitter. Only the state on counts: off, unavailable, unknown or a missing entity count as off."
         }
       },
       "thermostat_valve_curve": {
@@ -61,10 +65,14 @@
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
           "smart_pi_learning_start": "Start of the learning",
           "smart_pi_debug": "Record full diagnostics (debug)",
-          "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+          "smart_pi_enable_valve_linearization": "Enable valve curve linearization",
+          "smart_pi_disturbance_entity": "Disturbance entity (optional)",
+          "smart_pi_heating_unavailable_entity": "Heating unavailable entity (optional)"
         },
         "data_description": {
-          "smart_pi_learning_start": "Bootstrap runs heating cycles at full power until the model is learned, then regulates. Direct start regulates from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The choice applies when the learning starts from a blank state (new thermostat or learning reset); a thermostat that has already learned keeps its model."
+          "smart_pi_learning_start": "Bootstrap runs heating cycles at full power until the model is learned, then regulates. Direct start regulates from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The choice applies when the learning starts from a blank state (new thermostat or learning reset); a thermostat that has already learned keeps its model.",
+          "smart_pi_disturbance_entity": "A binary sensor or a toggle helper that is on while an unmeasured heat gain or loss disturbs the room (guests, fireplace, sun, auxiliary heater). While it is on, every SmartPI learning is paused and the regulation goes on unchanged. Only the state on counts: off, unavailable, unknown or a missing entity count as off.",
+          "smart_pi_heating_unavailable_entity": "A binary sensor or a toggle helper that is on while the emitter driven by this thermostat cannot produce (boiler off, hot-water priority, heat-pump defrost, tariff cut-off, circulator stopped), in heating and cooling alike. While it is on, every SmartPI learning is paused and the integral is held; the command sent is unchanged. Turn it off when the emitter produces again: the integral stays held for the dead time of the emitter. Only the state on counts: off, unavailable, unknown or a missing entity count as off."
         }
       },
       "valve_curve": {
@@ -99,11 +107,11 @@
     },
     "set_smartpi_learning": {
       "name": "Set SmartPI learning",
-      "description": "Enable or pause SmartPI thermal learning for a thermostat.",
+      "description": "Enable or pause SmartPI thermal learning for a thermostat. The pause is saved; the disturbance and heating unavailable entities pause the learning too, without changing this setting.",
       "fields": {
         "learning_enabled": {
           "name": "Learning enabled",
-          "description": "Whether SmartPI may update its thermal model and dead-time estimates."
+          "description": "Whether SmartPI may learn: thermal model, dead times, emitter lag, response model, T_ar learning and room model. The regulation goes on unchanged while learning is paused."
         }
       }
     },

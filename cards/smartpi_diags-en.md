@@ -64,6 +64,7 @@
 {% set deadtime_cool_reliable = model.get('deadtime_cool_reliable', false) %}
 
 {% set learning_enabled = learning.get('enabled') %}
+{% set block_reason = learning.get('block_reason') %}
 {% set stage = learning.get('stage', 'unknown') %}
 {% set bootstrap_progress = learning.get('bootstrap_progress_percent') %}
 {% set bootstrap_status = learning.get('bootstrap_status') %}
@@ -342,12 +343,12 @@
 ### 🧠 AB Learning
 
 {{ stage_icon }} **{{ stage | upper }}**
-{%- if learning_enabled is sameas false %} · ⏸️ paused{% endif %}
+{%- if block_reason %} · ⏸️ blocked: {{ block_reason }}{% endif %}
 {%- if bootstrap_progress is not none %} · {{ bootstrap_progress }}%{% endif %}
 
 | Parameter | Value |
 |---|---|
-| Learning | {% if learning_enabled is sameas true %}enabled{% elif learning_enabled is sameas false %}paused{% else %}—{% endif %} |
+| Learning | {% if learning_enabled is sameas true %}enabled{% elif learning_enabled is sameas false %}paused{% else %}—{% endif %}{% if block_reason %} · blocked: **{{ block_reason }}**{% endif %} |
 | EMEA Samples A/B | **{{ emea_samples_a }} / {{ emea_samples_b }}** (targets: {{ bootstrap_target_a }}/{{ bootstrap_target_b }} bootstrap, {{ history_target }} history) |
 | Accepted updates A/B | **{{ accepted_updates_a }} / {{ accepted_updates_b }}** |
 | Drift A/B | `{{ a_drift }}` / `{{ b_drift }}` |
@@ -428,7 +429,7 @@
 | Parameter | Value |
 |---|---:|
 | `ep` | {{ ep | round(4) }} |
-| Thermal | {% if learning_enabled is sameas false %}⏸️ learning paused{% else %}{{ '✅ active' if t_freeze == 'none' else '🔒 ' ~ (t_freeze | replace('_', ' ')) }}{% endif %} |
+| Thermal | {% if block_reason %}⏸️ learning blocked ({{ block_reason }}){% else %}{{ '✅ active' if t_freeze == 'none' else '🔒 ' ~ (t_freeze | replace('_', ' ')) }}{% endif %} |
 | Gains | {{ '✅ active' if g_freeze == 'none' else '🔒 ' ~ (g_freeze | replace('_', ' ')) }} |
 | Gains decision | `{{ g_dec_g }}` |
 

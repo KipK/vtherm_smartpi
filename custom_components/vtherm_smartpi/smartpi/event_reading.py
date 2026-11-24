@@ -303,6 +303,11 @@ class EventReader:
         self._interrupted_at = now
         self._record.stop(now)
 
+    def block(self, now: float, reason: str) -> None:
+        """The learning is blocked (smartpi/learning_block.py): the readings in progress end without result; the record
+        goes on."""
+        self._end_in_progress(reason, now)
+
     def restart(self, bridged: bool) -> None:
         """The restart decision: not bridged, the readings in progress end and the record is dropped."""
         if not bridged:

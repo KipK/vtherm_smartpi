@@ -65,6 +65,8 @@
 {% set deadtime_cool_reliable = model.get('deadtime_cool_reliable', false) %}
 
 {% set learning_enabled = learning.get('enabled') %}
+{% set block_reason = learning.get('block_reason') %}
+{% set block_reason_fr = {'paused': 'en pause', 'disturbance': 'perturbation', 'heating unavailable': 'chauffage indisponible'}.get(block_reason, block_reason) %}
 {% set stage = learning.get('stage', 'unknown') %}
 {% set bootstrap_progress = learning.get('bootstrap_progress_percent') %}
 {% set bootstrap_status = learning.get('bootstrap_status') %}
@@ -343,12 +345,12 @@
 ### 🧠 Apprentissage AB
 
 {{ stage_icon }} **{{ stage | upper }}**
-{%- if learning_enabled is sameas false %} · ⏸️ en pause{% endif %}
+{%- if block_reason %} · ⏸️ bloqué : {{ block_reason_fr }}{% endif %}
 {%- if bootstrap_progress is not none %} · {{ bootstrap_progress }}%{% endif %}
 
 | Paramètre | Valeur |
 |---|---|
-| Apprentissage | {% if learning_enabled is sameas true %}activé{% elif learning_enabled is sameas false %}en pause{% else %}—{% endif %} |
+| Apprentissage | {% if learning_enabled is sameas true %}activé{% elif learning_enabled is sameas false %}en pause{% else %}—{% endif %}{% if block_reason %} · bloqué : **{{ block_reason_fr }}**{% endif %} |
 | Échantillons EMEA A/B | **{{ emea_samples_a }} / {{ emea_samples_b }}** (cibles: {{ bootstrap_target_a }}/{{ bootstrap_target_b }} bootstrap, {{ history_target }} historique) |
 | Updates acceptés A/B | **{{ accepted_updates_a }} / {{ accepted_updates_b }}** |
 | Dérive A/B | `{{ a_drift }}` / `{{ b_drift }}` |
@@ -429,7 +431,7 @@
 | Paramètre | Valeur |
 |---|---:|
 | `ep` | {{ ep | round(4) }} |
-| Thermique | {% if learning_enabled is sameas false %}⏸️ apprentissage en pause{% else %}{{ '✅ active' if t_freeze == 'none' else '🔒 ' ~ (t_freeze | replace('_', ' ')) }}{% endif %} |
+| Thermique | {% if block_reason %}⏸️ apprentissage bloqué ({{ block_reason_fr }}){% else %}{{ '✅ active' if t_freeze == 'none' else '🔒 ' ~ (t_freeze | replace('_', ' ')) }}{% endif %} |
 | Gains | {{ '✅ active' if g_freeze == 'none' else '🔒 ' ~ (g_freeze | replace('_', ' ')) }} |
 | Décision gains | `{{ g_dec_g }}` |
 

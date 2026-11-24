@@ -232,8 +232,9 @@ class DeadTimeEstimator:
         self._history_heat = deque(hist_heat, maxlen=6)
         self._history_cool = deque(hist_cool, maxlen=6)
 
-    def reset_observation(self, current_power: float = 0.0) -> None:
-        """Clear transient detection state while preserving learned dead times."""
+    def reset_observation(self, current_power: float = 0.0, keep_history: bool = False) -> None:
+        """Clear transient detection state while preserving learned dead times (and the temperature history with
+        ``keep_history``: the anticipation and the pulses read it)."""
         self.state = "OFF"
         self.last_power = float(current_power)
         self.last_stop_time = None
@@ -245,7 +246,8 @@ class DeadTimeEstimator:
         self._near_extreme_time = None
         self._trend_slope = 0.0
         self._weak_evidence = False
-        self.history.clear()
+        if not keep_history:
+            self.history.clear()
         self._stop_peak = None
         self._stop_peak_confirmed = False
 

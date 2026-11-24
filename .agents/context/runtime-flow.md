@@ -204,8 +204,14 @@ Pipeline inside `calculate`, in execution order:
   `_algo_handler`); all fire `vtherm_smartpi_event` with `entity_id` and a `type`:
   - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, emitter lag learning, room model; a calibration in progress is cancelled), type
     `learning_reset`, forced tick, attributes, state write, `save_now`.
-  - `set_smartpi_learning` (`learning_enabled`: bool, required): `set_learning_enabled` (invalidates in-flight
-    observations), type `learning_enabled_changed`, attributes, diagnostic refresh, `save_now`.
+  - `set_smartpi_learning` (`learning_enabled`: bool, required): `set_learning_enabled` (the pause of
+    `smartpi/learning_block.py`, independent of the two entities), type `learning_enabled_changed`, attributes,
+    diagnostic refresh, `save_now`.
+- Learning-block entities: optional per-thermostat config keys `smart_pi_disturbance_entity`,
+  `smart_pi_heating_unavailable_entity` (entity selectors, `binary_sensor`/`input_boolean`; not in the defaults
+  entry; a cleared field is stored as `None` in options). `init_algorithm` passes the merged entry to
+  `learning_block.configure(hass, entry)`; `SmartPI.calculate` reads the states at its start (no listener).
+  `_process_learning` starts no learning computation while blocked (stores still saved).
   - `force_smartpi_calibration`: `force_calibration` (`LearningStart.request_calibration` -> `Calibration.request`:
     refused in the learning stage, learning paused, thermostat off (`_last_restart_reason == "off"`), < 24 h after the
     last end; ignored while one runs; never raises; answer in `calibration.last_request`), type `force_calibration`, forced tick, `save_now`.

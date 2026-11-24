@@ -208,10 +208,17 @@ def apply_energy_balance(algo, t: float) -> dict:
     return rec
 
 
+def _freeze_ab_learning(algo) -> None:
+    """Keep the seeded a, b and dead times: the a/b learning and the dead-time estimator are not fed (the room model
+    and the T_ar learning go on, which the learning pause would stop)."""
+    algo.update_learning = lambda **_kw: None
+    algo.dt_est.update = lambda **_kw: None
+
+
 def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.0, ta0: float = 19.0,
                 t0: float = T0, b_online_ratio: float = 1.0, on_tick=None, restart_at: float | None = None,
                 history_days: float = 0.0) -> dict:
-    """Closed loop of SmartPI (room model on, learning paused) on the air-wall plant.
+    """Closed loop of SmartPI (room model on, a/b learning frozen) on the air-wall plant.
 
     The online model is seeded with the true a and b = b_online_ratio x b_eq, with reliable
     dead times. on_tick(algo, t) runs before each calculation (60 s ticks), for example to
@@ -274,7 +281,7 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
         algo.dt_est.deadtime_cool_s = 900.0
         algo.dt_est.deadtime_cool_reliable = True
         algo._output_initialized = True
-        algo.set_learning_enabled(False)
+        _freeze_ab_learning(algo)
         last_pub, pub_time = None, None
         for _ in range(int(days * DAY / cycle_s)):
             on_percent = 0.0
@@ -283,6 +290,7 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
                 out["restart"] = {"i": len(out["t"]), "state": saved, "integral": algo.integral}
                 algo = new_algo()
                 algo.load_state(saved)
+                _freeze_ab_learning(algo)
                 algo.room_model.load_state(room_saved)
             for kk in range(int(cycle_s // 60)):
                 t = clock["t"]

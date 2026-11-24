@@ -184,12 +184,18 @@ class LearningStart:
         the bootstrap start, whose kept lag is published only."""
         return self.reading.kept_lag_s(hvac_mode) if self.direct else None
 
+    def _blocked(self) -> bool:
+        """True while the learning is blocked (smartpi/learning_block.py)."""
+        return getattr(getattr(self._owner, "learning_block", None), "blocked", False) is True
+
     def hand_over(self, estimator: Any, hvac_mode: object) -> None:
         """Give the kept values of ``hvac_mode`` to the estimator as starting values, once per mode and blank start: ``a``
         of the two agreeing readings, and ``b`` with the first hand-over. With the bootstrap start they wait for the end
-        of the learning stage. A state saved with kept values and no starting values hands them over at its load."""
+        of the learning stage; they wait too while the learning is blocked. A state saved with kept values and no
+        starting values hands them over at its load, unless it was saved with the learning paused."""
         kept = self.reading.kept_for(hvac_mode)
-        if kept is None or estimator.start.handed_for(kept["mode"]) or (not self.direct and self.learning_stage):
+        if kept is None or estimator.start.handed_for(kept["mode"]) or (not self.direct and self.learning_stage) or (
+                self._blocked()):
             return
         sign = -1.0 if kept["mode"] == MODE_COOL else 1.0
         estimator.give_starting_values(kept["a_per_min"], kept.get("b_per_min"), kept["mode"], sign)
@@ -231,7 +237,8 @@ class LearningStart:
     def advance(self, now: float, target: float, temp: float, hvac_mode: object, previous_command: float) -> None:
         """Advance the calibration and the measurement pulse (command of the pulse before the PI: direct start or
         calibration), then the readings of the events. A calibration whose end has come during its pulse ends at the
-        calculation where the pulse ends. While a calibration is in progress the estimator takes no ``a`` measure."""
+        calculation where the pulse ends. While a calibration is in progress the estimator takes no ``a`` measure. While
+        the learning is blocked no pulse is advanced (none starts)."""
         owner = self._owner
         learning_stage = self.learning_stage
         cal = self.calibration
@@ -239,7 +246,7 @@ class LearningStart:
         if cal.in_progress:
             self._follow_calibration(now, hvac_mode, learning_stage, temp)
         calibrating = cal.in_progress
-        if self.direct or calibrating:
+        if (self.direct or calibrating) and not self._blocked():
             heated = self.pulse.calibration_heated
             self.pulse.update(
                 now, target, temp, hvac_mode,
@@ -276,7 +283,8 @@ class LearningStart:
     def _step_model(self, now: float, hvac_mode: object) -> None:
         """The readings of the response model: what tells whether SmartPI is in control, the published ``b``."""
         owner, est = self._owner, self._owner.est
-        excluded = getattr(owner.restart, "excluded_vt", None) or (
+        block = getattr(owner, "learning_block", None)
+        excluded = getattr(owner.restart, "excluded_vt", None) or getattr(block, "exclusion", None) or (
             "safety mode" if getattr(owner, "vt_safety_override", False) is True else None)
         self.model_reading.note_control(now, excluded, float(est.b) if getattr(est, "usable_b", False) is True else None)
         self.model_reading.step(now, owner.learn_win.events.phase_start)
@@ -287,9 +295,17 @@ class LearningStart:
         return str(getattr(self._owner, "_name", ""))
 
     def cancel_calibration(self) -> None:
-        """Cancel a calibration in progress (learning reset or learning paused)."""
+        """Cancel a calibration in progress (learning reset or learning blocked)."""
         if self.calibration.in_progress:
             self.calibration.finish(RESULT_CANCELLED)
+
+    def block(self, now: float, reason: str) -> None:
+        """The learning becomes blocked (smartpi/learning_block.py): a calibration in progress is cancelled, the pulse in
+        progress ends and the readings in progress end without result."""
+        self.cancel_calibration()
+        self.pulse.interrupt(now, reason)
+        self.reading.block(now, reason)
+        self.model_reading.block(now, reason)
 
     def request_calibration(self, phase: SmartPIPhase, learning_enabled: bool) -> bool:
         """A calibration is requested (smartpi/calibration.py ``Calibration.request``: refused, ignored or started;
@@ -466,7 +482,8 @@ class LearningStart:
         self.reading.load(state.get("event_reading") or state.get("pulse_reading"))
         self.record.load(state.get("measure_events"))
         self._load_model(state)
-        self.hand_over(self._owner.est, self._owner.est.model_hvac_mode)
+        if state.get("learning_enabled", True) is not False:
+            self.hand_over(self._owner.est, self._owner.est.model_hvac_mode)
 
     def _load_model(self, state: dict[str, Any]) -> None:
         """The response model, its readings and record; a state saved without it seeds the model from the dead times

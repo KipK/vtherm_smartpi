@@ -151,6 +151,7 @@ class SmartPIHandler:
             valve_mode=valve_mode_enabled,
         )
         t.prop_algorithm.restart_exclusion_probe = self._restart_exclusion
+        t.prop_algorithm.learning_block.configure(t.hass, entry)  # disturbance and heating-unavailable entities
 
         _LOGGER.info("%s - SmartPI Algorithm initialized", t)
         async_dispatcher_send(t.hass, SIGNAL_SMARTPI_TARGET_UPDATED, t.unique_id)
@@ -280,10 +281,11 @@ class SmartPIHandler:
                 await manager.async_run(self._thermostat.hass)
 
     def _process_learning(self, algo) -> None:
-        """Start the loop that runs the due computations and persist the data of the managers that have a store."""
-        t = self._thermostat
-        jobs = self._learning_jobs(algo)
-        if any(manager.active for manager, _ in jobs) and (self._learning_task is None or self._learning_task.done()):
+        """Start the due computations (none while the learning is blocked); persist the managers that have a store."""
+        t, jobs = self._thermostat, self._learning_jobs(algo)
+        blocked = getattr(getattr(algo, "learning_block", None), "blocked", False) is True
+        may_run = (self._learning_task is None or self._learning_task.done()) and not blocked
+        if may_run and any(manager.active for manager, _ in jobs):
             self._learning_task = t.hass.async_create_background_task(
                 self._run_learning([manager for manager, _ in jobs]), f"{DOMAIN}_learning"
             )
@@ -681,9 +683,7 @@ class SmartPIHandler:
         diagnostic_entity_id = self._resolve_diagnostic_entity_id()
         specific_states["regulation_diagnostics"] = diagnostic_entity_id
         algo = t.prop_algorithm if isinstance(t.prop_algorithm, SmartPI) else None
-        specific_states["smartpi_learning_enabled"] = (
-            algo.learning_enabled if algo is not None else True
-        )
+        specific_states["smartpi_learning_enabled"] = algo.learning_enabled if algo is not None else True
 
     def _resolve_diagnostic_entity_id(self) -> str | None:
         """Resolve the SmartPI diagnostic sensor entity id from the registry."""

@@ -188,3 +188,23 @@ def test_published_values_during_a_guard_cut_follow_the_room_in_plain_words() ->
     live = algo.get_published_diagnostics()
     assert live["control"]["mode"] == "smartpi" and live["temperature"]["error"] == 0.4
     assert live["analysis"]["control"]["anticipation_c"] == -0.5
+
+
+def test_published_learning_block_values_are_plain_words() -> None:
+    """learning.block_reason: null, "paused", "disturbance" or "heating unavailable"; the integral hold sources of
+    the heating unavailable entity are "heating_unavailable" and "heating_unavailable_resume"."""
+    from custom_components.vtherm_smartpi.smartpi.learning_block import (
+        BLOCK_DISTURBANCE,
+        BLOCK_HEATING_UNAVAILABLE,
+        BLOCK_PAUSED,
+        INTEGRAL_HOLD_SOURCE_HEATING_UNAVAILABLE,
+    )
+    from custom_components.vtherm_smartpi.smartpi.resume_hold import ResumeHoldSource
+
+    algo = _representative_smartpi()
+    assert algo.get_published_diagnostics()["learning"]["block_reason"] is None
+    algo.set_learning_enabled(False)
+    assert algo.get_published_diagnostics()["learning"]["block_reason"] == BLOCK_PAUSED == "paused"
+    assert (BLOCK_DISTURBANCE, BLOCK_HEATING_UNAVAILABLE) == ("disturbance", "heating unavailable")
+    assert INTEGRAL_HOLD_SOURCE_HEATING_UNAVAILABLE == "heating_unavailable"
+    assert ResumeHoldSource.HEATING_UNAVAILABLE_RESUME.value == "heating_unavailable_resume"

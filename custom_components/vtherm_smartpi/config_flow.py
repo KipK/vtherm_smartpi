@@ -28,6 +28,7 @@ from .const import (
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
+    LEARNING_BLOCK_ENTITY_KEYS,
     LEARNING_STARTS,
 )
 
@@ -40,14 +41,17 @@ THERMOSTAT_TYPE_CLIMATE = "thermostat_over_climate"
 AUTO_REGULATION_VALVE = "auto_regulation_valve"
 CONF_THERMOSTAT_TYPE_KEY = "thermostat_type"
 CONF_AUTO_REGULATION_MODE_KEY = "auto_regulation_mode"
+# Domains of the entities that block the learning (disturbance, heating unavailable)
+LEARNING_BLOCK_ENTITY_DOMAINS = ["binary_sensor", "input_boolean"]
 
 
 def build_main_options_schema(
     defaults: dict[str, Any],
     *,
     include_valve_linearization: bool,
+    include_learning_block_entities: bool = False,
 ) -> vol.Schema:
-    """Build the SmartPI main options schema."""
+    """Build the SmartPI main options schema; the entities that block the learning belong to a thermostat entry."""
     schema = {
         vol.Optional(
             CONF_MINIMAL_ACTIVATION_DELAY,
@@ -136,6 +140,13 @@ def build_main_options_schema(
                 default=defaults[CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION],
             )
         ] = bool
+    if include_learning_block_entities:
+        for key in LEARNING_BLOCK_ENTITY_KEYS:
+            schema[
+                vol.Optional(key, description={"suggested_value": defaults.get(key)})
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=LEARNING_BLOCK_ENTITY_DOMAINS)
+            )
     return vol.Schema(schema)
 
 
@@ -216,6 +227,7 @@ def build_user_settings_schema(
         build_main_options_schema(
             defaults,
             include_valve_linearization=is_valve,
+            include_learning_block_entities=True,
         ).schema
     )
     return vol.Schema(schema)
@@ -449,10 +461,15 @@ class SmartPIOptionsFlow(OptionsFlow):
         defaults = dict(DEFAULT_OPTIONS)
         defaults.update(self._config_entry.options or self._config_entry.data)
         is_valve_target = self._is_valve_target_entry()
+        is_thermostat_entry = self._config_entry.data.get(CONF_TARGET_VTHERM) is not None
 
         if user_input is not None:
             data = dict(defaults)
             data.update(user_input)
+            if is_thermostat_entry:
+                # A cleared entity field is absent from the input: store it as unset.
+                for key in LEARNING_BLOCK_ENTITY_KEYS:
+                    data[key] = user_input.get(key)
             self._pending_options_data = data
             if (
                 is_valve_target
@@ -469,6 +486,7 @@ class SmartPIOptionsFlow(OptionsFlow):
             data_schema=build_main_options_schema(
                 defaults,
                 include_valve_linearization=is_valve_target,
+                include_learning_block_entities=is_thermostat_entry,
             ),
         )
 

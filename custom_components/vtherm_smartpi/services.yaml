@@ -16,7 +16,7 @@ set_smartpi_learning:
   fields:
     learning_enabled:
       name: Learning enabled
-      description: Whether SmartPI may update its thermal model and dead-time estimates.
+      description: "Whether SmartPI may learn: thermal model, dead times, emitter lag, response model, T_ar learning and room model. The regulation goes on unchanged while learning is paused."
       required: true
       selector:
         boolean:

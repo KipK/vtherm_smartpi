@@ -1,4 +1,4 @@
-"""Integral hold after a window or power-shedding resume."""
+"""Integral hold after a window, power-shedding or heating-unavailable resume."""
 from __future__ import annotations
 
 from enum import Enum
@@ -27,10 +27,11 @@ class ResumeHoldSource(str, Enum):
     NONE = "none"
     WINDOW_RESUME = "window_resume"
     POWER_SHEDDING_RESUME = "power_shedding_resume"
+    HEATING_UNAVAILABLE_RESUME = "heating_unavailable_resume"
 
 
 class ResumeDeadtimeHold:
-    """Temporary I:HOLD after a window or power-shedding resume.
+    """Temporary I:HOLD after a window, power-shedding or heating-unavailable resume.
 
     The hold covers the active dead time of the resumed episode, so that the
     integral does not accumulate the error while the emitter has not answered
@@ -86,7 +87,7 @@ class ResumeDeadtimeHold:
         ctl: SmartPIController,
         in_deadtime_window: Callable[[], bool],
     ) -> None:
-        """Manage the temporary I:HOLD window after a window/shedding resume."""
+        """Manage the temporary I:HOLD window after a resume."""
         source = self.source
         if source == ResumeHoldSource.NONE:
             return

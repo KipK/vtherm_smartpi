@@ -95,7 +95,15 @@ are then the setpoint minus the temperature of the last calculation,
 indoor temperature.
 
 `temperature.integral_hold_source` is `calibration_recovery` while the integral
-is held after a calibration pulse, until the room reaches the setpoint.
+is held after a calibration pulse, until the room reaches the setpoint. It is
+`heating_unavailable` while the heating unavailable entity is on, then
+`heating_unavailable_resume` while the integral stays held for the dead time of
+the emitter after it turns off.
+
+`learning.enabled` is the setting of the `set_smartpi_learning` service.
+`learning.block_reason` is `null` while SmartPI learns, else why every learning is
+paused: `heating unavailable` (heating unavailable entity on), `disturbance`
+(disturbance entity on) or `paused` (service), in that order when several apply.
 
 `control.last_restart` describes the last restart of Home Assistant or of the
 integration. It is `null` before the first regulation tick after the restart,
@@ -132,8 +140,8 @@ last one until the next request.
 |---|---|
 | `state` | `idle` (no calibration in progress), `waiting` (between pulses, the regulation runs), or the step of its pulse in progress: `rest`, `full power`, `stop` |
 | `pulses_done` | Pulses started by the calibration (three at most; an interrupted pulse counts) |
-| `result` | `null` before any calibration, `in progress`, `readings agree` (two pulses agree), `pulses done` (three pulses read without agreement), `time limit` (48 hours) or `cancelled` (change between heating and cooling, return of the learning stage, learning reset, learning paused) |
-| `last_request` | Answer to the last request, `null` before any: `started`, `refused: learning stage`, `refused: learning paused`, `refused: thermostat off`, `refused: too soon` (less than 24 hours after the end of the last calibration), `ignored: in progress` |
+| `result` | `null` before any calibration, `in progress`, `readings agree` (two pulses agree), `pulses done` (three pulses read without agreement), `time limit` (48 hours) or `cancelled` (change between heating and cooling, return of the learning stage, learning reset, learning paused by the service or an entity) |
+| `last_request` | Answer to the last request, `null` before any: `started`, `refused: learning stage`, `refused: learning paused` (by the service or an entity), `refused: thermostat off`, `refused: too soon` (less than 24 hours after the end of the last calibration), `ignored: in progress` |
 | `last_time` | Local time at which the last calibration that was not cancelled ended (ISO 8601), `null` before |
 | `deadtime_start_s` | Last dead time after a start measured during a pulse of the calibration, in seconds, `null` when none |
 | `deadtime_stop_s` | Last dead time after a stop measured during a pulse of the calibration, in seconds, `null` when none |

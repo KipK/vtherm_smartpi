@@ -90,6 +90,7 @@ from .smartpi.governance import SmartPIGovernance
 from .smartpi.setpoint import SmartPISetpointManager
 from .smartpi.guards import GUARD_CUT_I_MODE, SmartPIGuards
 from .smartpi.controller import SmartPIController
+from .smartpi.learning_block import INTEGRAL_HOLD_SOURCE_HEATING_UNAVAILABLE, LearningBlock
 from .smartpi.learning_window import LearningWindowManager
 from .smartpi.deadband import DeadbandManager
 from .smartpi.gains import GainScheduler
@@ -255,7 +256,7 @@ class SmartPI:
         self._last_hvac_mode: VThermHvacMode | None = None
 
         # Learning start timestamp
-        self._learning_enabled: bool = True
+        self.learning_block = LearningBlock(self)  # pause, disturbance, heating unavailable
         self._learning_start_date: Optional[datetime] = datetime.now()
         self._session_learn_ok_count_base: int = 0
         self._session_learn_skip_count_base: int = 0
@@ -441,7 +442,7 @@ class SmartPI:
 
     def force_calibration(self) -> bool:
         """Request a calibration (measurement pulses, smartpi/calibration.py); False when it does not start."""
-        return self._start.request_calibration(self.phase, self._learning_enabled)
+        return self._start.request_calibration(self.phase, not self.learning_block.blocked)
 
     # ------------------------------
     # Learning entry point
@@ -465,27 +466,12 @@ class SmartPI:
 
     @property
     def learning_enabled(self) -> bool:
-        """Return whether thermal model learning is enabled."""
-        return self._learning_enabled
+        """Return whether thermal model learning is enabled (not paused by the service)."""
+        return not self.learning_block.paused
 
     def set_learning_enabled(self, enabled: bool) -> None:
-        """Enable or pause learning and invalidate in-flight observations."""
-        enabled = bool(enabled)
-        if enabled == self._learning_enabled:
-            return
-
-        self._learning_enabled = enabled
-        if not enabled:
-            self._start.cancel_calibration()  # pulses would run without measuring
-        self._reset_learning_window()
-        self.dt_est.reset_observation(self._committed_on_percent)
-        self._t_heat_episode_start = None
-        self._t_cool_episode_start = None
-        _LOGGER.info(
-            "%s - SmartPI learning %s",
-            self._name,
-            "enabled" if enabled else "paused",
-        )
+        """Enable or pause learning (smartpi/learning_block.py: the block and its effects)."""
+        self.learning_block.set_paused(not enabled)
 
     def update_learning(
         self,
@@ -518,7 +504,7 @@ class SmartPI:
         """
         now = time.monotonic()
 
-        if not self._learning_enabled:
+        if self.learning_block.records_only(now, dt_min, u_active, ext_temp):
             return
 
         if a_learning_block_reason is None and setpoint_changed:
@@ -1042,8 +1028,7 @@ class SmartPI:
         """
         if self.tar_learning is None or self.restart.pending:
             return
-        if excluded is None and self.vt_safety_override:
-            excluded = "safety mode"
+        excluded = self.learning_block.exclusion_for(excluded, self.vt_safety_override)
         try:
             self.tar_learning.observe(
                 time.time(),
@@ -1078,8 +1063,7 @@ class SmartPI:
         """
         if self.room_model is None or self.restart.pending:
             return
-        if excluded is None and self.vt_safety_override:
-            excluded = "safety mode"
+        excluded = self.learning_block.exclusion_for(excluded, self.vt_safety_override)
         try:
             self.room_model.observe(
                 time.time(),
@@ -1137,7 +1121,7 @@ class SmartPI:
         """Save algorithm state for persistence."""
         state = {
             "version": 2,
-            "learning_enabled": self._learning_enabled,
+            "learning_enabled": self.learning_enabled,
             "last_active_wall_ts": self._last_active_wall_ts,
             "cycles_since_reset": min(self._cycles_since_reset, self.ff_warmup_cycles),
             "est_state": self.est.save_state(),
@@ -1879,6 +1863,7 @@ class SmartPI:
         now = time.monotonic()
         self._ext_control = self._ext_control if ext_current_temp is None else ext_current_temp
         self._start.begin(hvac_mode)
+        self.learning_block.read(now)
 
         # --- 0. HVAC mode transition (HEAT↔COOL) → reset integral ---
         # Track active modes BEFORE validation so that missing presets in COOL
@@ -1940,13 +1925,7 @@ class SmartPI:
             if current_temp is not None:
                 t_int_lp, t_int_clean = self.tint_filter.update(current_temp, now)
                 if not self.command_is_on_off:
-                    self.dt_est.update(
-                        now=now,
-                        tin=t_int_lp,
-                        tin_raw=current_temp,
-                        u_applied=self._committed_on_percent,
-                        hvac_mode=hvac_mode,
-                    )
+                    self.learning_block.feed_deadtime(now, t_int_lp, current_temp, self._committed_on_percent, hvac_mode)
                 self._last_current_temp = current_temp
                 self._update_learning_during_guard_cut(
                     now=now,
@@ -2011,14 +1990,8 @@ class SmartPI:
             self.resume_hold.start(resume_hold_source)
 
         # --- 4. Learning ---
-        if self._learning_enabled and not self.command_is_on_off:
-            self.dt_est.update(
-                now=now,
-                tin=t_int_lp,
-                tin_raw=current_temp,
-                u_applied=self._committed_on_percent,
-                hvac_mode=hvac_mode,
-            )
+        if not self.command_is_on_off:  # the temperature history is fed whether the learning is blocked or not
+            self.learning_block.feed_deadtime(now, t_int_lp, current_temp, self._committed_on_percent, hvac_mode)
 
         # Heartbeat learning update
         learning_dt_min = dt_min
@@ -2056,14 +2029,7 @@ class SmartPI:
             # so commit the bang-bang output now for deadtime tracking.
             self._commit_current_linear_output()
             self._update_deadtime_episode_status(self._committed_on_percent, hvac_mode, now)
-            if self._learning_enabled:
-                self.dt_est.update(
-                    now=now,
-                    tin=t_int_lp,
-                    tin_raw=current_temp,
-                    u_applied=self._committed_on_percent,
-                    hvac_mode=hvac_mode,
-                )
+            self.learning_block.feed_deadtime(now, t_int_lp, current_temp, self._committed_on_percent, hvac_mode)
 
             self._last_current_temp = current_temp
             self._last_ext_temp = ext_current_temp
@@ -2125,6 +2091,8 @@ class SmartPI:
             integrator_hold, integrator_hold_source = True, "governance_sensor_invalid"
         elif not integrator_hold and self._start.recovering:  # back to the setpoint after a calibration pulse
             integrator_hold, integrator_hold_source = True, "calibration_recovery"
+        if self.learning_block.heating_unavailable:  # the emitter does not produce: the error is not the PI's
+            integrator_hold, integrator_hold_source = True, INTEGRAL_HOLD_SOURCE_HEATING_UNAVAILABLE
         if self.vt_safety_override:  # the PI does not drive the actuator
             integrator_hold, integrator_hold_source = True, "vt_safety"
 

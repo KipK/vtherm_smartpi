@@ -23,6 +23,10 @@ CONF_SMART_PI_KNEE_DEMAND = "smart_pi_knee_demand"
 CONF_SMART_PI_KNEE_VALVE = "smart_pi_knee_valve"
 CONF_SMART_PI_MAX_VALVE = "smart_pi_max_valve"
 CONF_SMART_PI_LEARNING_START = "smart_pi_learning_start"
+# Optional per-thermostat entities (binary_sensor or input_boolean) that block the learning (smartpi/learning_block.py)
+CONF_SMART_PI_DISTURBANCE_ENTITY = "smart_pi_disturbance_entity"
+CONF_SMART_PI_HEATING_UNAVAILABLE_ENTITY = "smart_pi_heating_unavailable_entity"
+LEARNING_BLOCK_ENTITY_KEYS = (CONF_SMART_PI_DISTURBANCE_ENTITY, CONF_SMART_PI_HEATING_UNAVAILABLE_ENTITY)
 
 DEFAULT_MINIMAL_ACTIVATION_DELAY = 0
 DEFAULT_MINIMAL_DEACTIVATION_DELAY = 0

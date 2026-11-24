@@ -105,7 +105,7 @@ To add SmartPI to an additional thermostat, open the SmartPI integration configu
 
 ![SmartPI — per-thermostat configuration](../../assets/screens/config_smartpi.png)
 
-The parameters available are the same as for global defaults. Any parameter set here overrides the corresponding global default for the selected thermostat only.
+The parameters available are the same as for global defaults, plus two optional entities of that thermostat that pause the learning (see [Pausing the learning](#pausing-the-learning)). Any parameter set here overrides the corresponding global default for the selected thermostat only.
 
 A disabled SmartPI entry is ignored. A thermostat whose dedicated entry is disabled uses the enabled defaults entry, or the built-in defaults when there is none, and the thermostats depending on an entry are reloaded when it is disabled or removed. If the defaults entry has been deleted, it is recreated when you add the SmartPI integration again.
 
@@ -565,6 +565,8 @@ These values come from simulations of each installation type. A cycle within one
 | **Demand at knee**             | SmartPI demand corresponding to the valve slope change.                                           | `80%`         |
 | **Valve opening at knee**      | Physical valve opening at the slope change.                                                       | `15%`         |
 | **Maximum valve opening**      | Maximum allowed opening when linearization is enabled.                                            | `100%`        |
+| **Disturbance entity**         | Per-thermostat only. A `binary_sensor` or `input_boolean` that is on while an unmeasured gain or loss disturbs the room: the learning pauses. See [Pausing the learning](#pausing-the-learning). | none |
+| **Heating unavailable entity** | Per-thermostat only. A `binary_sensor` or `input_boolean` that is on while the emitter cannot produce: the learning pauses and the integral is held. See [Pausing the learning](#pausing-the-learning). | none |
 
 ### Start of the learning
 
@@ -580,6 +582,23 @@ The option applies to a new thermostat and after `reset_smartpi_learning`. A the
 When this option is disabled, a deadband or near-band transition updates the next SmartPI command but does not interrupt the PWM cycle already in progress. This is the recommended behavior for short cycles, because restarting cycles too often can create unnecessary switching.
 
 Enable it only on very slow thermal systems with long PWM cycles, where waiting for the next cycle boundary can delay the physical response too much after entering or leaving deadband or near-band.
+
+### Pausing the learning
+
+Three causes pause every SmartPI learning, each on its own: the [`set_smartpi_learning`](#set_smartpi_learning) service, the disturbance entity and the heating unavailable entity. While one of them applies:
+
+- the regulation goes on with the model already learned and its command is unchanged (the heating unavailable entity only holds the integral, see below);
+- SmartPI learns nothing: no `a`/`b` window, no dead time, no emitter lag, no heating balance, no measurement reading for the start values or the response model, and the emitter lag learning and the room model record the period as excluded. Their computations wait for the end of the pause;
+- the room temperature is still recorded, so the anticipation keeps working;
+- no measurement pulse of the direct start runs, and a pulse in progress ends;
+- a calibration request is refused, and a calibration in progress is cancelled.
+
+Nothing learned is erased. When the pause ends, the measurements start again from fresh observations, with their usual waiting rules.
+
+The two entities are optional and set per thermostat in the SmartPI configuration. Each accepts a `binary_sensor` (a template binary sensor, for example) or an `input_boolean` (a toggle helper driven by automations). SmartPI reads their state at every regulation cycle, from the first cycle after a restart. Only the state `on` counts: `off`, `unavailable`, `unknown` and an entity that does not exist count as off. The entities never change the setting of the service.
+
+- **Disturbance entity**: on while an unmeasured heat gain or loss disturbs the room, for example guests, a fireplace, strong sun or an auxiliary heater. The integral stays free, since it is what compensates the disturbance.
+- **Heating unavailable entity**: on while the emitter driven by the thermostat cannot produce, for example a boiler off, hot-water priority, heat-pump defrost, a tariff cut-off or a stopped circulator, in heating and in cooling. The integral is held as long as it is on (`I:HOLD`, source `heating_unavailable`), so that the error of this period does not wind it up and the restart does not overshoot. Turn it off when the emitter produces again: the integral then stays held for the dead time of the emitter (source `heating_unavailable_resume`), and the learning resumes at once, without the 20-minute wait that follows a window.
 
 ## Diagnostics and Markdown card
 
@@ -651,11 +670,11 @@ Each service uses the standard Home Assistant `target:` and accepts Versatile Th
 
 ### `set_smartpi_learning`
 
-Use this service to pause or resume thermal learning for one SmartPI thermostat. Set the required `learning_enabled` field to `false` to pause learning or `true` to resume it.
+Use this service to pause or resume the learning of one SmartPI thermostat. Set the required `learning_enabled` field to `false` to pause learning or `true` to resume it.
 
-While learning is paused, regulation continues with the model already learned, but SmartPI does not collect A/B or dead-time observations. Pausing does not erase the learned parameters or dead-time history. SmartPI starts fresh observation windows when the setting changes, and the setting is preserved across Home Assistant restarts.
+While learning is paused, every learning stops and the regulation goes on unchanged (see [Pausing the learning](#pausing-the-learning)). Pausing does not erase the learned parameters. The setting is preserved across Home Assistant restarts and is independent of the disturbance and heating unavailable entities.
 
-The current setting is available as `specific_states.smartpi_learning_enabled` on the climate entity and as `live.learning.enabled` in the diagnostic sensor attributes.
+The current setting is available as `specific_states.smartpi_learning_enabled` on the climate entity and as `live.learning.enabled` in the diagnostic sensor attributes. `live.learning.block_reason` tells why the learning is paused, whatever the cause.
 
 ### `reset_smartpi_learning`
 

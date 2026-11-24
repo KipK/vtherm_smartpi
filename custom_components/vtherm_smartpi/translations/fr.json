@@ -20,10 +20,14 @@
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
           "smart_pi_learning_start": "Démarrage de l'apprentissage",
           "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
-          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne",
+          "smart_pi_disturbance_entity": "Entité de perturbation (facultative)",
+          "smart_pi_heating_unavailable_entity": "Entité de chauffage indisponible (facultative)"
         },
         "data_description": {
-          "smart_pi_learning_start": "L'amorçage fait des cycles de chauffe à pleine puissance jusqu'à ce que le modèle soit appris, puis régule. Le démarrage direct régule dès la première minute et mesure la pièce avec au plus trois impulsions légères près de la consigne ; il demande des changements de consigne programmés chaque jour pour continuer à apprendre et convient surtout à une sonde précise au 0,01 °C. Le choix s'applique quand l'apprentissage repart d'un état vierge (nouveau thermostat ou réinitialisation de l'apprentissage) ; un thermostat qui a déjà appris garde son modèle."
+          "smart_pi_learning_start": "L'amorçage fait des cycles de chauffe à pleine puissance jusqu'à ce que le modèle soit appris, puis régule. Le démarrage direct régule dès la première minute et mesure la pièce avec au plus trois impulsions légères près de la consigne ; il demande des changements de consigne programmés chaque jour pour continuer à apprendre et convient surtout à une sonde précise au 0,01 °C. Le choix s'applique quand l'apprentissage repart d'un état vierge (nouveau thermostat ou réinitialisation de l'apprentissage) ; un thermostat qui a déjà appris garde son modèle.",
+          "smart_pi_disturbance_entity": "Un capteur binaire ou une entrée booléenne (interrupteur d'aide) à l'état on pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce (invités, cheminée, soleil, chauffage d'appoint). Tant qu'elle est à on, tout apprentissage SmartPI est suspendu et la régulation continue sans changement. Seul l'état on compte : off, indisponible (unavailable), inconnu (unknown) ou une entité absente comptent comme off.",
+          "smart_pi_heating_unavailable_entity": "Un capteur binaire ou une entrée booléenne (interrupteur d'aide) à l'état on pendant que l'émetteur piloté par ce thermostat ne peut pas produire (chaudière arrêtée, priorité eau chaude, dégivrage de pompe à chaleur, délestage tarifaire, circulateur arrêté), en chauffage comme en climatisation. Tant qu'elle est à on, tout apprentissage SmartPI est suspendu et l'intégrale est maintenue ; la commande envoyée ne change pas. Repassez-la à off quand l'émetteur produit de nouveau : l'intégrale reste maintenue pendant le temps mort de l'émetteur. Seul l'état on compte : off, indisponible (unavailable), inconnu (unknown) ou une entité absente comptent comme off."
         }
       },
       "thermostat_valve_curve": {
@@ -61,10 +65,14 @@
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
           "smart_pi_learning_start": "Démarrage de l'apprentissage",
           "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
-          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne",
+          "smart_pi_disturbance_entity": "Entité de perturbation (facultative)",
+          "smart_pi_heating_unavailable_entity": "Entité de chauffage indisponible (facultative)"
         },
         "data_description": {
-          "smart_pi_learning_start": "L'amorçage fait des cycles de chauffe à pleine puissance jusqu'à ce que le modèle soit appris, puis régule. Le démarrage direct régule dès la première minute et mesure la pièce avec au plus trois impulsions légères près de la consigne ; il demande des changements de consigne programmés chaque jour pour continuer à apprendre et convient surtout à une sonde précise au 0,01 °C. Le choix s'applique quand l'apprentissage repart d'un état vierge (nouveau thermostat ou réinitialisation de l'apprentissage) ; un thermostat qui a déjà appris garde son modèle."
+          "smart_pi_learning_start": "L'amorçage fait des cycles de chauffe à pleine puissance jusqu'à ce que le modèle soit appris, puis régule. Le démarrage direct régule dès la première minute et mesure la pièce avec au plus trois impulsions légères près de la consigne ; il demande des changements de consigne programmés chaque jour pour continuer à apprendre et convient surtout à une sonde précise au 0,01 °C. Le choix s'applique quand l'apprentissage repart d'un état vierge (nouveau thermostat ou réinitialisation de l'apprentissage) ; un thermostat qui a déjà appris garde son modèle.",
+          "smart_pi_disturbance_entity": "Un capteur binaire ou une entrée booléenne (interrupteur d'aide) à l'état on pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce (invités, cheminée, soleil, chauffage d'appoint). Tant qu'elle est à on, tout apprentissage SmartPI est suspendu et la régulation continue sans changement. Seul l'état on compte : off, indisponible (unavailable), inconnu (unknown) ou une entité absente comptent comme off.",
+          "smart_pi_heating_unavailable_entity": "Un capteur binaire ou une entrée booléenne (interrupteur d'aide) à l'état on pendant que l'émetteur piloté par ce thermostat ne peut pas produire (chaudière arrêtée, priorité eau chaude, dégivrage de pompe à chaleur, délestage tarifaire, circulateur arrêté), en chauffage comme en climatisation. Tant qu'elle est à on, tout apprentissage SmartPI est suspendu et l'intégrale est maintenue ; la commande envoyée ne change pas. Repassez-la à off quand l'émetteur produit de nouveau : l'intégrale reste maintenue pendant le temps mort de l'émetteur. Seul l'état on compte : off, indisponible (unavailable), inconnu (unknown) ou une entité absente comptent comme off."
         }
       },
       "valve_curve": {
@@ -99,11 +107,11 @@
     },
     "set_smartpi_learning": {
       "name": "Définir l'apprentissage SmartPI",
-      "description": "Active ou met en pause l'apprentissage thermique SmartPI pour un thermostat.",
+      "description": "Active ou met en pause l'apprentissage thermique SmartPI pour un thermostat. La pause est enregistrée ; les entités de perturbation et de chauffage indisponible suspendent aussi l'apprentissage, sans modifier ce réglage.",
       "fields": {
         "learning_enabled": {
           "name": "Apprentissage activé",
-          "description": "Indique si SmartPI peut mettre à jour son modèle thermique et ses estimations de temps mort."
+          "description": "Indique si SmartPI peut apprendre : modèle thermique, temps morts, retard de l'émetteur, modèle de réponse, apprentissage T_ar et modèle de pièce. La régulation continue sans changement pendant la pause."
         }
       }
     },
