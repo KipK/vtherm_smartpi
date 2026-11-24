@@ -267,10 +267,10 @@ class SmartPIHandler:
         return SmartPIHandler._tar_exclusion(t, algo)
 
     def _learning_jobs(self, algo) -> list:
-        """The (manager, store) pairs whose computations run in the executor: T_ar, room model, fit of the readings."""
-        reading = getattr(getattr(algo, "_start", None), "reading", None)
+        """The (manager, store) pairs whose computations run in the executor: T_ar, room model, fits of the readings."""
+        start = getattr(algo, "_start", None)
         pairs = ((getattr(algo, "tar_learning", None), self._tar_store), (getattr(algo, "room_model", None), self._room_store),
-                 (reading, None))
+                 (getattr(start, "reading", None), None), (getattr(start, "model_reading", None), None))
         return [(manager, store) for manager, store in pairs if manager is not None]
 
     async def _run_learning(self, managers) -> None:

@@ -155,6 +155,7 @@ def _build_model(algo: SmartPI, tau_info: TauReliability) -> Dict[str, Any]:
         "deadtime_cool_reliable": dt_est.deadtime_cool_reliable,
         "a_stability_ratio": _round_optional(est.diag_a_mad_over_med, 3),
         "b_stability_ratio": _round_optional(est.diag_b_mad_over_med, 3),
+        **algo._start.model.public_model(est.model_hvac_mode),
     }
 
 
@@ -333,6 +334,7 @@ def _build_analysis_control(algo: SmartPI) -> Dict[str, Any]:
         "near_band_above_deg": deadband_mgr.near_band_above_deg,
         "near_band_source": deadband_mgr.near_band_source,
         "temperature_slope_h": _round_optional(algo.temperature_slope_h, 6),
+        "effective_dead_time_s": algo._start.model.public_effective_dead_time_s(algo.est.model_hvac_mode),
     }
 
 
@@ -365,6 +367,7 @@ def _build_analysis_learning(algo: SmartPI) -> Dict[str, Any]:
         },
         "response_lag": _response_lag_diag(learn_win.response_lag),
         "heating_balance": _heating_balance_diag(learn_win.heating_balance),
+        "response_model": algo._start.model.public_learning(algo.est.model_hvac_mode),
     }
 
 

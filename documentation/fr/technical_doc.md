@@ -510,6 +510,90 @@ L'enregistrement, les lectures en cours, les valeurs retenues et les impulsions 
 (un ajustement en cours est remis en file) ; sinon les lectures en cours se terminent et l'enregistrement
 est abandonné.
 
+#### Modèle de réponse (publié seulement)
+
+`response_model.py` tient, par mode, un modèle dynamique de la réponse de la pièce à la
+puissance : un temps mort pur $\theta$ (sonde, transport, actionneur) suivi d'une
+constante de temps de réponse $\tau_e$ du premier ordre (l'émetteur, l'air et la masse
+proche ensemble). Rien dans la régulation ne
+le lit ; il est publié à côté des temps morts et des retards ci-dessus.
+
+Un second lecteur (`ModelReader`, `event_reading.py`) lit les événements de mesure avec
+les mêmes fenêtres que le lecteur ci-dessus (avance de 1800 s, première fin à la clôture
+de l'événement, prolongée à six retards de la dernière estimation, 8 ajustements, 24 h),
+sur un enregistrement propre qui tourne à chaque étape et avec son propre travail
+d'arrière-plan. Il lit les événements des impulsions, du bootstrap et des calibrations
+quelles que soient les valeurs retenues, et les événements de régulation qui suivent un
+repos de 1800 s, une chauffe d'au moins 600 s en équivalent pleine puissance, une hausse
+d'au moins 0.3 °C jusqu'à leur pic, alors que SmartPI pilote l'actionneur sur toute la
+fenêtre (ni arrêt, ni exclusion vue par le thermostat : fenêtre, délestage, mode sécurité,
+commande remplacée) et seulement avec une position home connue. La fenêtre d'un événement
+de régulation se termine six retards d'émetteur après le début de sa chauffe (le retard
+publié ; sans modèle publié, le retard de sa dernière estimation, une fenêtre plus longue
+étant ajustée de nouveau plus courte), quelle que soit la clôture de la phase régulée.
+
+Avec une position home connue, la fenêtre d'un événement dont la chauffe démarre dans
+l'obscurité (`quiet_periods/solar.py`) se termine au lever du soleil suivant. Un événement
+est de jour lorsque sa chauffe ne démarre pas dans l'obscurité, ou lorsque l'obscurité
+qui suit le début de la chauffe dure moins de trois retards d'émetteur (le retard publié,
+sinon celui de son estimation). Un événement de jour, de
+toute source, est ajusté et montré avec `daytime` ; il n'est donné au modèle que lorsque
+le mode n'a encore aucun événement, et le premier événement dans l'obscurité le remplace
+alors. Sans position home aucun événement n'est de jour (et aucun événement de régulation
+n'est lu).
+
+L'ajustement (`event_fit.fit_response`) explique la pièce avec la chaîne du lecteur
+ci-dessus, avec des résidus seulement aux franchissements de niveau de la pièce : un
+changement d'un pas de sonde (au plus 1.5 pas) est pris au milieu des deux niveaux, un
+changement plus grand à sa nouvelle valeur, et le modèle est interpolé à ces instants.
+Une grille de profils de $\theta$ (0 à 1200 s par pas de 60 s, puis 1500 à 5400 s par pas
+de 300 s) et de $\tau_e$ (24 valeurs sur échelle logarithmique, de 60 s à 4 h) cherche $b$
+par une recherche scalaire bornée pour chaque cellule ($a$ et la température de départ par
+moindres carrés), puis Nelder-Mead affine la meilleure cellule dans les bornes de la
+grille. Les résidus de franchissements successifs sont corrélés sur environ
+$S = \theta + \tau_e$ : le nombre de résidus indépendants est pris égal à
+$n = \max(W/S, 1)$, $W$ étant la fenêtre après le début de la chauffe. Les cellules dont
+le coût est au plus le minimum multiplié par $1 + 3.84 / n$ donnent les plages de $\theta$
+et de $S$ ; l'ajustement distingue $\theta$ lorsque la plage de $\theta$ est au plus
+$\max(300\,s, 0.5\,S)$. Un ajustement est rejeté avec moins de 8 franchissements, une
+hausse de moins de 3 pas de sonde, aucune chauffe vue ($a = 0$), $\theta$ ou $\tau_e$ sur
+sa borne haute (5400 s, 4 h), ou une racine de la moyenne des carrés des résidus de plus de
+2 pas de sonde (0.01 °C au moins) : `fit too far from the room temperature`. Un ajustement
+dont $\tau_e$ est sur sa borne basse (60 s, un émetteur rapide dont la vraie valeur peut
+être plus courte) est accepté à 60 s et montré comme `accepted, response time constant at
+its lower limit`.
+
+Par mode, les 7 derniers événements acceptés sont conservés. $S$ est leur médiane, $\theta$
+la médiane des événements qui le distinguent (au plus $S$), sinon $S/2$ (le milieu de
+$[0, S]$ : temps mort effectif $3S/4$) ; $\tau_e = S - \theta$. Un événement publie le modèle en `provisional`, deux événements dont les $S$
+concordent à 20 % près le rendent `measured`, et aucun événement qui distingue $\theta$
+le rend `dead time assumed`. Les événements d'une calibration rejoignent l'historique ;
+lorsque deux d'entre eux concordent sur $S$ et que leur moyenne s'écarte de plus de 30 %
+du $S$ de l'historique, ces deux-là le remplacent. Grandeurs dérivées : temps mort
+effectif $\theta + \tau_e/2$, retard de l'émetteur $\theta + \tau_e$, temps de
+stabilisation $\theta + 3\tau_e$. Chaque pic confirmé après une coupure donne aussi un
+échantillon $\tau_e = (t_{peak} - \theta) / \ln(1 + s_{cut}/\ell)$, avec $\ell = b\,(T_{cut}
+- T_{out})$ et $s_{cut}$ la pente aux moindres carrés de la pièce sur les dernières
+$\min(\tau_e, 1800\,s)$ avant la coupure, lorsque $s_{cut} \ge \ell$ et que le pic vient au
+moins 600 s après $\theta$ ; les échantillons sont publiés seulement.
+
+Lorsque la séparation est incertaine (`dead time assumed`), chaque utilisateur du modèle
+prend pour son propre usage l'extrémité prudente de $\theta \in [0, S]$ : les gains lisent
+le temps mort effectif $3S/4$ (plus la demi-période d'échantillonnage $h/2$ là où les gains
+en tiennent compte), l'horizon d'anticipation lit $S$, et l'attente d'une fenêtre de `b`
+après un arrêt vaut $S \cdot \max(3, \ln(q_{stop} / 0.05\,\ell))$, avec $q_{stop}$ la chaleur
+encore à venir à l'arrêt et $\ell$ les pertes (le cas $\theta = 0$, dont la traîne
+d'émetteur est la plus longue).
+
+Le modèle, ses lectures et son enregistrement sont sauvegardés sous `response_state`. Un
+état sauvegardé sans `response_state` est amorcé à partir du temps mort actif $L$ de
+chaque mode (`dt_est_state`) et du premier retard de l'émetteur $S$ parmi le retard
+retenu des lectures, le retard retenu du bilan de chauffe (en chauffage) et le retard de
+réponse : $\theta = \mathrm{clamp}(2L - S, 0, L)$, ou $2L/3$ sans $S$ (la séparation en
+moitiés de $S = 4L/3$), et $\tau_e = 2(L - \theta)$, de sorte que le temps mort effectif égale $L$. L'amorçage est
+publié en `previous version`, `provisional`, jusqu'au premier événement accepté du mode ;
+un mode sans $L$ fiable n'a pas d'amorçage.
+
 ### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur
 
 L'apprentissage du retard de l'émetteur (`smartpi/tar_learning/`) et le modèle de pièce sélectionnent leurs données avec `smartpi/quiet_periods/`, un module Python pur partagé par les méthodes qui ont besoin d'une pièce à l'abri des apports solaires. Aucune heure locale n'intervient dans la sélection ; les temps sont des secondes epoch et des intervalles semi-ouverts `[start, end)`.
@@ -899,9 +983,11 @@ Cette séparation évite de garder P et I gelés uniquement parce que l'hystér�
 | `peak_search.py`       | recherche du pic de température après une coupure |
 | `sensor_step.py`       | pas de la sonde, lu sur la dernière heure d'échantillons |
 | `measure_event.py`     | détecteur des événements de mesure et enregistrement de la puissance et des températures |
-| `event_reading.py`     | lecture des événements du bootstrap et des impulsions, valeurs retenues par mode |
+| `event_reading.py`     | lecture des événements du bootstrap et des impulsions, valeurs retenues par mode ; lecteur de chaque événement pour le modèle de réponse |
 | `measure_pulse.py`     | impulsions de mesure du démarrage direct                 |
-| `event_fit.py`         | ajustement de la réponse de la pièce à un événement de chauffe (travail d'arrière-plan) |
+| `event_fit.py`         | ajustement de la réponse de la pièce à un événement de chauffe, et ajustement par profils du modèle de réponse (travaux d'arrière-plan) |
+| `response_model.py`    | temps mort et constante de temps de réponse par mode, publiés seulement |
+| `temperature_history.py` | historique brut et filtré de la température de la pièce lu par l'apprentissage |
 | `starting_values.py`   | valeurs de départ de `a` et `b`, relâchement et crédit de montée en charge |
 | `learning_start.py`    | début de l'apprentissage (phase de l'algorithme, source de la commande, transmission des valeurs retenues) |
 | `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
@@ -1016,6 +1102,7 @@ Chaque composant consulte cette décision ; aucun ne décide seul. L'état trans
 | Retard de l'émetteur (phases à puissance constante) | période passive ou épisode repris (3.7) | épisode compté comme interrompu |
 | Bilan de chauffe | période passive ou phase en cours reprise (3.7, bilan de chauffe) | phase abandonnée, mesures conservées |
 | Lectures de mesure | l'enregistrement, les lectures en cours et la phase du détecteur reprennent (3.7) | les lectures en cours se terminent, l'enregistrement est abandonné, les valeurs retenues restent |
+| Lectures du modèle de réponse | l'enregistrement et les lectures en cours reprennent (3.7) | les lectures en cours se terminent, l'enregistrement est abandonné, le modèle reste |
 | Sortie tout-ou-rien du bootstrap | reprise dans la bande (3.1) | repart à 0 |
 | Historique du retard de l'émetteur (HEAT uniquement ; en COOL comme un autre redémarrage) | la durée d'arrêt est un échantillon manquant (pas d'intervalle invalide) ; l'état du chauffage à l'arrêt est tenu jusqu'à la première commande qui suit, sans aucun front | la période de chauffe est close au dernier calcul, et seule la durée d'arrêt est invalide |
 | Modèle de pièce (HEAT uniquement ; en COOL comme un autre redémarrage) | la commande appliquée à l'arrêt est tenue pendant la durée d'arrêt ; l'état est propagé à travers elle et les prévisions en cours se poursuivent | le chauffage est considéré comme éteint d'après l'état sauvegardé, l'incertitude est rouverte et les prévisions en cours sont abandonnées |
@@ -1045,7 +1132,7 @@ Sans prise en charge des reçus par Versatile Thermostat, SmartPI engage la puis
 - `build_published_diagnostics()` : la fonction qui construit ce payload.
 
 `diagnostic_history.py` enveloppe ce payload dans `schema_version`, `live` et le
-bloc stable de dix-huit séries `history`. Les entités normales excluent `live` du
+bloc stable de dix-neuf séries `history`. Les entités normales excluent `live` du
 Recorder ; la sous-classe debug l'enregistre directement. Le mode debug ne fait que sélectionner la classe de capteur enregistrée ; il n'ajoute pas de second bloc de diagnostic.
 
 `control.last_restart` donne la décision sur le redémarrage de la session courante : `bridged`, la durée d'arrêt `downtime_s` (en secondes, `null` lorsque l'horloge a sauté ou que rien n'a été sauvegardé) et, pour un redémarrage non ponté, la `reason` en mots simples. Il vaut `null` avant le premier calcul d'un thermostat restauré depuis un stockage, et pour un thermostat sans état sauvegardé.

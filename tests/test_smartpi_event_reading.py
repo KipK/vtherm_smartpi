@@ -412,7 +412,7 @@ def test_the_bootstrap_start_attaches_its_reader_and_saves_nothing_before_a_read
     algo = MagicMock()
     start = LearningStart("bootstrap", algo)
     assert algo.learn_win.events.reader is start.reading and algo.learn_win.events.record is start.record
-    assert start.save(1000.0) == {}
+    assert set(start.save(1000.0)) == {"response_state"}   # the response model is always saved
     start.record.enabled = True
     start.record.feed(1000.0, 60.0, 0.5, 10.0, [(900.0, 20.0)])
     start.reading._index = 1

@@ -23,7 +23,8 @@ The phase in progress is saved with the rest it follows and resumed after a rest
 bridges (``resolve_restart``).
 
 The detector also feeds the record of the measurement events (``MeasureRecord``) and hands the events to the reader
-that owns the record (``smartpi/event_reading.py``) when one is attached. The record holds the power as the emitter
+that owns the record (``smartpi/event_reading.py``) when one is attached, and does the same for the reader of the
+response model (``model_reader``) and its own record. The record holds the power as the emitter
 state: for a switch, the on and off edges of the cycles the scheduler applied (``MeasureRecord.note_cycle``, from the
 applied-command receipts); without them, or for a valve, the power the detector observed over each interval.
 """
@@ -295,6 +296,18 @@ class MeasureRecord:
         fronts = [ts[len(ts) - max_points + 1] for ts, _ in self._ch.values() if len(ts) > max_points]
         return max(fronts) if fronts else None
 
+    def points(self, name: str, t_from: float, t_to: float) -> list[tuple[float, float]]:
+        """The points of channel ``name`` with t_from <= t <= t_to."""
+        ts, vs = self._ch[name]
+        i0, i1 = bisect_right(ts, t_from - 1e-9), bisect_right(ts, t_to)
+        return list(zip(ts[i0:i1], vs[i0:i1]))
+
+    def value_at(self, name: str, t: float) -> float | None:
+        """The value of channel ``name`` held at ``t``, None before its first point."""
+        ts, vs = self._ch[name]
+        i = bisect_right(ts, t) - 1
+        return vs[i] if i >= 0 else None
+
     def snapshot(self, t_end: float) -> dict[str, Any]:
         """The points up to ``t_end`` as plain data, seconds from ``t0``; the power ends with a point at ``t_end``."""
         out: dict[str, Any] = {"origin": self.t0}
@@ -359,6 +372,8 @@ class MeasureEventDetector:
         # The record fed at each observation and the reader of the events, attached by their owner (None: none).
         self.record: MeasureRecord | None = None
         self.reader: Any = None
+        # The reader of the response model, fed with its own record (``ModelReader``; None: none).
+        self.model_reader: Any = None
         self._clear_runtime()
 
     def _clear_runtime(self) -> None:
@@ -409,8 +424,9 @@ class MeasureEventDetector:
         temperature. Returns the events closed or dropped by this observation, which the reader gets too.
         """
         events = self._observe(now, dt_s, u, hvac_mode, tin_history, context, ext)
-        if self.reader is not None:
-            self.reader.read_events(events, now)
+        for reader in (self.reader, self.model_reader):
+            if reader is not None:
+                reader.read_events(events, now)
         return events
 
     def _observe(
@@ -453,8 +469,9 @@ class MeasureEventDetector:
             self._drop_phase(events, "observation gap")
             self._rest_start = None
         self._last_now = now
-        if self.record is not None:
-            self.record.feed(now, dt_s, u, ext, tin_history)
+        for record in (self.record, getattr(self.model_reader, "record", None)):
+            if record is not None:
+                record.feed(now, dt_s, u, ext, tin_history)
         on = u > _POWER_ON
         history = tin_history
 
@@ -613,8 +630,9 @@ class MeasureEventDetector:
         stop, keeps it contiguous. Otherwise the phase is dropped and the start
         of the rest is unknown. Returns the dropped event, if any.
         """
-        if self.reader is not None:
-            self.reader.restart(bridged)
+        for reader in (self.reader, self.model_reader):
+            if reader is not None:
+                reader.restart(bridged)
         restore = self._restore
         if restore is None:
             return []

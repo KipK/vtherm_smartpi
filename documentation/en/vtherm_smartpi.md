@@ -218,6 +218,8 @@ SmartPI describes the time between a command and its effect with two quantities 
 - **Dead time**: the time from a change of the command to the first visible move of the room temperature. There are two values: the heating dead time after a start of heating (`model.deadtime_heat_s`) and the cooling dead time after a stop (`model.deadtime_cool_s`: the emitter keeps giving heat for a while). The bootstrap measures them (see [Step 1](#step-1--measuring-dead-times)) and SmartPI keeps measuring the heating dead time at each heating start. They are read by the gain rule (it expects an apparent dead time), the start of the learning windows, the integral hold after a resume and the fallback horizon of the anticipation.
 - **Emitter lag** (`T_ar`, the average residence time of Astrom and Hagglund): the mean time the commanded heat takes to arrive in the room, that is the dead time plus the inertia of the emitter. It is always at least the dead time, typically about twice. Three methods estimate this same quantity: the heating phases at constant power (`analysis.learning.response_lag`), the heating balance (`analysis.learning.heating_balance`), and the learning on morning setpoint rises and on several days of quiet periods ([Emitter lag learning](#emitter-lag-learning), `tar_learning`). The emitter lag is read by the correction of the delivered power when `a` is learned, by the delay before a learning window starts (3 lags) and, from the heating balance, by the horizon of the anticipation in heating. The emitter lag learning also gives the heating dead time in force for the regulation (`tar_learning.applied_s`), derived from the learned emitter lag.
 
+SmartPI also fits a response model on whole measurement events (pulses, bootstrap phases, calibration pulses, and comfort returns of the regulation at night): a pure dead time (`model.dead_time_s`) followed by a response time constant (`model.response_time_constant_s`: the emitter, the air and the nearby mass together; their sum is an emitter lag), with its source and confidence and the effective dead time (dead time plus half the time constant, `analysis.control.effective_dead_time_s`). It is published only: the regulation does not read it (see the [diagnostics](diagnostics.md#response-model)).
+
 ## Operating phases
 
 ### Learning phase
@@ -584,7 +586,7 @@ For the diagnostic schema and Recorder profiles, see the [SmartPI Diagnostics Gu
 
 The SmartPI diagnostic sensor publishes a versioned envelope. Dashboards and
 Markdown cards read complete diagnostics from `attributes.live`; historical
-graphs read the stable eighteen-series contract from `attributes.history`.
+graphs read the stable nineteen-series contract from `attributes.history`.
 
 This is the main place to check:
 

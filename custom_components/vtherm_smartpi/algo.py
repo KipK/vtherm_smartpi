@@ -117,6 +117,7 @@ from .smartpi.restart_bridge import (
     decide,
 )
 from .smartpi.const import ENABLE_ADAPTIVE_TINT_FILTER
+from .smartpi.temperature_history import TemperatureHistory
 from .smartpi.timestamp_utils import (
     elapsed_wall_minutes,
     monotonic_to_wall_ts,
@@ -206,8 +207,7 @@ class SmartPI:
         # Model estimator
         self.est = ABEstimator()
 
-        # --- New Component Managers (Phase 2.5 refactoring) ---
-        self.learn_win = LearningWindowManager(name)
+        self.learn_win = LearningWindowManager(name, TemperatureHistory())
         self.deadband_mgr = DeadbandManager(name, near_band_deg)
         self.gain_scheduler = GainScheduler(name)
         self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
@@ -273,8 +273,8 @@ class SmartPI:
 
         # --- Dead Time (L) Support ---
         self.learning_start = learning_start  # "bootstrap" or "direct" (smartpi/learning_start.py)
-        self._start = LearningStart(learning_start, self)
-        self.dt_est = DeadTimeEstimator(self._start.direct, self._start.measures_start)
+        self._start = LearningStart(learning_start, self, getattr(hass, "config", None))
+        self.dt_est = DeadTimeEstimator(self._start.direct, self._start.measures_start, self.learn_win.temperatures)
         # Learning of the HEAT active dead time (None when the algorithm runs without it)
         self.tar_learning: TarLearningManager | None = None
         if tar_learning:
@@ -2005,7 +2005,7 @@ class SmartPI:
         anticipating = not self.command_is_on_off
         anticipation_c = self._anticipation.apply(correction_c(
             self.anticipation_horizon(hvac_mode).seconds if anticipating else 0.0,
-            now, current_temp, target_temp, self.dt_est.tin_history, anticipating,
+            now, current_temp, target_temp, self.learn_win.temperatures.raw, anticipating,
         ), self.deadband_mgr.in_deadband)
         setpoint_changed, error_i, error_p, old_target_temp = self._manage_setpoint(
             target_temp, current_temp, hvac_mode, anticipation_c,

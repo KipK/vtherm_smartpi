@@ -521,7 +521,7 @@ def test_diagnostic_sensor_builds_stable_envelope_and_deduplicates(hass) -> None
                 "pi_percent": 20.0,
                 "ff_percent": 15.0,
             },
-            "model": {"a": 0.05, "b": 0.001},
+            "model": {"a": 0.05, "b": 0.001, "effective_dead_time_s": None},
             "feedforward": {"source": None, "wall_power_percent": None},
             "room_model": {
                 "a": None,

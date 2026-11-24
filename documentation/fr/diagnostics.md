@@ -38,7 +38,7 @@ Le mode debug enregistre `live` et `history`. Le contenu n'est pas dupliqué
 dans `history` : le contrat historique reste identique dans les deux modes. Le
 mode debug change donc la conservation, pas la publication.
 
-Le bloc `history` contient ces dix-huit séries :
+Le bloc `history` contient ces dix-neuf séries :
 
 | Chemin sous `history` | Signification |
 |---|---|
@@ -53,6 +53,7 @@ Le bloc `history` contient ces dix-huit séries :
 | `power.ff_percent` | Contribution feed-forward |
 | `model.a` | Gain de chauffe appris |
 | `model.b` | Coefficient de déperdition appris |
+| `model.effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (`model.dead_time_s` plus la moitié de `model.response_time_constant_s`) ; publié seulement, non utilisé par la régulation |
 | `feedforward.source` | Source de la puissance de maintien en vigueur, comme dans `live.feedforward.source` |
 | `feedforward.wall_power_percent` | Part des murs du feed-forward appliquée, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` lorsqu'aucune part des murs n'est appliquée |
 | `room_model.a` | Réponse de chauffe du modèle de pièce, dans les unités de `model.a` ; `null` avant une publication |
@@ -61,9 +62,9 @@ Le bloc `history` contient ces dix-huit séries :
 | `room_model.forecast_error_12h_c` | Idem pour les prévisions à 12 h (°C) |
 | `deadtime.applied_s` | Temps mort de chauffe en vigueur pour la régulation, en secondes (le temps mort du bootstrap, ou la valeur dérivée du retard de l'émetteur appris) |
 
-Les séries feed-forward, modèle de pièce et temps mort sont toujours présentes
-et valent `null` lorsque le bloc correspondant n'est pas calculé. La commande
-appliquée ne mesure pas la chaleur délivrée.
+Les séries feed-forward, modèle de pièce, temps mort et temps mort effectif sont
+toujours présentes et valent `null` lorsque le bloc correspondant n'est pas calculé.
+La commande appliquée ne mesure pas la chaleur délivrée.
 
 ## Diagnostics live
 
@@ -74,7 +75,7 @@ Le bloc `live` est organisé par responsabilité :
 | `control` | Phase, mode, gains (`kp`, `ki`), temps intégral effectif `ti_min` (minutes), saturation, bandes de régulation et dernier redémarrage (`last_restart`) |
 | `power` | Puissances du cycle courant et suivant, PI/FF, limites et puissance appliquée |
 | `temperature` | Températures intérieure/extérieure, température anticipée (`anticipated` : température intérieure plus la correction d'anticipation), erreurs et état de l'intégrale |
-| `model` | Modèle A/B, confiance, constante de temps et temps morts |
+| `model` | Modèle A/B, confiance, constante de temps, temps morts et modèle de réponse |
 | `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées, dérive et démarrage de l'apprentissage (`start`) |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
 | `feedforward` | Source de la puissance de maintien, part des murs de la puissance de maintien et source de bande morte |
@@ -163,6 +164,7 @@ l'anticipation de la température, en chauffage et en refroidissement :
 | `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon, sans pente montante ou descendante, ou pendant une coupure de la garde) |
 | `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le temps entre une commande et son effet), `0` lorsqu'il n'y en a pas |
 | `anticipation_horizon_source` | Origine de l'horizon : `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct, en chauffage et en refroidissement), `heating balance` (médiane des derniers retards de l'émetteur mesurés), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` ; le bilan de chauffe n'est utilisé qu'en chauffage |
+| `effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (temps mort plus la moitié de la constante de temps de réponse), `null` sans modèle ; publié seulement |
 
 `analysis.deadtime` suit la détection du temps mort :
 
@@ -214,6 +216,32 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `opening_remap_active` | `true` lorsque les réglages d'ouverture de Versatile Thermostat modifient l'ouverture envoyée à la vanne |
 | `quantization_step_linear_percent` | Demande linéaire, en pourcentage, déplacée par un pas de vanne de `1%` à la position de vanne engagée ; `1.0` sans linéarisation, `null` lorsque la vanne est fermée |
 | `issues` | Codes de filtrage, de retard de commande ou de transformation d'ouverture en conflit avec la linéarisation SmartPI : `dpercent_filter`, `period_filter`, `opening_remap`. Les mêmes avertissements apparaissent dans les Réparations de Home Assistant ; un filtrage ou un retard ne prouve pas, à lui seul, un échec de l'apprentissage |
+
+### Modèle de réponse
+
+Le modèle de réponse décrit, pour le mode HVAC dans lequel se trouve le modèle, la façon
+dont la pièce répond à la puissance : un temps mort (sonde, transport, actionneur) suivi
+d'une constante de temps de réponse (l'émetteur, l'air et la masse proche ensemble). Il est ajusté sur des événements de mesure
+entiers : les impulsions, les phases du bootstrap, les impulsions de calibration et les
+montées de confort de la régulation après un repos (celles-ci seulement la nuit, la position
+du domicile étant connue). Il est publié seulement : rien dans la régulation ne le lit.
+
+| Chemin | Signification |
+|---|---|
+| `model.dead_time_s` | Temps mort en secondes, `null` sans modèle |
+| `model.response_time_constant_s` | Constante de temps de réponse en secondes, `null` sans modèle |
+| `model.response_source` | Origine du dernier événement accepté : `measurement pulses`, `bootstrap`, `calibration`, `regulation`, ou `previous version` (valeurs reprises du temps mort et du retard de l'émetteur appris avant l'existence du modèle, jusqu'au premier événement accepté) ; `null` sans modèle |
+| `model.response_confidence` | `measured` (deux événements concordent sur le temps mort plus la constante de temps à 20 % près), `provisional` (un événement, ou valeurs de la version précédente), `dead time assumed` (aucun événement ne distingue le temps mort : la moitié du total est supposée) ; `null` sans modèle |
+
+`analysis.learning.response_model` :
+
+| Champ | Signification |
+|---|---|
+| `events` | Nombre d'événements acceptés conservés pour le mode (au plus 7) |
+| `last` | Dernier événement ajusté, `null` avant le premier : `source`, `dead_time_s`, `response_time_constant_s`, `rms_c` (racine de la moyenne des carrés des résidus aux changements de température, °C), `outcome` (`accepted`, `accepted, response time constant at its lower limit` (60 s, un émetteur rapide), `used in daylight until an event in darkness`, `not used in daylight`, ou la raison du rejet : `too few temperature changes`, `temperature rise too small`, `no heating seen`, `dead time at its limit`, `response time constant at its limit`, `fit too far from the room temperature`), `daytime` (`true` pour un événement de jour : sa chauffe démarre hors de la nuit, ou la nuit couvre moins de trois retards d'émetteur après elle ; utilisé seulement tant que le mode n'a pas d'autre événement), `prediction_rms_c` (pour un événement donné au modèle : racine de la moyenne des carrés des résidus, °C, du modèle en vigueur avant lui sur sa fenêtre, son temps mort et sa constante de temps de réponse fixés ; `null` sans modèle en vigueur) |
+| `last_reason` | Issue du dernier événement examiné : l'issue de son ajustement, ou la raison pour laquelle il n'a pas été lu (par exemple `rest before heating too short`, `heating too short`, `temperature rise too small`, `SmartPI not in control`, `thermostat stopped`, `home position unknown`, `no record`, `24 hours`, `eight fits`) ; `null` avant le premier |
+| `prediction_rms_c` | Médiane des 7 dernières valeurs `last.prediction_rms_c` du mode (°C) : la qualité de prédiction des nouveaux événements par le modèle ; montrée seulement, `null` avant la première |
+| `peak_samples` | Constantes de temps de réponse en secondes lues aux derniers pics de température confirmés après une coupure (au plus 7), à partir du temps mort, de la pente de la pièce avant la coupure et de ses pertes ; montrées seulement |
 
 ### Apprentissage du retard de l'émetteur
 

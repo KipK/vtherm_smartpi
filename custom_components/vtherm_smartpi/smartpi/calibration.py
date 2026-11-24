@@ -143,9 +143,10 @@ def fall_rate(tin_history: Iterable[tuple[float, float]], cooling: bool) -> floa
     return max(0.0, slope if cooling else -slope)
 
 
-def pulse_limits(dt_est: Any, hvac_mode: object, horizon_s: float) -> PulseLimits:
+def pulse_limits(dt_est: Any, hvac_mode: object, horizon_s: float, history: Any = None) -> PulseLimits:
     """Limits of a calibration pulse from the dead times of ``hvac_mode`` (0 when not reliable), the anticipation
-    horizon in use and the recent fall of the room."""
+    horizon in use and the recent fall of the room (``history``: the raw room temperature samples, the ``tin_history``
+    of ``dt_est`` when not given)."""
     def reliable(view: tuple[float | None, bool]) -> float:
         value, ok = view
         return float(value) if ok and value is not None and value > 0.0 else 0.0
@@ -158,7 +159,8 @@ def pulse_limits(dt_est: Any, hvac_mode: object, horizon_s: float) -> PulseLimit
         gap_s=_clamp(2.0 * horizon, CALIBRATION_GAP_MIN_S, CALIBRATION_GAP_MAX_S),
         rest_s=min(passive + CALIBRATION_REST_EXTRA_S, CALIBRATION_STEP_MAX_S),
         trough_lead_s=active,
-        fall_c_per_s=fall_rate(getattr(dt_est, "tin_history", ()) or (), hvac_mode == VThermHvacMode_COOL),
+        fall_c_per_s=fall_rate(
+            (getattr(dt_est, "tin_history", ()) if history is None else history) or (), hvac_mode == VThermHvacMode_COOL),
         heat_max_s=_clamp(2.0 * (active + horizon), CALIBRATION_HEAT_MIN_S, CALIBRATION_STEP_MAX_S),
         depth_cap_c=CALIBRATION_DEPTH_CAP_C,
         step_max_s=CALIBRATION_STEP_MAX_S,

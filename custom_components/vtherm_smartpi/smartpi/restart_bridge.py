@@ -233,6 +233,11 @@ class RestartBridge:
             "target": _finite(target),
         }
 
+    @property
+    def excluded_vt(self) -> str | None:
+        """Why SmartPI was not in control at the last tick, as seen by the thermostat (None when it was)."""
+        return self._excluded_vt
+
     def note_exclusion(self, excluded: str | None) -> None:
         """Why SmartPI was not in control at the last tick, as seen by the thermostat."""
         self._excluded_vt = excluded or None

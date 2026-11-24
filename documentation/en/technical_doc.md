@@ -645,6 +645,89 @@ and `starting_values` inside `est_state`); a state saved without them loads.
 After a bridged restart the readings resume (a fit in flight is queued again);
 otherwise the readings in progress end and the record is dropped.
 
+#### Response model (published only)
+
+`response_model.py` holds, per mode, a dynamic model of the response of the room
+to the power: a pure dead time $\theta$ (sensor, transport, actuator) followed by
+a first-order response time constant $\tau_e$ (the emitter, the air and the
+nearby mass together). Nothing in the regulation reads it
+yet; it is published next to the dead times and lags above.
+
+A second reader (`ModelReader`, `event_reading.py`) reads the measurement events
+with the same windows as the reader above (lead 1800 s, first end at the close of
+the event, extended to six lags of the last fit, 8 fits, 24 h), on a record of its
+own that runs in every stage, and with its own background job. It reads the
+events of the pulses, of the bootstrap and of the calibrations whatever values
+are kept, and the regulation events that follow a rest of 1800 s, heat for at
+least 600 s of full-power equivalent, rise by at least 0.3 °C to their peak, while
+SmartPI drives the actuator over the whole window (no stop, no exclusion seen by
+the thermostat: window, shedding, safety mode, command overridden) and only with
+a known home position. The window of a regulation event ends six emitter lags
+after its heating step (the published lag; without a published model, the lag
+of its last fit, a longer window being fitted again shorter), whenever the
+regulated phase closes.
+
+With a known home position, the window of an event whose heating step starts in
+darkness (`quiet_periods/solar.py`) ends at the next sunrise. An event is in
+daylight when its heating step is not in darkness, or when the darkness after
+its heating step lasts less than three emitter lags (the published lag, else the
+lag of its fit). An event in daylight, of any source, is fitted and
+shown with `daytime`; it is given to the model only when the mode has no event
+yet, and the first event in darkness then replaces it. Without a home position
+no event is in daylight (and no regulation event is read).
+
+The fit (`event_fit.fit_response`) explains the room with the chain of the
+reader above, with residuals only at the level crossings of the room: a change
+of one sensor step (at most 1.5 steps) is taken at the midpoint of the two
+levels, a larger change at its new value, the model is interpolated at those
+instants. A profile grid of $\theta$ (0 to 1200 s by 60 s, then 1500 to 5400 s
+by 300 s) and $\tau_e$ (24 values on a log scale, 60 s to 4 h) searches $b$ by
+a bounded scalar search for each cell ($a$ and the start temperature by least
+squares), then Nelder-Mead polishes the best cell within the bounds of the
+grid. The residuals of successive crossings are correlated over about
+$S = \theta + \tau_e$, so the number of independent residuals is taken as
+$n = \max(W/S, 1)$, with $W$ the window after the heating step. The cells whose
+cost is at most the minimum times $1 + 3.84 / n$ give the ranges of $\theta$
+and of $S$; the fit tells $\theta$ apart when the range of $\theta$ is at most
+$\max(300\,s, 0.5\,S)$. A fit is rejected with fewer than 8 crossings, a rise
+of less than 3 sensor steps, no heating seen ($a = 0$), $\theta$ or $\tau_e$ at
+its upper bound (5400 s, 4 h), or a root mean square residual above 2 sensor
+steps (0.01 °C at least): `fit too far from the room temperature`. A fit with
+$\tau_e$ on its lower bound (60 s, a fast emitter whose true value may be
+shorter) is accepted at 60 s and shown as `accepted, response time constant at
+its lower limit`.
+
+Per mode the last 7 accepted events are kept. $S$ is their median, $\theta$ the
+median of the events that tell it apart (at most $S$), else $S/2$ (the middle
+of $[0, S]$: effective dead time $3S/4$); $\tau_e = S - \theta$. One event publishes the model as `provisional`, two events whose
+$S$ agree within 20 % make it `measured`, no event that tells $\theta$ apart
+makes it `dead time assumed`. The events of a calibration join the history;
+when two of them agree on $S$ and their mean is off the $S$ of the history by
+more than 30 %, those two replace it. Derived values: effective dead time
+$\theta + \tau_e/2$, emitter lag $\theta + \tau_e$, settling time
+$\theta + 3\tau_e$. Each confirmed peak after a cut also gives a peak sample
+$\tau_e = (t_{peak} - \theta) / \ln(1 + s_{cut}/\ell)$, with $\ell = b\,(T_{cut}
+- T_{out})$ and $s_{cut}$ the least-squares slope of the room over the last
+$\min(\tau_e, 1800\,s)$ before the cut, when $s_{cut} \ge \ell$ and the peak
+comes at least 600 s after $\theta$; the samples are published only.
+
+When the split is uncertain (`dead time assumed`), a consumer of the model takes
+the cautious end of $\theta \in [0, S]$ for its own use: the gains read the
+effective dead time $3S/4$ (plus half the sampling period $h/2$ where the gains
+account for it), the anticipation horizon reads $S$, and the wait of a `b` window
+after a stop is $S \cdot \max(3, \ln(q_{stop} / 0.05\,\ell))$, with $q_{stop}$ the
+heat still to come at the stop and $\ell$ the losses (the case $\theta = 0$, whose
+emitter tail is the longest).
+
+The model, its readings and its record are saved under `response_state`. A
+state saved without it is seeded from the active dead time $L$ of each mode
+(`dt_est_state`) and the first emitter lag $S$ among the kept lag of the
+readings, the kept lag of the heating balance (heating) and the response lag:
+$\theta = \mathrm{clamp}(2L - S, 0, L)$, or $2L/3$ without $S$ (the split in
+halves of $S = 4L/3$), and $\tau_e = 2(L - \theta)$, so that the effective dead time equals $L$. The seed is
+published as `previous version`, `provisional`, until the first accepted event
+of the mode; a mode without a reliable $L$ has no seed.
+
 ### 3.8 Quiet periods of the emitter lag learning
 
 The emitter lag learning (`smartpi/tar_learning/`) and the room model select their data with
@@ -1226,9 +1309,11 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | `peak_search.py`       | the search of the temperature peak after a cut |
 | `sensor_step.py`       | the step of the sensor, read on the last hour of samples |
 | `measure_event.py`     | detector of the measurement events and record of the power and temperatures |
-| `event_reading.py`     | reading of the events of the bootstrap and of the pulses, kept values per mode |
+| `event_reading.py`     | reading of the events of the bootstrap and of the pulses, kept values per mode; reader of every event for the response model |
 | `measure_pulse.py`     | measurement pulses of the direct start                      |
-| `event_fit.py`         | fit of the response of the room to a heating event (background job) |
+| `event_fit.py`         | fit of the response of the room to a heating event, and profile fit of the response model (background jobs) |
+| `response_model.py`    | dead time and response time constant per mode, published only |
+| `temperature_history.py` | raw and filtered room temperature history read by the learning |
 | `starting_values.py`   | starting values of `a` and `b`, release and warm-up credit |
 | `learning_start.py`    | start of the learning (phase of the algorithm, source of the command, hand-over of the kept values) |
 | `learning_outcomes.py` | bounded counters of learning-window outcomes                |
@@ -1388,6 +1473,7 @@ until the decision.
 | Emitter lag (constant-power phases) | passive period or episode resumed (3.7) | episode counted as interrupted |
 | Heating balance | rest or phase in progress resumed (3.7, heating balance) | phase dropped, measurements kept |
 | Measurement readings | the record, the readings in progress and the phase of the detector resume (3.7) | the readings in progress end, the record is dropped, the kept values stay |
+| Response model readings | the record and the readings in progress resume (3.7) | the readings in progress end, the record is dropped, the model stays |
 | Bootstrap on/off output | resumed inside the band (3.1) | starts at 0 |
 | Emitter lag history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |
 | Room model (HEAT only; in COOL as another restart) | the command applied at the stop is held over the downtime; the state is propagated through it and the forecasts in progress go on | the heater is taken as stopped from the saved state, the uncertainty is reopened and the forecasts in progress are dropped |
@@ -1433,7 +1519,7 @@ opening commits nothing.
 - `build_published_diagnostics()`: the function that builds that payload.
 
 `diagnostic_history.py` wraps this payload in `schema_version`, `live` and the
-stable eighteen-series `history` block. Normal sensor entities exclude `live` from
+stable nineteen-series `history` block. Normal sensor entities exclude `live` from
 Recorder; the debug sensor subclass records it directly. The debug option only selects the sensor class that is recorded; it does not
 add a second diagnostic block.
 

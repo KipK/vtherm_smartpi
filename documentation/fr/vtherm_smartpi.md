@@ -218,6 +218,8 @@ SmartPI décrit le temps qui sépare une commande de son effet par deux grandeur
 - **Temps mort** : le temps entre un changement de la commande et le premier mouvement visible de la température de la pièce. Il y a deux valeurs : le temps mort de chauffe après un démarrage de chauffe (`model.deadtime_heat_s`) et le temps mort de refroidissement après un arrêt (`model.deadtime_cool_s` : l'émetteur continue de donner de la chaleur pendant un moment). Le bootstrap les mesure (voir l'[étape 1](#étape-1--mesure-des-temps-morts)) et SmartPI continue de mesurer le temps mort de chauffe à chaque démarrage de chauffe. Ils sont lus par la règle des gains (elle attend un temps mort apparent), le début des fenêtres d'apprentissage, le maintien de l'intégrale après une reprise et l'horizon de repli de l'anticipation.
 - **Retard de l'émetteur** (`T_ar`, le temps de séjour moyen d'Astrom et Hagglund) : le temps moyen que met la chaleur commandée pour arriver dans la pièce, c'est-à-dire le temps mort plus l'inertie de l'émetteur. Il est toujours au moins égal au temps mort, typiquement environ deux fois plus long. Trois méthodes estiment cette même grandeur : les phases de chauffe à puissance constante (`analysis.learning.response_lag`), le bilan de chauffe (`analysis.learning.heating_balance`), et l'apprentissage sur les montées de consigne du matin et sur plusieurs jours de périodes calmes ([Apprentissage du retard de l'émetteur](#apprentissage-du-retard-de-lémetteur), `tar_learning`). Le retard de l'émetteur est lu par la correction de la puissance délivrée lorsque `a` est appris, par le délai avant le début d'une fenêtre d'apprentissage (3 retards) et, pour la valeur du bilan de chauffe, par l'horizon de l'anticipation en chauffage. L'apprentissage du retard de l'émetteur donne aussi le temps mort de chauffe en vigueur pour la régulation (`tar_learning.applied_s`), dérivé du retard de l'émetteur appris.
 
+SmartPI ajuste aussi un modèle de réponse sur des événements de mesure entiers (impulsions, phases du bootstrap, impulsions de calibration, et retours au confort de la régulation la nuit) : un temps mort pur (`model.dead_time_s`) suivi d'une constante de temps de réponse (`model.response_time_constant_s` : l'émetteur, l'air et la masse proche ensemble ; leur somme est un retard de l'émetteur), avec sa source, sa confiance et le temps mort effectif (temps mort plus la moitié de la constante de temps, `analysis.control.effective_dead_time_s`). Il est publié seulement : la régulation ne le lit pas (voir les [diagnostics](diagnostics.md#modèle-de-réponse)).
+
 ## Phases de fonctionnement
 
 ### Phase d'apprentissage
@@ -576,7 +578,7 @@ Pour le schéma des diagnostics et les profils Recorder, consultez le [Guide des
 
 Le capteur de diagnostic SmartPI publie une enveloppe versionnée. Les dashboards
 et cartes Markdown lisent les diagnostics complets dans `attributes.live` ; les
-graphiques historiques lisent le contrat stable de dix-huit séries dans
+graphiques historiques lisent le contrat stable de dix-neuf séries dans
 `attributes.history`.
 
 C'est l'endroit principal à consulter pour savoir :

@@ -79,9 +79,9 @@ def test_heartbeat_learning_trigger_on_slope_quality():
     # (i=0 = oldest = 19 min ago, i=19 = most recent = now)
     # Amplitude = 0.95°C >> DT_DERIVATIVE_MIN_ABS (0.03°C); slope ≈ +0.05°C/min.
     base_now = time.monotonic()
-    smartpi.dt_est._tin_history = [
+    smartpi.learn_win.temperatures.raw.extend(
         (base_now - (19 - i) * 60, 19.0 + i * 0.05) for i in range(20)
-    ]
+    )
 
     # Single call with 20-min window: start_ts goes back 20 min, all 20 samples in range.
     # The slope gate should pass immediately and the window should submit.

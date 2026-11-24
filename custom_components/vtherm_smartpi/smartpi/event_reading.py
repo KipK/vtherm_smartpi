@@ -50,19 +50,23 @@ from typing import Any
 from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from . import job_abort
 from .calibration import readings_agree_on
-from .event_fit import readings_agree, run_fit
+from .const import HEATING_BALANCE_MIN_ON_S, HEATING_BALANCE_MIN_RISE_C
+from .event_fit import readings_agree, run_fit, run_response_fit
 from .measure_event import (
     MODE_COOL,
     RECORD_MAX_POINTS,
     SOURCE_BOOTSTRAP,
     SOURCE_CALIBRATION,
     SOURCE_PULSE,
+    SOURCE_REGULATION,
     MeasureEvent,
     MeasureRecord,
     _integer,
     _number,
 )
-from .peak_search import PEAK_NONE
+from .peak_search import PEAK_CONFIRMED, PEAK_NONE
+from .quiet_periods.solar import astral_available, dark_intervals, validate_position
+from .response_model import PEAK_SLOPE_MAX_S, ResponseModel, peak_sample
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,6 +95,8 @@ def _finite(x: object) -> bool:
 class EventReader:
     """Readings of the events, kept values and the fit job. Times are monotonic seconds, as ``SmartPI.calculate`` reads
     them. ``record`` is the record of the detector the reader is attached to."""
+
+    _fit = staticmethod(run_fit)   # the fit a job runs
 
     def __init__(self, record: MeasureRecord) -> None:
         self._record = record
@@ -203,7 +209,7 @@ class EventReader:
             return
         job["started"] = self._running = True
         try:
-            result = await hass.async_add_executor_job(job_abort.run, self._abort, run_fit, job["snap"])
+            result = await hass.async_add_executor_job(job_abort.run, self._abort, self._fit, job["snap"])
         except job_abort.JobAborted:
             return
         except Exception:  # noqa: BLE001 - a failed fit must never stop the regulation
@@ -220,7 +226,7 @@ class EventReader:
             return
         job["started"] = True
         try:
-            result = run_fit(job["snap"])
+            result = self._fit(job["snap"])
         except Exception:  # noqa: BLE001 - a reading must never disturb the regulation
             _LOGGER.exception("event reading: fit failed")
             result = False
@@ -242,7 +248,7 @@ class EventReader:
                     continue
                 snap = self._record.snapshot(r["next_end_s"])
                 snap.update(cooling=r["cooling"], start=max(r["window_start_s"] - snap["origin"], 0.0),
-                            end=r["next_end_s"] - snap["origin"])
+                            end=r["next_end_s"] - snap["origin"], heat=r["heat_start_s"] - snap["origin"])
                 r["fitting"] = True
                 self._job = {"index": r["index"], "t_end": r["next_end_s"], "snap": snap, "started": False}
                 return
@@ -522,3 +528,230 @@ class EventReader:
                 }
                 if values.get("b_agree") is True:
                     store[mode]["b_agree"] = True
+
+
+MODEL_READINGS_KEPT = 8          # ended readings of the model kept for the audit
+READING_DARK_LAGS = 3.0          # dark part of the window after the heating step, in emitter lags
+
+
+def _slope_per_min(points: list[tuple[float, float]]) -> float | None:
+    """Least-squares slope (C/min) of three points or more, None otherwise."""
+    if len(points) < 3:
+        return None
+    n = len(points)
+    tm = sum(t for t, _ in points) / n
+    vm = sum(v for _, v in points) / n
+    sxx = sum((t - tm) ** 2 for t, _ in points)
+    return None if sxx <= 0.0 else 60.0 * sum((t - tm) * (v - vm) for t, v in points) / sxx
+
+
+class ModelReader(EventReader):
+    """Readings of the response model (smartpi/response_model.py): the readings of the base reader, on a record of
+    their own that runs in every stage, for every closed event of the detector, fitted by ``run_response_fit``.
+
+    Pulse, bootstrap and calibration events are read as the base reader reads them, whatever values are kept.
+    Regulation events are read after a rest of ``HEATING_BALANCE_MIN_REST_S`` (the event has no reason), with
+    ``HEATING_BALANCE_MIN_ON_S`` of full-power-equivalent heating and a rise of ``HEATING_BALANCE_MIN_RISE_C`` to the
+    peak, while SmartPI is in control over the window (no stop, no exclusion seen by the thermostat), and only with a
+    known home position. The window of a regulation reading ends ``READING_WINDOW_LAGS`` emitter lags after the
+    heating step (the published lag, else the lag of its last fit), whenever the regulated phase closes.
+
+    With a known home position, the window of an event whose heating step starts in darkness ends at the next sunrise;
+    the event is in daylight when its heating step is not in darkness or when the darkness after it lasts less than
+    ``READING_DARK_LAGS`` emitter lags (the published lag, else the lag of its fit). An event in daylight is fitted
+    and shown with its flag and given to the model as such (smartpi/response_model.py: used only while the mode has
+    no other event). Without a home position no event is in daylight. Each confirmed peak gives a peak sample when the
+    model and ``b`` are published.
+    """
+
+    _fit = staticmethod(run_response_fit)
+
+    def __init__(self, model: ResponseModel) -> None:
+        self.model = model
+        self.position = None
+        super().__init__(MeasureRecord())
+        self._record.enabled = True
+
+    @property
+    def record(self) -> MeasureRecord:
+        return self._record
+
+    def reset(self) -> None:
+        super().reset()
+        self._excluded_at: float | None = None     # last calculation at which SmartPI was not in control
+        self._b: float | None = None               # published loss coefficient (1/min)
+
+    def set_position(self, latitude: Any, longitude: Any) -> None:
+        """Position of the home; unknown when not valid or when the solar position cannot be computed."""
+        pos = validate_position(latitude, longitude)
+        self.position = pos if pos is not None and astral_available() else None
+
+    def note_control(self, now: float, excluded: str | None, b: float | None) -> None:
+        """Once per calculation: why SmartPI's command is not the applied one (None when it is) and the published
+        loss coefficient."""
+        if excluded:
+            self._excluded_at = now
+        self._b = b
+
+    def wants_record(self, learning_stage: bool, hvac_mode: object) -> bool:
+        return True
+
+    def read_events(self, events: list[MeasureEvent], now: float) -> None:
+        """Every closed event: its peak sample, then its reading when it is admitted."""
+        for event in events:
+            if not event.closed:
+                continue
+            self._peak(event)
+            reason = self._refusal(event)
+            if reason is not None:
+                self.model.refuse(reason)
+                continue
+            self._take(event, now)
+            entry = self._readings[-1]
+            entry["source"] = event.source
+            if entry["state"] == STATE_NONE:
+                self.model.refuse(entry["reason"])
+                continue
+            dark_end = None if self.position is None else self._dark_end(entry["heat_start_s"])
+            entry["daytime"] = self.position is not None and dark_end is None
+            ends = [entry["first_end_s"]] + ([] if dark_end is None else [dark_end])
+            lag = self.model.emitter_lag_s(event.mode)
+            if event.source == SOURCE_REGULATION and lag is not None:
+                ends.append(entry["heat_start_s"] + READING_WINDOW_LAGS * lag)
+            entry["first_end_s"] = entry["next_end_s"] = min(ends)
+            if dark_end is not None:
+                entry["dark_end_s"] = dark_end
+        ended = [r for r in self._readings if r["state"] != STATE_WAITING]
+        self._readings = [r for r in self._readings if r["state"] == STATE_WAITING or r in ended[-MODEL_READINGS_KEPT:]]
+        self._queue_due(now)
+
+    def _refusal(self, event: MeasureEvent) -> str | None:
+        """Why a regulation event is not read (plain words), None when it is read."""
+        if event.source != SOURCE_REGULATION:
+            return None
+        if event.reason:
+            return event.reason
+        phase, search = event.phase, event.phase["search"]
+        if phase["on_s"] < HEATING_BALANCE_MIN_ON_S:
+            return "heating too short"
+        t_peak = phase["t_cut"] + search.peak_delay_s
+        baseline = phase["base_value"] + phase["base_slope"] * (t_peak - phase["t_start"])
+        if (-1.0 if event.mode == MODE_COOL else 1.0) * (search.peak_value - baseline) < HEATING_BALANCE_MIN_RISE_C:
+            return "temperature rise too small"
+        start = phase["t_start"] - READING_LEAD_S
+        if self._excluded_at is not None and self._excluded_at >= start:
+            return "SmartPI not in control"
+        if self._interrupted_at is not None and self._interrupted_at >= start:
+            return "thermostat stopped"
+        return "home position unknown" if self.position is None else None
+
+    def _peak(self, event: MeasureEvent) -> None:
+        """Peak sample of a confirmed peak (published only)."""
+        values = self.model.values(event.mode)
+        if event.outcome != PEAK_CONFIRMED or values is None or self._b is None or self._b <= 0.0:
+            return
+        phase, sign = event.phase, -1.0 if event.mode == MODE_COOL else 1.0
+        t_cut = phase["t_cut"]
+        slope = _slope_per_min(self._record.points("room", t_cut - min(values["tau_e_s"], PEAK_SLOPE_MAX_S), t_cut))
+        temp = phase["cut_temp"] if phase["cut_temp"] is not None else self._record.value_at("room", t_cut)
+        ext = self._record.value_at("ext", t_cut)
+        if temp is None or ext is None:
+            return
+        tau = peak_sample(values["theta_s"], phase["search"].peak_delay_s, None if slope is None else sign * slope,
+                          self._b * sign * (temp - ext))
+        if tau is not None:
+            self.model.add_peak(event.mode, tau)
+
+    def _queue_due(self, now: float) -> None:
+        """The base reader's queueing; the snapshot also carries theta and tau_e of the model in force (prediction)."""
+        job = self._job
+        super()._queue_due(now)
+        if self._job is not None and self._job is not job:
+            mode = next(r["mode"] for r in self._readings if r["index"] == self._job["index"])
+            values = self.model.values(mode)
+            self._job["snap"]["model"] = None if values is None else (values["theta_s"], values["tau_e_s"])
+
+    def _dark_end(self, t: float) -> float | None:
+        """End (monotonic) of the darkness that holds ``t`` at the home position, None when ``t`` is not in darkness."""
+        w = monotonic_to_wall_ts(t)
+        try:
+            end = None
+            for a, b in sorted(dark_intervals(self.position, w, w + READING_MAX_WINDOW_S)):
+                if a <= (w if end is None else end) < b:     # blocks of a long darkness follow each other
+                    end = b
+            return None if end is None else t + (end - w)
+        except Exception:  # noqa: BLE001 - without the solar position the window is not known to be dark
+            _LOGGER.debug("response model: darkness unknown", exc_info=True)
+            return None
+
+    def _fit_done(self, reading: dict[str, Any], result: Any, now: float) -> None:
+        """The fit of a reading ran. The window after the heating step targets ``READING_WINDOW_LAGS`` lags of the last
+        fit (no shorter than the first window), cut at the sunrise and at 24 hours; a regulation reading targets that
+        many published lags (lags of its last fit without a published model) and a longer window is fitted again
+        shorter. Complete when the window covers ``READING_COVERAGE`` of the target, abandoned at 24 hours or at the
+        last fit without that."""
+        if not result:
+            super()._fit_done(reading, result, now)
+            self.model.refuse(reading["reason"])
+            return
+        reading["fitting"] = False
+        self.version += 1
+        reading["fits"].append(result)
+        reading["result"] = result
+        heat = reading["heat_start_s"]
+        window = result["end_s"] - heat
+        want = READING_WINDOW_LAGS * result["lag_s"]
+        regulation = reading.get("source", SOURCE_REGULATION) == SOURCE_REGULATION
+        if regulation:
+            lag = self.model.emitter_lag_s(reading["mode"])
+            want = want if lag is None else READING_WINDOW_LAGS * lag
+        else:
+            want = max(want, reading["first_end_s"] - heat)
+        capped = min(want, READING_MAX_WINDOW_S)
+        target = min(capped, reading.get("dark_end_s", float("inf")) - heat)
+        covered = window >= READING_COVERAGE * target - 1e-6
+        too_long = regulation and window > target / READING_COVERAGE + 1e-6
+        if too_long and len(reading["fits"]) < READING_MAX_FITS:
+            reading["next_end_s"], reading["target_s"] = heat + target, target
+        elif covered and not too_long and (target < capped or window >= READING_COVERAGE * want - 1e-6):
+            reading["state"], reading["end_s"] = STATE_COMPLETE, now
+            self._complete(reading, now)
+        elif (covered and not too_long) or len(reading["fits"]) >= READING_MAX_FITS:
+            reading["state"], reading["end_s"] = STATE_ABANDONED, now
+            reading["reason"] = "eight fits" if too_long or not covered else "24 hours"
+            self.model.refuse(reading["reason"])
+        else:
+            reading["next_end_s"], reading["target_s"] = heat + target, target
+
+    def _complete(self, reading: dict[str, Any], now: float) -> None:
+        """A complete reading goes to the model, with its daylight flag; a regulation reading only with SmartPI in
+        control over its window."""
+        source = reading.get("source", SOURCE_REGULATION)
+        result = reading["result"]
+        if source == SOURCE_REGULATION and self._excluded_at is not None and self._excluded_at >= reading["window_start_s"]:
+            self.model.refuse("SmartPI not in control")
+            return
+        daytime = bool(reading.get("daytime"))
+        if "dark_end_s" in reading:
+            lag = self.model.emitter_lag_s(reading["mode"])
+            lag = result.get("lag_s", 0.0) if lag is None else lag
+            daytime = reading["dark_end_s"] - reading["heat_start_s"] < READING_DARK_LAGS * lag - 1e-6
+        reading["daytime"] = daytime
+        reading["outcome"] = self.model.add(reading["mode"], source, result, now, daytime)
+
+    @staticmethod
+    def _save_reading(reading: dict[str, Any]) -> dict[str, Any]:
+        saved = EventReader._save_reading(reading)
+        if "dark_end_s" in reading:
+            saved["dark_end_s"] = monotonic_to_wall_ts(reading["dark_end_s"])
+        return saved
+
+    def _load_reading(self, raw: object) -> dict[str, Any] | None:
+        reading = super()._load_reading(raw)
+        if reading is not None:
+            reading["source"] = raw["source"] if isinstance(raw.get("source"), str) else SOURCE_REGULATION
+            reading["daytime"] = raw.get("daytime") is True
+            dark_end = wall_to_monotonic_ts(raw.get("dark_end_s"))
+            if dark_end is not None:
+                reading["dark_end_s"] = dark_end
+        return reading

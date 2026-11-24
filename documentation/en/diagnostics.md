@@ -38,7 +38,7 @@ Debug mode records both `live` and `history`. The content is not duplicated
 inside `history`: the historical contract remains identical in both modes.
 Debug mode therefore changes retention, not publication.
 
-The `history` block contains these eighteen series:
+The `history` block contains these nineteen series:
 
 | Path under `history` | Meaning |
 |---|---|
@@ -53,6 +53,7 @@ The `history` block contains these eighteen series:
 | `power.ff_percent` | Feed-forward contribution |
 | `model.a` | Learned heating gain |
 | `model.b` | Learned heat-loss coefficient |
+| `model.effective_dead_time_s` | Effective dead time of the response model in seconds (`model.dead_time_s` plus half of `model.response_time_constant_s`); published only, not used by the regulation |
 | `feedforward.source` | Holding power source in force, as in `live.feedforward.source` |
 | `feedforward.wall_power_percent` | Wall part of the feed-forward applied, in % of full power (negative when the walls give heat back); `null` when no wall part is applied |
 | `room_model.a` | Heating response of the room model, in the units of `model.a`; `null` before a publication |
@@ -61,8 +62,8 @@ The `history` block contains these eighteen series:
 | `room_model.forecast_error_12h_c` | Same for the 12 h forecasts (°C) |
 | `deadtime.applied_s` | Heating dead time in force for the regulation, in seconds (the bootstrap dead time, or the value derived from the learned emitter lag) |
 
-The feed-forward, room model and dead-time series are always present and are
-`null` when the corresponding block is not computed. The applied command does
+The feed-forward, room model, dead-time and effective dead time series are
+always present and are `null` when the corresponding block is not computed. The applied command does
 not measure delivered heat.
 
 ## Live diagnostics
@@ -74,7 +75,7 @@ The `live` block is organized by responsibility:
 | `control` | Phase, regulation mode, gains (`kp`, `ki`), effective integral time `ti_min` (minutes), saturation, regulation bands and the last restart (`last_restart`) |
 | `power` | Current and next-cycle power, PI/FF split, limits and applied power |
 | `temperature` | Indoor/outdoor temperatures, anticipated temperature (`anticipated`: indoor temperature plus the anticipation correction), errors and integral state |
-| `model` | A/B model, confidence, time constant and dead times |
+| `model` | A/B model, confidence, time constant, dead times and the response model |
 | `learning` | Learning stage, bootstrap progress, accepted updates, drift state and the start of the learning (`start`) |
 | `governance` | Thermal regime and model-update decision |
 | `feedforward` | Holding power source, wall part of the holding power and dead-band source |
@@ -161,6 +162,7 @@ anticipation of the temperature, in heating and in cooling:
 | `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon, without a rising or falling slope, or during a guard cut) |
 | `anticipation_horizon_s` | Horizon of the anticipation in seconds (the time between a command and its effect), `0` when none |
 | `anticipation_horizon_source` | Where the horizon comes from: `measurement pulses` (emitter lag kept from the measurement pulses of the direct start, in heating and in cooling), `heating balance` (median of the last emitter lags measured), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none`; the heating balance is used in heating only |
+| `effective_dead_time_s` | Effective dead time of the response model in seconds (dead time plus half the response time constant), `null` without a model; published only |
 
 `analysis.deadtime` follows the dead time detection:
 
@@ -214,6 +216,32 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 | `opening_remap_active` | `true` when the Versatile Thermostat opening settings change the opening sent to the valve |
 | `quantization_step_linear_percent` | Linear demand, in percent, moved by one `1%` valve step at the committed valve position; `1.0` without linearization, `null` when the valve is closed |
 | `issues` | Codes for command filtering, delay or an opening remap conflicting with SmartPI linearization: `dpercent_filter`, `period_filter`, `opening_remap`. The same warnings appear in Home Assistant Repairs; filtering or delay alone does not prove a learning failure |
+
+### Response model
+
+The response model describes, for the HVAC mode the model is in, how the room
+answers the power: a dead time (sensor, transport, actuator) followed by a
+response time constant (the emitter, the air and the nearby mass together). It is fitted on whole measurement events: the
+pulses, the bootstrap phases, the calibration pulses and the comfort returns of
+the regulation after a rest (those only at night, with the home position known).
+It is published only: nothing in the regulation reads it.
+
+| Path | Meaning |
+|---|---|
+| `model.dead_time_s` | Dead time in seconds, `null` without a model |
+| `model.response_time_constant_s` | Response time constant in seconds, `null` without a model |
+| `model.response_source` | Source of the latest accepted event: `measurement pulses`, `bootstrap`, `calibration`, `regulation`, or `previous version` (values carried over from the dead time and emitter lag learned before the model existed, until the first accepted event); `null` without a model |
+| `model.response_confidence` | `measured` (two events agree on the dead time plus the time constant within 20 %), `provisional` (one event, or values of the previous version), `dead time assumed` (no event tells the dead time apart: half of the total is assumed); `null` without a model |
+
+`analysis.learning.response_model`:
+
+| Field | Meaning |
+|---|---|
+| `events` | Number of accepted events kept for the mode (at most 7) |
+| `last` | Last fitted event, `null` before one: `source`, `dead_time_s`, `response_time_constant_s`, `rms_c` (root mean square residual at the temperature changes, °C), `outcome` (`accepted`, `accepted, response time constant at its lower limit` (60 s, a fast emitter), `used in daylight until an event in darkness`, `not used in daylight`, or why it was rejected: `too few temperature changes`, `temperature rise too small`, `no heating seen`, `dead time at its limit`, `response time constant at its limit`, `fit too far from the room temperature`), `daytime` (`true` for an event in daylight: its heating step out of darkness, or less than three emitter lags of darkness after it; used only while the mode has no other event), `prediction_rms_c` (for an event given to the model: root mean square residual, °C, of the model in force before it on its window, its dead time and response time constant fixed; `null` without a model in force) |
+| `last_reason` | Outcome of the last event considered: the outcome of its fit, or why it was not read (for example `rest before heating too short`, `heating too short`, `temperature rise too small`, `SmartPI not in control`, `thermostat stopped`, `home position unknown`, `no record`, `24 hours`, `eight fits`); `null` before the first one |
+| `prediction_rms_c` | Median of the last 7 `last.prediction_rms_c` values of the mode (°C): how well the model predicts new events; shown only, `null` before one |
+| `peak_samples` | Response time constants in seconds read on the last confirmed temperature peaks after a cut (at most 7), from the dead time, the slope of the room before the cut and its losses; shown only |
 
 ### Emitter lag learning
 

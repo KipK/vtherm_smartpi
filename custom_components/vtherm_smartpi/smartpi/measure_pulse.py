@@ -68,9 +68,9 @@ STATE_STOP = "stop"
 PULSE_RISE_STEPS = 3.0
 
 
-def _sensor_step(dt_est: Any) -> float:
-    """Smallest change between two successive samples of the last hour: the step of the sensor."""
-    return sensor_step(getattr(dt_est, "tin_history", []))
+def _sensor_step(history: Any) -> float:
+    """Smallest change between two successive samples of the last hour of the room temperature: the step of the sensor."""
+    return sensor_step(history)
 
 
 class MeasurePulse:
@@ -84,6 +84,7 @@ class MeasurePulse:
         self._state = STATE_IDLE
         self._cur: dict[str, Any] | None = None
         self._history: list[dict[str, Any]] = []
+        self._temps: Any = ()                # raw room temperature samples of the calculation in progress
         self._count = 0                      # pulses started, all modes (index of the pulse)
         self._mode_counts: dict[str, int] = {}   # pulses started by mode
         self._last_end_s: float | None = None
@@ -154,6 +155,7 @@ class MeasurePulse:
         calibration_pulses_left: bool = False,
         event_stage: str | None = None,
         limits: Any = None,
+        history: Any = None,
     ) -> None:
         """Advance the pulse for this calculation (called once per calculation, before the command is chosen).
 
@@ -161,7 +163,9 @@ class MeasurePulse:
         pulses go on even when both dead times are known. ``calibration``: a calibration is in progress; its pulses
         start while ``calibration_pulses_left``. ``event_stage``: stage of the measurement event in progress
         (``MeasureEventDetector.phase_stage``), which ends the stop step of a calibration pulse. ``limits``: the limits of
-        the calibration pulses (``smartpi.calibration.PulseLimits``), read while a calibration is in progress."""
+        the calibration pulses (``smartpi.calibration.PulseLimits``), read while a calibration is in progress. ``history``:
+        the raw room temperature samples (smartpi/temperature_history.py), the ``tin_history`` of ``dt_est`` when not given."""
+        self._temps = getattr(dt_est, "tin_history", []) if history is None else history
         self._calls += 1
         sign = -1.0 if cooling else 1.0
         demand = sign * (target - temp)           # > 0: the room is on the demand side of the setpoint
@@ -275,7 +279,7 @@ class MeasurePulse:
                     cur["outcome"] = outcome
                     # The response must stand out of the sensor: three of its steps. The step goes on until the
                     # room is back near the setpoint, for ``PULSE_HEAT_EXTEND_MAX_S`` at most.
-                    if sign * (temp - cur["_extreme"]) >= PULSE_RISE_STEPS * _sensor_step(dt_est) - 1e-9 and (
+                    if sign * (temp - cur["_extreme"]) >= PULSE_RISE_STEPS * _sensor_step(self._temps) - 1e-9 and (
                         demand <= PULSE_HEAT_BACK_C + 1e-9
                         or now - cur["heat_start_s"] >= PULSE_HEAT_EXTEND_MAX_S - 1e-9
                     ):
@@ -317,7 +321,7 @@ class MeasurePulse:
         # the regulation takes over once the room is far enough under the setpoint and lower than at the start of
         # the stop (the peak has then had time to show), at the cap in any case
         cap = PULSE_TAKEOVER_CAP_C if own is None else own.depth_cap_c
-        deeper = sign * (cur["temp_stop"] - temp) >= _sensor_step(dt_est) - 1e-9
+        deeper = sign * (cur["temp_stop"] - temp) >= _sensor_step(self._temps) - 1e-9
         under = demand >= cap - 1e-9 or (demand >= PULSE_TAKEOVER_C - 1e-9 and deeper)
         if peak:
             self._finish(now, "peak")

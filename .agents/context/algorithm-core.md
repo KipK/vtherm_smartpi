@@ -116,7 +116,7 @@ One mechanism: the holding power `u_ff1`, clamped to [0,1]; runtime FF = `u_ff1`
 
 ## 10. Persistence map (`SmartPI.save_state`, version 2)
 
-`est_state`, `dt_est_state`, `gov_state`, `ctl_state` (integral), `sp_mgr_state`, `lw_state`, `db_state`, `cal_state`, `gs_state`, `guards_state`, `ac_state`, `ff_source`/`ff_wall`, `tint_filter_state`, `learning_enabled`, `last_active_wall_ts`, `cycles_since_reset`, optional `hysteresis_output`, `restart`, and the learning-start keys `measure_events` (the record), `event_reading` (readings in progress and kept values; the older key `pulse_reading` still loads); `est_state` holds `starting_values`. States saved before these keys load. Storage plumbing in `state_store.py`.
+`est_state`, `dt_est_state`, `gov_state`, `ctl_state` (integral), `sp_mgr_state`, `lw_state`, `db_state`, `cal_state`, `gs_state`, `guards_state`, `ac_state`, `ff_source`/`ff_wall`, `tint_filter_state`, `learning_enabled`, `last_active_wall_ts`, `cycles_since_reset`, optional `hysteresis_output`, `restart`, and the learning-start keys `measure_events` (the record), `event_reading` (readings in progress and kept values; the older key `pulse_reading` still loads), `est_state` holds `starting_values`. States saved before these keys load. Storage plumbing in `state_store.py`.
 
 ## Invariants a change must not break
 

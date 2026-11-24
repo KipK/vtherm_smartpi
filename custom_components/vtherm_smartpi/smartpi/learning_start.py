@@ -48,10 +48,11 @@ from .calibration import (
     pulse_limits,
 )
 from .const import AB_MIN_SAMPLES_A, AB_MIN_SAMPLES_B, SmartPIPhase
-from .event_reading import EventReader
+from .event_reading import EventReader, ModelReader
 from .feedforward import compute_ff_gain
 from .measure_event import MODE_COOL, SOURCE_BOOTSTRAP, SOURCE_CALIBRATION, SOURCE_PULSE, SOURCE_REGULATION, MeasureRecord
 from .measure_pulse import PULSE_MAX_COUNT, STATE_HEAT, STATE_REST, MeasurePulse
+from .response_model import ResponseModel, seed_from_saved
 from .timestamp_utils import monotonic_to_wall_ts
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ def command_is_on_off(algo: Any) -> bool:
 class LearningStart:
     """Start mode of the learning, the measurement pulses and their readings."""
 
-    def __init__(self, learning_start: str = LEARNING_START_BOOTSTRAP, owner: Any = None) -> None:
+    def __init__(self, learning_start: str = LEARNING_START_BOOTSTRAP, owner: Any = None, config: Any = None) -> None:
         if learning_start not in LEARNING_STARTS:
             raise ValueError(f"learning_start must be one of {LEARNING_STARTS} (got {learning_start!r})")
         self.configured = learning_start   # the option: what a blank start uses
@@ -94,6 +95,10 @@ class LearningStart:
         self.pulse = MeasurePulse()
         self.record = MeasureRecord()
         self.reading = EventReader(self.record)
+        # The response model (smartpi/response_model.py), fed by its reader of every event; published only.
+        self.model = ResponseModel()
+        self.model_reading = ModelReader(self.model)
+        self.model_reading.set_position(getattr(config, "latitude", None), getattr(config, "longitude", None))
         self.calibration = Calibration()
         self._pi_stage_seen = False      # a learning stage driven by the PI has been seen
         self._integral_zeroed = False    # the integral term was set to zero for this blank start
@@ -103,6 +108,7 @@ class LearningStart:
             events = owner.learn_win.events
             events.source = self.event_source
             events.record, events.reader = self.record, self.reading
+            events.model_reader = self.model_reading
 
     @property
     def direct(self) -> bool:
@@ -122,6 +128,8 @@ class LearningStart:
         self.calibration.forget_lag()
         self.pulse.reset()
         self.reading.reset()
+        self.model_reading.reset()
+        self.model.reset()
         self._pi_stage_seen = False
         self._integral_zeroed = False
         self.recovering = self._calibration_pulse_seen = False
@@ -210,12 +218,14 @@ class LearningStart:
         fraction, and so does a scheduler without receipts (the record then gets the power the detector observed)."""
         start = getattr(receipt, "cycle_start_monotonic", None)
         if not valve and start is not None:
-            self.record.note_cycle(start, float(receipt.on_time_sec), float(receipt.cycle_duration_sec))
+            for record in (self.record, self.model_reading.record):
+                record.note_cycle(start, float(receipt.on_time_sec), float(receipt.cycle_duration_sec))
 
     # -- per calculation ---------------------------------------------------------------------------------------
     def begin(self, hvac_mode: object) -> None:
         """First call of a calculation: the change of mode."""
         self.reading.begin(hvac_mode)
+        self.model_reading.begin(hvac_mode)
         self.zero_integral()
 
     def advance(self, now: float, target: float, temp: float, hvac_mode: object, previous_command: float) -> None:
@@ -239,12 +249,15 @@ class LearningStart:
                 active_deadtime_known=dt_est.active_deadtime(hvac_mode)[1],
                 passive_deadtime_known=dt_est.passive_deadtime(hvac_mode)[1],
                 dt_est=dt_est,
+                history=owner.learn_win.temperatures.raw,
                 previous_command=previous_command,
                 readings_pending=self.reading.wants_pulses(hvac_mode),
                 calibration=calibrating,
                 calibration_pulses_left=cal.pulses < PULSE_MAX_COUNT,
                 event_stage=owner.learn_win.events.phase_stage(str(hvac_mode)) if calibrating else None,
-                limits=pulse_limits(dt_est, hvac_mode, owner.anticipation_horizon(hvac_mode).seconds) if calibrating else None,
+                limits=pulse_limits(
+                    dt_est, hvac_mode, owner.anticipation_horizon(hvac_mode).seconds, owner.learn_win.temperatures.raw,
+                ) if calibrating else None,
             )
             if calibrating and self.pulse.calibration_heated > heated:
                 cal.pulses += 1   # a calibration pulse counts once it heats
@@ -256,6 +269,7 @@ class LearningStart:
             now, hvac_mode, response_lag=owner.learn_win.response_lag if self.direct else None,
             phase_start=owner.learn_win.events.phase_start,
         )
+        self._step_model(now, hvac_mode)
         lag = self.calibration.lag_s.get(str(hvac_mode)) if self.direct else None
         if lag is not None:   # a lag corrected by a calibration replaces the lag kept from the start
             owner.learn_win.response_lag.give_lag(lag)
@@ -264,6 +278,14 @@ class LearningStart:
         if not self.record.enabled:
             self.record.clear()
         self.zero_integral()
+
+    def _step_model(self, now: float, hvac_mode: object) -> None:
+        """The readings of the response model: what tells whether SmartPI is in control, the published ``b``."""
+        owner, est = self._owner, self._owner.est
+        excluded = getattr(owner.restart, "excluded_vt", None) or (
+            "safety mode" if getattr(owner, "vt_safety_override", False) is True else None)
+        self.model_reading.note_control(now, excluded, float(est.b) if getattr(est, "usable_b", False) is True else None)
+        self.model_reading.step(now, hvac_mode, None, owner.learn_win.events.phase_start)
 
     # -- the calibration -----------------------------------------------------------------------------------------
     @property
@@ -285,6 +307,7 @@ class LearningStart:
             _LOGGER.info("%s - Calibration request %s", self._name, reason)
             return False
         self.reading.start_calibration()
+        self.model.start_calibration()
         _LOGGER.info("%s - Calibration started", self._name)
         return True
 
@@ -359,6 +382,7 @@ class LearningStart:
         """The thermostat stops (off, window, shedding): the pulse and the readings in progress end."""
         self.pulse.interrupt(now, reason)
         self.reading.interrupt(now, reason)
+        self.model_reading.interrupt(now, reason)
 
     def zero_integral(self) -> None:
         """Set the integral term to zero, once per blank start, at the calculation at which a learning stage driven
@@ -406,7 +430,7 @@ class LearningStart:
     def save(self, now: float) -> dict[str, Any]:
         """The start of the learning when it is the direct one (a state without it began with the bootstrap), the
         pulses started (a pulse in progress is saved as ended by the restart), the calibration, the record of the events
-        and the readings with their kept values."""
+        and the readings with their kept values, and the response model with its readings and record."""
         state: dict[str, Any] = {"learning_start": self.mode} if self.direct else {}   # no key: the bootstrap
         pulse = self.pulse.save(now)
         if pulse is not None:
@@ -420,6 +444,9 @@ class LearningStart:
         record = self.record.save()
         if record is not None:
             state["measure_events"] = record
+        # always saved: a state without it is one of an earlier version, whose model is seeded at its load
+        state["response_state"] = {"model": self.model.save(), "reading": self.model_reading.save(),
+                                   "record": self.model_reading.record.save()}
         return state
 
     def _begun(self, state: dict[str, Any]) -> bool:
@@ -444,4 +471,19 @@ class LearningStart:
         self.calibration.load(state.get("calibration"), state.get("cal_state"))
         self.reading.load(state.get("event_reading") or state.get("pulse_reading"))
         self.record.load(state.get("measure_events"))
+        self._load_model(state)
         self.hand_over(self._owner.est, self._owner.est.model_hvac_mode)
+
+    def _load_model(self, state: dict[str, Any]) -> None:
+        """The response model, its readings and record; a state saved without it seeds the model from the dead times
+        and lags of the earlier estimators (smartpi/response_model.py)."""
+        saved = state.get("response_state")
+        if not isinstance(saved, dict):
+            self.model_reading.reset()
+            self.model.reset()
+            for mode, (theta, tau) in seed_from_saved(state).items():
+                self.model.seed(mode, theta, tau)
+            return
+        self.model.load(saved.get("model"))
+        self.model_reading.load(saved.get("reading"))
+        self.model_reading.record.load(saved.get("record"))

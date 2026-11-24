@@ -20,15 +20,12 @@ from .const import (
     DEADTIME_PASSIVE_TIMEOUT_S,
     STOP_PEAK_DROP_MIN_C,
     STOP_PEAK_DROP_STEPS,
-    TIN_HISTORY_MAX_SAMPLES,
-    TIN_HISTORY_RETENTION_MIN,
 )
 from .deadtime_trend import prestart_trend
 from .peak_search import PeakSearch
 from .sensor_step import sensor_step
+from .temperature_history import TemperatureHistory
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
-
-_TIN_HISTORY_RETENTION_S = TIN_HISTORY_RETENTION_MIN * 60.0
 
 # Applied power (share of full power) of the cycle before a stop for the stop to end a heating at full power.
 FULL_POWER_STOP_MIN = 0.99
@@ -45,7 +42,10 @@ class DeadTimeEstimator:
     Based on Finite State Machine detecting sharp power transitions.
     """
 
-    def __init__(self, passive_by_peak: bool = False, measured_start: Callable[[], bool] | None = None):
+    def __init__(
+        self, passive_by_peak: bool = False, measured_start: Callable[[], bool] | None = None,
+        history: TemperatureHistory | None = None,
+    ):
         self.deadtime_heat_s: float | None = None
         self.deadtime_cool_s: float | None = None
         self.deadtime_heat_reliable: bool = False
@@ -98,19 +98,12 @@ class DeadTimeEstimator:
         self.samples_added = {"heat": 0, "cool": 0}
         self._history_cool = deque(maxlen=6)
 
-        # Raw measured temperature history for external access (SmartPI learning).
-        # Learning slopes rely on the quantisation of raw measurements: their
-        # robustness guard counts distinct value jumps, which a filtered signal
-        # would inflate. Both histories keep the samples of the last
-        # TIN_HISTORY_RETENTION_MIN minutes (see _append_history).
-        self._tin_history: Deque[Tuple[float, float]] = deque(
-            maxlen=TIN_HISTORY_MAX_SAMPLES
-        )
-        # Filtered temperature history, used only by the dead time inflection
-        # lookback so that it stays consistent with the trough/peak tracking.
-        self._tin_lp_history: Deque[Tuple[float, float]] = deque(
-            maxlen=TIN_HISTORY_MAX_SAMPLES
-        )
+        # The room temperatures the estimator records at each update (smartpi/temperature_history.py), shared with
+        # the learning: the raw history feeds the learning slopes, the filtered one the inflection lookback of the
+        # detection, so that it stays consistent with the trough/peak tracking.
+        self.history = history if history is not None else TemperatureHistory()
+        self._tin_history = self.history.raw
+        self._tin_lp_history = self.history.filtered
         # Detection state saved before a restart (wall-clock times), resumed
         # only when the restart is bridged (resume_after_restart).
         self._restart_detection: dict | None = None
@@ -166,28 +159,8 @@ class DeadTimeEstimator:
 
     @property
     def tin_history(self) -> Deque[Tuple[float, float]]:
-        """Raw measured temperature history for learning window slope calculation."""
+        """The raw temperature history of the holder."""
         return self._tin_history
-
-    @staticmethod
-    def _append_history(
-        history: Deque[Tuple[float, float]], now: float, value: float
-    ) -> None:
-        """Append a sample when the value changed or 60 seconds elapsed.
-
-        Samples older than TIN_HISTORY_RETENTION_MIN are dropped. The history
-        spans that duration as long as the TIN_HISTORY_MAX_SAMPLES cap is not
-        reached, i.e. while samples arrive on average at most every 10 s.
-        """
-        # Performance/Redundancy Gate: only append if temperature changed
-        # or if more than 60 seconds passed since the last sample.
-        # This prevents redundant points from high-frequency heartbeat triggers
-        # while preserving high-resolution inflection points during transitions.
-        if not history or abs(value - history[-1][1]) > 0.001 or now - history[-1][0] >= 60.0:
-            history.append((now, value))
-        oldest_kept = now - _TIN_HISTORY_RETENTION_S
-        while history and history[0][0] < oldest_kept:
-            history.popleft()
 
     def reset(self):
         """Reset estimator state, the dead times set aside for the other mode included."""
@@ -215,8 +188,7 @@ class DeadTimeEstimator:
         self.last_outcome = {"heat": None, "cool": None}
         self._history_heat.clear()
         self._history_cool.clear()
-        self._tin_history.clear()
-        self._tin_lp_history.clear()
+        self.history.clear()
         self._restart_detection = None
         self._stop_peak = None
         self._stop_peak_confirmed = False
@@ -273,8 +245,7 @@ class DeadTimeEstimator:
         self._near_extreme_time = None
         self._trend_slope = 0.0
         self._weak_evidence = False
-        self._tin_history.clear()
-        self._tin_lp_history.clear()
+        self.history.clear()
         self._stop_peak = None
         self._stop_peak_confirmed = False
 
@@ -445,8 +416,7 @@ class DeadTimeEstimator:
         active_response = "cool" if hvac_mode == VThermHvacMode_COOL else "heat"
         passive_response = "heat" if hvac_mode == VThermHvacMode_COOL else "cool"
 
-        self._append_history(self._tin_history, now, tin if tin_raw is None else tin_raw)
-        self._append_history(self._tin_lp_history, now, tin)
+        self.history.append(now, tin, tin_raw)
 
         by_peak = self.passive_by_peak
         if by_peak and u_applied > 0.01:
@@ -808,8 +778,7 @@ class DeadTimeEstimator:
             "model_hvac_mode": self.model_hvac_mode,
             "history_heat": list(self._history_heat),
             "history_cool": list(self._history_cool),
-            "tin_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_history],
-            "tin_lp_history": [(monotonic_to_wall_ts(t), v) for t, v in self._tin_lp_history],
+            **self.history.save(),
             "detection": self._detection_state(),
         }
         if self._mode_stash:
@@ -864,15 +833,7 @@ class DeadTimeEstimator:
         self._restart_detection = dict(detection) if isinstance(detection, dict) else None
 
         # Restore temperature histories (a missing filtered history stays empty)
-        for key, history in (
-            ("tin_history", self._tin_history),
-            ("tin_lp_history", self._tin_lp_history),
-        ):
-            history.clear()
-            for t_wall, v in state.get(key, []):
-                t_mono = wall_to_monotonic_ts(t_wall)
-                if t_mono is not None:
-                    history.append((t_mono, v))
+        self.history.load(state)
 
 
 def _direction(response: str) -> float:

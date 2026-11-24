@@ -39,7 +39,7 @@ def test_history_contains_only_equinox_time_series() -> None:
             "pi_percent": 20.0,
             "ff_percent": 15.0,
         },
-        "model": {"a": 0.05, "b": 0.001},
+        "model": {"a": 0.05, "b": 0.001, "effective_dead_time_s": None},
         "feedforward": {"source": None, "wall_power_percent": None},
         "room_model": {
             "a": None,
@@ -103,3 +103,9 @@ def test_history_does_not_depend_on_the_analysis_subtree() -> None:
     assert live == before
     del live["analysis"]
     assert build_history_diagnostics(live) == full
+
+
+def test_history_carries_the_effective_dead_time_of_the_response_model() -> None:
+    live = _live_diagnostics()
+    live["model"].update(dead_time_s=300, response_time_constant_s=1201)
+    assert build_history_diagnostics(live)["model"]["effective_dead_time_s"] == 900

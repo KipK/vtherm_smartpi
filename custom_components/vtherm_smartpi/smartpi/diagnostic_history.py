@@ -11,11 +11,17 @@ def _horizon(errors: Any, label: str) -> Any:
     return errors.get(label) if isinstance(errors, Mapping) else None
 
 
+def _effective_dead_time(model: Mapping[str, Any]) -> int | None:
+    """Dead time plus half the response time constant of the response model (whole seconds), None without it."""
+    dead, tau = model.get("dead_time_s"), model.get("response_time_constant_s")
+    return None if dead is None or tau is None else round(dead + tau / 2)
+
+
 def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
     """Return the stable Recorder payload.
 
-    The feed-forward, room model and dead-time series are always present, null
-    when their block is missing or not computed yet.
+    The feed-forward, room model, dead-time and effective dead time series are
+    always present, null when their block is missing or not computed yet.
     """
     control = live["control"]
     temperature = live["temperature"]
@@ -44,6 +50,7 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
         "model": {
             "a": model["a"],
             "b": model["b"],
+            "effective_dead_time_s": _effective_dead_time(model),
         },
         "feedforward": {
             "source": feedforward.get("source"),
