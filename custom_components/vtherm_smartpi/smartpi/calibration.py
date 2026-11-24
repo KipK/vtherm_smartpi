@@ -33,9 +33,10 @@ and corrected only when the value in force is off the reading by more than ``CAL
   walls). With ``CALIBRATION_CORRECT_B`` and when the two readings' own values agree within the agreement margin of
   the readings, it is corrected: the channel restarts and the reading stands until the learning's own time constant
   is reliable again;
-- the emitter lag, with the direct start only: it is given to the response-lag estimator in place of the lag kept from
-  the start, and stands while that estimator has no lag of its own. It never sets the anticipation horizon. With the
-  bootstrap start it is published only.
+- the emitter lag, with the direct start only: it is noted (``lag_s``, ``corrected``) and published; what the learning
+  reads is the response model, which takes the events of the calibration and replaces the history of the mode by its
+  two agreeing events under the same rule (smartpi/response_model.py). It never sets the anticipation horizon. With
+  the bootstrap start it is published only.
 
 With ``CALIBRATION_SKIP_WHEN_OWN_AGREE``, a quantity is not corrected while the learning's own recent measures agree
 with the value in force (no drift candidate and the last ``CALIBRATION_OWN_RECENT`` measures within the threshold).

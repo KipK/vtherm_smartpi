@@ -175,17 +175,6 @@ l'anticipation de la température, en chauffage et en refroidissement :
 | `waiting_elapsed_s` | Âge de la réponse attendue en secondes, `null` quand aucune détection n'est armée |
 | `heat_last_outcome` / `cool_last_outcome` | Issue de la dernière attente d'une réponse montante / descendante : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger), `null` avant la première |
 
-`analysis.learning.response_lag` décrit le retard de l'émetteur mesuré sur les phases de chauffe à puissance constante, utilisé par l'apprentissage de `a` :
-
-| Champ | Signification |
-|---|---|
-| `lag_s` | Retard de l'émetteur publié en secondes, `null` tant qu'il n'existe pas un ensemble cohérent d'estimations |
-| `estimates` | Nombre d'estimations conservées (7 au plus) |
-| `episodes` | Nombre de phases de chauffe terminées depuis le début de l'apprentissage (des périodes de chauffe séparées par moins de 10 minutes sans chauffe ne comptent que pour une phase) ; il continue après la publication du retard de l'émetteur et peut dépasser `episodes_target` |
-| `episodes_target` | Nombre de phases de chauffe après lequel le modèle de puissance délivrée est résolu sans retard de l'émetteur publié (`4`) |
-| `episode_median_s` | Durée médiane des épisodes actifs récents en secondes, `null` avec moins de 3 épisodes |
-| `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage). `episode interrupted by restart` : épisode en cours lors d'un redémarrage non ponté, non repris, compté sans estimation. Peut être vide juste après un redémarrage |
-
 `analysis.learning.heating_balance` décrit la vitesse de chauffe et le retard de l'émetteur mesurés sur les phases de chauffe. La régulation ne lit que `kept_lag_s` :
 
 | Champ | Signification |
@@ -203,9 +192,8 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 
 | Valeur | Signification |
 |---|---|
-| `step1 - deadtime: heat:… cool:…` | Attente des temps morts actif et passif |
+| `step1 - waiting response model` | Aucune fenêtre d'apprentissage avant la publication du modèle de réponse du mode (la première phase de chauffe ou impulsion lue en entier le donne) |
 | `step2 - collecting emeas: A:n/5 B:n/5` | Collecte des mesures de `a` et `b` |
-| `step2 - waiting response lag: estimates N, heating phases K/4` | Collectes complètes ; la publication de `a` attend le modèle de puissance délivrée (retard de l'émetteur publié, `K` atteint 4, ou 31 mesures de `a` collectées) |
 
 `valve` vaut `null` sauf si le thermostat pilote une vanne. En mode vanne, il contient :
 
@@ -224,7 +212,10 @@ dont la pièce répond à la puissance : un temps mort (sonde, transport, action
 d'une constante de temps de réponse (l'émetteur, l'air et la masse proche ensemble). Il est ajusté sur des événements de mesure
 entiers : les impulsions, les phases du bootstrap, les impulsions de calibration et les
 montées de confort de la régulation après un repos (celles-ci seulement la nuit, la position
-du domicile étant connue). Il est publié seulement : rien dans la régulation ne le lit.
+du domicile étant connue). L'apprentissage de `a` et `b` le lit (aucune fenêtre d'apprentissage de la phase
+d'apprentissage avant lui, puissance délivrée, délai d'une fenêtre d'apprentissage après un
+démarrage ou un arrêt) ; le régulateur lui-même (gains, maintiens, anticipation, bande proche)
+ne le lit pas.
 
 | Chemin | Signification |
 |---|---|

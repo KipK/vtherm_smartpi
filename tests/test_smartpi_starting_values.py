@@ -239,7 +239,6 @@ def test_the_lag_of_the_bootstrap_readings_is_published_not_used():
     assert bootstrap._start.kept_lag_s(VThermHvacMode_HEAT) is None
     assert bootstrap._start.reading.kept_lag_s(VThermHvacMode_HEAT) == 420.0
     bootstrap._start.advance(1000.0, 20.0, 19.0, VThermHvacMode_HEAT, 0.0)
-    assert bootstrap.learn_win.response_lag.lag_s is None
     assert bootstrap.anticipation_horizon(VThermHvacMode_HEAT) == before
     assert before.seconds != 420.0
     direct._start.advance(1000.0, 20.0, 19.0, VThermHvacMode_HEAT, 0.0)

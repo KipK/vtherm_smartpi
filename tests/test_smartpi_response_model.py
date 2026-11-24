@@ -163,7 +163,7 @@ def test_one_event_publishes_a_provisional_model_two_agreeing_events_a_measured_
     assert values["confidence"] == CONFIDENCE_MEASURED
     assert values["theta_s"] == 250.0 and values["theta_s"] + values["tau_e_s"] == 1100.0   # medians
     assert model.effective_dead_time_s(MODE_HEAT) == 250.0 + 425.0
-    assert model.emitter_lag_s(MODE_HEAT) == 1100.0 and model.settling_s(MODE_HEAT) == 250.0 + 3 * 850.0
+    assert model.emitter_lag_s(MODE_HEAT) == 1100.0
     assert model.values(MODE_COOL) is None                                   # per mode
 
 
@@ -347,7 +347,7 @@ class _Rig:
             self.temp += (0.05 * self.heat - 0.0005 * (self.temp - 5.0)) * 10.0 / 60.0
         self.now += STEP_S
         self.reader.note_control(self.now, None, 0.0005)
-        self.reader.step(self.now, VThermHvacMode_HEAT, None, self.detector.phase_start)
+        self.reader.step(self.now, self.detector.phase_start)
         self.history.append((self.now, round(self.temp, 2)))
         self.detector.observe(now=self.now, dt_s=STEP_S, u=u, hvac_mode=VThermHvacMode_HEAT,
                               tin_history=self.history, context="regulation", ext=5.0)

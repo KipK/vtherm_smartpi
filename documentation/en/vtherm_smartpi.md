@@ -215,10 +215,10 @@ The regulation threshold and regulation minimum period are configured in the **U
 
 SmartPI describes the time between a command and its effect with two quantities only, and every part of this documentation, of the diagnostics and of the cards uses these two names.
 
-- **Dead time**: the time from a change of the command to the first visible move of the room temperature. There are two values: the heating dead time after a start of heating (`model.deadtime_heat_s`) and the cooling dead time after a stop (`model.deadtime_cool_s`: the emitter keeps giving heat for a while). The bootstrap measures them (see [Step 1](#step-1--measuring-dead-times)) and SmartPI keeps measuring the heating dead time at each heating start. They are read by the gain rule (it expects an apparent dead time), the start of the learning windows, the integral hold after a resume and the fallback horizon of the anticipation.
-- **Emitter lag** (`T_ar`, the average residence time of Astrom and Hagglund): the mean time the commanded heat takes to arrive in the room, that is the dead time plus the inertia of the emitter. It is always at least the dead time, typically about twice. Three methods estimate this same quantity: the heating phases at constant power (`analysis.learning.response_lag`), the heating balance (`analysis.learning.heating_balance`), and the learning on morning setpoint rises and on several days of quiet periods ([Emitter lag learning](#emitter-lag-learning), `tar_learning`). The emitter lag is read by the correction of the delivered power when `a` is learned, by the delay before a learning window starts (3 lags) and, from the heating balance, by the horizon of the anticipation in heating. The emitter lag learning also gives the heating dead time in force for the regulation (`tar_learning.applied_s`), derived from the learned emitter lag.
+- **Dead time**: the time from a change of the command to the first visible move of the room temperature. There are two values: the heating dead time after a start of heating (`model.deadtime_heat_s`) and the cooling dead time after a stop (`model.deadtime_cool_s`: the emitter keeps giving heat for a while). The bootstrap measures them (see [Step 1](#step-1--measuring-dead-times)) and SmartPI keeps measuring the heating dead time at each heating start. They are read by the gain rule (it expects an apparent dead time), the integral hold after a resume and the fallback horizon of the anticipation.
+- **Emitter lag** (`T_ar`, the average residence time of Astrom and Hagglund): the mean time the commanded heat takes to arrive in the room, that is the dead time plus the inertia of the emitter. It is always at least the dead time, typically about twice. Two methods estimate this same quantity besides the response model below: the heating balance (`analysis.learning.heating_balance`), and the learning on morning setpoint rises and on several days of quiet periods ([Emitter lag learning](#emitter-lag-learning), `tar_learning`). The heating balance gives the horizon of the anticipation in heating. The emitter lag learning also gives the heating dead time in force for the regulation (`tar_learning.applied_s`), derived from the learned emitter lag.
 
-SmartPI also fits a response model on whole measurement events (pulses, bootstrap phases, calibration pulses, and comfort returns of the regulation at night): a pure dead time (`model.dead_time_s`) followed by a response time constant (`model.response_time_constant_s`: the emitter, the air and the nearby mass together; their sum is an emitter lag), with its source and confidence and the effective dead time (dead time plus half the time constant, `analysis.control.effective_dead_time_s`). It is published only: the regulation does not read it (see the [diagnostics](diagnostics.md#response-model)).
+SmartPI also fits a response model on whole measurement events (pulses, bootstrap phases, calibration pulses, and comfort returns of the regulation at night): a pure dead time (`model.dead_time_s`) followed by a response time constant (`model.response_time_constant_s`: the emitter, the air and the nearby mass together; their sum is an emitter lag), with its source and confidence and the effective dead time (dead time plus half the time constant, `analysis.control.effective_dead_time_s`). The learning of `a` and `b` reads it: no learning window of the learning phase before it, the heat actually delivered when `a` is learned, and the delay before a learning window starts after a start or a stop of the heating. The regulator itself (gains, anticipation) does not read it yet (see the [diagnostics](diagnostics.md#response-model)).
 
 ## Operating phases
 
@@ -255,7 +255,7 @@ SmartPI keeps measuring the heating dead time at each heating start that follows
 
 #### Step 2 — Learning heat loss (`b`)
 
-Once the dead times are considered reliable, SmartPI starts collecting **cooling observations**: it measures how fast the room loses heat when the heater is off.
+Once the first heating phase has given a response model (see [Dead time and emitter lag](#dead-time-and-emitter-lag)), SmartPI starts collecting **cooling observations**: it measures how fast the room loses heat when the heater is off.
 
 From these observations, it calculates `b`, the heat-loss coefficient. This parameter represents how quickly the room cools down depending on the difference between indoor and outdoor temperature.
 
@@ -263,18 +263,19 @@ SmartPI needs at least 5 valid cooling observations before `b` is considered usa
 
 #### Step 3 — Learning heating gain (`a`)
 
-Once `b` has enough observations to be considered reliable, SmartPI starts collecting **heating observations**: it measures how quickly the room warms up for a given heating command.
+SmartPI also collects **heating observations**: it measures how quickly the room warms up for a given heating command. Those made before `b` has its 5 observations are kept and recomputed once `b` is known.
 
 From these observations, it calculates `a`, the heating gain. This parameter represents how effectively your heating system raises the indoor temperature.
 
 After a heating start, the room warms up progressively: the emitter, the air and
 the sensor take some time before the temperature rises at its full rate. SmartPI
-measures the *emitter lag* on the first heating phases at constant power and
-ignores the start of each phase until the response has settled, then accounts
-for the heat actually delivered. `a` is only published once this emitter lag is known (or after 4
-heating phases where it could not be measured, for example with a sensor that
-reports too rarely). A heating phase is a period of continuous heating; short
-interruptions of less than 10 minutes do not start a new one.
+ignores the start of each phase for one emitter lag (the dead time plus the response
+time constant of the response model), then accounts for the heat actually delivered. After a stop the emitter keeps heating: a cooling observation
+starts one emitter lag after the stop and accounts for the heat the emitter still gives,
+once `a` is known (the cooling observations made before are recomputed then). `a` is only
+published once the response model is known (or after 4 heating phases without it,
+for example with a sensor that reports too rarely). A heating phase is a period of
+continuous heating; short interruptions of less than 10 minutes do not start a new one.
 
 SmartPI needs 5 valid heating observations for `a`, or 4 when they agree closely.
 
@@ -307,7 +308,7 @@ With the direct start there are no hysteresis cycles: SmartPI regulates with its
 
 Two pulses are at least 6 hours apart. The dead time after a stop is read on that peak, also on the stops of the regulation: when the heating starts again before the confirmation, the peak still counts if the room has already fallen enough from it.
 
-During the learning stage, a measure of the loss rate `b` after a stop starts once the peak of the stop is confirmed or, when the emitter lag is known (learned, or kept from the pulses), three emitter lags after the stop.
+During the learning stage, the measures of the heating rate `a` and of the loss rate `b` start once the first pulse has given a response model, with the same delays after a start or a stop as in the bootstrap (see [Step 3](#step-3--learning-heating-gain-a)).
 
 SmartPI reads each pulse as a whole, like the heating phases of the bootstrap (see [Leaving bootstrap](#leaving-bootstrap)). When two pulses agree, their heating rate `a`, loss rate `b` and emitter lag are kept. Until the learning publishes its own model, the kept values stand for it: they give the gains of the regulation, the horizon of the anticipation and the starting values of `a` and `b`. When the first model is published, the integral term of the regulation starts from zero. In simulation the first model is published in about 8 to 24 hours.
 
@@ -348,9 +349,9 @@ Each pulse gives the dead-time learning a start and a stop from full power, meas
 
 - heating rate: when the value in use is off the reading by more than 30 % of the reading (the reading is the best estimate of the true value), the learning of the heating rate of that mode starts again and the reading stands in for it until the learning publishes its own value,
 - loss coefficient: it is read and published (`reading_b`), not corrected: the loss coefficient read on a pulse is biased in a room with heavy walls. The learning keeps its own,
-- emitter lag: with the direct start, when the horizon of the anticipation in use is off the lag read by more than 30 %, that lag replaces the lag kept from the start in the learning of the response lag (until that learning measures its own); it never changes the horizon of the anticipation. With the bootstrap start it is published only.
+- emitter lag: with the direct start, when the horizon of the anticipation in use is off the lag read by more than 30 %, the correction is noted and published; the learning reads the response model, whose history the two agreeing pulses replace when they are off it by more than 30 %. It never changes the horizon of the anticipation. With the bootstrap start it is published only.
 
-A value in use within 30 % of the reading is left as it is: a calibration of a well-learned room changes nothing. When a value is corrected, the change of the holding power is moved into the integral term, so the feed-forward and the integral term do not jump (the proportional term follows its new gain as usual), and the progress of the feed-forward ramp is kept. Corrected values are kept across a restart. The heating balance and the learning of the response lag observe the pulses like any other heating phase. While a calibration is in progress, the learning takes no measure of the heating rate (the pulses and the recoveries after them would bias it); the loss coefficient and the dead times go on being learned. After each pulse the integral term is held until the room is back at the setpoint, so that the recovery after the pulse does not build up an integral that would overheat the room afterwards.
+A value in use within 30 % of the reading is left as it is: a calibration of a well-learned room changes nothing. When a value is corrected, the change of the holding power is moved into the integral term, so the feed-forward and the integral term do not jump (the proportional term follows its new gain as usual), and the progress of the feed-forward ramp is kept. Corrected values are kept across a restart. The heating balance observes the pulses like any other heating phase. While a calibration is in progress, the learning takes no measure of the heating rate (the pulses and the recoveries after them would bias it); the loss coefficient and the dead times go on being learned. After each pulse the integral term is held until the room is back at the setpoint, so that the recovery after the pulse does not build up an integral that would overheat the room afterwards.
 
 A calibration ends when two of its pulses agree, when its three pulses are done and read, or after 48 hours. When that end comes during a pulse, a pulse at rest hands back to the regulation at once, a pulse heating at full power goes to its stop step, and a pulse in its stop step goes on: the calibration ends, and applies its corrections, when that pulse ends. A pulse counts once it has started heating; one that ends during its rest (a setpoint change, for example) does not count. Switching the thermostat off (or a window, or power shedding) ends the pulse in progress; the calibration goes on with its next pulse. A change between heating and cooling, a learning reset or a pause of the learning cancels it at once, with its pulse. A restart keeps the calibration in progress and its pulse count; the pulse in progress ends.
 

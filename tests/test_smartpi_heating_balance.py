@@ -473,8 +473,7 @@ def test_learning_window_feeds_the_heating_balance():
         now = 1000.0 + 600.0 * k
         window.update(
             dt_min=1.0, current_temp=19.0, ext_temp=T_EXT, u_active=u, estimator=est,
-            dt_est=dt, governance=gov, now=now, in_deadband=False, in_near_band=False,
-            t_heat_episode_start=None, t_cool_episode_start=None,
+            dt_est=dt, governance=gov, now=now,
             hvac_mode=VThermHvacMode_HEAT, target_temp=21.0, raw_temp=19.0, **kwargs,
         )
         assert window.heating_balance.state == "heating"

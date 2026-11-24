@@ -373,11 +373,8 @@ async def test_smartpi_power_stability_abort():
         minimal_deactivation_delay=0,
         name="TestAlgo"
     )
-    # Simulate deadtimes already learned so the bootstrap gate does not block A/B collection
-    algo.dt_est.deadtime_heat_reliable = True
-    algo.dt_est.deadtime_heat_s = 30.0
-    algo.dt_est.deadtime_cool_reliable = True
-    algo.dt_est.deadtime_cool_s = 30.0
+    # A response model of a fast emitter (settling waits of seconds) so that the learning stage opens A/B windows
+    algo._start.model.seed(str(VThermHvacMode_HEAT), 0.0, 1.0)
 
     # 1. Start a cycle with 50% power
     start_ts_dt = datetime.now() - timedelta(minutes=10)
@@ -397,7 +394,8 @@ async def test_smartpi_power_stability_abort():
         current_temp=20.0,
         ext_temp=10.0,
         u_active=0.5,
-        setpoint_changed=False
+        setpoint_changed=False,
+        hvac_mode=VThermHvacMode_HEAT,
     )
 
     assert algo.learn_win_active is True
@@ -413,7 +411,8 @@ async def test_smartpi_power_stability_abort():
         current_temp=20.01,
         ext_temp=10.0,
         u_active=0.6,
-        setpoint_changed=False
+        setpoint_changed=False,
+        hvac_mode=VThermHvacMode_HEAT,
     )
 
     # Window must stay open: moderate PI modulation is now allowed
@@ -428,7 +427,8 @@ async def test_smartpi_power_stability_abort():
             current_temp=20.0,
             ext_temp=10.0,
             u_active=0.0,
-            setpoint_changed=False
+            setpoint_changed=False,
+            hvac_mode=VThermHvacMode_HEAT,
         )
         if not algo.learn_win_active:
             break

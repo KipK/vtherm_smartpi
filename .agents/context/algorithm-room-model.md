@@ -12,7 +12,7 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 | Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | Yes (HEAT, PWM only): gives the dead time in force used by gains, near band, I-hold |
 | Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the two learnings above and below |
 | Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1). Forecasts, forecast errors, `a`/`b_eq` display: no |
-| Emitter lag on constant-power heating phases | `smartpi/response_lag.py` | Yes: delivered-power model for the `a` learning |
+| Response model (theta, tau_e) | `smartpi/response_model.py` | Yes, a/b learning only: learning-stage gate, delivered power, settling waits (`smartpi/power_steps.py`) |
 | Heating balance | `smartpi/heating_balance.py` | Yes, one value: the median kept emitter lag is the HEAT horizon of the anticipation (`smartpi/anticipation.py`); `a` and the other values are observation only |
 | Restart bridge | `smartpi/restart_bridge.py` | Yes: decides resume vs conservative restart for every component |
 | Resume hold | `smartpi/resume_hold.py` | Yes: temporary I-hold after window / power-shedding resume; `recovery_error_floor_c` (residual error under which a recovery counts as closed) |
@@ -250,23 +250,13 @@ Silent / declining states:
 | computation failed | `last_error` |
 Typical outcome with short setbacks and heavy walls: model stays unpublished and changes nothing.
 
-## 5. Emitter lag on constant-power heating phases (`smartpi/response_lag.py`, class `ResponseLagEstimator`)
+## 5. Power steps of the a/b learning (`smartpi/power_steps.py`, class `PowerSteps`)
 
-Purpose: measure the intercept `T_ar` of the response on constant-power active episodes (deviation <=
-`RESPONSE_LAG_U_TOL = 0.05`) after a passive period >= `max(1800 s, 5 x known emitter lag)`, and expose the settling
-gates plus the delivered-power model (pure dead time `L = min(active dead time, T_ar)` then first order of `T_ar - L`).
-Estimates: last `RESPONSE_LAG_HISTORY = 7`; published when >= `RESPONSE_LAG_MIN_ESTIMATES = 3` and combined
-uncertainty <= `RESPONSE_LAG_MAX_REL_UNC = 0.15` of the median (inconsistent sets keep the published value).
-Model resolved when the emitter lag is published or after `RESPONSE_LAG_RESOLVE_EPISODES = 4` heating phases without publication
-(then applied power is used).
-Regulation: yes. It gates the first publication of `a` (`bootstrap_status = step2 - waiting response lag ...`),
-sets the settling delay of `a`/`b` windows and the delivered fraction of power. In PWM regulation constant-power
-episodes are rare, so an installation already out of the bootstrap may never publish an emitter lag.
-Persistence: in the learning-window state (`lw_state["response_lag"]`), passive period/episode context as
-wall-clock times (resumed after a bridged restart; otherwise episode ends "episode interrupted by restart").
-Diagnostics: `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`, `episodes_target`,
-`episode_median_s`, `last_reason`). Silent: `lag_s = null` with `last_reason` saying why (for example
-`intercept not resolvable`).
+Purpose: track active episodes (step from rest, constant within `RESPONSE_LAG_U_TOL = 0.05`), heating phases (cuts
+< `RESPONSE_LAG_PHASE_MIN_OFF_S` join), the last 7 durations, the delivered power (theta then tau_e of the mode's
+response model) and the settling gates (waits in `smartpi/response_model.py`; formula in `algorithm-core.md`).
+No estimation of its own. Persistence: `lw_state["power_steps"]` (an old `response_lag` block loads its durations
+and episodes), restart context with the delivered power and temperatures at the cut. No published block.
 
 ## 6. Heating balance (`smartpi/heating_balance.py`, class `HeatingBalance`)
 

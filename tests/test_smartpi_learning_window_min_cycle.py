@@ -50,10 +50,6 @@ def _run(minutes: int, min_active_window_min: float):
             dt_est=dt,
             governance=gov,
             now=now,
-            in_deadband=False,
-            in_near_band=False,
-            t_heat_episode_start=None,
-            t_cool_episode_start=None,
             hvac_mode=VThermHvacMode_HEAT,
             target_temp=21.0,
             raw_temp=temp,
@@ -83,8 +79,7 @@ def test_without_cycle_the_active_window_is_submitted_earlier():
 def test_bootstrap_minimum_is_capped_by_the_heating_phases():
     """A bootstrap heating phase may be shorter than one cycle: half the median phase is enough."""
     win = LearningWindowManager("t")
-    lag = win.response_lag
-    lag._durations.extend([600.0, 600.0, 600.0])  # 10 min heating phases
+    win.power_steps._durations.extend([600.0, 600.0, 600.0])  # 10 min heating phases
     assert win._bootstrap_active_window_min(CYCLE_MIN * 2, is_hysteresis=True) == pytest.approx(5.0)
     assert win._bootstrap_active_window_min(4.0, is_hysteresis=True) == 4.0
     assert win._bootstrap_active_window_min(CYCLE_MIN * 2, is_hysteresis=False) == CYCLE_MIN * 2

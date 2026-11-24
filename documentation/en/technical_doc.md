@@ -74,7 +74,10 @@ In phase `HYSTERESIS`, learning follows a strict order:
    `a` (`heat` in HEAT, `cool` in COOL),
 2. the passive-response dead time must be reliable before useful collection
    for `b` (`cool` in HEAT, `heat` in COOL),
-3. `b` must progress before `a` through a soft gate.
+3. `b` must progress before `a` through a soft gate: an `a` window submitted
+   while `b` has fewer than `AB_A_SOFT_GATE_MIN_B` measurements is kept
+   (`skip: a kept until b is learned`), recomputed when `b` is published (3.4),
+   and published with the collection once `b` has its measurements.
 
 Rules effectively coded:
 
@@ -140,21 +143,15 @@ The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on 
   existing dead-time, power-stability, robust-slope, and governance guards,
 - keeps passive OFF/`b` learning under its existing physical guards;
   disturbance-only responses are not blocked by this setpoint gate,
-- blocks bootstrap collection until the required dead times are reliable; in the
-  learning stage of the direct start a `b` window needs instead the confirmed peak
-  of the stop (3.7, Direct start) or a known emitter lag (published, or kept by
-  the readings of the pulses), with which it starts `3 T_ar` after the cut,
+- opens no window of the learning stage (bootstrap or direct start) before the
+  response model of the mode is published, provisional included
+  (`skip: learning stage - response model not yet published`, 3.7),
 - applies a post-resume pause (`LEARNING_PAUSE_RESUME_MIN = 20`),
-- anchors the window start after the dead-time end when needed,
 - delays the window start until the response transient has decayed
-  (`skip: response transient (a|b)`): once the emitter lag is published (3.7),
-  an `a` window starts at least `min(3 T_ar, half the median active episode)` after
-  the power step. A `b` window starts after the power cut at least the longer of
-  `3 T_ar` (published emitter lag) and `AB_SETTLE_K_PASSIVE_DEADTIME = 1.5` reliable
-  passive dead times: the emitter keeps heating after a cut, and since the room
-  only starts to cool once this residual heat falls below the losses, the passive
-  dead time bounds its decay even when the emitter lag is unknown. In the bootstrap
-  only the `3 T_ar` term applies,
+  (`skip: response transient (a|b)`), with the waits of the response model (3.7):
+  an `a` window starts at least `min(θ + τ_e, half the median active episode)`
+  after the power step, a `b` window at least `θ + τ_e` after the power cut.
+  Without a model (outside the learning stage) there is no wait,
 - does not submit an active window shorter than one PWM cycle
   (`active_window_shorter_than_cycle`): its duration is set before its data, since
   stopping as soon as a short window looks significant favours the steepest noisy
@@ -207,7 +204,11 @@ The calculation followed by `learn()` is:
 
 - OFF phase:
 
-$$ b = -\frac{dT/dt}{T_{int} - T_{ext}} $$
+$$ b = \frac{a \cdot p - dT/dt}{T_{int} - T_{ext}} $$
+
+with $p$ the mean power still delivered over the window after the cut (3.7) and
+$a$ the usable value (published, or a starting value standing); before `a` is
+usable, $p$ is not counted ($b = -\frac{dT/dt}{T_{int} - T_{ext}}$).
 
 - ON phase:
 
@@ -225,6 +226,15 @@ with that `b`, then `a` is aggregated again if it has already been published: an
 `a` measurement made before `b` was accurate therefore follows its corrections. A
 measurement restored without an observation, or whose recomputation would
 contradict the mode sign, keeps its value.
+
+Likewise each `b` measurement keeps its observation (`dT/dt`, `T_int - T_ext`,
+`p`, mode). Each time `a` is published, given as a starting value or corrected,
+the retained `b` measurements of that mode with a residual power are recomputed
+with that `a`, then `b` is aggregated again if it has already been published
+(unless a starting value of `b` stands). A change below `AB_VAL_TOLERANCE`
+recomputes nothing. A recomputation never starts another one: a change of `b`
+recomputes the `a` measurements, a change of `a` recomputes the `b` measurements,
+once each.
 
 ### 3.5 Integral balance of windows without a robust slope
 
@@ -287,105 +297,67 @@ Reliability becomes true as soon as at least one valid measurement has been capt
 ### 3.7 Emitter lag and delivered power
 
 At the scale of a learning window, the room behaves as an integrator behind
-fast inertias (actuator, emitter, air mixing, sensor housing) and a pure dead
-time (integrating first-order plus dead time response). After a power step, the
-slope settles progressively and its ramp asymptote crosses the extrapolated
-passive trajectory at $t = T_{ar} = L + \sum \tau_i$, the mean residence time of
-the response (Åström and Hägglund), the emitter lag. A window that starts $k \cdot T_{ar}$ after the
-step has a slope deficit of at most $e^{-k}$ for a single inertia, whatever the pure
-dead time share. A window within the transient underestimates `a`, all the more as
-the emitter lag is long or the sensor reports late.
+a pure dead time $\theta$ (sensor, transport, actuator) and a first-order response
+time constant $\tau_e$ (the emitter, the air and the nearby mass): the response
+model of the mode (Response model, below). After a power step the slope settles
+progressively; a window within the transient underestimates `a`, all the more as
+the emitter lag $\theta + \tau_e$ is long or the sensor reports late. The a/b
+learning reads the published model of its mode (`ResponseModel.values`), and
+nothing else, for three things.
 
-`ResponseLagEstimator` (`response_lag.py`) measures the emitter lag $T_{ar}$ on active episodes
-at constant power (deviation at most `RESPONSE_LAG_U_TOL = 0.05`):
+**Power steps.** `PowerSteps` (`power_steps.py`) follows the power applied over each
+update interval: an active episode is a run of power after a step from rest (it
+stays constant while the power moves by at most `RESPONSE_LAG_U_TOL = 0.05`), a cut
+ends it. A discontinuity of more than 1 s between two updates ends the episode at
+the last observed instant, and the power cut is dated at the resume. The last
+`RESPONSE_LAG_HISTORY = 7` episode durations are kept (their median, once
+`RESPONSE_LAG_MIN_ESTIMATES = 3` are known, caps the `a` wait). A heating phase
+groups the active episodes separated by power cuts shorter than
+`RESPONSE_LAG_PHASE_MIN_OFF_S = 600 s`.
 
-- the episode must follow a passive period of at least
-  `max(RESPONSE_LAG_MIN_OFF_S = 1800 s, RESPONSE_LAG_MIN_OFF_LAGS = 5 × known emitter lag)`,
-  so that the power of the previous episode has decayed;
-- the passive baseline is the robust OLS slope of the end of that OFF period (at
-  most `RESPONSE_LAG_PASSIVE_SPAN_S = 3600 s`), otherwise the published `b`;
-- the late line is fitted on the level crossings of the raw history (at least
-  `RESPONSE_LAG_MIN_CROSSINGS = 3`). For a jump of one sensor step, the crossing is
-  dated at the midpoint between the two samples; a jump of several steps keeps the
-  raw value. This removes the staircase and trigger-threshold biases of sensors
-  that report on change;
-- the intercept of an OLS line fitted on a transient segment falls before
-  $T_{ar}$: the estimator inverts the closed-form intercept of a single-inertia
-  response over the fitted interval (monotonic in $T_{ar}$). An episode is not
-  used when the inversion is too flat (`RESPONSE_LAG_MIN_INVERSION_SLOPE = 0.05`)
-  or when the intercept reaches `RESPONSE_LAG_RESOLVABLE_FRAC = 0.9` of its
-  limit for an infinite inertia. An estimate above `RESPONSE_LAG_MAX_S`
-  (`DT_MAX_MIN` × 60 = 14,400 s) is also discarded (`intercept not resolvable`);
-- each estimate carries its standard deviation, propagated from the fit
-  residuals and from an assumed relative uncertainty of `b` of
-  `RESPONSE_LAG_B_REL_UNC = 0.10`.
+**Delivered power.** The power delivered to the room is the command delayed by
+$\theta$, then a first order of $\tau_e$ (the published split). Without a
+model the delivered power equals the applied power. `a` is referred to the mean
+delivered power of its window; the residual delivered power of a `b` window
+enters `b` (3.4); the balance pools of `b` (3.5) keep the applied power. For an active
+window starting $t_0$ after the step and lasting $W$, the mean delivered fraction
+is (`response_model.delivered_fraction`):
 
-The last `RESPONSE_LAG_HISTORY = 7` estimates are kept. The emitter lag is published
-when at least `RESPONSE_LAG_MIN_ESTIMATES = 3` estimates give a combined standard
-deviation of their inverse-variance weighted median at most
-`RESPONSE_LAG_MAX_REL_UNC = 0.15` of that median (floor
-`RESPONSE_LAG_UNC_FLOOR_S = 30 s`); estimates more than three standard deviations
-away from the median are not combined. An inconsistent set keeps the published
-value, so dispersed estimates do not switch the delivered power model on and off. A discontinuity of more than 1 s between two updates ends the
-episode at the last observed instant, and the power cut is dated at the resume.
+$$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-\theta)/\tau_e}\right)\mathbb{1}_{t>\theta}\,dt $$
+
+**Settling waits.** A window starts one emitter lag $H = \theta + \tau_e$
+after the power step (`a`) or the cut (`b`), whatever the split (while the split
+is assumed, $H = S$). The `a` wait is capped at half the median active episode
+(`AB_SETTLE_ACTIVE_CAP_FRAC`): a longer wait would exceed a bootstrap heating
+phase with a slow emitter. The delivered power model corrects the rest of the
+transient: the rise in `a`, the residual heat of the emitter after the cut in `b`.
+The same rule holds in the regulation, the bootstrap and the direct start.
+Without a model there is no wait.
+
+**Model settled.** The delivered power model of `a` is settled once the model of
+the mode is published, or after `RESPONSE_LAG_RESOLVE_EPISODES = 4` heating
+phases without it (the applied power is then used); until then `a` measurements
+are collected without publication. In the learning stage no window opens before
+the model, so its first publication finds no collection; when the model changes
+later by more than `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` of its emitter lag (on
+$S$ or on $\theta$) before the first publication of `a`, the collected
+measurements are recomputed with the new delivered power. Only the windows that
+the settling wait admits are recomputed; the others are dropped, since their
+correction depends on the shape of the response. With no model, no window of the
+learning stage opens, so the stage waits for the model (`learning.bootstrap_status`
+reads `step1 - waiting response model`).
 
 A bridged restart (5.4) resumes the passive period or the active episode in
 progress at the save. The context is persisted as wall-clock times (last observed
-instant, then start of the passive period, or start, power, constancy, preceding
-passive time and outdoor temperature of the episode) and converted back to the
-monotonic clock on load. The heater kept the committed power over the stop, and
-the first update after the restart spans the stop with that power: a passive
-period goes on and the stop counts as passive; an episode goes on, and the first
-observation continues or ends it like any other. After any other restart the
-passive period is dropped and an episode ends without an estimate
-(`episode interrupted by restart`); a nonzero power then opens a new
-episode without a known passive period. The crossings come from the raw history
-of the dead time detector, persisted the same way; it holds no sample during the
-stop. A state saved without this context resumes nothing.
-
-The inversion assumes a single-inertia (first-order) response. It recovers the mean
-residence time only for such an emitter, or when the episode lasts several times
-the emitter lag. On an emitter that combines a pure dead time and an inertia, or two
-successive inertias, the intercept of a short episode falls later than that of a
-single inertia with the same residence time: the published emitter lag is then overestimated,
-by about 1.3 times on the simulated shapes, or is never published when the episode
-stays in the transient regime.
-
-The intercept fixes the emitter lag, not the shape of the response. The
-delivered power model splits it into a pure dead time
-$L = \min(\text{active dead time}, T_{ar})$, then a first-order inertia of
-$T_{ar} - L$. The dead time is detected after the response has started, so it
-bounds the pure dead time from above: the model never delivers power earlier than a
-pure dead time with the same intercept. Without a published emitter lag or a reliable dead
-time, the delivered power equals the applied power. For an active window starting
-$t_0$ after the step and lasting $W$, the mean delivered fraction is, with
-$\tau = T_{ar} - L$:
-
-$$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-L)/\tau}\right)\mathbb{1}_{t>L}\,dt $$
-
-The model is resolved once the emitter lag is published, or after
-`RESPONSE_LAG_RESOLVE_EPISODES = 4` heating phases without a publication
-(the applied power is then used). A heating phase groups the active episodes
-separated by power cuts shorter than `RESPONSE_LAG_PHASE_MIN_OFF_S = 600 s`: an
-episode that starts less than 600 s after the end of the previous one does not
-count as a new phase. Until then, `a` measurements are collected
-without publication. When the published emitter lag appears or changes by more than
-`RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` before the first publication of `a`, the
-collected measurements are recomputed with the new delivered power. Only the
-windows that the settling gate admits are recomputed; the others are dropped,
-since their correction depends on the shape of the response.
-
-The state is published in `analysis.learning.response_lag` (`lag_s`, `estimates`,
-`episodes`, `episodes_target`, `episode_median_s`, `last_reason`) and persisted
-with the learning state. `episodes` counts the heating phases ended since the
-start of the learning, also after the emitter lag is published; `episodes_target` is
-`RESPONSE_LAG_RESOLVE_EPISODES`. When both collections have reached their count
-and `a` waits for this model, `learning.bootstrap_status` reads
-`step2 - waiting response lag: estimates N, heating phases K/4`.
-
-The emitter lag is learned on constant-power episodes, which the hysteresis bootstrap
-provides. In PWM regulation the duty cycle changes from cycle to cycle, so an
-installation already out of the bootstrap rarely provides one.
+instant, then start of the passive period with the delivered power and the
+temperatures at the cut, or start, power and constancy of the episode) and
+converted back to the monotonic clock on load. The heater kept the committed
+power over the stop, and the first update after the restart spans the stop with
+that power: a passive period goes on and the stop counts as passive; an episode
+goes on, and the first observation continues or ends it like any other. After
+any other restart the passive period is dropped and an episode is counted as
+ended. The episodes are saved under `lw_state.power_steps` (a state of the former
+`response_lag` block loads its durations and heating phases).
 
 #### Heating balance
 
@@ -538,8 +510,7 @@ the events the pulses cause give the kept values. Until the learning publishes
 its own model they stand for it: `pre_model_gains` gives the gains from the kept
 `a` and the active dead time (the IMC/SIMC rule of a slow room, neither gain
 above its fallback value), the kept emitter lag is the horizon of the
-anticipation (source `measurement pulses`) and the emitter lag of the
-response-lag estimator, which counts as resolved with it. The integral term
+anticipation (source `measurement pulses`). The integral term
 starts from zero at the calculation at which the learning stage ends. The
 dead-time estimator reads the dead time after a stop on the temperature peak,
 with the peak search of the measurement events and an earlier confirmation: the
@@ -598,9 +569,10 @@ CALIBRATION_CORRECT_REL * in force` (0.30):
   published history, counter, drift, `own_b`) and stands the reading, released
   when the own time constant is reliable again; the `a` measures are replayed
   with it;
-- lag (direct start only): kept in `calibration.lag_s` by mode and given to the
-  response-lag estimator in place of the kept lag of the start at each
-  calculation; it never enters the anticipation horizon.
+- lag (direct start only): kept in `calibration.lag_s` by mode and published;
+  the learning reads the response model, whose history the agreeing calibration
+  events replace under the same 30 % rule (Response model, below); it never
+  enters the anticipation horizon.
 
 With `CALIBRATION_SKIP_WHEN_OWN_AGREE = True` (off by default), `a` or `b` is not
 corrected while its drift buffer is empty and its last
@@ -613,7 +585,7 @@ temperature and warmup, is moved into the integral. A change of `Kp` that follow
 a correction is not moved into the integral: the proportional term acts on the error as
 usual, and a change of `Ki` only rescales the integral (`SmartPIController.transfer_gains`). A bootstrap start whose `b`
 stands from a correction does not return to its learning stage. The heating
-balance and the response-lag estimator observe the pulses as any heating phase.
+balance and the power steps observe the pulses as any heating phase.
 A calibration ends when two of its readings agree (`readings agree`), when its
 pulses are done and their readings have ended (`pulses done`), or
 `CALIBRATION_MAX_S = 48 h` after its first calculation (`time limit`); its
@@ -626,7 +598,7 @@ also checked on a calculation cut by the guard
 (`LearningStart.follow_calibration`). While a calibration is in progress
 (request to end) `ABEstimator.learn` takes no `a` measure: a window with
 `u > U_ON_MIN` is skipped (`skip: calibration in progress`); `b` windows, the
-dead times, the heating balance and the response lag go on. After each
+dead times, the heating balance and the power steps go on. After each
 calibration pulse (`LearningStart.recovering`) the integral is held (`I:HOLD`,
 source `calibration_recovery`) until the room reaches the setpoint; the
 pulses of the learning stage do not hold it. A stop of the thermostat ends
@@ -645,13 +617,15 @@ and `starting_values` inside `est_state`); a state saved without them loads.
 After a bridged restart the readings resume (a fit in flight is queued again);
 otherwise the readings in progress end and the record is dropped.
 
-#### Response model (published only)
+#### Response model
 
 `response_model.py` holds, per mode, a dynamic model of the response of the room
 to the power: a pure dead time $\theta$ (sensor, transport, actuator) followed by
 a first-order response time constant $\tau_e$ (the emitter, the air and the
-nearby mass together). Nothing in the regulation reads it
-yet; it is published next to the dead times and lags above.
+nearby mass together). The a/b learning reads it (3.7: no window of the learning
+stage before it, delivered power, settling waits); the regulator itself (gains,
+holds, horizon, near band) does not read it yet. It is published next to the
+dead times and lags above.
 
 A second reader (`ModelReader`, `event_reading.py`) reads the measurement events
 with the same windows as the reader above (lead 1800 s, first end at the close of
@@ -704,8 +678,8 @@ $S$ agree within 20 % make it `measured`, no event that tells $\theta$ apart
 makes it `dead time assumed`. The events of a calibration join the history;
 when two of them agree on $S$ and their mean is off the $S$ of the history by
 more than 30 %, those two replace it. Derived values: effective dead time
-$\theta + \tau_e/2$, emitter lag $\theta + \tau_e$, settling time
-$\theta + 3\tau_e$. Each confirmed peak after a cut also gives a peak sample
+$\theta + \tau_e/2$, emitter lag $\theta + \tau_e$, settling waits of the a/b
+learning (3.7). Each confirmed peak after a cut also gives a peak sample
 $\tau_e = (t_{peak} - \theta) / \ln(1 + s_{cut}/\ell)$, with $\ell = b\,(T_{cut}
 - T_{out})$ and $s_{cut}$ the least-squares slope of the room over the last
 $\min(\tau_e, 1800\,s)$ before the cut, when $s_{cut} \ge \ell$ and the peak
@@ -714,15 +688,14 @@ comes at least 600 s after $\theta$; the samples are published only.
 When the split is uncertain (`dead time assumed`), a consumer of the model takes
 the cautious end of $\theta \in [0, S]$ for its own use: the gains read the
 effective dead time $3S/4$ (plus half the sampling period $h/2$ where the gains
-account for it), the anticipation horizon reads $S$, and the wait of a `b` window
-after a stop is $S \cdot \max(3, \ln(q_{stop} / 0.05\,\ell))$, with $q_{stop}$ the
-heat still to come at the stop and $\ell$ the losses (the case $\theta = 0$, whose
-emitter tail is the longest).
+account for it) and the anticipation horizon reads $S$. The windows of the
+learning wait $S$ whatever the split.
 
 The model, its readings and its record are saved under `response_state`. A
 state saved without it is seeded from the active dead time $L$ of each mode
 (`dt_est_state`) and the first emitter lag $S$ among the kept lag of the
-readings, the kept lag of the heating balance (heating) and the response lag:
+readings, the kept lag of the heating balance (heating) and the lag of the former
+response-lag estimator:
 $\theta = \mathrm{clamp}(2L - S, 0, L)$, or $2L/3$ without $S$ (the split in
 halves of $S = 4L/3$), and $\tau_e = 2(L - \theta)$, so that the effective dead time equals $L$. The seed is
 published as `previous version`, `provisional`, until the first accepted event
@@ -1304,7 +1277,7 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | `ab_drift.py`          | persistent drift detection and recentering for `a/b`, with one candidate sequence per channel |
 | `learning_window.py`   | learning-window management and guardrails                   |
 | `ab_window_balance.py` | integral balance of windows without a robust slope and `a/b` pools |
-| `response_lag.py`      | `ResponseLagEstimator`: emitter lag on constant-power heating phases, settling gates and delivered power model |
+| `power_steps.py`       | `PowerSteps`: power steps of the a/b learning (episodes, heating phases), delivered power and settling gates from the response model |
 | `heating_balance.py`   | `HeatingBalance`: heating rate and emitter lag measured on heating phases |
 | `peak_search.py`       | the search of the temperature peak after a cut |
 | `sensor_step.py`       | the step of the sensor, read on the last hour of samples |
@@ -1365,8 +1338,6 @@ The current payload from `SmartPI.save_state()` notably contains:
     "version": 2,
     "learning_enabled": ...,
     "last_active_wall_ts": ...,
-    "deadtime_skip_count_a": ...,
-    "deadtime_skip_count_b": ...,
     "est_state": {...},
     "dt_est_state": {...},
     "gov_state": {...},
@@ -1494,9 +1465,9 @@ invalid interval. The room model has its resume limit of 3 hours.
 `control.last_restart` publishes the decision of the current session (5.5).
 
 The integral-balance pools and the window-outcome counters are not persisted:
-they start empty at each startup. The observations of the `a` measurements are
-persisted with the estimator state; a state that does not contain them loads with
-measurements that cannot be recomputed.
+they start empty at each startup. The observations of the `a` and `b`
+measurements are persisted with the estimator state; a state that does not
+contain them loads with measurements that cannot be recomputed.
 
 The applied power that feeds the dead time, the emitter lag learning and the
 room model comes from the applied-command receipts of the Versatile Thermostat
@@ -1581,21 +1552,9 @@ are specific to the current Home Assistant session.
 | `RESPONSE_LAG_MIN_ESTIMATES`   | `3`    |
 | `RESPONSE_LAG_RESOLVE_EPISODES` | `4`   |
 | `RESPONSE_LAG_PHASE_MIN_OFF_S` | `600` |
-| `RESPONSE_LAG_MAX_REL_UNC`     | `0.15` |
-| `RESPONSE_LAG_UNC_FLOOR_S`     | `30`   |
-| `RESPONSE_LAG_MIN_OFF_S`       | `1800` |
-| `RESPONSE_LAG_MIN_OFF_LAGS`    | `5`    |
-| `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
 | `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
 | `RESPONSE_LAG_U_TOL`           | `0.05` |
 | `RESTART_BRIDGE_MAX_GAP_S` (`RESPONSE_LAG_RESTART_MAX_GAP_S`) | `600` |
-| `RESPONSE_LAG_PASSIVE_SPAN_S`  | `3600` |
-| `RESPONSE_LAG_MIN_INVERSION_SLOPE` | `0.05` |
-| `RESPONSE_LAG_RESOLVABLE_FRAC` | `0.9`  |
-| `RESPONSE_LAG_B_REL_UNC`       | `0.10` |
-| `RESPONSE_LAG_MAX_S`           | `DT_MAX_MIN` × 60 (`14400`) |
-| `AB_SETTLE_K_ACTIVE`           | `3`    |
-| `AB_SETTLE_K_PASSIVE`          | `3`    |
 | `AB_SETTLE_ACTIVE_CAP_FRAC`    | `0.5`  |
 
 ### 6.2 Regulation

@@ -23,10 +23,9 @@ are kept per mode, like the ``a`` channel of the a/b estimator, so a period in t
 and runs its own readings. The kept ``a`` and the mean loss coefficient ``b`` of the two readings are what
 ``LearningStart`` gives to the a/b estimator as starting values (``smartpi/starting_values.py``): ``a`` of each mode
 once, ``b`` (a property of the room, shared by the modes) with the first hand-over only. With
-the direct start the kept values also feed the gains before the first model (``LearningStart.pre_model_a``), the
-anticipation horizon (``smartpi/anticipation.py``) and the learning of ``a`` through the response-lag estimator
-(``ResponseLagEstimator.give_lag``), which counts as resolved with it: the learning of ``a`` then runs on its existing
-condition. With the bootstrap start the kept lag is kept and published with the readings, nothing reads it.
+the direct start the kept values also feed the gains before the first model (``LearningStart.pre_model_a``) and the
+anticipation horizon (``smartpi/anticipation.py``). With the bootstrap start the kept lag is kept and published with
+the readings, nothing reads it.
 
 The record is trimmed from the front to ``RECORD_PRE_S`` before the start of the oldest window still open (or of the
 phase in progress), so that the emitter filter of a fit starts well before its window, and to ``RECORD_SPAN_S`` at
@@ -310,15 +309,9 @@ class EventReader:
             self._end_in_progress("interrupted by restart")
             self._record.clear()
 
-    def step(
-        self,
-        now: float,
-        hvac_mode: object,
-        response_lag: Any,
-        phase_start: float | None,
-    ) -> None:
+    def step(self, now: float, phase_start: float | None) -> None:
         """Once per calculation: apply the result of the fit that ran, queue the next one that is due, trim the record
-        and keep agreeing values; give the kept lag to the response-lag estimator when one is passed."""
+        and keep agreeing values."""
         if self._result is not None:
             index, result = self._result
             self._result = None
@@ -327,8 +320,6 @@ class EventReader:
                 self._fit_done(reading, result, now)
         self._queue_due(now)
         self._trim(now, phase_start)
-        if response_lag is not None:
-            response_lag.give_lag(self.kept_lag_s(hvac_mode))
 
     def read_events(self, events: list[MeasureEvent], now: float) -> None:
         """The events the detector closed or dropped at ``now``: a closed one that a pulse (of the start or of a

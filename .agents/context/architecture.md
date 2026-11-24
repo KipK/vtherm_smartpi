@@ -71,7 +71,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 **Dead time and emitter lag**
 - `deadtime_estimator.py`: heating/cooling dead time by state machine on power transitions; in peak mode (direct start only) the dead time after a stop is read on the `peak_search.py` peak.
 - `deadtime_trend.py`: free-running trend before a power start.
-- `response_lag.py`: emitter lag estimator over the constant-power heating phases of the learning windows.
+- `power_steps.py`: power steps of the a/b learning (episodes, heating phases), delivered power and settling gates from the response model (`response_model.py`).
 
 **Measurement events and starting values** (one reading chain; see `algorithm-core.md` section 6b)
 - `peak_search.py`: `PeakSearch`, the one search of the temperature peak after a cut (300 s bins, earliest strictly highest mean, confirmed by a closed bin 1800 s later, 4 h limit). Used by the detector (so by the heating balance) and by the dead-time estimator in peak mode (which adds the early confirmation, `drop_floor_c`).
@@ -125,7 +125,7 @@ Find a test by module name: `tests/test_<module>.py` or `tests/test_smartpi_<top
 | Setpoint / deadband | `test_smartpi_setpoint*`, `test_algo_setpoint_boost`, `test_smartpi_deadband_output`, `test_smartpi_near_band_unwind`, `test_smartpi_nearband_model`, `test_smartpi_valve_curve`, `test_smartpi_valve_runtime_sync` |
 | Measurement events | `test_smartpi_{peak_search,measure_event,event_reading,starting_values,learning_start,start_per_mode,response_model}` |
 | Learning A/B | `test_ab_window_balance`, `test_smartpi_ab_*`, `test_smartpi_learning_*`, `test_learning_outcomes`, `test_smartpi_heating_balance`, `test_smartpi_b_heat_learning_guard`, `test_smartpi_hysteresis_learning`, `test_smartpi_tin_history_coverage` |
-| Dead time / emitter lag / calibration | `test_smartpi_deadtime_*`, `test_smartpi_response_lag*`, `test_smartpi_calibration*` |
+| Dead time / emitter lag / calibration | `test_smartpi_deadtime_*`, `test_smartpi_power_steps*`, `test_smartpi_passive_cut_gate`, `test_smartpi_calibration*` |
 | Feed-forward | `test_smartpi_feedforward`, `test_room_model_feedforward` |
 | Restart | `test_restart_bridge*`, `test_smartpi_restart_*` |
 | Persistence / diagnostics | `test_algo_persistence`, `test_handler_persistence`, `test_diagnostic_history`, `test_published_diagnostics_schema` |
@@ -171,7 +171,7 @@ Rules for any user-visible change: update `documentation/en` and `documentation/
 
 `algo.py` and `handler.py` must not grow. New logic goes into a new or existing module under `smartpi/`; `algo.py` only wires it (construct, call, persist, publish), and `handler.py` only bridges VT. Extract before adding.
 
-Current sizes (lines): `algo.py` 2327, `handler.py` 808, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 21877. Largest `smartpi/` files: `learning_window.py` 1177, `ab_estimator.py` 1103, `response_lag.py` 849, `measure_event.py` 732.
+Current sizes (lines): `algo.py` 2206, `handler.py` 760, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 21932. Largest `smartpi/` files: `ab_estimator.py` 1222, `learning_window.py` 1048, `deadtime_estimator.py` 907, `measure_event.py` 750.
 
 ## 7. Names that do not exist (do not look for them)
 

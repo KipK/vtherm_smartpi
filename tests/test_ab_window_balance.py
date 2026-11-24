@@ -249,7 +249,7 @@ def _governance():
     return gov
 
 
-def _window_update(win, est, dt, gov, now, temp, u, t_heat_start=None):
+def _window_update(win, est, dt, gov, now, temp, u):
     dt.tin_history.append((now, temp))
     win.update(
         dt_min=1.0,
@@ -260,10 +260,6 @@ def _window_update(win, est, dt, gov, now, temp, u, t_heat_start=None):
         dt_est=dt,
         governance=gov,
         now=now,
-        in_deadband=False,
-        in_near_band=False,
-        t_heat_episode_start=t_heat_start,
-        t_cool_episode_start=None,
         hvac_mode=VThermHvacMode_HEAT,
         target_temp=TARGET,
         raw_temp=temp,
@@ -283,26 +279,27 @@ def test_window_closed_by_a_gate_is_pooled():
     win, est, dt, gov = LearningWindowManager("t"), _estimator(), _dt_est(), _governance()
     now = _run_passive_window(win, est, dt, gov, 1000.0)
     assert win.active
-    # Heating restarts: the dead time gate closes the passive window.
-    _window_update(win, est, dt, gov, now, dt.tin_history[-1][1], 1.0, t_heat_start=now)
+    # Heating restarts: the power step closes the passive window.
+    _window_update(win, est, dt, gov, now, dt.tin_history[-1][1], 1.0)
     assert not win.active
     assert win._balance.pool_size("b") == 1
     outcomes = dict((r, n) for r, n in win.outcomes_summary(now)["b"])
-    assert outcomes == {"skip: deadtime window": 1, "pool: segment added": 1}
+    assert len(outcomes) == 2 and outcomes["pool: segment added"] == 1
+    assert any(r.startswith("skip: power step") for r in outcomes)
 
 
 def test_external_reset_discards_the_window():
     win, est, dt, gov = LearningWindowManager("t"), _estimator(), _dt_est(), _governance()
     now = _run_passive_window(win, est, dt, gov, 1000.0)
     win.reset()
-    _window_update(win, est, dt, gov, now, dt.tin_history[-1][1], 1.0, t_heat_start=now)
+    _window_update(win, est, dt, gov, now, dt.tin_history[-1][1], 1.0)
     assert win._balance.pool_size("b") == 0
 
 
 def test_reset_all_clears_pools():
     win, est, dt, gov = LearningWindowManager("t"), _estimator(), _dt_est(), _governance()
     now = _run_passive_window(win, est, dt, gov, 1000.0)
-    _window_update(win, est, dt, gov, now, dt.tin_history[-1][1], 1.0, t_heat_start=now)
+    _window_update(win, est, dt, gov, now, dt.tin_history[-1][1], 1.0)
     assert win._balance.pool_size("b") == 1
     win.reset_all()
     assert win._balance.pool_size("b") == 0

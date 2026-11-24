@@ -61,10 +61,6 @@ def _update(
         dt_est=dt_estimator,
         governance=_make_governance(),
         now=now,
-        in_deadband=False,
-        in_near_band=False,
-        t_heat_episode_start=None,
-        t_cool_episode_start=None,
         hvac_mode=VThermHvacMode_HEAT,
         **kwargs,
     )

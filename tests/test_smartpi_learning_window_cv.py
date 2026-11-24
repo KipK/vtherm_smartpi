@@ -46,7 +46,7 @@ def _make_governance(decision=GovernanceDecision.ADAPT_ON):
 
 def _call_update(win, dt_min, current_temp, ext_temp, u_active,
                  estimator=None, dt_est=None, governance=None,
-                 now=None, t_heat_start=None, t_cool_start=None):
+                 now=None):
     """Convenience wrapper around LearningWindowManager.update()."""
     import time as _time
     if estimator is None:
@@ -66,10 +66,6 @@ def _call_update(win, dt_min, current_temp, ext_temp, u_active,
         dt_est=dt_est,
         governance=governance,
         now=now,
-        in_deadband=False,
-        in_near_band=False,
-        t_heat_episode_start=t_heat_start,
-        t_cool_episode_start=t_cool_start,
     )
 
 
@@ -160,10 +156,6 @@ def test_learning_window_stable_pi_modulation():
             dt_est=dt_est,
             governance=gov,
             now=now,
-            in_deadband=False,
-            in_near_band=False,
-            t_heat_episode_start=None,
-            t_cool_episode_start=None,
         )
         # Window should remain active throughout all cycles
         if i >= 1:  # window starts on cycle 0
@@ -205,10 +197,6 @@ def test_learning_window_regime_change_rejected():
             dt_est=dt_est,
             governance=gov,
             now=now,
-            in_deadband=False,
-            in_near_band=False,
-            t_heat_episode_start=None,
-            t_cool_episode_start=None,
         )
 
     assert win.active, "Window should be active after 5 ON cycles"
@@ -223,10 +211,6 @@ def test_learning_window_regime_change_rejected():
         dt_est=dt_est,
         governance=gov,
         now=base_now + 5 * 60.0,
-        in_deadband=False,
-        in_near_band=False,
-        t_heat_episode_start=None,
-        t_cool_episode_start=None,
     )
 
     # Second injection: CV based on 5×0.35 + 1×0.0 samples → CV ≈ 0.49 >> 0.30 → TRIGGERS
@@ -239,10 +223,6 @@ def test_learning_window_regime_change_rejected():
         dt_est=dt_est,
         governance=gov,
         now=base_now + 6 * 60.0,
-        in_deadband=False,
-        in_near_band=False,
-        t_heat_episode_start=None,
-        t_cool_episode_start=None,
     )
 
     # Window should have closed (early submit or skip)
@@ -273,10 +253,6 @@ def test_learning_window_constant_power():
             dt_est=dt_est,
             governance=gov,
             now=base_now + i * 60.0,
-            in_deadband=False,
-            in_near_band=False,
-            t_heat_episode_start=None,
-            t_cool_episode_start=None,
         )
 
     assert win.active, "Window must stay open with constant power"
@@ -315,10 +291,6 @@ def test_learning_window_wide_modulation_limit():
             dt_est=dt_est,
             governance=gov,
             now=base_now + i * 60.0,
-            in_deadband=False,
-            in_near_band=False,
-            t_heat_episode_start=None,
-            t_cool_episode_start=None,
         )
 
     cv = win._u_cv
@@ -352,10 +324,6 @@ def test_learning_window_extreme_variation():
             dt_est=dt_est,
             governance=gov,
             now=base_now + i * 60.0,
-            in_deadband=False,
-            in_near_band=False,
-            t_heat_episode_start=None,
-            t_cool_episode_start=None,
         )
         if not win.active and i >= 2:
             closed = True

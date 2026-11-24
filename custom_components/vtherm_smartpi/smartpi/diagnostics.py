@@ -17,7 +17,6 @@ from .const import (
     AB_HISTORY_SIZE,
     AB_MIN_SAMPLES_A,
     AB_MIN_SAMPLES_B,
-    RESPONSE_LAG_RESOLVE_EPISODES,
     clamp,
 )
 
@@ -182,54 +181,18 @@ def _bootstrap_state(algo: SmartPI) -> str | None:
     Returns None if not in Hysteresis phase.
 
     Two steps:
-      step1: waiting for deadtimes (A/B collection blocked per mode)
-      step2: both deadtimes acquired, collecting initial emeas (<AB_MIN_SAMPLES_A/B),
-             then waiting for the response lag once both counts are reached and
-             the delivered power model of a is not resolved
+      step1: waiting for the response model of the mode (no a/b window before it)
+      step2: collecting initial emeas (<AB_MIN_SAMPLES_A/B)
     The HYSTERESIS phase ends once both sample targets are reached and the
-    delivered power model is resolved.
+    delivered power model is settled.
     """
     if algo.phase != SmartPIPhase.HYSTERESIS:
         return None
 
     nb_a = len(algo.est.a_meas_hist)
     nb_b = len(algo.est.b_meas_hist)
-
-    dt_est = algo.dt_est
-    dt_heat_ok = dt_est.deadtime_heat_reliable
-    dt_cool_ok = dt_est.deadtime_cool_reliable
-
-    # Step 1: at least one deadtime missing
-    if not (dt_heat_ok and dt_cool_ok):
-        heat_str = (
-            f"{int(dt_est.deadtime_heat_s)}s"
-            if dt_heat_ok and dt_est.deadtime_heat_s is not None
-            else "null"
-        )
-        cool_str = (
-            f"{int(dt_est.deadtime_cool_s)}s"
-            if dt_cool_ok and dt_est.deadtime_cool_s is not None
-            else "null"
-        )
-        parts = [f"step1 - deadtime: heat:{heat_str} cool:{cool_str}"]
-        if dt_heat_ok and nb_a > 0:
-            parts.append(f"[A:{nb_a}/{AB_MIN_SAMPLES_A}]")
-        if dt_cool_ok and nb_b > 0:
-            parts.append(f"[B:{nb_b}/{AB_MIN_SAMPLES_B}]")
-        return " ".join(parts)
-
-    # Step 2: both deadtimes acquired, collecting initial emeas
-    if (
-        nb_a >= AB_MIN_SAMPLES_A
-        and nb_b >= AB_MIN_SAMPLES_B
-        and not algo.est.a_model_ready
-        and algo.est.learn_ok_count_a == 0
-    ):
-        lag = algo.learn_win.response_lag
-        return (
-            f"step2 - waiting response lag: estimates {lag.estimates_count}, "
-            f"heating phases {lag.episodes_count}/{RESPONSE_LAG_RESOLVE_EPISODES}"
-        )
+    if algo.learn_win.model(algo.est.model_hvac_mode) is None:
+        return "step1 - waiting response model"
     return f"step2 - collecting emeas: A:{nb_a}/{AB_MIN_SAMPLES_A} B:{nb_b}/{AB_MIN_SAMPLES_B}"
 
 
@@ -365,23 +328,8 @@ def _build_analysis_learning(algo: SmartPI) -> Dict[str, Any]:
             "segments_b": learn_win.balance.pool_size("b"),
             "resolution_c": round(learn_win.balance.resolution_c, 3),
         },
-        "response_lag": _response_lag_diag(learn_win.response_lag),
         "heating_balance": _heating_balance_diag(learn_win.heating_balance),
         "response_model": algo._start.model.public_learning(algo.est.model_hvac_mode),
-    }
-
-
-def _response_lag_diag(response_lag) -> Dict[str, Any]:
-    """Return the response lag estimate and its last outcome."""
-    lag = response_lag.lag_s
-    episode = response_lag.episode_median_s
-    return {
-        "lag_s": round(lag) if lag is not None else None,
-        "estimates": response_lag.estimates_count,
-        "episodes": response_lag.episodes_count,
-        "episodes_target": RESPONSE_LAG_RESOLVE_EPISODES,
-        "episode_median_s": round(episode) if episode is not None else None,
-        "last_reason": response_lag.last_reason,
     }
 
 

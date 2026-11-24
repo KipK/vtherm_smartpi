@@ -131,7 +131,7 @@ Pipeline inside `calculate`, in execution order:
 7. `_start.advance`: the calibration (end rules and, on agreeing readings, the corrections, `smartpi/calibration.py`;
    on a guard-cut calculation only the end check runs, `_start.follow_calibration`), the measurement pulse (direct
    start in its learning stage, or a calibration in either start mode with its `pulse_limits`), the readings, the
-   corrected lag given to the response lag (direct start). Anticipation: `correction_c` with the
+   response-model readings. Anticipation: `correction_c` with the
    horizon of `SmartPI.anticipation_horizon` (0 while the command is on/off); then
    `_manage_setpoint` (setpoint change, boost, raw error `error_i` and `error_p` on the anticipated temperature),
    `error_i_ctl` = integral error on the anticipated temperature; setpoint-change handling.

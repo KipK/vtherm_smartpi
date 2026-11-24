@@ -110,7 +110,7 @@ class _Run:
 
     @property
     def lag(self):
-        return self.algo.learn_win.response_lag
+        return self.algo.learn_win.power_steps
 
 
 def _to_cooling(run: _Run, minutes: int) -> None:
@@ -125,7 +125,7 @@ def _to_cooling(run: _Run, minutes: int) -> None:
     assert run.lag._ep_start is not None
 
 
-def test_short_restart_in_cool_resumes_the_output_and_the_response_lag() -> None:
+def test_short_restart_in_cool_resumes_the_output_and_the_power_steps() -> None:
     reference = _Run()
     _to_cooling(reference, 10)
     reference.until(lambda: reference.u == 0.0)
@@ -145,17 +145,16 @@ def test_short_restart_in_cool_resumes_the_output_and_the_response_lag() -> None
     assert run.algo.ctl.hysteresis_state == "band"
     assert run.u == 1.0  # the cooling phase goes on
     assert run.lag.episodes_count == episodes
-    assert run.lag.last_reason != "episode interrupted by restart"
     run.until(lambda: run.u == 0.0)
     run.tick()
     assert run.lag.episodes_count == reference.lag.episodes_count
-    assert run.lag.estimates_count == reference.lag.estimates_count
-    assert run.lag.last_reason == reference.lag.last_reason
+    assert run.lag._durations[-1] == pytest.approx(reference.lag._durations[-1], abs=60.0)
 
 
 def test_heat_to_cool_change_is_not_bridged() -> None:
     run = _Run()
     _to_cooling(run, 10)
+    episodes = run.lag.episodes_count
     run.stop()
     run.saved["restart"]["hvac_mode"] = str(VThermHvacMode_HEAT)  # heating before the stop
     run.tick()
@@ -165,7 +164,7 @@ def test_heat_to_cool_change_is_not_bridged() -> None:
     decision = run.algo.restart.decision
     assert not decision.bridged and decision.reason == REASON_MODE_CHANGED
     assert run.u == 0.0  # the saved output is not resumed
-    assert run.lag.last_reason == "episode interrupted by restart"
+    assert run.lag.episodes_count == episodes + 1   # the episode in progress is counted as ended
 
 
 def test_learning_histories_keep_their_non_heating_handling_in_cool() -> None:

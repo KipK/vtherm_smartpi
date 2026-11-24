@@ -17,8 +17,13 @@ mode has no event yet: it is then kept until the first event in darkness replace
 - the events of a calibration enter the history; when two of them agree on S and their mean S is off the S published
   before them by more than ``CALIBRATION_CORRECT_REL``, those two replace the history of the mode.
 
-Derived values: effective dead time theta + tau_e / 2 (gains, holds), emitter lag theta + tau_e (horizon), settling
-time theta + ``SETTLE_TAU_E`` tau_e (a/b windows).
+Derived values: effective dead time theta + tau_e / 2 (gains, holds), emitter lag theta + tau_e (horizon).
+
+The a/b learning (smartpi/learning_window.py, smartpi/power_steps.py) reads the model of its mode: no window of the
+learning stage before it is published; the power delivered to the room is the command delayed by theta, then a first
+order of tau_e (``delivered_fraction``); a window starts the emitter lag theta + tau_e = S after the power step or
+the cut (``settle_s``; the split does not change it, assumed or not): the delivered power, counted in ``a`` and in
+``b``, corrects the rest of the transient.
 
 A state saved without this model is seeded once (``seed_from_saved``) so that the effective dead time equals the saved
 active dead time L: with an emitter lag S of the earlier estimators theta = clamp(2L - S, 0, L), with L only
@@ -31,7 +36,8 @@ Prediction: each fed event carries the rms of the model in force before it on it
 Peak samples: each confirmed peak after a cut gives tau_e = (t_peak - theta) / ln(1 + s_cut / l), with l the loss rate
 b (T_cut - T_outdoor) and s_cut the slope before the cut. They are published only.
 
-Nothing in the regulation reads this model. Internal codes become plain words here.
+The regulator itself (gains, holds, horizon, near band) does not read this model. Internal codes become plain words
+here.
 """
 from __future__ import annotations
 
@@ -53,7 +59,6 @@ from .measure_event import (
 from .timestamp_utils import monotonic_to_wall_ts
 
 RESPONSE_MODEL_HISTORY = 7
-SETTLE_TAU_E = 3.0
 PEAK_SAMPLES_KEPT = 7
 PREDICTIONS_KEPT = 7
 PEAK_MIN_S = 600.0             # time from the dead time to the peak of a usable peak sample (two peak bins)
@@ -126,11 +131,6 @@ class ResponseModel:
         """theta + tau_e."""
         v = self.values(mode)
         return None if v is None else v["theta_s"] + v["tau_e_s"]
-
-    def settling_s(self, mode: object) -> float | None:
-        """theta + SETTLE_TAU_E x tau_e."""
-        v = self.values(mode)
-        return None if v is None else v["theta_s"] + SETTLE_TAU_E * v["tau_e_s"]
 
     def event_count(self, mode: object) -> int:
         return len(self._events.get(None if mode is None else str(mode)) or [])
@@ -287,6 +287,31 @@ def peak_sample(theta_s: float, peak_delay_s: float, slope_c_min: float | None, 
     if slope_c_min is None or loss_c_min <= 0.0 or slope_c_min < loss_c_min or peak_delay_s - theta_s < PEAK_MIN_S:
         return None
     return (peak_delay_s - theta_s) / math.log1p(slope_c_min / loss_c_min)
+
+
+# -- a/b learning -----------------------------------------------------------------------------------------------------
+def settle_s(values: dict[str, Any] | None) -> float | None:
+    """Wait of a window after a power step (``a``) or a cut (``b``): the emitter lag theta + tau_e = S, the same
+    whether the split is measured or assumed (the delivered power corrects the rest of the transient); None without a
+    model."""
+    if values is None:
+        return None
+    return values["theta_s"] + values["tau_e_s"]
+
+
+def delivered_fraction(start_s: float, duration_s: float, values: dict[str, Any] | None) -> float:
+    """Mean fraction of a power step from rest delivered over a window of ``duration_s`` starting ``start_s`` after the
+    step: delay theta, then a first order of tau_e (the published values). 1 without a model."""
+    if values is None or duration_s <= 0.0:
+        return 1.0
+    delay, tau = values["theta_s"], values["tau_e_s"]
+    end = start_s + duration_s
+    on = max(start_s, delay)
+    if end <= on:
+        return 0.0
+    if tau <= 0.0:
+        return (end - on) / duration_s
+    return ((end - on) - tau * (math.exp(-(on - delay) / tau) - math.exp(-(end - delay) / tau))) / duration_s
 
 
 # -- migration -------------------------------------------------------------------------------------------------------

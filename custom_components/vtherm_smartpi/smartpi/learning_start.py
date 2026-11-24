@@ -6,7 +6,7 @@ separate. The learning keeps its stage and everything keyed on it. ``learning_st
 - ``"bootstrap"``: the on/off hysteresis is the command during the learning stage. Its heating phases are measurement
   events like the pulses' (source ``bootstrap``): they are recorded and read, and two agreeing readings give starting
   values once the stage has ended. The lag of those readings is kept and published, not used: the anticipation horizon
-  and the response lag do not read it;
+  does not read it;
 - ``"direct"``: the PI is the command from the first calculation, on the fallback gains until a heating rate is kept.
   Its model readers see no published model during the stage, so the feed-forward is zero. Up to three measurement
   pulses (smartpi/measure_pulse.py) replace the PI command for a short sequence that gives the learning a dead time
@@ -27,8 +27,8 @@ reset takes the configured mode again.
 ``LearningStart`` holds the pulses, the record of the measurement events and their reader, the calibration that
 drives the pulses once the first model is published and applies its corrections (smartpi/calibration.py), and the few
 calls ``SmartPI`` makes around them. It also tells the phase of the algorithm and what drives the command. It reads
-the state it needs (phase, regulator, dead-time estimator, response lag, estimator) from the ``SmartPI`` it belongs
-to. Times are monotonic seconds, as ``SmartPI.calculate`` reads them.
+the state it needs (phase, regulator, dead-time estimator, estimator) from the ``SmartPI`` it belongs to, and gives
+its response model to the learning window. Times are monotonic seconds, as ``SmartPI.calculate`` reads them.
 """
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ class LearningStart:
         self.pulse = MeasurePulse()
         self.record = MeasureRecord()
         self.reading = EventReader(self.record)
-        # The response model (smartpi/response_model.py), fed by its reader of every event; published only.
+        # The response model (smartpi/response_model.py), fed by its reader of every event; the a/b learning reads it.
         self.model = ResponseModel()
         self.model_reading = ModelReader(self.model)
         self.model_reading.set_position(getattr(config, "latitude", None), getattr(config, "longitude", None))
@@ -109,6 +109,7 @@ class LearningStart:
             events.source = self.event_source
             events.record, events.reader = self.record, self.reading
             events.model_reader = self.model_reading
+            owner.learn_win.response_model = self.model
 
     @property
     def direct(self) -> bool:
@@ -121,8 +122,8 @@ class LearningStart:
         self._owner.dt_est.passive_by_peak = self.direct
 
     def reset(self) -> None:
-        """Blank start: the configured start, the pulses are available again, the kept values and the lag given to the
-        estimator are dropped, a calibration in progress is cancelled."""
+        """Blank start: the configured start, the pulses are available again, the kept values and the response model are
+        dropped, a calibration in progress is cancelled."""
         self._use(self.configured)
         self.cancel_calibration()
         self.calibration.forget_lag()
@@ -133,7 +134,6 @@ class LearningStart:
         self._pi_stage_seen = False
         self._integral_zeroed = False
         self.recovering = self._calibration_pulse_seen = False
-        self._owner.learn_win.response_lag.give_lag(None)
 
     # -- the learning stage ------------------------------------------------------------------------------------
     def b_waiting(self, estimator: Any) -> bool:
@@ -265,14 +265,8 @@ class LearningStart:
                 self._follow_calibration(now, hvac_mode, learning_stage, temp)   # its pulse ended: it may end now
         self._follow_recovery(target, temp, hvac_mode)
         owner.est.calibrating = cal.in_progress
-        self.reading.step(
-            now, hvac_mode, response_lag=owner.learn_win.response_lag if self.direct else None,
-            phase_start=owner.learn_win.events.phase_start,
-        )
+        self.reading.step(now, owner.learn_win.events.phase_start)
         self._step_model(now, hvac_mode)
-        lag = self.calibration.lag_s.get(str(hvac_mode)) if self.direct else None
-        if lag is not None:   # a lag corrected by a calibration replaces the lag kept from the start
-            owner.learn_win.response_lag.give_lag(lag)
         self.hand_over(owner.est, hvac_mode)
         self.record.enabled = self.reading.wants_record(learning_stage, hvac_mode) or cal.in_progress
         if not self.record.enabled:
@@ -285,7 +279,7 @@ class LearningStart:
         excluded = getattr(owner.restart, "excluded_vt", None) or (
             "safety mode" if getattr(owner, "vt_safety_override", False) is True else None)
         self.model_reading.note_control(now, excluded, float(est.b) if getattr(est, "usable_b", False) is True else None)
-        self.model_reading.step(now, hvac_mode, None, owner.learn_win.events.phase_start)
+        self.model_reading.step(now, owner.learn_win.events.phase_start)
 
     # -- the calibration -----------------------------------------------------------------------------------------
     @property

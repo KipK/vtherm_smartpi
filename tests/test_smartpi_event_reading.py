@@ -30,7 +30,7 @@ class _Rig:
         self.detector.record, self.detector.reader = self.record, self.reader
         self.temp, self.heat, self.now = 20.0, 0.0, 1000.0
         self.history: deque = deque()
-        self.estimator, self.lag = MagicMock(), MagicMock()
+        self.estimator = MagicMock()
 
     def calculation(self, u: float, sync: bool = True) -> None:
         """One calculation: the step of the reader, the observation of the detector, then the job runs."""
@@ -46,7 +46,7 @@ class _Rig:
             self.reader.run_queued_sync()
 
     def step(self) -> None:
-        self.reader.step(self.now, VThermHvacMode_HEAT, self.lag, self.detector.phase_start)
+        self.reader.step(self.now, self.detector.phase_start)
 
     def run(self, u: float, minutes: int, sync: bool = True) -> None:
         for _ in range(minutes):
@@ -259,16 +259,6 @@ def test_the_end_of_a_calibration_ends_its_readings_only():
         rig.reader.end_calibration(rig.now)
     assert _readings(start)[0]["state"] == er.STATE_WAITING
     assert _readings(cal)[0]["state"] == er.STATE_ENDED and _readings(cal)[0]["reason"] == "calibration ended"
-
-
-def test_without_a_response_lag_the_kept_lag_is_given_to_nobody():
-    rig = _Rig(source="bootstrap")
-    rig.reader._kept = {"heat": {"mode": "heat", "a_per_min": 0.05, "lag_s": 300.0, "b_per_min": 0.0005, "pulses": [1, 2], "at_s": 0.0}}
-    lag = MagicMock()
-    rig.reader.step(rig.now, VThermHvacMode_HEAT, None, None)
-    rig.reader.step(rig.now, VThermHvacMode_HEAT, lag, None)
-    lag.give_lag.assert_called_once_with(300.0)
-    assert rig.reader.kept_lag_s(VThermHvacMode_HEAT) == 300.0       # kept and published all the same
 
 
 def test_a_fit_is_applied_at_the_next_calculation():

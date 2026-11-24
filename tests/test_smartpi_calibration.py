@@ -586,7 +586,6 @@ def test_the_emitter_lag_is_corrected_with_the_direct_start_only_and_never_sets_
         room = _Room(algo, clock)
         room.run(5)
         horizon = algo.anticipation_horizon(VThermHvacMode_HEAT)
-        given = algo.learn_win.response_lag._given
         _agree(algo, clock, room, lag=3.0 * horizon.seconds)
         room.tick()
         cal = _calibration(algo)
@@ -594,9 +593,9 @@ def test_the_emitter_lag_is_corrected_with_the_direct_start_only_and_never_sets_
         assert algo.anticipation_horizon(VThermHvacMode_HEAT) == horizon
         if start == "direct":
             assert cal["corrected"] == ["emitter lag"]
-            assert algo.learn_win.response_lag._given == 3.0 * horizon.seconds
+            assert algo._start.calibration.lag_s == {"heat": 3.0 * horizon.seconds}
         else:
-            assert cal["corrected"] == [] and algo.learn_win.response_lag._given == given
+            assert cal["corrected"] == [] and algo._start.calibration.lag_s == {}
 
 
 def test_the_command_stays_continuous_at_a_correction(clock):
@@ -634,9 +633,6 @@ def test_corrected_values_and_the_corrected_lag_survive_a_restart(clock, monkeyp
     _agree(direct, clock, room, lag=2400.0)
     restored = _learned("direct", saved_state=json.loads(json.dumps(direct.save_state())))
     assert restored._start.calibration.lag_s == {"heat": 2400.0}
-    room = _Room(restored, clock)
-    room.tick()
-    assert restored.learn_win.response_lag._given == 2400.0
 
 
 def test_a_learning_reset_drops_the_corrections(clock):

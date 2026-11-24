@@ -173,18 +173,6 @@ anticipation of the temperature, in heating and in cooling:
 | `waiting_elapsed_s` | Age of the response being waited for in seconds, `null` when no detection is armed |
 | `heat_last_outcome` / `cool_last_outcome` | Outcome of the last wait for a rising / falling response: `detected`, `timeout`, `aborted` (power transition before a detection), `rejected` (the temperature already moved in the direction of the response before the power start, too steeply or too irregularly to measure it), `ignored` (a measurement shorter than the published dead time, dropped because the temperature was already moving in the direction of the response before the start or the window before the start was too short to tell), `null` before the first one |
 
-`analysis.learning.response_lag` describes the emitter lag measured on heating
-phases at constant power, used by the `a` learning:
-
-| Field | Meaning |
-|---|---|
-| `lag_s` | Published emitter lag in seconds, `null` until a consistent set of estimates |
-| `estimates` | Number of retained estimates (at most 7) |
-| `episodes` | Number of heating phases ended since the start of the learning (heating runs separated by less than 10 minutes without heating count as one phase); it keeps counting after the emitter lag is published and may exceed `episodes_target` |
-| `episodes_target` | Number of heating phases after which the delivered power model is resolved without a published emitter lag (`4`) |
-| `episode_median_s` | Median duration of the recent active episodes in seconds, `null` with fewer than 3 episodes |
-| `last_reason` | Outcome of the last active episode (estimate kept, or reason it was not used). `episode interrupted by restart`: episode in progress at a restart that was not bridged, counted without an estimate. May be empty right after a restart |
-
 `analysis.learning.heating_balance` describes the heating rate and the emitter
 lag measured on heating phases. The regulation reads only `kept_lag_s`:
 
@@ -203,9 +191,8 @@ During the bootstrap, `learning.bootstrap_status` describes the current step:
 
 | Value | Meaning |
 |---|---|
-| `step1 - deadtime: heat:… cool:…` | Waiting for the active and passive dead times |
+| `step1 - waiting response model` | No learning window before the response model of the mode is published (the first heating phase or pulse read as a whole gives it) |
 | `step2 - collecting emeas: A:n/5 B:n/5` | Collecting the `a` and `b` measurements |
-| `step2 - waiting response lag: estimates N, heating phases K/4` | Collections complete; the `a` publication waits for the delivered power model (published lag, `K` reaches 4, or 31 `a` measurements collected) |
 
 `valve` is `null` unless the thermostat drives a valve. In valve mode it contains:
 
@@ -224,7 +211,9 @@ answers the power: a dead time (sensor, transport, actuator) followed by a
 response time constant (the emitter, the air and the nearby mass together). It is fitted on whole measurement events: the
 pulses, the bootstrap phases, the calibration pulses and the comfort returns of
 the regulation after a rest (those only at night, with the home position known).
-It is published only: nothing in the regulation reads it.
+The learning of `a` and `b` reads it (no learning window of the learning phase
+before it, delivered power, delay of a learning window after a start or a stop);
+the regulator itself (gains, holds, anticipation, near band) does not read it.
 
 | Path | Meaning |
 |---|---|

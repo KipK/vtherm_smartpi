@@ -291,8 +291,6 @@ class SmartPI:
             )
         self._t_heat_episode_start: float | None = None
         self._t_cool_episode_start: float | None = None
-        self._deadtime_skip_count_a: int = 0
-        self._deadtime_skip_count_b: int = 0
 
         # --- Guard Manager (Phase 2.5 refactoring) ---
         self.guards = SmartPIGuards()
@@ -384,15 +382,13 @@ class SmartPI:
             self.room_model.reset()
         self._t_heat_episode_start = None
         self._t_cool_episode_start = None
-        self._deadtime_skip_count_a = 0
-        self._deadtime_skip_count_b = 0
 
         # Reset guard manager
         self.guards.reset(keep_counts=True)
 
         # Reset new component managers (Phase 2.5 refactoring)
         self.learn_win.reset_all()
-        self.est.a_model_ready = self.learn_win.response_lag.resolved
+        self.est.a_model_ready = False   # no response model nor heating phase after a reset
         self._hysteresis_restore = None
         self._start.reset()
         self.deadband_mgr.reset()
@@ -529,7 +525,7 @@ class SmartPI:
             a_learning_block_reason = "skip: setpoint transition"
 
         # Delegate to LearningWindowManager
-        self._deadtime_skip_count_a, self._deadtime_skip_count_b = self.learn_win.update(
+        self.learn_win.update(
             dt_min=dt_min,
             current_temp=current_temp,
             ext_temp=ext_temp,
@@ -538,12 +534,6 @@ class SmartPI:
             dt_est=self.dt_est,
             governance=self.gov,
             now=now,
-            in_deadband=self.deadband_mgr.in_deadband,
-            in_near_band=self.deadband_mgr.in_near_band,
-            t_heat_episode_start=self._t_heat_episode_start,
-            t_cool_episode_start=self._t_cool_episode_start,
-            deadtime_skip_count_a=self._deadtime_skip_count_a,
-            deadtime_skip_count_b=self._deadtime_skip_count_b,
             is_calibrating=self.phase == SmartPIPhase.CALIBRATION,
             is_hysteresis=(self.phase == SmartPIPhase.HYSTERESIS),
             hvac_mode=hvac_mode,
@@ -1065,7 +1055,7 @@ class SmartPI:
                 b=self.est.b,
                 dtc=self.dt_est.deadtime_cool_s,
                 dtc_reliable=self.dt_est.deadtime_cool_reliable,
-                lag=self.learn_win.response_lag.lag_s,
+                lag=self._start.model.emitter_lag_s(hvac_mode),
                 cycle_min=self._cycle_min,
                 valve=self._valve_mode_enabled,
                 excluded=excluded,
@@ -1149,8 +1139,6 @@ class SmartPI:
             "version": 2,
             "learning_enabled": self._learning_enabled,
             "last_active_wall_ts": self._last_active_wall_ts,
-            "deadtime_skip_count_a": self._deadtime_skip_count_a,
-            "deadtime_skip_count_b": self._deadtime_skip_count_b,
             "cycles_since_reset": min(self._cycles_since_reset, self.ff_warmup_cycles),
             "est_state": self.est.save_state(),
             "dt_est_state": self.dt_est.save_state(),
@@ -1415,13 +1403,7 @@ class SmartPI:
         self.gov.load_state(state.get("gov_state", {}))
         self.ctl.load_state(state.get("ctl_state", {}))
         self.sp_mgr.load_state(state.get("sp_mgr_state", {}))
-        lw_state = state.get("lw_state", {})
-        self.learn_win.load_state(lw_state)
-        if isinstance(lw_state, dict) and "response_lag" in lw_state:
-            # The flag is otherwise refreshed by the first learning update: a
-            # restored unresolved model must keep the bootstrap from the first
-            # calculation. States without the block keep the default.
-            self.est.a_model_ready = self.learn_win.response_lag.resolved
+        self.learn_win.load_state(state.get("lw_state", {}))
         self._learning_start_date = self.learn_win.learning_start_date
         self.deadband_mgr.load_state(state.get("db_state", {}))
         self.gain_scheduler.load_state(state.get("gs_state", {}))
@@ -1434,6 +1416,8 @@ class SmartPI:
         self.resume_hold.clear()
         self._hysteresis_restore = self._load_hysteresis_output(state.get("hysteresis_output"))
         self._start.load(state)
+        # Refreshed by each learning update: an unsettled power model keeps the learning stage from the first tick.
+        self.est.a_model_ready = self.learn_win.a_model_ready(self.est.model_hvac_mode)
         # The restart is decided at the first tick (resolve_restart); until then
         # the transient state above stays as after a cold start.
         self.restart.load(state.get("restart"))
@@ -1441,8 +1425,6 @@ class SmartPI:
         self._clear_restart_wait()
 
         # Load main algorithm scalars
-        self._deadtime_skip_count_a = int(state.get("deadtime_skip_count_a", 0))
-        self._deadtime_skip_count_b = int(state.get("deadtime_skip_count_b", 0))
         self._last_active_wall_ts = normalize_wall_timestamp(
             state.get("last_active_wall_ts")
         )

@@ -10,7 +10,7 @@ from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThe
 from custom_components.vtherm_smartpi.smartpi.ab_estimator import ABEstimator
 from custom_components.vtherm_smartpi.smartpi.const import AB_A_SOFT_GATE_MIN_B, AB_MIN_SAMPLES_A
 from custom_components.vtherm_smartpi.smartpi.deadtime_estimator import DeadTimeEstimator
-from custom_components.vtherm_smartpi.smartpi.response_lag import ResponseLagEstimator
+from custom_components.vtherm_smartpi.smartpi.power_steps import PowerSteps
 
 HEAT, COOL = VThermHvacMode_HEAT, VThermHvacMode_COOL
 B = 3.0e-4
@@ -259,31 +259,29 @@ def test_dead_time_stash_round_trips_and_old_state_loads():
 # ---------------------------------------------------------------- emitter lag
 
 
-def _observe(lag: ResponseLagEstimator, mode) -> None:
-    lag.observe(now=100.0, dt_s=10.0, u=0.0, t_ext=5.0, hvac_mode=mode, b=B, tin_history=[])
+def _observe(steps: PowerSteps, mode) -> None:
+    steps.observe(now=100.0, dt_s=10.0, u=0.0, hvac_mode=mode, model=None)
 
 
-def test_response_lag_is_kept_per_mode():
-    lag = ResponseLagEstimator("t")
-    _observe(lag, HEAT)
-    lag.load_state({"hvac_mode": "heat", "estimates": [[280.0, 20.0], [300.0, 20.0], [330.0, 20.0]],
-                    "durations": [900.0], "episodes": 4})
-    assert lag.lag_s == 300.0
+def test_power_steps_are_kept_per_mode():
+    steps = PowerSteps("t")
+    _observe(steps, HEAT)
+    steps.load_state({"hvac_mode": "heat", "durations": [900.0, 900.0, 900.0], "episodes": 4})
+    assert steps.episodes_count == 4
 
-    _observe(lag, COOL)
-    assert lag.lag_s is None and lag.estimates_count == 0 and lag.episodes_count == 0
-    state = json.loads(json.dumps(lag.save_state()))
+    _observe(steps, COOL)
+    assert steps.episodes_count == 0 and steps.episode_median_s is None
+    state = json.loads(json.dumps(steps.save_state()))
     assert set(state["mode_stash"]) == {"heat"}
 
-    _observe(lag, HEAT)
-    assert lag.lag_s == 300.0 and lag.estimates_count == 3 and lag.episodes_count == 4
-    assert lag.episode_median_s is None or lag.episode_median_s == 900.0
-    assert "mode_stash" not in json.loads(json.dumps(lag.save_state()))
+    _observe(steps, HEAT)
+    assert steps.episodes_count == 4 and steps.episode_median_s == 900.0
+    assert "mode_stash" not in json.loads(json.dumps(steps.save_state()))
 
-    reloaded = ResponseLagEstimator("t")
+    reloaded = PowerSteps("t")
     reloaded.load_state(state)
     _observe(reloaded, HEAT)
-    assert reloaded.lag_s == 300.0 and reloaded.episodes_count == 4
+    assert reloaded.episodes_count == 4
     reloaded.clear()
     assert "mode_stash" not in reloaded.save_state()
 

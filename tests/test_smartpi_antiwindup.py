@@ -178,9 +178,9 @@ def test_resume_after_override_does_not_integrate_gap(override):
     algo.est.b = 0.002
     algo.est.a_meas_hist.extend([0.02] * AB_MIN_SAMPLES_A)
     algo.est.b_meas_hist.extend([0.002] * AB_MIN_SAMPLES_B)
-    # A model past the bootstrap has a resolved response lag: the learning,
+    # A model past the bootstrap has a settled delivered power model: the learning,
     # fed during a guard cut, keeps the stable phase.
-    algo.learn_win.response_lag._episodes = RESPONSE_LAG_RESOLVE_EPISODES
+    algo.learn_win.power_steps._episodes = RESPONSE_LAG_RESOLVE_EPISODES
     clock = [10_000.0]
     target, current = 20.0, 19.0
     error = abs(target - current)

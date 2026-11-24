@@ -154,11 +154,11 @@ class _Run:
 
     @property
     def lag(self):
-        return self.algo.learn_win.response_lag
+        return self.algo.learn_win.power_steps
 
 
 def _to_heating_episode() -> _Run:
-    """Warm room (passive period), then a setpoint step: an episode of the response lag starts."""
+    """Warm room (passive period), then a setpoint step: an episode of the power steps starts."""
     run = _Run(setpoint=17.0, temp=19.0)
     run.ticks(60)
     run.setpoint = 20.0
@@ -168,9 +168,9 @@ def _to_heating_episode() -> _Run:
 
 
 # ---------------------------------------------------------------------------
-# Response lag: an episode in progress across a short restart
+# Power steps: an episode in progress across a short restart
 # ---------------------------------------------------------------------------
-def test_response_lag_episode_resumes_across_a_short_restart() -> None:
+def test_power_step_episode_resumes_across_a_short_restart() -> None:
     """The first observation after a load used to see a zero power: the episode was counted interrupted."""
     run = _to_heating_episode()
     episodes = run.lag.episodes_count
@@ -181,14 +181,13 @@ def test_response_lag_episode_resumes_across_a_short_restart() -> None:
     run.start()
     run.tick()
 
-    assert run.lag.last_reason != "episode interrupted by restart"
     assert run.lag.episodes_count == episodes
     assert run.lag._ep_start is not None
     with _clocks(run.clock):
         assert run.clock.time() - (run.clock.monotonic() - run.lag._ep_start) == pytest.approx(start_wall, abs=1.0)
 
 
-def test_response_lag_episode_is_interrupted_by_a_long_restart() -> None:
+def test_power_step_episode_is_interrupted_by_a_long_restart() -> None:
     run = _to_heating_episode()
     episodes = run.lag.episodes_count
     run.stop()
@@ -198,7 +197,6 @@ def test_response_lag_episode_is_interrupted_by_a_long_restart() -> None:
 
     assert run.algo.restart.decision.bridged is False
     assert run.lag.episodes_count == episodes + 1
-    assert run.lag.last_reason == "episode interrupted by restart"
 
 
 # ---------------------------------------------------------------------------

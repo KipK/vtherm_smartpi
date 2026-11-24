@@ -53,10 +53,6 @@ def _call_update(win, u_active, governance, estimator, now=1000.0):
         dt_est=_make_dt_est(),
         governance=governance,
         now=now,
-        in_deadband=False,
-        in_near_band=True,
-        t_heat_episode_start=None,
-        t_cool_episode_start=None,
     )
 
 

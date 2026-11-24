@@ -27,8 +27,8 @@ def _stable_smartpi() -> SmartPI:
         name="guard_cut_learning",
     )
     force_smartpi_stable_mode(algo)
-    # A model past the bootstrap has a resolved response lag.
-    algo.learn_win.response_lag._episodes = RESPONSE_LAG_RESOLVE_EPISODES
+    # A model past the bootstrap has a settled delivered power model.
+    algo.learn_win.power_steps._episodes = RESPONSE_LAG_RESOLVE_EPISODES
     assert algo.phase == SmartPIPhase.STABLE
     return algo
 
@@ -63,7 +63,7 @@ def test_guard_cut_feeds_the_passive_learning():
     _start_cut_after_setpoint_drop(algo, 1000.0)
     algo.deadband_mgr.in_deadband = True
 
-    with patch.object(algo.learn_win, "update", return_value=(0, 0)) as update:
+    with patch.object(algo.learn_win, "update", return_value=None) as update:
         for i in range(1, 6):
             _calculate(algo, 1000.0 + 60.0 * i, 19.6 - 0.02 * i)
 
@@ -71,8 +71,6 @@ def test_guard_cut_feeds_the_passive_learning():
     kwargs = update.call_args.kwargs
     assert math.isclose(kwargs["dt_min"], 1.0)
     assert kwargs["u_active"] == 0.0
-    assert kwargs["in_deadband"] is False
-    assert kwargs["in_near_band"] is False
     assert kwargs["a_learning_allowed"] is False
     assert kwargs["a_learning_block_reason"] == "skip: guard cut"
     assert algo.gov.regime == GovernanceRegime.SATURATED
@@ -84,7 +82,7 @@ def test_guard_cut_learning_caps_a_tick_gap_at_one_cycle():
     algo = _stable_smartpi()
     _start_cut_after_setpoint_drop(algo, 1000.0)
 
-    with patch.object(algo.learn_win, "update", return_value=(0, 0)) as update:
+    with patch.object(algo.learn_win, "update", return_value=None) as update:
         _calculate(algo, 1060.0, 19.5)
         _calculate(algo, 1060.0 + 3600.0, 19.0)
 
@@ -98,7 +96,7 @@ def test_learning_resumes_normally_after_the_guard_cut():
     assert algo._guard_cut_learning_ts == 1060.0
 
     algo.guards.reset()
-    with patch.object(algo.learn_win, "update", return_value=(0, 0)) as update:
+    with patch.object(algo.learn_win, "update", return_value=None) as update:
         # The first tick after the cut continues from the last cut tick.
         _calculate(algo, 1120.0, 15.9)
         assert algo._guard_cut_learning_ts is None
