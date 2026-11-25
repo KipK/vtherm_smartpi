@@ -196,11 +196,10 @@ def test_malformed_or_wrong_signed_stash_is_dropped():
 # ---------------------------------------------------------------- dead times
 
 
-def _set_dead_times(dt: DeadTimeEstimator, heat: float, cool: float) -> None:
+def _set_dead_times(dt: DeadTimeEstimator, heat: float) -> None:
+    """The dead time after a start of HEAT (the heating slot)."""
     dt._history_heat.extend([heat - 10.0, heat, heat + 10.0])
-    dt._history_cool.extend([cool - 5.0, cool, cool + 5.0])
-    dt.deadtime_heat_s, dt.deadtime_cool_s = heat, cool
-    dt.deadtime_heat_reliable = dt.deadtime_cool_reliable = True
+    dt.deadtime_heat_s, dt.deadtime_heat_reliable = heat, True
 
 
 def _dead_times(dt: DeadTimeEstimator) -> tuple:
@@ -211,22 +210,22 @@ def _dead_times(dt: DeadTimeEstimator) -> tuple:
 def test_heat_dead_times_come_back_exactly():
     dt = DeadTimeEstimator()
     dt.ensure_hvac_mode(HEAT)
-    _set_dead_times(dt, 240.0, 420.0)
+    _set_dead_times(dt, 240.0)
     heat = _dead_times(dt)
 
     assert dt.ensure_hvac_mode(COOL) is True
     assert _dead_times(dt) == (None, None, False, False, [], [])
-    dt._history_heat.append(90.0)
-    dt.deadtime_heat_s = 90.0
+    dt._history_cool.append(90.0)
+    dt.deadtime_cool_s = 90.0
     assert dt.ensure_hvac_mode(HEAT) is True
     assert _dead_times(dt) == heat
-    assert set(dt._mode_stash) == {"cool"} and dt._mode_stash["cool"]["deadtime_heat_s"] == 90.0
+    assert set(dt._mode_stash) == {"cool"} and dt._mode_stash["cool"]["deadtime_cool_s"] == 90.0
 
 
 def test_dead_time_reset_clears_both_modes_and_single_mode_state_is_unchanged():
     dt = DeadTimeEstimator()
     dt.ensure_hvac_mode(HEAT)
-    _set_dead_times(dt, 240.0, 420.0)
+    _set_dead_times(dt, 240.0)
     assert "mode_stash" not in dt.save_state()
     dt.ensure_hvac_mode(COOL)
     assert "mode_stash" in dt.save_state()
@@ -239,7 +238,7 @@ def test_dead_time_reset_clears_both_modes_and_single_mode_state_is_unchanged():
 def test_dead_time_stash_round_trips_and_old_state_loads():
     dt = DeadTimeEstimator()
     dt.ensure_hvac_mode(HEAT)
-    _set_dead_times(dt, 240.0, 420.0)
+    _set_dead_times(dt, 240.0)
     heat = _dead_times(dt)
     old = json.loads(json.dumps(dt.save_state()))
     legacy = DeadTimeEstimator()
@@ -300,7 +299,7 @@ def test_saved_state_carries_the_stash_and_only_after_a_switch():
     _learn_b(algo.est, HEAT)
     _learn_a(algo.est, HEAT, 0.025)
     algo.dt_est.ensure_hvac_mode(HEAT)
-    _set_dead_times(algo.dt_est, 240.0, 420.0)
+    _set_dead_times(algo.dt_est, 240.0)
     saved = json.loads(json.dumps(algo.save_state()))
     assert "mode_stash" not in saved["est_state"] and "mode_stash" not in saved["dt_est_state"]
 
@@ -315,7 +314,7 @@ def test_saved_state_carries_the_stash_and_only_after_a_switch():
     other.load_state(saved)
     other.calculate(target_temp=22.0, current_temp=21.0, ext_current_temp=5.0, hvac_mode=HEAT)
     assert other.est.learn_ok_count_a > 0 and other.est.a > 0.0
-    assert other.dt_est.deadtime_heat_s == 240.0 and other.dt_est.deadtime_cool_s == 420.0
+    assert other.dt_est.deadtime_heat_s == 240.0 and other.dt_est.deadtime_cool_s is None
 
     other.reset_learning()
     assert "mode_stash" not in other.save_state()["est_state"]

@@ -28,6 +28,7 @@ from .learning_outcomes import LearningOutcomes
 from .measure_event import MODE_HEAT, MeasureEventDetector
 from .power_steps import PowerSteps
 from .response_model import delivered_fraction
+from .temperature_history import TemperatureHistory
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 # Two observed intervals are contiguous within this tolerance (s).
@@ -35,11 +36,9 @@ _CONTIGUITY_TOL_S = 1.0
 
 if TYPE_CHECKING:
     from .ab_estimator import ABEstimator
-    from .deadtime_estimator import DeadTimeEstimator
     from .governance import SmartPIGovernance
     from .response_model import ResponseModel
     from ..hvac_mode import VThermHvacMode
-    from .temperature_history import TemperatureHistory
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,11 +59,11 @@ class LearningWindowManager:
         
         Args:
             name: Entity name for logging purposes.
-            temperatures: The room temperature history the window slopes read (smartpi/temperature_history.py);
-                without it, the ``tin_history`` of the dead-time estimator given to ``update``.
+            temperatures: The room temperature history the window slopes read (smartpi/temperature_history.py), an
+                empty one when not given.
         """
         self._name = name
-        self.temperatures = temperatures
+        self.temperatures = temperatures if temperatures is not None else TemperatureHistory()
         
         # Learning window state (multi-cycle learning)
         self._active: bool = False
@@ -413,10 +412,6 @@ class LearningWindowManager:
     # Learning window update method
     # --------------------------------------------------------------------------
 
-    def _tin_history(self, dt_est: "DeadTimeEstimator"):
-        """The raw room temperature samples the window reads."""
-        return self.temperatures.raw if self.temperatures is not None else dt_est.tin_history
-
     def update(
         self,
         dt_min: float,
@@ -424,7 +419,6 @@ class LearningWindowManager:
         ext_temp: float,
         u_active: float,
         estimator: "ABEstimator",
-        dt_est: "DeadTimeEstimator",
         governance: "SmartPIGovernance",
         now: float,
         is_calibrating: bool = False,
@@ -453,7 +447,7 @@ class LearningWindowManager:
                 dt_s=dt_min * 60.0,
                 u=clamp(u_active, 0.0, 1.0),
                 hvac_mode=hvac_mode,
-                tin_history=self._tin_history(dt_est),
+                tin_history=self.temperatures.raw,
                 context=(
                     "calibration" if is_calibrating
                     else "bootstrap" if is_hysteresis
@@ -480,7 +474,6 @@ class LearningWindowManager:
                 ext_temp,
                 u_active,
                 estimator,
-                dt_est,
                 governance,
                 now,
                 model,
@@ -621,7 +614,6 @@ class LearningWindowManager:
         ext_temp: float,
         u_active: float,
         estimator: "ABEstimator",
-        dt_est: "DeadTimeEstimator",
         governance: "SmartPIGovernance",
         now: float,
         model: dict | None,
@@ -642,8 +634,6 @@ class LearningWindowManager:
             ext_temp: Current outdoor temperature.
             u_active: Power applied during this interval (0..1).
             estimator: The ABEstimator instance for learning submission.
-            dt_est: The DeadTimeEstimator instance (room temperature history
-                when none is given).
             governance: The SmartPIGovernance instance for regime decisions.
             now: Current monotonic time.
             model: Published response model of the mode, None without one.
@@ -774,7 +764,7 @@ class LearningWindowManager:
                 u_eff_win = self._u_int / max(self._t_int_s, 1e-9)
                 trim_frac = 0.10 if u_eff_win < U_OFF_MAX else 0.0
                 early_samples = [
-                    p for p in self._tin_history(dt_est)
+                    p for p in self.temperatures.raw
                     if p[0] >= self._start_ts and (close_at is None or p[0] <= close_at)
                 ]
                 slope_early, method_early, _ = ABEstimator.robust_dTdt_per_min(
@@ -898,7 +888,7 @@ class LearningWindowManager:
             # Try slope quality: submit if robust, extend if not, timeout if limit reached.
             # robust_dTdt_per_min enforces its own internal guards (jumps, amplitude, t-test).
             trim_frac = 0.10 if u_eff_pre < U_OFF_MAX else 0.0
-            relevant_samples = [p for p in self._tin_history(dt_est) if p[0] >= self._start_ts]
+            relevant_samples = [p for p in self.temperatures.raw if p[0] >= self._start_ts]
             slope_val, method, n_samples = ABEstimator.robust_dTdt_per_min(
                 relevant_samples, trim_start_frac=trim_frac
             )

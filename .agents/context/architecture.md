@@ -69,7 +69,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `tint_filter.py`: adaptive filter on indoor temperature (`t_int_lp`, `t_int_clean`).
 
 **Dead time and emitter lag**
-- `deadtime_estimator.py`: heating/cooling dead time by state machine on power transitions; in peak mode (direct start only) the dead time after a stop is read on the `peak_search.py` peak.
+- `deadtime_estimator.py`: dead time after a start (heating in HEAT, cooling in COOL) by state machine on power transitions; the gains read it.
 - `deadtime_trend.py`: free-running trend before a power start.
 - `power_steps.py`: power steps of the a/b learning (episodes, heating phases), delivered power and settling gates from the response model (`response_model.py`).
 

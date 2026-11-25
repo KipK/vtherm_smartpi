@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
+from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi import event_reading as er
 from custom_components.vtherm_smartpi.smartpi.event_fit import (
     REJECT_CROSSINGS,
@@ -280,6 +280,52 @@ def test_a_seed_is_previous_and_provisional_until_the_first_accepted_event():
     assert model.values(MODE_HEAT)["source"] == SOURCE_PULSE
     model.reset()
     assert model.values(MODE_HEAT) is None
+
+
+def test_a_state_of_an_earlier_version_loads_without_its_dead_time_after_a_stop():
+    """A state saved before the response model (dead times after a stop, heating balance, response lag) loads: the
+    dead time after a stop is ignored in both modes, the one after a start is kept and seeds the model."""
+    from custom_components.vtherm_smartpi.algo import SmartPI
+
+    def _algo():
+        return SmartPI(hass=MagicMock(), cycle_min=10.0, minimal_activation_delay=0, minimal_deactivation_delay=0,
+                       name="Earlier state")
+
+    state = _algo().save_state()
+    del state["response_state"]
+    state["dt_est_state"] = {
+        "model_hvac_mode": MODE_HEAT,
+        "deadtime_heat_s": 600.0, "deadtime_heat_reliable": True, "history_heat": [600.0],
+        "deadtime_cool_s": 2400.0, "deadtime_cool_reliable": True, "history_cool": [2400.0],
+        "mode_stash": {MODE_COOL: {
+            "deadtime_heat_s": 1800.0, "deadtime_heat_reliable": True, "history_heat": [1800.0],
+            "deadtime_cool_s": 300.0, "deadtime_cool_reliable": True, "history_cool": [300.0]}},
+        "tin_history": [], "tin_lp_history": [],
+        "detection": {"state": "WAITING_COOL_RESPONSE", "last_power": 0.0, "waiting_power_on": False,
+                      "cool_start_wall": time.time() - 600.0, "cool_peak_temp": 20.0, "trend_slope": 0.0},
+    }
+    state["lw_state"]["heating_balance"] = {"lags": [2000.0], "results": [], "restart": None}
+    state["lw_state"]["response_lag"] = {"hvac_mode": MODE_HEAT, "published": 900.0}
+
+    algo = _algo()
+    algo.load_state(state)
+    algo.dt_est.resume_after_restart(True)
+    dt_est = algo.dt_est
+    assert (dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable) == (600.0, True)
+    assert (dt_est.deadtime_cool_s, dt_est.deadtime_cool_reliable) == (None, False)
+    assert dt_est.state == "OFF"
+    assert dt_est.save_state()["mode_stash"][MODE_COOL]["deadtime_heat_s"] is None
+    # seeds of the response model: theta + tau_e / 2 = the saved dead time after a start
+    assert algo._start.model.values(MODE_HEAT)["theta_s"] == 0.0
+    assert algo._start.model.values(MODE_HEAT)["tau_e_s"] == pytest.approx(1200.0)
+    assert algo._start.model.values(MODE_COOL)["theta_s"] + 0.5 * algo._start.model.values(MODE_COOL)["tau_e_s"] == (
+        pytest.approx(300.0))
+    model = algo.get_published_diagnostics()["model"]
+    assert model["deadtime_heat_s"] == 600.0 and "deadtime_cool_s" not in model
+    algo.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=5.0, hvac_mode=VThermHvacMode_HEAT)
+    # the mode set aside comes back with its dead time after a start only
+    assert dt_est.ensure_hvac_mode(VThermHvacMode_COOL) is True
+    assert (dt_est.deadtime_cool_s, dt_est.deadtime_heat_s) == (300.0, None)
 
 
 def test_the_saved_model_loads_back_and_malformed_parts_are_skipped():

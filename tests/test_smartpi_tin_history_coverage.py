@@ -24,7 +24,7 @@ def test_fast_sensor_history_covers_a_full_learning_window() -> None:
     last = _feed_fast_sensor(est, start, minutes=DT_MAX_MIN + 30, period_s=15.0)
 
     window_start = last - DT_MAX_MIN * 60.0
-    for history in (est.tin_history, est._tin_lp_history):
+    for history in (est.history.raw, est._tin_lp_history):
         assert history[0][0] <= window_start
 
 
@@ -35,7 +35,7 @@ def test_window_slope_samples_start_at_window_start() -> None:
     last = _feed_fast_sensor(est, start, minutes=210, period_s=15.0)
 
     window_start = last - 200 * 60.0
-    samples = [p for p in est.tin_history if p[0] >= window_start]
+    samples = [p for p in est.history.raw if p[0] >= window_start]
     assert samples[0][0] - window_start < 15.0
     slope, method, _ = ABEstimator.robust_dTdt_per_min(samples)
     assert method == "ols_ttest"
@@ -57,6 +57,6 @@ def test_samples_older_than_retention_are_dropped() -> None:
         now += 60.0
     last = now - 60.0
 
-    for history in (est.tin_history, est._tin_lp_history):
+    for history in (est.history.raw, est._tin_lp_history):
         assert last - history[0][0] <= TIN_HISTORY_RETENTION_MIN * 60.0
         assert last - history[0][0] >= TIN_HISTORY_RETENTION_MIN * 60.0 - 60.0

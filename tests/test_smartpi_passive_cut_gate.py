@@ -60,9 +60,10 @@ def _run_cut(*, model, a_known=False, is_hysteresis=False, hvac_mode=VThermHvacM
         temp += sign * (0.01 if u > 0 else -0.005)
         reading = round(temp, 2)
         dt.tin_history.append((now, reading))
+        win.temperatures.raw = dt.tin_history
         win.update(
             dt_min=TICK_S / 60.0, current_temp=reading, ext_temp=t_ext, u_active=u,
-            estimator=est, dt_est=dt, governance=gov, now=now, is_hysteresis=is_hysteresis,
+            estimator=est, governance=gov, now=now, is_hysteresis=is_hysteresis,
             hvac_mode=hvac_mode, target_temp=target, raw_temp=reading,
         )
         reasons.append(est.learn_last_reason)

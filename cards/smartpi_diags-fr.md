@@ -59,10 +59,9 @@
 {% set b = model.get('b') %}
 {% set ab_conf = model.get('confidence', 'unknown') %}
 {% set tau_reliable = model.get('tau_reliable', false) %}
-{% set dt_heat = model.get('deadtime_heat_s') %}
-{% set dt_cool = model.get('deadtime_cool_s') %}
-{% set deadtime_heat_reliable = model.get('deadtime_heat_reliable', false) %}
-{% set deadtime_cool_reliable = model.get('deadtime_cool_reliable', false) %}
+{% set dt_key = 'deadtime_cool' if 'deadtime_cool_s' in model else 'deadtime_heat' %}
+{% set dt_heat = model.get(dt_key ~ '_s') %}
+{% set deadtime_heat_reliable = model.get(dt_key ~ '_reliable', false) %}
 
 {% set learning_enabled = learning.get('enabled') %}
 {% set block_reason = learning.get('block_reason') %}
@@ -102,7 +101,6 @@
 {% set calibration_result = calibration.get('result') %}
 {% set calibration_last = calibration.get('last_time') %}
 {% set calibration_dt_start = calibration.get('deadtime_start_s') %}
-{% set calibration_dt_stop = calibration.get('deadtime_stop_s') %}
 {% set calibration_a = calibration.get('reading_a') %}
 {% set calibration_b = calibration.get('reading_b') %}
 {% set calibration_lag = calibration.get('reading_lag_s') %}
@@ -188,7 +186,7 @@
 {% set anticipation_horizon_source_label = {
   'measurement pulses': 'impulsions de mesure',
   'response model': 'modèle de réponse',
-  'dead times': 'temps morts',
+  'dead time': 'temps mort',
   'none': 'aucune'
 }.get(anticipation_horizon_source, anticipation_horizon_source) %}
 {% set learn_u_avg = analysis_learning.get('window_mean_power') %}
@@ -329,8 +327,7 @@
 | Confiance AB | {{ ab_label }} |
 | `tau_reliable` | {% if tau_reliable %}✅{% else %}⏳{% endif %} |
 {% if not has_analysis -%}
-| `deadtime_heat_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} · {% if deadtime_heat_reliable %}✅ fiable{% else %}⏳ apprentissage{% endif %} |
-| `deadtime_cool_s` | {% if dt_cool is not none %}{{ dt_cool }} s{% else %}—{% endif %} · {% if deadtime_cool_reliable %}✅ fiable{% else %}⏳ apprentissage{% endif %} |
+| `{{ dt_key }}_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} · {% if deadtime_heat_reliable %}✅ fiable{% else %}⏳ apprentissage{% endif %} |
 {% endif -%}
 | `Kp` | {% if kp is not none %}{{ kp | float | round(4) }}{% else %}—{% endif %} |
 | `Ki` | {% if ki is not none %}{{ ki | float | round(5) }}{% else %}—{% endif %} |
@@ -382,7 +379,7 @@
 |---|---|
 | Calibration | `{{ calibration_state }}` · {{ calibration_pulses }} impulsion(s) |
 | Résultat | {% if calibration_result %}`{{ calibration_result }}`{% else %}—{% endif %} |
-| Temps morts (démarrage / arrêt) | {% if calibration_dt_start is not none %}{{ calibration_dt_start }} s{% else %}—{% endif %} / {% if calibration_dt_stop is not none %}{{ calibration_dt_stop }} s{% else %}—{% endif %} |
+| Temps mort après un démarrage | {% if calibration_dt_start is not none %}{{ calibration_dt_start }} s{% else %}—{% endif %} |
 | Lecture a · b · retard | {% if calibration_a is not none %}{{ calibration_a }} °C/min · {{ calibration_b }} /min · {{ calibration_lag }} s{% else %}—{% endif %} |
 | En usage a · b · retard | {% if calibration_in_a is not none %}{{ calibration_in_a }} °C/min · {{ calibration_in_b }} /min · {{ calibration_in_lag }} s{% else %}—{% endif %} |
 | Corrigé | {% if calibration_corrected %}{{ calibration_corrected | join(', ') }}{% else %}—{% endif %} |
@@ -441,8 +438,7 @@
 
 | Paramètre | Valeur |
 |---|---|
-| `deadtime_heat_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} · {% if deadtime_heat_reliable %}✅ fiable{% else %}⏳ apprentissage{% endif %} |
-| `deadtime_cool_s` | {% if dt_cool is not none %}{{ dt_cool }} s{% else %}—{% endif %} · {% if deadtime_cool_reliable %}✅ fiable{% else %}⏳ apprentissage{% endif %} |
+| `{{ dt_key }}_s` | {% if dt_heat is not none %}{{ dt_heat }} s{% else %}—{% endif %} · {% if deadtime_heat_reliable %}✅ fiable{% else %}⏳ apprentissage{% endif %} |
 | `deadtime_state` | `{{ deadtime_state }}` |
 | `deadtime_last_power` | {% if deadtime_last_power is not none %}{{ (deadtime_last_power | float * 100) | round(1) }}%{% else %}—{% endif %} |
 

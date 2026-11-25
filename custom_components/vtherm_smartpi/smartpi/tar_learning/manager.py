@@ -265,8 +265,6 @@ class TarLearningManager:
         setpoint: float | None,
         phase: str | None,
         b: float | None,
-        dtc: float | None,
-        dtc_reliable: bool,
         lag: float | None,
         cycle_min: float,
         valve: bool = False,
@@ -297,9 +295,10 @@ class TarLearningManager:
         if hvac_mode != VThermHvacMode_HEAT and not excluded:
             excluded = "hvac not heating"
         self._cycle_s = max(float(cycle_min) * 60.0, 60.0)
+        # No dead time after a stop is recorded (dtc): the washout of a night reads the emitter lag.
         prev_sp = self.history.record(
             now, temp=temp, ext=ext, setpoint=setpoint, phase=phase.upper() if phase else None,
-            b=b, dtc=dtc if dtc_reliable else None, lag=lag, excluded=excluded,
+            b=b, dtc=None, lag=lag, excluded=excluded,
         )
         if prev_sp is not None and setpoint is not None:
             self._on_setpoint_change(now, prev_sp, float(setpoint))

@@ -419,7 +419,7 @@ class MeasureEventDetector:
     ) -> list[MeasureEvent]:
         """Observe the power applied over [now - dt_s, now].
 
-        tin_history holds the (monotonic time, temperature) samples of the dead time estimator; context names
+        tin_history holds the raw (monotonic time, temperature) samples of the room; context names
         the learning phase of the caller ("bootstrap", "calibration" or "regulation"); ext is the outdoor
         temperature. Returns the events closed or dropped by this observation, which the reader gets too.
         """

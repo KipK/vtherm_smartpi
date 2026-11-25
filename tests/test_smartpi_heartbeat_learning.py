@@ -64,7 +64,7 @@ def test_heartbeat_learning_trigger_on_slope_quality():
     smartpi._start.model.seed(str(VThermHvacMode_HEAT), 0.0, 1.0)
     smartpi.learn_win.set_learning_resume_ts(None)
 
-    # Pre-populate tin_history with 20 samples, 1 min apart, rising temperature.
+    # Pre-populate the temperature history with 20 samples, 1 min apart, rising temperature.
     # (i=0 = oldest = 19 min ago, i=19 = most recent = now)
     # Amplitude = 0.95°C >> DT_DERIVATIVE_MIN_ABS (0.03°C); slope ≈ +0.05°C/min.
     base_now = time.monotonic()

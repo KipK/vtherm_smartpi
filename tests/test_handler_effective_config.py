@@ -113,7 +113,7 @@ def test_the_handler_passes_the_start_of_the_learning_to_the_algorithm():
     """The option reaches SmartPI; an entry without it (saved before the option existed) runs the bootstrap."""
     direct = _algorithm_of({}, {CONF_SMART_PI_LEARNING_START: "direct"})
     assert direct.learning_start == "direct" and direct.command_is_hysteresis is False
-    assert direct.dt_est.passive_by_peak is True
+    assert direct.dt_est.direct is True
     for data, options in (({}, {}), ({}, {CONF_SMART_PI_DEADBAND: GLOBAL_DEADBAND}), ({CONF_SMART_PI_LEARNING_START: "bootstrap"}, {})):
         bootstrap = _algorithm_of(data, options)
         assert bootstrap.learning_start == "bootstrap" and bootstrap.command_is_hysteresis is True

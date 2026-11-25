@@ -10,10 +10,9 @@ separate. The learning keeps its stage and everything keyed on it. ``learning_st
 - ``"direct"``: the PI is the command from the first calculation, on the fallback gains until a heating rate is kept.
   Its model readers see no published model during the stage, so the feed-forward is zero. Up to three measurement
   pulses (smartpi/measure_pulse.py) replace the PI command for a short sequence that gives the learning a dead time
-  after a start and after a stop, and the readings of the measurement events they cause (smartpi/event_reading.py)
-  keep a heating rate, a loss coefficient and an emitter lag that stand in for the first model. The pulses go on while
-  no values are kept in the mode or its response model is not published. The dead time after a stop is read on the
-  temperature peak (smartpi/peak_search.py). The integral term of the regulator starts from zero
+  after a start and a measurement event, and the readings of those events (smartpi/event_reading.py) keep a heating
+  rate, a loss coefficient and an emitter lag that stand in for the first model. The pulses go on while no values are
+  kept in the mode or its response model is not published. The integral term of the regulator starts from zero
   at the calculation at which the learning stage ends.
 
 The values kept from the readings are given to the a/b estimator as starting values (smartpi/starting_values.py),
@@ -120,7 +119,7 @@ class LearningStart:
     def _use(self, mode: str) -> None:
         """Take ``mode`` as the start of the learning in progress."""
         self.mode = mode
-        self._owner.dt_est.passive_by_peak = self.direct
+        self._owner.dt_est.direct = self.direct
 
     def reset(self) -> None:
         """Blank start: the configured start, the pulses are available again, the kept values and the response model are
@@ -242,7 +241,6 @@ class LearningStart:
         owner = self._owner
         learning_stage = self.learning_stage
         cal = self.calibration
-        dt_est = owner.dt_est
         if cal.in_progress:
             self._follow_calibration(now, hvac_mode, learning_stage, temp)
         calibrating = cal.in_progress
@@ -254,13 +252,13 @@ class LearningStart:
                 heat_or_cool=hvac_mode in (VThermHvacMode_HEAT, VThermHvacMode_COOL),
                 learning_stage=learning_stage,
                 model_known=owner.learn_win.model(hvac_mode) is not None,
-                dt_est=dt_est,
+                dt_est=owner.dt_est,
                 history=owner.learn_win.temperatures.raw,
                 previous_command=previous_command,
                 readings_pending=self.reading.wants_pulses(hvac_mode),
                 calibration=calibrating,
                 calibration_pulses_left=cal.pulses < PULSE_MAX_COUNT,
-                event_stage=owner.learn_win.events.phase_stage(str(hvac_mode)) if calibrating else None,
+                event_stage=owner.learn_win.events.phase_stage(str(hvac_mode)),
                 limits=pulse_limits(
                     owner.learn_win.model(hvac_mode), hvac_mode, owner.anticipation_horizon(hvac_mode).seconds,
                     owner.learn_win.temperatures.raw,
@@ -335,7 +333,7 @@ class LearningStart:
             self.recovering = False
 
     def _follow_calibration(self, now: float, hvac_mode: object, learning_stage: bool, temp: float | None) -> None:
-        """Note the dead times measured by a calibration pulse, then end the calibration when its end has come. A
+        """Note the dead time measured by a calibration pulse, then end the calibration when its end has come. A
         cancellation ends its pulse at once; any other end first ends the pulse in progress cleanly: a pulse in its
         rest hands back at once, one heating goes to its stop step, one in its stop step goes on, and the calibration
         ends at the calculation where that pulse ends."""
@@ -427,7 +425,7 @@ class LearningStart:
 
     def calibration_public(self) -> dict[str, Any]:
         """Plain summary of the calibration: its state (the step of its pulse in progress in words, "waiting" between
-        pulses, "idle" without calibration), its pulses, result, dead times and agreeing reading."""
+        pulses, "idle" without calibration), its pulses, result, dead time and agreeing reading."""
         cal = self.calibration
         step = _PULSE_STEPS.get(self.pulse.state, "none") if self.pulse.for_calibration else "waiting"
         mode = cal.mode or self._owner.est.model_hvac_mode

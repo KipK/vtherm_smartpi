@@ -271,7 +271,8 @@ class SmartPI:
         # --- Dead Time (L) Support ---
         self.learning_start = learning_start  # "bootstrap" or "direct" (smartpi/learning_start.py)
         self._start = LearningStart(learning_start, self, getattr(hass, "config", None))
-        self.dt_est = DeadTimeEstimator(self._start.direct, self._start.measures_start, self.learn_win.temperatures)
+        self.dt_est = DeadTimeEstimator(
+            self._start.direct, self._start.measures_start, self.learn_win.temperatures, self._start.model.emitter_lag_s)
         # T_ar learning: history and quiet periods of the room model (None when the algorithm runs without it)
         self.tar_learning: TarLearningManager | None = None
         if tar_learning:
@@ -513,7 +514,6 @@ class SmartPI:
             ext_temp=ext_temp,
             u_active=u_active,
             estimator=self.est,
-            dt_est=self.dt_est,
             governance=self.gov,
             now=now,
             is_calibrating=self.phase == SmartPIPhase.CALIBRATION,
@@ -1014,8 +1014,6 @@ class SmartPI:
                 setpoint=target_temp,
                 phase=str(self.phase.value) if isinstance(self.phase, SmartPIPhase) else str(self.phase),
                 b=self.est.b,
-                dtc=self.dt_est.deadtime_cool_s,
-                dtc_reliable=self.dt_est.deadtime_cool_reliable,
                 dth=self.dt_est.deadtime_heat_s if self.dt_est.deadtime_heat_reliable else None,
                 lag=self._start.model.emitter_lag_s(hvac_mode),
                 cycle_min=self._cycle_min,

@@ -230,9 +230,10 @@ def _window_setup(model: dict | None = _model(0.0, 300.0)):
 
 
 def _update(win, est, dt, gov, now, u, temp, is_hysteresis=False):
+    win.temperatures.raw = dt.tin_history
     win.update(
         dt_min=1.0, current_temp=temp, ext_temp=T_EXT, u_active=u,
-        estimator=est, dt_est=dt, governance=gov, now=now, is_hysteresis=is_hysteresis,
+        estimator=est, governance=gov, now=now, is_hysteresis=is_hysteresis,
         hvac_mode=VThermHvacMode_HEAT, target_temp=21.0, raw_temp=temp,
     )
 

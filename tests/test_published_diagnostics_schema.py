@@ -111,12 +111,12 @@ def test_published_start_summary_has_plain_values() -> None:
 
 
 def test_published_calibration_summary_has_plain_values() -> None:
-    """calibration: its state in words, the pulses, the result, the last request, the dead times, the agreeing reading,
+    """calibration: its state in words, the pulses, the result, the last request, the dead time after a start, the agreeing reading,
     the values in force it was compared with and the quantities it corrected, in words."""
     algo = _representative_smartpi()
     cal = algo.get_published_diagnostics()["calibration"]
     assert set(cal) == {
-        "state", "pulses_done", "result", "last_request", "last_time", "deadtime_start_s", "deadtime_stop_s",
+        "state", "pulses_done", "result", "last_request", "last_time", "deadtime_start_s",
         "reading_a", "reading_b", "reading_lag_s", "in_force_a", "in_force_b", "in_force_lag_s", "corrected",
     }
     assert cal["state"] == "idle" and cal["pulses_done"] == 0 and cal["result"] is None

@@ -159,7 +159,7 @@ def test_manager_records_hvac_off_as_invalid_and_rejects_the_morning() -> None:
 
     def tick(t, mode=VThermHvacMode_HEAT, sp=18.0, excluded=None):
         m.observe(t, hvac_mode=mode, temp=19.0 + (t - t0) / 360000.0, ext=3.0, setpoint=sp, phase="Stable",
-                  b=0.002, dtc=900.0, dtc_reliable=True, lag=300.0, cycle_min=10.0, excluded=excluded)
+                  b=0.002, lag=300.0, cycle_min=10.0, excluded=excluded)
 
     t = t0
     while t < t0 + 5 * 3600.0:

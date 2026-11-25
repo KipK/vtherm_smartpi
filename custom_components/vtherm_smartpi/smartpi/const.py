@@ -290,10 +290,8 @@ EVENT_PHASE_MIN_OFF_S = RESPONSE_LAG_PHASE_MIN_OFF_S  # Shorter cut: same phase
 EVENT_PEAK_BIN_S = 300.0     # Width of the bins of the peak search
 EVENT_PEAK_CONFIRM_S = 1800.0  # A bin this long after the best bin confirms the peak
 EVENT_PEAK_MAX_S = 4 * 3600.0  # Longest wait for the peak after the cut
-# Early confirmation of the peak of a stop (dead-time estimator only): a closed bin after the best one, lower than
-# it by max(STOP_PEAK_DROP_MIN_C, STOP_PEAK_DROP_STEPS sensor steps, STOP_PEAK_DROP_RISE_FRAC of the rise since the cut).
-STOP_PEAK_DROP_MIN_C = 0.05
-STOP_PEAK_DROP_STEPS = 2.0
+# Early confirmation of a peak (smartpi/peak_search.py, a search built with a drop floor): a closed bin after the best
+# one, lower than it by max(the drop floor, STOP_PEAK_DROP_RISE_FRAC of the rise since the cut).
 STOP_PEAK_DROP_RISE_FRAC = 0.5
 EVENT_MIN_RISE_C = 0.3       # Smallest temperature rise of a regulation event read by the response model
 # Active gate cap, fraction of the median episode (the settling waits: smartpi/response_model.py).
@@ -306,16 +304,11 @@ AB_SETTLE_ACTIVE_CAP_FRAC = 0.5
 # arrive on average more often than every 10 s (a sample is added on each
 # value change or after 60 s).
 TIN_HISTORY_RETENTION_MIN = DT_MAX_MIN + 60
-# Dead time detection: an active response (power on) is attributed to the
-# power step within this delay. A passive response (power off) may follow a
-# long release of the heat stored in the emitter (floor heating): in the
-# bootstrap its wait only ends by a detection or by a power restart, which
-# needs a drop the detection sees first, so the delay only bounds how late a
-# drop is still attributed to the power cut.
+# Dead time detection: the response to a power start is attributed to the
+# power step within this delay.
 DEADTIME_ACTIVE_TIMEOUT_S = 14400.0
-DEADTIME_PASSIVE_TIMEOUT_S = 43200.0
 # Free-running trend before an active power start: fitted on the raw samples of
-# the last 30 min of the OFF period (after the passive delay of the last stop),
+# the last 30 min of the OFF period (one emitter lag after the last stop),
 # with at least 15 min and 4 samples (3 per half window to compare the slopes
 # of the two halves). A trend whose fitted change stays within one sensor step
 # (floored at this value) is flat.

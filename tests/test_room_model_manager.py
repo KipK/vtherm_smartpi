@@ -298,7 +298,7 @@ def test_inactive_learning_and_reset(mass_manager) -> None:
     tar2 = TarLearningManager("x", "UTC")
     tar2.set_dependencies(True)
     tar2.observe(0.0, hvac_mode=VThermHvacMode_HEAT, temp=19.0, ext=5.0, setpoint=20.0, phase="stable", b=0.001,
-                 dtc=None, dtc_reliable=False, lag=None, cycle_min=10.0, valve=True)
+                 lag=None, cycle_min=10.0, valve=True)
     valve = RoomModelManager("x", "UTC", tar2)
     assert valve.diagnostics()["status"] == "not identified: valve heaters are not supported yet"
     fresh = RoomModelManager("x", "UTC", _tar(rsim.simulate(rsim.NO_MASS, 0.5)))

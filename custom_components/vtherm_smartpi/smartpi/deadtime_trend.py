@@ -78,7 +78,7 @@ def prestart_trend(
         history: raw (timestamp, temperature) samples, oldest first.
         start_ts: instant of the power start.
         off_since_ts: earliest instant of the free-running OFF period (the last
-            power stop plus the passive delay), None when unknown.
+            power stop plus one emitter lag), None when unknown.
         direction: +1 when the response rises (heat), -1 when it falls (cool).
         detection_threshold_c: move that detects a response.
 

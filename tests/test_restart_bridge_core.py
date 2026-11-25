@@ -495,14 +495,14 @@ def test_learning_window_is_dropped_by_a_restart_that_is_not_bridged() -> None:
 # ---------------------------------------------------------------------------
 # Dead time detection in progress
 # ---------------------------------------------------------------------------
-def _passive_response(est: DeadTimeEstimator, clock: _Clock, t_from: float, t_to: float) -> None:
-    """Room at 20 C after a full-power cut at t = 0: flat for 1200 s, then cooling 1 C/h."""
+def _start_response(est: DeadTimeEstimator, clock: _Clock, t_from: float, t_to: float) -> None:
+    """Room at 20 C, heater off until a full-power start at t = 0: flat for 1200 s, then warming 1 C/h."""
     t = t_from
     while t <= t_to:
         clock.t = t
-        temp = 20.0 if t < 1200.0 else 20.0 - (t - 1200.0) / 3600.0
+        temp = 20.0 if t < 1200.0 else 20.0 + (t - 1200.0) / 3600.0
         with _clocks(clock):
-            est.update(now=clock.monotonic(), tin=temp, u_applied=0.0 if t >= 0.0 else 1.0,
+            est.update(now=clock.monotonic(), tin=temp, u_applied=1.0 if t >= 0.0 else 0.0,
                        hvac_mode=VThermHvacMode_HEAT)
         t += 60.0
 
@@ -511,13 +511,13 @@ def _passive_response(est: DeadTimeEstimator, clock: _Clock, t_from: float, t_to
 def test_dead_time_detection_resumes_across_a_bridged_restart(bridged: bool) -> None:
     clock = _Clock()
     ref = DeadTimeEstimator()
-    _passive_response(ref, clock, -1200.0, 3600.0)
-    assert ref.last_outcome["cool"] == "detected"
+    _start_response(ref, clock, -1200.0, 3600.0)
+    assert ref.last_outcome["heat"] == "detected"
 
     clock = _Clock()
     est = DeadTimeEstimator()
-    _passive_response(est, clock, -1200.0, 600.0)
-    assert est.state == "WAITING_COOL_RESPONSE"
+    _start_response(est, clock, -1200.0, 600.0)
+    assert est.state == "WAITING_HEAT_RESPONSE"
     with _clocks(clock):
         saved = est.save_state()
     clock.shift = MONO_SHIFT
@@ -527,13 +527,13 @@ def test_dead_time_detection_resumes_across_a_bridged_restart(bridged: bool) -> 
         back.load_state(saved)
         assert back.state == "OFF"
         back.resume_after_restart(bridged)
-    _passive_response(back, clock, 720.0, 3600.0)
+    _start_response(back, clock, 720.0, 3600.0)
     if bridged:
-        assert back.last_outcome["cool"] == "detected"
-        assert back.deadtime_cool_s == pytest.approx(ref.deadtime_cool_s, abs=1.0)
+        assert back.last_outcome["heat"] == "detected"
+        assert back.deadtime_heat_s == pytest.approx(ref.deadtime_heat_s, abs=1.0)
     else:
-        assert back.last_outcome["cool"] is None
-        assert back.deadtime_cool_s is None
+        assert back.last_outcome["heat"] is None
+        assert back.deadtime_heat_s is None
 
 
 # ---------------------------------------------------------------------------

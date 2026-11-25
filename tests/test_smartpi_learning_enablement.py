@@ -94,7 +94,7 @@ def test_learning_change_starts_with_clean_observations() -> None:
     smartpi.learn_win._active = True
     smartpi.dt_est.state = "WAITING_HEAT_RESPONSE"
     smartpi.dt_est.heat_start_time = 100.0
-    smartpi.dt_est._tin_history.append((100.0, 19.0))
+    smartpi.dt_est.history.raw.append((100.0, 19.0))
     smartpi._t_heat_episode_start = 100.0
 
     smartpi.set_learning_enabled(False)
@@ -107,13 +107,13 @@ def test_learning_change_starts_with_clean_observations() -> None:
     assert smartpi.learn_win_active is False
     assert smartpi.dt_est.state == "OFF"
     assert smartpi.dt_est.heat_start_time is None
-    assert list(smartpi.dt_est.tin_history) == [(100.0, 19.0)]
+    assert list(smartpi.dt_est.history.raw) == [(100.0, 19.0)]
     assert smartpi._t_heat_episode_start == 100.0
 
     smartpi.learn_win._active = True
     smartpi.dt_est.state = "WAITING_COOL_RESPONSE"
     smartpi.dt_est.cool_start_time = 200.0
-    smartpi.dt_est._tin_history.append((200.0, 20.0))
+    smartpi.dt_est.history.raw.append((200.0, 20.0))
     smartpi._committed_on_percent = 0.8
 
     smartpi.set_learning_enabled(True)
@@ -122,7 +122,7 @@ def test_learning_change_starts_with_clean_observations() -> None:
     assert smartpi.learn_win_active is False
     assert smartpi.dt_est.state == "OFF"
     assert smartpi.dt_est.cool_start_time is None
-    assert list(smartpi.dt_est.tin_history) == [(100.0, 19.0), (200.0, 20.0)]
+    assert list(smartpi.dt_est.history.raw) == [(100.0, 19.0), (200.0, 20.0)]
     assert smartpi.dt_est.last_power == 0.8
     assert smartpi.dt_est.deadtime_heat_s == 180.0
 

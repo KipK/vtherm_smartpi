@@ -24,7 +24,7 @@ def test_learning_start_defaults_to_bootstrap():
     assert algo.phase == SmartPIPhase.HYSTERESIS
     assert algo.command_is_hysteresis is True
     assert algo.command_is_on_off is True
-    assert algo.dt_est.passive_by_peak is False
+    assert algo.dt_est.direct is False
 
 
 def test_learning_start_rejects_an_unknown_value():
@@ -39,7 +39,7 @@ def test_direct_start_lets_the_pi_drive_the_learning_stage():
     assert algo.phase == SmartPIPhase.HYSTERESIS
     assert algo.command_is_hysteresis is False
     assert algo.command_is_on_off is False
-    assert algo.dt_est.passive_by_peak is True
+    assert algo.dt_est.direct is True
 
 
 def test_bootstrap_start_keeps_no_pulse_state_and_attaches_the_reader():
@@ -132,7 +132,7 @@ def test_the_option_acts_on_a_blank_start_only_a_learned_thermostat_keeps_its_st
     direct = _make(learning_start="direct")
     direct.load_state(state)
     start = direct._start
-    assert start.configured == "direct" and start.mode == "bootstrap" and direct.dt_est.passive_by_peak is False
+    assert start.configured == "direct" and start.mode == "bootstrap" and direct.dt_est.direct is False
     assert direct.phase == SmartPIPhase.STABLE and direct.command_is_hysteresis is False
     # no pulse and no record on a learned thermostat, whatever the room does (a blank direct start pulses here)
     blank = _make(learning_start="direct")
@@ -163,9 +163,9 @@ def test_a_learning_begun_in_direct_goes_on_in_direct_and_a_reset_takes_the_conf
     assert state["learning_start"] == "direct" and state["measure_pulse"]["mode_counts"] == {"heat": 1}
     other = _make(learning_start="bootstrap")
     other.load_state(state)
-    assert other._start.mode == "direct" and other.dt_est.passive_by_peak is True and other._start.pulse.count_for("heat") == 1
+    assert other._start.mode == "direct" and other.dt_est.direct is True and other._start.pulse.count_for("heat") == 1
     other.reset_learning()
-    assert other._start.mode == "bootstrap" and other.dt_est.passive_by_peak is False and other.command_is_hysteresis is True
+    assert other._start.mode == "bootstrap" and other.dt_est.direct is False and other.command_is_hysteresis is True
     assert other._start.pulse.count == 0
 
 
@@ -173,4 +173,4 @@ def test_a_blank_saved_state_takes_the_configured_start():
     state = json.loads(json.dumps(_make().save_state()))
     direct = _make(learning_start="direct")
     direct.load_state(state)
-    assert direct._start.mode == "direct" and direct.dt_est.passive_by_peak is True and direct.command_is_hysteresis is False
+    assert direct._start.mode == "direct" and direct.dt_est.direct is True and direct.command_is_hysteresis is False

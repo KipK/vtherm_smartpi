@@ -74,12 +74,12 @@ Le bloc `live` est organisé par responsabilité :
 | `control` | Phase, mode, gains (`kp`, `ki`), temps intégral effectif `ti_min` (minutes), saturation, bandes de régulation et dernier redémarrage (`last_restart`) |
 | `power` | Puissances du cycle courant et suivant, PI/FF, limites et puissance appliquée |
 | `temperature` | Températures intérieure/extérieure, température anticipée (`anticipated` : température intérieure plus la correction d'anticipation), erreurs et état de l'intégrale |
-| `model` | Modèle A/B, confiance, constante de temps, temps morts et modèle de réponse |
+| `model` | Modèle A/B, confiance, constante de temps, temps mort après un démarrage et modèle de réponse |
 | `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées, dérive et démarrage de l'apprentissage (`start`) |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
 | `feedforward` | Source de la puissance de maintien, part des murs de la puissance de maintien et source de bande morte |
 | `setpoint` | État du boost de consigne |
-| `calibration` | La calibration en cours ou la dernière : état, impulsions, résultat, dernière demande, temps morts mesurés, lecture, valeurs en usage et corrections |
+| `calibration` | La calibration en cours ou la dernière : état, impulsions, résultat, dernière demande, temps mort mesuré, lecture, valeurs en usage et corrections |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
 | `tar_learning` | Apprentissage du retard de l'émetteur |
@@ -146,7 +146,6 @@ dernière jusqu'à la demande suivante.
 | `last_request` | Réponse à la dernière demande, `null` avant toute demande : `started`, `refused: learning stage` (premier modèle en apprentissage), `refused: learning paused` (apprentissage suspendu par le service ou une entité), `refused: thermostat off` (thermostat éteint), `refused: too soon` (moins de 24 heures après la fin de la dernière calibration), `ignored: in progress` (calibration en cours) |
 | `last_time` | Heure locale de fin de la dernière calibration non annulée (ISO 8601), `null` avant |
 | `deadtime_start_s` | Dernier temps mort après un démarrage mesuré pendant une impulsion de la calibration, en secondes, `null` sans mesure |
-| `deadtime_stop_s` | Dernier temps mort après un arrêt mesuré pendant une impulsion de la calibration, en secondes, `null` sans mesure |
 | `reading_a` | Vitesse de chauffe des deux impulsions concordantes en °C/min à pleine puissance (5 décimales), `null` tant que deux impulsions ne concordent pas |
 | `reading_b` | Coefficient de pertes des deux impulsions concordantes en 1/min (6 décimales), `null` tant que deux impulsions ne concordent pas ; publié seulement, jamais corrigé |
 | `reading_lag_s` | Retard de l'émetteur des deux impulsions concordantes en secondes, `null` tant que deux impulsions ne concordent pas |
@@ -155,8 +154,8 @@ dernière jusqu'à la demande suivante.
 | `in_force_lag_s` | Horizon de l'anticipation en usage lorsque les impulsions ont concordé, en secondes, affiché à côté de `reading_lag_s` ; `null` tant que deux impulsions ne concordent pas |
 | `corrected` | Ce que la calibration a corrigé : une liste parmi `heating rate` (vitesse de chauffe), `loss coefficient` (coefficient de pertes) ; vide si rien n'a été corrigé |
 
-Les temps morts mesurés par les impulsions rejoignent les temps morts appris
-comme toute autre mesure. Une grandeur de la lecture n'est corrigée que si elle
+Les temps morts après un démarrage mesurés par les impulsions rejoignent les
+temps morts appris comme toute autre mesure. Une grandeur de la lecture n'est corrigée que si elle
 s'écarte de plus de 30 % de la valeur en usage (voir **Calibration** dans la
 [documentation SmartPI](vtherm_smartpi.md)). Le retard de l'émetteur est corrigé
 par le modèle de réponse lui-même : les impulsions de calibration sont des
@@ -174,7 +173,7 @@ l'anticipation de la température, en chauffage et en refroidissement :
 |---|---|
 | `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon, sans pente montante ou descendante, ou pendant une coupure de la garde) |
 | `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le temps entre une commande et son effet), `0` lorsqu'il n'y en a pas |
-| `anticipation_horizon_source` | Origine de l'horizon : `response model` (retard de l'émetteur du modèle de réponse du mode : temps mort plus constante de temps de réponse), et sans modèle `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` |
+| `anticipation_horizon_source` | Origine de l'horizon : `response model` (retard de l'émetteur du modèle de réponse du mode : temps mort plus constante de temps de réponse), et sans modèle `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct), `dead time` (le temps mort fiable de chauffe (HEAT) ou de refroidissement (COOL) après un démarrage) ou `none` |
 | `effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (temps mort plus la moitié de la constante de temps de réponse), `null` sans modèle ; les maintiens de l'intégrale, la bande proche au-dessus de la consigne et les impulsions de calibration le lisent |
 | `gain_delay_s` | Retard lu par la règle des gains, en secondes : le temps mort fiable de chauffe (HEAT) ou de refroidissement (COOL) après un démarrage, tel quel ; `null` sans lui (gains de sécurité) |
 | `gain_delay_source` | Origine de `gain_delay_s` : `dead time` ; `null` sans retard |
@@ -184,10 +183,10 @@ l'anticipation de la température, en chauffage et en refroidissement :
 
 | Champ | Signification |
 |---|---|
-| `state` | État du détecteur (`WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`) |
+| `state` | État du détecteur : `WAITING_HEAT_RESPONSE` (HEAT) ou `WAITING_COOL_RESPONSE` (COOL) tant que la réponse à un démarrage est attendue, `HEATING` / `COOLING` pendant que la puissance est active, `OFF` |
 | `last_power` | Dernière puissance vue par le détecteur |
 | `waiting_elapsed_s` | Âge de la réponse attendue en secondes, `null` quand aucune détection n'est armée |
-| `heat_last_outcome` / `cool_last_outcome` | Issue de la dernière attente d'une réponse montante / descendante : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger), `null` avant la première |
+| `heat_last_outcome` (HEAT) / `cool_last_outcome` (COOL) | Issue de la dernière attente de la réponse à un démarrage, montante en HEAT, descendante en COOL : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger), `null` avant la première |
 
 Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 

@@ -13,16 +13,16 @@ room (``pulse_limits``, from the response model of the mode, smartpi/response_mo
 theta + tau_e / 2 and emitter lag theta + tau_e, both 0 without a model): a pulse may start from
 ``CALIBRATION_START_OVER_C`` past the setpoint; the next one waits twice the anticipation horizon after the end of the
 previous one (one to six hours); the rest lasts the emitter lag plus ``CALIBRATION_REST_EXTRA_S`` (the free-running
-window the dead-time estimator needs to measure the start), and ends earlier when the lowest point the room is heading
+window the dead-time estimator needs after the emitter lag to measure the start), and ends earlier when the lowest point the room is heading
 to (the room plus its fall during the effective dead time) reaches ``PULSE_REST_UNDER_C`` on the demand side; the
-heating step ends like that of the other pulses (response seen and the room back within ``PULSE_HEAT_BACK_C`` of the
+heating step ends like that of the other pulses (rise seen and the room back within ``PULSE_HEAT_BACK_C`` of the
 setpoint) or lasts twice the effective dead time plus the horizon (two to four hours) at most; during the stop the
 regulation takes over only when the room is ``PULSE_TAKEOVER_C`` on
 the demand side and lower than at the start of the stop by one step of the sensor, or ``CALIBRATION_DEPTH_CAP_C`` on
 the demand side in any case. No step lasts more than ``CALIBRATION_STEP_MAX_S``. The command of a pulse is applied as
-an on/off command like any pulse: the dead-time estimator measures the start and the stop as usual and its samples go
-into its median. The stop step of a calibration pulse ends when the measurement event of the pulse is closed (its peak
-confirmed) and the estimator no longer waits for the response to the stop.
+an on/off command like any pulse: the dead-time estimator measures the start as usual and its samples go into its
+median (``deadtime_start_s``: the last one measured during a calibration pulse). The stop step ends, as for any pulse,
+when the measurement event of the pulse is closed.
 
 The events of the calibration pulses are read like those of the start (smartpi/event_reading.py) but apart from them:
 two agreeing readings give the calibration reading (heating rate, loss coefficient, emitter lag). When the calibration
@@ -54,7 +54,7 @@ before the regulation computes its command. The step of the learned holding powe
 the feed-forward and the integral term do not jump, at the first regulation calculation after the correction; a
 change of Kp acts on the error as usual (it is not moved into the integral). While a calibration is in progress the
 learning takes no measure of the heating rate (its pulses and the recoveries after them would bias it); the loss
-coefficient, the dead times and the measurement events go on. After each calibration pulse the integral is held until
+coefficient, the dead time and the measurement events go on. After each calibration pulse the integral is held until
 the room reaches the setpoint. A pulse counts for its
 calibration once it reaches its heating step; one that ends before (a setpoint change during its rest, for example)
 does not count and the next one may start at once. A stop of the thermostat (off, window, shedding) ends the pulse in
@@ -100,7 +100,7 @@ CALIBRATION_OWN_RECENT = 3                   # recent measures of the learning r
 CALIBRATION_START_OVER_C = 0.2               # a pulse may start up to this far past the setpoint
 CALIBRATION_GAP_MIN_S = 3600.0               # gap after the previous pulse: twice the horizon, within these bounds
 CALIBRATION_GAP_MAX_S = 6.0 * 3600.0
-CALIBRATION_REST_EXTRA_S = DEADTIME_PRESTART_MIN_SPAN_S + 300.0   # free-running window + one sensor heartbeat
+CALIBRATION_REST_EXTRA_S = DEADTIME_PRESTART_MIN_SPAN_S + 300.0   # free-running window of the dead time + one sensor heartbeat
 CALIBRATION_HEAT_MIN_S = 2.0 * 3600.0        # heating step limit: twice (effective dead time + horizon), within these
 CALIBRATION_STEP_MAX_S = 4.0 * 3600.0        # longest step of a calibration pulse
 CALIBRATION_DEPTH_CAP_C = 0.8                # the regulation takes over at this distance on the demand side
@@ -220,7 +220,6 @@ class Calibration:
         self.start_s: float | None = None
         self.mode: str | None = None
         self.deadtime_start_s: float | None = None
-        self.deadtime_stop_s: float | None = None
         self.corrected: list[str] = []
         self.in_force: dict[str, float] | None = None
         self._seen: dict[str, int] = {}   # dead-time samples the estimator had added at the last look (runtime)
@@ -250,7 +249,7 @@ class Calibration:
         return reason
 
     def finish(self, result: str) -> None:
-        """The calibration ends; its pulses and dead times stay published until the next one."""
+        """The calibration ends; its pulses and dead time stay published until the next one."""
         self.in_progress = False
         self.start_s = None
         self.result = result
@@ -280,19 +279,18 @@ class Calibration:
         return None
 
     def note_deadtimes(self, dt_est: Any, hvac_mode: object, pulse_active: bool) -> None:
-        """Keep the dead times the estimator measured since the last look while a calibration pulse runs; the samples
-        added between the pulses are not the calibration's."""
-        cooling = hvac_mode == VThermHvacMode_COOL
+        """Keep the dead time after a start the estimator measured since the last look while a calibration pulse runs;
+        the samples added between the pulses are not the calibration's."""
+        response = "cool" if hvac_mode == VThermHvacMode_COOL else "heat"
         added = getattr(dt_est, "samples_added", None)
         if not pulse_active or not isinstance(added, dict):
             self._seen = {}
             return
-        for key, response in (("start", "cool" if cooling else "heat"), ("stop", "heat" if cooling else "cool")):
-            n = added.get(response, 0)
-            seen = self._seen.get(response)
-            self._seen[response] = n
-            if seen is not None and n > seen:
-                setattr(self, f"deadtime_{key}_s", dt_est.last_sample_s(response))
+        n = added.get(response, 0)
+        seen = self._seen.get(response)
+        self._seen[response] = n
+        if seen is not None and n > seen:
+            self.deadtime_start_s = dt_est.last_sample_s(response)
 
     # -- persistence -------------------------------------------------------------------------------------------
     def save(self) -> dict[str, Any] | None:
@@ -302,7 +300,7 @@ class Calibration:
             "in_progress": self.in_progress, "pulses": self.pulses, "mode": self.mode,
             "start_wall": monotonic_to_wall_ts(self.start_s), "result": self.result,
             "last_end_wall": self.last_end_wall,
-            "deadtime_start_s": self.deadtime_start_s, "deadtime_stop_s": self.deadtime_stop_s,
+            "deadtime_start_s": self.deadtime_start_s,
             "last_request": self.last_request,
         }
         if self.in_force is not None:
@@ -329,7 +327,6 @@ class Calibration:
         self.pulses = pulses if isinstance(pulses, int) and not isinstance(pulses, bool) and pulses >= 0 else 0
         self.mode = saved["mode"] if isinstance(saved.get("mode"), str) else None
         self.deadtime_start_s = _seconds(saved.get("deadtime_start_s"))
-        self.deadtime_stop_s = _seconds(saved.get("deadtime_stop_s"))
         in_force = saved.get("in_force")
         if isinstance(in_force, dict) and all(_seconds(in_force.get(q)) is not None for q in ("a", "b", "lag_s")):
             self.in_force = {q: float(in_force[q]) for q in ("a", "b", "lag_s")}
@@ -356,7 +353,6 @@ class Calibration:
             "last_request": self.last_request,
             "last_time": None if self.last_end_wall is None else datetime.fromtimestamp(self.last_end_wall).isoformat(),
             "deadtime_start_s": None if self.deadtime_start_s is None else round(self.deadtime_start_s),
-            "deadtime_stop_s": None if self.deadtime_stop_s is None else round(self.deadtime_stop_s),
             "reading_a": None if reading is None else round(reading["a_per_min"], 5),
             "reading_b": None if b is None else round(b, 6),
             "reading_lag_s": None if reading is None else round(reading["lag_s"]),

@@ -52,13 +52,13 @@ def _update(
     now=120.0,
     **kwargs,
 ):
+    window.temperatures.raw = dt_estimator.tin_history
     return window.update(
         dt_min=1.0,
         current_temp=current_temp,
         ext_temp=ext_temp,
         u_active=u_active,
         estimator=estimator,
-        dt_est=dt_estimator,
         governance=_make_governance(),
         now=now,
         hvac_mode=VThermHvacMode_HEAT,

@@ -1,6 +1,6 @@
 """
 Dead Time Estimator for Smart-PI.
-Detects heating/cooling dead time via finite state machine on power transitions.
+Detects the dead time after a power start (the active response of the mode) on the power transitions.
 """
 from __future__ import annotations
 
@@ -8,43 +8,33 @@ import logging
 import statistics
 import time
 from collections import deque
-from typing import Callable, Deque, Tuple
+from typing import Callable
 
 from ..hvac_mode import (
     VThermHvacMode,
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
 )
-from .const import (
-    DEADTIME_ACTIVE_TIMEOUT_S,
-    DEADTIME_PASSIVE_TIMEOUT_S,
-    STOP_PEAK_DROP_MIN_C,
-    STOP_PEAK_DROP_STEPS,
-)
+from .const import DEADTIME_ACTIVE_TIMEOUT_S
 from .deadtime_trend import prestart_trend
-from .peak_search import PeakSearch
-from .sensor_step import sensor_step
 from .temperature_history import TemperatureHistory
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
-# Applied power (share of full power) of the cycle before a stop for the stop to end a heating at full power.
-FULL_POWER_STOP_MIN = 0.99
-
 _LOGGER = logging.getLogger(__name__)
 
-# Samples of the dead time after a stop kept for the audit record.
-_PASSIVE_RECORD_MAX = 500
+_WAITING = {"heat": "WAITING_HEAT_RESPONSE", "cool": "WAITING_COOL_RESPONSE"}
 
 
 class DeadTimeEstimator:
     """
-    Simplified Dead Time Estimator for Smart-PI.
-    Based on Finite State Machine detecting sharp power transitions.
+    Dead time after a power start: threshold detection of the response, measured against the free-running trend of
+    the room before the start. The "heat" slot holds a rising response, the "cool" slot a falling one: the active
+    response is "heat" in HEAT and "cool" in COOL; the other slot stays empty.
     """
 
     def __init__(
-        self, passive_by_peak: bool = False, measured_start: Callable[[], bool] | None = None,
-        history: TemperatureHistory | None = None,
+        self, direct: bool = False, measured_start: Callable[[], bool] | None = None,
+        history: TemperatureHistory | None = None, emitter_lag: Callable[[object], float | None] | None = None,
     ):
         self.deadtime_heat_s: float | None = None
         self.deadtime_cool_s: float | None = None
@@ -52,7 +42,7 @@ class DeadTimeEstimator:
         self.deadtime_cool_reliable: bool = False
         self.model_hvac_mode: str | None = None
         # Learned dead times of the HVAC mode that is not active, by mode name, as saved state (the "heat" and "cool"
-        # slots swap meaning between modes, so each mode keeps both). Empty for a thermostat that never changes mode.
+        # slots swap meaning between modes, so each mode keeps its own). Empty for a thermostat that never changes mode.
         self._mode_stash: dict[str, dict] = {}
 
         # Configuration
@@ -61,7 +51,6 @@ class DeadTimeEstimator:
         self.min_power_cool_threshold = 0.80
         self.detection_threshold = 0.05
         self.timeout_seconds = DEADTIME_ACTIVE_TIMEOUT_S
-        self.passive_timeout_seconds = DEADTIME_PASSIVE_TIMEOUT_S
 
         # State
         self.state = "OFF"  # OFF, HEATING, COOLING, WAITING_HEAT_RESPONSE, WAITING_COOL_RESPONSE
@@ -74,17 +63,16 @@ class DeadTimeEstimator:
 
         self.cool_start_time: float | None = None
         self.cool_peak_temp: float | None = None
-        self._waiting_power_on: bool | None = None
         # Last instant near the trough (heat) or the peak (cool) of the
         # response being waited for: the dead time does not depend on the
         # retention of the temperature history when the drop comes late.
         self._near_extreme_time: float | None = None
-        # Free-running trend (degC/s) removed from the temperature while an
-        # active response is waited for; 0.0 for a passive response or a room
-        # without a trend in the direction of the response.
+        # Free-running trend (degC/s) removed from the temperature while the
+        # response is waited for; 0.0 for a room without a trend in the
+        # direction of the response.
         self._trend_slope: float = 0.0
-        # The armed active response follows a temperature already moving in
-        # the direction of the response, or a window too short to evaluate
+        # The armed response follows a temperature already moving in the
+        # direction of the response, or a window too short to evaluate
         # its trend: weak evidence, which never shortens the published value.
         self._weak_evidence: bool = False
         # Outcome of the last detection per response ("detected", "timeout",
@@ -99,7 +87,7 @@ class DeadTimeEstimator:
         self._history_cool = deque(maxlen=6)
 
         # The room temperatures the estimator records at each update (smartpi/temperature_history.py), shared with
-        # the learning: the raw history feeds the learning slopes, the filtered one the inflection lookback of the
+        # the learning: the raw history feeds the pre-start trend, the filtered one the inflection lookback of the
         # detection, so that it stays consistent with the trough/peak tracking.
         self.history = history if history is not None else TemperatureHistory()
         self._tin_history = self.history.raw
@@ -108,20 +96,14 @@ class DeadTimeEstimator:
         # only when the restart is bridged (resume_after_restart).
         self._restart_detection: dict | None = None
 
-        # True: the dead time after a stop is read on the temperature peak (peak_search.py), from full-power stops
-        # only. The search runs from a stop to its confirmation: a heating again, a mode change or a reset drops it.
-        self.passive_by_peak = bool(passive_by_peak)
-        self._stop_peak: PeakSearch | None = None
-        self._stop_peak_confirmed = False
-        # The cycle before the stop being measured was at full power (only such a stop feeds the value).
-        self._stop_from_full_power = False
-        # Tells whether a start is made by a measurement pulse or the hysteresis (None: always). False while the
-        # regulation drives the command (peak mode): a start then only lengthens the dead time after a start,
-        # which the pulses (or the bootstrap) have measured from a rest.
+        # True with the direct start (smartpi/learning_start.py): while the regulation drives the command a start
+        # only lengthens the dead time, which the pulses have measured from a rest.
+        self.direct = bool(direct)
+        # Tells whether a start is made by a measurement pulse or the hysteresis (None: always).
         self._start_source = measured_start
-        # Read-only record for the audit: every sample added to the passive dead time, with its origin.
-        self._passive_measures: list[dict] = []
-        self._passive_first_published_s: float | None = None
+        # Emitter lag (s) of the response model of a mode, None without a model: after a stop the emitter acts on
+        # the room for that time before the room runs free (start of the pre-start trend window).
+        self._emitter_lag = emitter_lag
 
     @property
     def measured_start(self) -> bool:
@@ -129,38 +111,9 @@ class DeadTimeEstimator:
         return True if self._start_source is None else bool(self._start_source())
 
     @property
-    def passive_measures(self) -> list[dict]:
-        """Samples of the dead time after a stop, oldest first: time (monotonic s), response, value (s), origin.
-
-        ``response`` is the passive response of the mode: ``"cool"`` (the room falls after a stop in HEAT)
-        or ``"heat"`` (it rises after a stop in COOL).
-
-        The origin is ``"peak"`` (read on the temperature peak after a stop) or ``"detection"`` (present
-        detection of the passive response). ``fed`` is False for a peak that does not feed the published value
-        (a stop from a lower power).
-        """
-        return [dict(m) for m in self._passive_measures]
-
-    @property
-    def passive_first_published_s(self) -> float | None:
-        """Monotonic time of the first sample of the dead time after a stop, None before."""
-        return self._passive_first_published_s
-
-    @property
-    def stop_peak_confirmed(self) -> bool:
-        """True from the confirmation of the peak of a stop until the heating starts again."""
-        return self._stop_peak_confirmed
-
-    @property
-    def stop_response_pending(self) -> bool:
-        """True while the response to the last stop is awaited: its detection is armed or its peak is searched."""
-        waiting = self.state in ("WAITING_HEAT_RESPONSE", "WAITING_COOL_RESPONSE") and self._waiting_power_on is False
-        return self._stop_peak is not None or waiting
-
-    @property
-    def tin_history(self) -> Deque[Tuple[float, float]]:
-        """The raw temperature history of the holder."""
-        return self._tin_history
+    def active_slot(self) -> str:
+        """Slot of the active response of the mode: "cool" in COOL, "heat" otherwise."""
+        return "cool" if self.model_hvac_mode == str(VThermHvacMode_COOL) else "heat"
 
     def reset(self):
         """Reset estimator state, the dead times set aside for the other mode included."""
@@ -181,7 +134,6 @@ class DeadTimeEstimator:
         self.heat_trough_temp = None
         self.cool_start_time = None
         self.cool_peak_temp = None
-        self._waiting_power_on = None
         self._near_extreme_time = None
         self._trend_slope = 0.0
         self._weak_evidence = False
@@ -190,11 +142,16 @@ class DeadTimeEstimator:
         self._history_cool.clear()
         self.history.clear()
         self._restart_detection = None
-        self._stop_peak = None
-        self._stop_peak_confirmed = False
-        self._stop_from_full_power = False
-        self._passive_measures.clear()
-        self._passive_first_published_s = None
+
+    def _drop_inactive_slot(self) -> None:
+        """Empty the slot of the response that is not the active one of the mode (a state saved by an earlier
+        version may hold a dead time after a stop there)."""
+        if self.active_slot == "heat":
+            self.deadtime_cool_s, self.deadtime_cool_reliable = None, False
+            self._history_cool.clear()
+        else:
+            self.deadtime_heat_s, self.deadtime_heat_reliable = None, False
+            self._history_heat.clear()
 
     def _learned_snapshot(self) -> dict | None:
         """The learned dead times as saved state, None when nothing was learned."""
@@ -242,14 +199,11 @@ class DeadTimeEstimator:
         self.heat_trough_temp = None
         self.cool_start_time = None
         self.cool_peak_temp = None
-        self._waiting_power_on = None
         self._near_extreme_time = None
         self._trend_slope = 0.0
         self._weak_evidence = False
         if not keep_history:
             self.history.clear()
-        self._stop_peak = None
-        self._stop_peak_confirmed = False
 
     @property
     def waiting_elapsed_s(self) -> float | None:
@@ -300,6 +254,7 @@ class DeadTimeEstimator:
         if mode_changed and mode_name in self._mode_stash:
             self._restore_learned(self._mode_stash.pop(mode_name))
         self.model_hvac_mode = mode_name
+        self._drop_inactive_slot()
         return reset_required
 
     def active_deadtime(self, hvac_mode: VThermHvacMode) -> tuple[float | None, bool]:
@@ -308,72 +263,45 @@ class DeadTimeEstimator:
             return self.deadtime_cool_s, self.deadtime_cool_reliable
         return self.deadtime_heat_s, self.deadtime_heat_reliable
 
-    def passive_deadtime(self, hvac_mode: VThermHvacMode) -> tuple[float | None, bool]:
-        """Return dead time for the passive response after active power stops."""
-        if hvac_mode == VThermHvacMode_COOL:
-            return self.deadtime_heat_s, self.deadtime_heat_reliable
-        return self.deadtime_cool_s, self.deadtime_cool_reliable
+    def _start_response(self, *, response: str, now: float, tin: float, off_since: float | None) -> None:
+        """Arm the detection of the response to a power start.
 
-    def _start_response(
-        self,
-        *,
-        response: str,
-        now: float,
-        tin: float,
-        power_on: bool,
-        off_since: float | None = None,
-    ) -> None:
-        """Arm a physical rising or falling temperature response.
-
-        An active response (power on) is measured against the free-running
-        trend of the OFF period before the start (``off_since`` onwards); a
-        trend too irregular to be extrapolated rejects the detection.
+        The response is measured against the free-running trend of the OFF
+        period before the start (``off_since`` onwards); a trend too irregular
+        to be extrapolated rejects the detection.
         """
         # A response still waited for is replaced by the new power transition.
-        if self.state == "WAITING_HEAT_RESPONSE":
-            self.last_outcome["heat"] = "aborted"
-        elif self.state == "WAITING_COOL_RESPONSE":
-            self.last_outcome["cool"] = "aborted"
+        if self.state in ("WAITING_HEAT_RESPONSE", "WAITING_COOL_RESPONSE"):
+            self.last_outcome["heat" if self.state == "WAITING_HEAT_RESPONSE" else "cool"] = "aborted"
         self._trend_slope = 0.0
         self._weak_evidence = False
-        if power_on:
-            trend = prestart_trend(
-                self._tin_history,
-                start_ts=now,
-                off_since_ts=off_since,
-                direction=_direction(response),
-                detection_threshold_c=self.detection_threshold,
-            )
-            if trend.rejected:
-                self.last_outcome[response] = "rejected"
-                self.state = "COOLING" if response == "cool" else "HEATING"
-                self._waiting_power_on = None
-                _LOGGER.debug(
-                    "DeadTime: %s response not armed (trend before the start not extrapolable)",
-                    response,
-                )
-                return
-            self._trend_slope = trend.slope_c_per_s
-            self._weak_evidence = (
-                trend.toward_response or trend.window_too_short
-                or (self.passive_by_peak and not self.measured_start)
-            )
-        self._waiting_power_on = power_on
+        trend = prestart_trend(
+            self._tin_history,
+            start_ts=now,
+            off_since_ts=off_since,
+            direction=_direction(response),
+            detection_threshold_c=self.detection_threshold,
+        )
+        if trend.rejected:
+            self.last_outcome[response] = "rejected"
+            self.state = "COOLING" if response == "cool" else "HEATING"
+            _LOGGER.debug("DeadTime: %s response not armed (trend before the start not extrapolable)", response)
+            return
+        self._trend_slope = trend.slope_c_per_s
+        self._weak_evidence = (
+            trend.toward_response or trend.window_too_short
+            or (self.direct and not self.measured_start)
+        )
         self._near_extreme_time = now
         if response == "cool":
             self.cool_start_time = now
             self.cool_peak_temp = tin
-            self.state = "WAITING_COOL_RESPONSE"
         else:
             self.heat_start_time = now
             self.heat_trough_temp = tin
-            self.state = "WAITING_HEAT_RESPONSE"
+        self.state = _WAITING[response]
         _LOGGER.debug(
-            "DeadTime: State -> %s (power_on=%s, temp=%.3f, trend=%.3f degC/h)",
-            self.state,
-            power_on,
-            tin,
-            self._trend_slope * 3600.0,
+            "DeadTime: State -> %s (temp=%.3f, trend=%.3f degC/h)", self.state, tin, self._trend_slope * 3600.0,
         )
 
     def _detrended(self, ts: float, value: float, start: float) -> float:
@@ -412,22 +340,12 @@ class DeadTimeEstimator:
 
         ``tin`` drives the detection (trough/peak tracking and inflection
         lookback). ``tin_raw`` is the raw measured temperature stored in
-        ``tin_history`` for learning slopes; it defaults to ``tin``.
+        the raw history for the pre-start trend; it defaults to ``tin``.
         """
         self.ensure_hvac_mode(hvac_mode)
         active_response = "cool" if hvac_mode == VThermHvacMode_COOL else "heat"
-        passive_response = "heat" if hvac_mode == VThermHvacMode_COOL else "cool"
 
         self.history.append(now, tin, tin_raw)
-
-        by_peak = self.passive_by_peak
-        if by_peak and u_applied > 0.01:
-            # The heating runs (or starts again): the bin in progress of a stop not yet measured is closed and may
-            # still confirm its peak early; otherwise the stop gives no measure.
-            if self._stop_peak is not None:
-                self._feed_stop_peak(now, passive_response, heating=True)
-            self._stop_peak = None
-            self._stop_peak_confirmed = False
 
         # --- Power Transition Detection ---
 
@@ -460,68 +378,21 @@ class DeadTimeEstimator:
                     response=active_response,
                     now=now,
                     tin=tin,
-                    power_on=True,
                     off_since=self._free_running_since(hvac_mode),
                 )
             else:
                 self.state = "COOLING" if active_response == "cool" else "HEATING"
-                self._waiting_power_on = None
 
-        # >0 -> 0: passive room response.
+        # >0 -> 0: the heating stops.
         elif self.last_power > 0.01 and u_applied <= 0.01:
             self.last_stop_time = now
 
-            threshold = (
-                self.min_power_cool_threshold
-                if passive_response == "cool"
-                else self.min_power_heat_threshold
-            )
-            if by_peak:
-                # The passive response is not detected: the dead time after this stop is read on its peak.
-                history = self._tin_history
-                self._stop_peak = PeakSearch(
-                    now, -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0,
-                    drop_floor_c=max(STOP_PEAK_DROP_MIN_C, STOP_PEAK_DROP_STEPS * sensor_step(history)),
-                    cut_value=history[-1][1] if history else None,
-                )
-                self._stop_peak_confirmed = False
-                self._stop_from_full_power = self.last_power >= FULL_POWER_STOP_MIN
-                if self.state == "WAITING_HEAT_RESPONSE":
-                    self.last_outcome["heat"] = "aborted"
-                elif self.state == "WAITING_COOL_RESPONSE":
-                    self.last_outcome["cool"] = "aborted"
-                self.state = "COOLING" if passive_response == "cool" else "HEATING"
-                self._waiting_power_on = None
-            elif self.last_power < threshold:
-                self.state = "COOLING" if passive_response == "cool" else "HEATING"
-                self._waiting_power_on = None
-                _LOGGER.debug(
-                    "DeadTime: Passive response ignored (Prev Power %.2f < %s)",
-                    self.last_power,
-                    threshold,
-                )
-            else:
-                self._start_response(
-                    response=passive_response,
-                    now=now,
-                    tin=tin,
-                    power_on=False,
-                )
-
         # --- State Logic ---
 
-        # Abort condition (3.B): if power state reverses while waiting
-        # This means the setpoint changed and we shouldn't wait for a response anymore
+        # Abort condition (3.B): the power stops while the response is waited for.
         power_on = u_applied > 0.01
-        if (
-            self.state in {"WAITING_HEAT_RESPONSE", "WAITING_COOL_RESPONSE"}
-            and self._waiting_power_on is not None
-            and power_on != self._waiting_power_on
-        ):
-            _LOGGER.debug(
-                "DeadTime: Aborting %s because power state changed",
-                self.state,
-            )
+        if self.state in ("WAITING_HEAT_RESPONSE", "WAITING_COOL_RESPONSE") and not power_on:
+            _LOGGER.debug("DeadTime: Aborting %s because power state changed", self.state)
             if self.state == "WAITING_HEAT_RESPONSE":
                 self.heat_start_time = None
                 self.heat_trough_temp = None
@@ -529,18 +400,15 @@ class DeadTimeEstimator:
             else:
                 self.cool_start_time = None
                 self.last_outcome["cool"] = "aborted"
-            current_response = active_response if power_on else passive_response
-            self.state = "COOLING" if current_response == "cool" else "HEATING"
-            self._waiting_power_on = None
+            self.state = "OFF"
 
         if self.state == "WAITING_HEAT_RESPONSE":
             if self.heat_start_time is not None and self.heat_trough_temp is not None:
                 elapsed = now - self.heat_start_time
 
                 # Check Timeout
-                if elapsed > self._timeout_s():
+                if elapsed > self.timeout_seconds:
                     self.state = "HEATING"
-                    self._waiting_power_on = None
                     self.last_outcome["heat"] = "timeout"
                     _LOGGER.debug("DeadTime: Heat Timeout (%.0fs)", elapsed)
                 else:
@@ -566,7 +434,6 @@ class DeadTimeEstimator:
                         dt = max(0.0, inflection_time - start)
 
                         self.state = "HEATING"
-                        self._waiting_power_on = None
                         if self._trend_dominates("heat", now, start):
                             self.last_outcome["heat"] = "rejected"
                             _LOGGER.debug("DeadTime: Heat detection rejected (trend before the start dominates the rise)")
@@ -574,8 +441,6 @@ class DeadTimeEstimator:
                             self.last_outcome["heat"] = "ignored"
                             _LOGGER.debug("DeadTime: Heat detection %.1fs ignored (shorter than %.1fs on weak evidence)", dt, self.deadtime_heat_s)
                         else:
-                            if passive_response == "heat":
-                                self._record_passive("heat", dt, now, "detection")
                             self._add_sample_heat(dt)
                             self.last_outcome["heat"] = "detected"
                             _LOGGER.info("SmartPI: Heat Deadtime detected = %.1fs (ascension delayed by %.1fs)", dt, now - inflection_time)
@@ -585,9 +450,8 @@ class DeadTimeEstimator:
                 elapsed = now - self.cool_start_time
 
                 # Check Timeout
-                if elapsed > self._timeout_s():
+                if elapsed > self.timeout_seconds:
                     self.state = "COOLING"
-                    self._waiting_power_on = None
                     self.last_outcome["cool"] = "timeout"
                     _LOGGER.debug("DeadTime: Cool Timeout (%.0fs)", elapsed)
                 else:
@@ -615,7 +479,6 @@ class DeadTimeEstimator:
                         dt = max(0.0, inflection_time - start)
 
                         self.state = "COOLING"
-                        self._waiting_power_on = None
                         if self._trend_dominates("cool", now, start):
                             self.last_outcome["cool"] = "rejected"
                             _LOGGER.debug("DeadTime: Cool detection rejected (trend before the start dominates the drop)")
@@ -623,83 +486,32 @@ class DeadTimeEstimator:
                             self.last_outcome["cool"] = "ignored"
                             _LOGGER.debug("DeadTime: Cool detection %.1fs ignored (shorter than %.1fs on weak evidence)", dt, self.deadtime_cool_s)
                         else:
-                            if passive_response == "cool":
-                                self._record_passive("cool", dt, now, "detection")
                             self._add_sample_cool(dt)
                             self.last_outcome["cool"] = "detected"
                             _LOGGER.info("SmartPI: Cool Deadtime detected = %.1fs (drop delayed by %.1fs)", dt, now - inflection_time)
 
         # Default states if running without detection
-        elif u_applied > 0.01 and self.state == "OFF":
+        elif power_on and self.state == "OFF":
             self.state = "COOLING" if active_response == "cool" else "HEATING"
-        elif u_applied <= 0.01:
-            if self.state != "OFF" and self.state != "WAITING_COOL_RESPONSE" and self.state != "COOLING":
-                self.state = "OFF"
-
-        if by_peak and self._stop_peak is not None:
-            self._feed_stop_peak(now, passive_response, heating=False)
+        elif not power_on:
+            self.state = "OFF"
 
         self.last_power = u_applied
-
-    def _feed_stop_peak(self, now: float, passive_response: str, heating: bool) -> None:
-        """Feed the sample of ``now`` to the peak search of the last stop. ``heating``: the heating starts again,
-        the bin in progress is closed and the search ends. Only a confirmed peak gives a measure; none is made when
-        the peak is not found within the wait."""
-        search = self._stop_peak
-        confirmed = False
-        if self._tin_history and self._tin_history[-1][0] == now and now >= search.t_cut:
-            # The raw samples of the history feed the peak search, as they feed the measurement events.
-            confirmed = search.feed(now, self._tin_history[-1][1])
-            if not confirmed and search.expired(now):
-                self._stop_peak = None
-                return
-        if not confirmed and heating:
-            confirmed = search.close_at_heating()
-        if not confirmed:
-            return
-        self._stop_peak = None
-        # Confirmed at the start of a heating: the stop is over, nothing waits for its peak any more.
-        self._stop_peak_confirmed = not heating
-        dead_time_s = search.peak_delay_s
-        self._add_passive_sample(passive_response, dead_time_s, now, "peak", fed=self._stop_from_full_power)
-        _LOGGER.info(
-            "SmartPI: Dead time after a stop read on the peak = %.1fs (%s response)", dead_time_s, passive_response,
-        )
-
-    def _add_passive_sample(self, response: str, dt: float, now: float, origin: str, fed: bool = True) -> None:
-        """Add a sample of the dead time after a stop (median and reliability rule of the estimator); a sample that
-        is not fed is only recorded."""
-        self._record_passive(response, dt, now, origin, fed)
-        if not fed:
-            return
-        if response == "cool":
-            self._add_sample_cool(dt)
-        else:
-            self._add_sample_heat(dt)
-
-    def _record_passive(self, response: str, dt: float, now: float, origin: str, fed: bool = True) -> None:
-        self._passive_measures.append(
-            {"t_s": float(now), "response": response, "value_s": float(dt), "origin": origin, "fed": bool(fed)}
-        )
-        del self._passive_measures[:-_PASSIVE_RECORD_MAX]
-        if fed and self._passive_first_published_s is None:
-            self._passive_first_published_s = float(now)
 
     def _free_running_since(self, hvac_mode: VThermHvacMode) -> float | None:
         """Return the start of the free-running part of the current OFF period.
 
-        Right after a stop the emitter keeps acting on the room for the
-        passive dead time; the trend before a start is taken after it.
+        Right after a stop the emitter keeps acting on the room: the trend
+        before a start is taken one emitter lag of the response model after
+        the stop, the dead time after a start without a model.
         """
         if self.last_stop_time is None:
             return None
-        passive_s, passive_reliable = self.passive_deadtime(hvac_mode)
-        delay = passive_s if passive_reliable and passive_s is not None else 0.0
+        delay = self._emitter_lag(hvac_mode) if self._emitter_lag is not None else None
+        if delay is None:
+            active_s, active_reliable = self.active_deadtime(hvac_mode)
+            delay = active_s if active_reliable and active_s is not None else 0.0
         return self.last_stop_time + max(0.0, float(delay))
-
-    def _timeout_s(self) -> float:
-        """Wait limit of the armed response: active after a power start, passive after a cut."""
-        return self.timeout_seconds if self._waiting_power_on else self.passive_timeout_seconds
 
     def last_sample_s(self, response: str) -> float | None:
         """Last sample of the ``response`` slot ("heat" or "cool"), None without one."""
@@ -731,7 +543,6 @@ class DeadTimeEstimator:
             "heat_trough_temp": self.heat_trough_temp,
             "cool_start_wall": monotonic_to_wall_ts(self.cool_start_time),
             "cool_peak_temp": self.cool_peak_temp,
-            "waiting_power_on": self._waiting_power_on,
             "near_extreme_wall": monotonic_to_wall_ts(self._near_extreme_time),
             "trend_slope": self._trend_slope,
         }
@@ -742,6 +553,8 @@ class DeadTimeEstimator:
         Bridged: the actuator kept its state over the stop, so the detection in
         progress, the last power and the last stop resume; the timeout still
         applies from the saved start. Otherwise the state of load_state stays.
+        A wait for the response to a stop (saved by an earlier version) resumes
+        as no detection.
         """
         saved, self._restart_detection = self._restart_detection, None
         if not bridged or not saved:
@@ -758,7 +571,8 @@ class DeadTimeEstimator:
             peak = None if peak is None else float(peak)
         except (TypeError, ValueError):
             return
-        waiting = saved.get("waiting_power_on")
+        if state in _WAITING.values() and saved.get("waiting_power_on") is False:
+            state = "OFF"
         self.state = state
         self.last_power = last_power
         self.last_stop_time = wall_to_monotonic_ts(saved.get("last_stop_wall"))
@@ -766,7 +580,6 @@ class DeadTimeEstimator:
         self.heat_trough_temp = trough
         self.cool_start_time = wall_to_monotonic_ts(saved.get("cool_start_wall"))
         self.cool_peak_temp = peak
-        self._waiting_power_on = waiting if isinstance(waiting, bool) else None
         self._near_extreme_time = wall_to_monotonic_ts(saved.get("near_extreme_wall"))
         self._trend_slope = trend
 
@@ -788,7 +601,8 @@ class DeadTimeEstimator:
         return state
 
     def load_state(self, state: dict) -> None:
-        """Restore state."""
+        """Restore state. The slot of the response that is not the active one of a mode (a dead time after a stop,
+        saved by an earlier version) is ignored, in the active mode and in the one set aside."""
         if not state:
             return
         self.deadtime_heat_s = state.get("deadtime_heat_s")
@@ -807,7 +621,7 @@ class DeadTimeEstimator:
 
         stash = state.get("mode_stash")
         self._mode_stash = {
-            mode: snap
+            mode: _active_only(snap, mode)
             for mode, snap in (stash.items() if isinstance(stash, dict) else ())
             if mode in (str(VThermHvacMode_HEAT), str(VThermHvacMode_COOL))
             and mode != self.model_hvac_mode
@@ -823,6 +637,8 @@ class DeadTimeEstimator:
             self.deadtime_heat_s = statistics.median(self._history_heat)
         if self._history_cool:
             self.deadtime_cool_s = statistics.median(self._history_cool)
+        if self.model_hvac_mode is not None:
+            self._drop_inactive_slot()
 
         # An in-progress detection is restored only across a bridged restart
         # (resume_after_restart): otherwise the actuator state during the
@@ -836,6 +652,12 @@ class DeadTimeEstimator:
 
         # Restore temperature histories (a missing filtered history stays empty)
         self.history.load(state)
+
+
+def _active_only(snap: dict, mode: str) -> dict:
+    """``snap`` (dead times set aside for ``mode``) without the slot of its response after a stop."""
+    passive = "heat" if mode == str(VThermHvacMode_COOL) else "cool"
+    return {**snap, f"deadtime_{passive}_s": None, f"deadtime_{passive}_reliable": False, f"history_{passive}": []}
 
 
 def _direction(response: str) -> float:

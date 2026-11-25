@@ -278,8 +278,6 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
             est._b_hat_hist.append(b_min * (1.0 + 0.01 * (i - 5)))
         algo.dt_est.deadtime_heat_s = p["tau_e"] + p["L"]
         algo.dt_est.deadtime_heat_reliable = True
-        algo.dt_est.deadtime_cool_s = 900.0
-        algo.dt_est.deadtime_cool_reliable = True
         algo._output_initialized = True
         _freeze_ab_learning(algo)
         last_pub, pub_time = None, None

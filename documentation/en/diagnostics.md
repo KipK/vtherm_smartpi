@@ -74,12 +74,12 @@ The `live` block is organized by responsibility:
 | `control` | Phase, regulation mode, gains (`kp`, `ki`), effective integral time `ti_min` (minutes), saturation, regulation bands and the last restart (`last_restart`) |
 | `power` | Current and next-cycle power, PI/FF split, limits and applied power |
 | `temperature` | Indoor/outdoor temperatures, anticipated temperature (`anticipated`: indoor temperature plus the anticipation correction), errors and integral state |
-| `model` | A/B model, confidence, time constant, dead times and the response model |
+| `model` | A/B model, confidence, time constant, dead time after a start and the response model |
 | `learning` | Learning stage, bootstrap progress, accepted updates, drift state and the start of the learning (`start`) |
 | `governance` | Thermal regime and model-update decision |
 | `feedforward` | Holding power source, wall part of the holding power and dead-band source |
 | `setpoint` | Setpoint boost state |
-| `calibration` | The calibration in progress or the last one: state, pulses, result, last request, dead times measured, reading, values in use and corrections |
+| `calibration` | The calibration in progress or the last one: state, pulses, result, last request, dead time measured, reading, values in use and corrections |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
 | `tar_learning` | Emitter lag learning |
@@ -143,7 +143,6 @@ last one until the next request.
 | `last_request` | Answer to the last request, `null` before any: `started`, `refused: learning stage`, `refused: learning paused` (by the service or an entity), `refused: thermostat off`, `refused: too soon` (less than 24 hours after the end of the last calibration), `ignored: in progress` |
 | `last_time` | Local time at which the last calibration that was not cancelled ended (ISO 8601), `null` before |
 | `deadtime_start_s` | Last dead time after a start measured during a pulse of the calibration, in seconds, `null` when none |
-| `deadtime_stop_s` | Last dead time after a stop measured during a pulse of the calibration, in seconds, `null` when none |
 | `reading_a` | Heating rate of the two agreeing pulses in °C/min at full power (5 decimals), `null` until two pulses agree |
 | `reading_b` | Loss coefficient of the two agreeing pulses in 1/min (6 decimals), `null` until two pulses agree; published only, never corrected |
 | `reading_lag_s` | Emitter lag of the two agreeing pulses in seconds, `null` until two pulses agree |
@@ -152,8 +151,8 @@ last one until the next request.
 | `in_force_lag_s` | Horizon of the anticipation in use when the pulses agreed, in seconds, shown beside `reading_lag_s`; `null` until two pulses agree |
 | `corrected` | What the calibration corrected: a list of `heating rate`, `loss coefficient`; empty when nothing was corrected |
 
-The dead times measured by the pulses join the learned dead times like any other
-measurement. A quantity of the reading is corrected only when it differs from
+The dead times after a start measured by the pulses join the learned ones like
+any other measurement. A quantity of the reading is corrected only when it differs from
 the value in use by more than 30 % (see **Calibration** in the
 [SmartPI documentation](vtherm_smartpi.md)). The emitter lag is corrected by the
 response model itself: the calibration pulses are events of the model, and two
@@ -170,7 +169,7 @@ anticipation of the temperature, in heating and in cooling:
 |---|---|
 | `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon, without a rising or falling slope, or during a guard cut) |
 | `anticipation_horizon_s` | Horizon of the anticipation in seconds (the time between a command and its effect), `0` when none |
-| `anticipation_horizon_source` | Where the horizon comes from: `response model` (emitter lag of the response model of the mode: dead time plus response time constant), and without a model `measurement pulses` (emitter lag kept from the measurement pulses of the direct start), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none` |
+| `anticipation_horizon_source` | Where the horizon comes from: `response model` (emitter lag of the response model of the mode: dead time plus response time constant), and without a model `measurement pulses` (emitter lag kept from the measurement pulses of the direct start), `dead time` (the reliable heating (HEAT) or cooling (COOL) dead time after a start) or `none` |
 | `effective_dead_time_s` | Effective dead time of the response model in seconds (dead time plus half the response time constant), `null` without a model; the integral holds, the near band above the setpoint and the calibration pulses read it |
 | `gain_delay_s` | Delay read by the gain rule, in seconds: the reliable heating (HEAT) or cooling (COOL) dead time after a start, as it is; `null` without it (safe gains) |
 | `gain_delay_source` | Where `gain_delay_s` comes from: `dead time`; `null` without a delay |
@@ -180,10 +179,10 @@ anticipation of the temperature, in heating and in cooling:
 
 | Field | Meaning |
 |---|---|
-| `state` | Detector state (`WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`) |
+| `state` | Detector state: `WAITING_HEAT_RESPONSE` (HEAT) or `WAITING_COOL_RESPONSE` (COOL) while the response to a start is waited for, `HEATING` / `COOLING` while the power is on, `OFF` |
 | `last_power` | Last power seen by the detector |
 | `waiting_elapsed_s` | Age of the response being waited for in seconds, `null` when no detection is armed |
-| `heat_last_outcome` / `cool_last_outcome` | Outcome of the last wait for a rising / falling response: `detected`, `timeout`, `aborted` (power transition before a detection), `rejected` (the temperature already moved in the direction of the response before the power start, too steeply or too irregularly to measure it), `ignored` (a measurement shorter than the published dead time, dropped because the temperature was already moving in the direction of the response before the start or the window before the start was too short to tell), `null` before the first one |
+| `heat_last_outcome` (HEAT) / `cool_last_outcome` (COOL) | Outcome of the last wait for the response to a start, rising in HEAT, falling in COOL: `detected`, `timeout`, `aborted` (power transition before a detection), `rejected` (the temperature already moved in the direction of the response before the power start, too steeply or too irregularly to measure it), `ignored` (a measurement shorter than the published dead time, dropped because the temperature was already moving in the direction of the response before the start or the window before the start was too short to tell), `null` before the first one |
 
 During the bootstrap, `learning.bootstrap_status` describes the current step:
 

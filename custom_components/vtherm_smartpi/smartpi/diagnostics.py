@@ -139,19 +139,18 @@ def _build_ab_confidence_state(algo: SmartPI) -> str:
 
 
 def _build_model(algo: SmartPI, tau_info: TauReliability) -> Dict[str, Any]:
-    """Return the learned A/B model and the dead times."""
+    """Return the learned A/B model and the dead time after a start (``deadtime_heat_*`` in HEAT, ``deadtime_cool_*``
+    in COOL)."""
     est = algo.est
-    dt_est = algo.dt_est
+    slot = algo.dt_est.active_slot
     return {
         "a": round(est.a, 6),
         "b": round(est.b, 6),
         "confidence": _build_ab_confidence_state(algo),
         "tau_reliable": tau_info.reliable,
         "tau_min": round(tau_info.tau_min, 1),
-        "deadtime_heat_s": dt_est.deadtime_heat_s,
-        "deadtime_cool_s": dt_est.deadtime_cool_s,
-        "deadtime_heat_reliable": dt_est.deadtime_heat_reliable,
-        "deadtime_cool_reliable": dt_est.deadtime_cool_reliable,
+        f"deadtime_{slot}_s": getattr(algo.dt_est, f"deadtime_{slot}_s"),
+        f"deadtime_{slot}_reliable": getattr(algo.dt_est, f"deadtime_{slot}_reliable"),
         "a_stability_ratio": _round_optional(est.diag_a_mad_over_med, 3),
         "b_stability_ratio": _round_optional(est.diag_b_mad_over_med, 3),
         **algo._start.model.public_model(est.model_hvac_mode),
@@ -367,8 +366,7 @@ def _build_analysis(algo: SmartPI) -> Dict[str, Any]:
             "state": algo.dt_est.state,
             "last_power": algo.dt_est.last_power,
             "waiting_elapsed_s": _round_optional(algo.dt_est.waiting_elapsed_s, 0),
-            "heat_last_outcome": algo.dt_est.last_outcome["heat"],
-            "cool_last_outcome": algo.dt_est.last_outcome["cool"],
+            f"{algo.dt_est.active_slot}_last_outcome": algo.dt_est.last_outcome[algo.dt_est.active_slot],
         },
         "governance": {
             "last_freeze_reason_gains": gov.last_freeze_reason_gains.value,

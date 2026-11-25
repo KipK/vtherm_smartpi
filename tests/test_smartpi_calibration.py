@@ -75,7 +75,6 @@ def _learned(start: str = "bootstrap", saved_state: dict | None = None) -> Smart
     if start == "direct":
         algo.est.give_starting_values(A_ROOM, B_ROOM, "heat", 1.0)
     algo.dt_est.deadtime_heat_s, algo.dt_est.deadtime_heat_reliable = 600.0, True
-    algo.dt_est.deadtime_cool_s, algo.dt_est.deadtime_cool_reliable = 480.0, True
     if saved_state is None:
         algo._start.model.seed("heat", 60.0, 60.0 * LAG_MIN - 60.0)   # the response model of the room: S = its lag
     assert algo.phase == SmartPIPhase.STABLE
@@ -177,7 +176,7 @@ def test_a_calibration_runs_pulses_in_either_start_mode_through_the_on_off_path(
     assert pulse["calibration"] is True and pulse["heat_start_s"] is not None and pulse["armed"] is True
     assert pulse["end_reason"] == "peak"                              # the event closed, the stop was measured
     assert algo.phase == SmartPIPhase.STABLE and _calibration(algo)["state"] == "waiting"
-    assert _calibration(algo)["deadtime_start_s"] is not None and _calibration(algo)["deadtime_stop_s"] is not None
+    assert _calibration(algo)["deadtime_start_s"] is not None and "deadtime_stop_s" not in _calibration(algo)
     assert _calibration(algo)["pulses_done"] == 1
     # the pulses of a calibration do not count for the learning stage
     assert algo._start.pulse.count_for("heat") == 0
@@ -355,19 +354,15 @@ def test_a_saved_state_of_the_former_calibration_and_automatic_calibration_loads
 class _Est:
     """Dead-time estimator as the pulses read it."""
 
-    def __init__(self, active=(None, False), passive=(None, False), history=()) -> None:
-        self._active, self._passive = active, passive
+    def __init__(self, active=(None, False), history=()) -> None:
+        self._active = active
         self.tin_history = list(history)
         self.heat_start_time = None
         self.state = "WAITING_HEAT_RESPONSE"
         self.last_outcome: dict = {}
-        self.stop_response_pending = False
 
     def active_deadtime(self, _mode):
         return self._active
-
-    def passive_deadtime(self, _mode):
-        return self._passive
 
 
 def test_the_limits_follow_the_response_model_and_the_horizon_within_their_bounds():

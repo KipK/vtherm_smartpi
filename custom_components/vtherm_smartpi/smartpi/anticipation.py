@@ -22,7 +22,7 @@ from .const import (
 
 SOURCE_RESPONSE_MODEL = "response model"
 SOURCE_PULSES = "measurement pulses"
-SOURCE_DEAD_TIMES = "dead times"
+SOURCE_DEAD_TIME = "dead time"
 SOURCE_NONE = "none"
 
 
@@ -45,10 +45,9 @@ def select_horizon(
     one. With a model the horizon is its emitter lag theta + tau_e, the mean arrival time of the commanded heat; when
     the split of the model is assumed that sum is the emitter lag S itself (the cautious end of theta in [0, S]).
     Without a model: ``pulse_lag_s`` (the lag kept from the readings of the measurement pulses in ``hvac_mode``, None
-    when no values are kept in that mode) when positive, else the longer of the active dead time of the mode and half
-    its passive dead time, each counted only when reliable and positive; 0 when none counts. ``dead_time_view``
-    returns the dead-time estimator (``active_deadtime`` and ``passive_deadtime`` by mode) and is called only when
-    nothing before decides.
+    when no values are kept in that mode) when positive, else the dead time after a start of the mode when reliable
+    and positive; 0 otherwise. ``dead_time_view`` returns the dead-time estimator (``active_deadtime`` by mode) and is
+    called only when nothing before decides.
     """
     if model is not None:
         lag = float(model["theta_s"]) + float(model["tau_e_s"])
@@ -56,13 +55,10 @@ def select_horizon(
             return AnticipationHorizon(lag, SOURCE_RESPONSE_MODEL)
     if pulse_lag_s is not None and pulse_lag_s > 0.0:
         return AnticipationHorizon(float(pulse_lag_s), SOURCE_PULSES)
-    view = dead_time_view()
-    active, active_reliable = view.active_deadtime(hvac_mode)
-    passive, passive_reliable = view.passive_deadtime(hvac_mode)
-    active = float(active) if active_reliable and active is not None and active > 0.0 else 0.0
-    passive = 0.5 * float(passive) if passive_reliable and passive is not None and passive > 0.0 else 0.0
-    seconds = max(active, passive)
-    return AnticipationHorizon(seconds, SOURCE_DEAD_TIMES if seconds > 0.0 else SOURCE_NONE)
+    active, active_reliable = dead_time_view().active_deadtime(hvac_mode)
+    if active_reliable and active is not None and active > 0.0:
+        return AnticipationHorizon(float(active), SOURCE_DEAD_TIME)
+    return AnticipationHorizon(0.0, SOURCE_NONE)
 
 
 def anticipated_error(error: float, correction: float, hvac_mode) -> float:

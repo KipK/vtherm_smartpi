@@ -38,7 +38,7 @@ def _levels(on, off) -> tuple[np.ndarray, np.ndarray]:
 
 def _tick(m: TarLearningManager, t: float, valve: bool = True, hvac_mode=VThermHvacMode_HEAT) -> None:
     m.observe(t, hvac_mode=hvac_mode, temp=19.0, ext=2.0, setpoint=19.0, phase="Stable", b=0.002,
-              dtc=None, dtc_reliable=False, lag=None, cycle_min=10.0, valve=valve)
+              lag=None, cycle_min=10.0, valve=valve)
 
 
 # ---------------------------------------------------------------------------

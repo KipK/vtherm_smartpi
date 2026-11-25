@@ -50,7 +50,6 @@ def _call_update(win, u_active, governance, estimator, now=1000.0):
         ext_temp=11.0,
         u_active=u_active,
         estimator=estimator,
-        dt_est=_make_dt_est(),
         governance=governance,
         now=now,
     )

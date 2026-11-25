@@ -46,6 +46,7 @@ def _update_once(
     hvac_mode=VThermHvacMode_HEAT,
     slope=-0.1,
 ):
+    win.temperatures.raw = _make_dt_est().tin_history
     with patch(
         "custom_components.vtherm_smartpi.smartpi.ab_estimator.ABEstimator.robust_dTdt_per_min",
         return_value=(slope, "test_slope", 3),
@@ -56,7 +57,6 @@ def _update_once(
             ext_temp=ext_temp,
             u_active=0.0,
             estimator=est,
-            dt_est=_make_dt_est(),
             governance=_make_governance(),
             now=120.0,
             hvac_mode=hvac_mode,

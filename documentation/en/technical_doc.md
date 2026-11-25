@@ -70,11 +70,9 @@ The value injected into the controller is `u_ff1 + u_pi`, then it goes through:
 
 In phase `HYSTERESIS`, learning follows a strict order:
 
-1. the active-response dead time must be reliable before useful collection for
-   `a` (`heat` in HEAT, `cool` in COOL),
-2. the passive-response dead time must be reliable before useful collection
-   for `b` (`cool` in HEAT, `heat` in COOL),
-3. `b` must progress before `a` through a soft gate: an `a` window submitted
+1. the response model of the mode (3.7) must be published before any `a` or
+   `b` window,
+2. `b` must progress before `a` through a soft gate: an `a` window submitted
    while `b` has fewer than `AB_A_SOFT_GATE_MIN_B` measurements is kept
    (`skip: a kept until b is learned`), recomputed when `b` is published (3.4),
    and published with the collection once `b` has its measurements.
@@ -266,29 +264,32 @@ Segments are accumulated per parameter (at most `AB_BALANCE_POOL_MAX_SEGMENTS = 
 
 ### 3.6 Dead-time estimation
 
-`DeadTimeEstimator` implements an independent FSM. Its channels describe the
-physical room response, not the power-transition direction:
+`DeadTimeEstimator` implements an independent FSM that measures the dead time
+after a power start (OFF -> ON). Its channels describe the physical room
+response, not the power-transition direction:
 
 - `deadtime_heat`: dead time before the temperature starts rising,
 - `deadtime_cool`: dead time before the temperature starts falling.
 
-Therefore OFF -> ON learns `heat` in HEAT mode but `cool` in COOL mode. The
-ON -> OFF transition learns the opposite passive response.
+Therefore OFF -> ON learns `heat` in HEAT mode and `cool` in COOL mode; the
+other channel stays empty (a value an earlier version saved there, a dead time
+after a stop, is ignored at load). A power cut arms nothing: what follows a
+stop is read by the response model (3.7).
 
 Detection tracks the filtered indoor temperature, in regulation as during the bootstrap and the measurement pulses: a raw measurement that oscillates by one sensor step would otherwise detect a response as soon as the power steps. A detection in progress resumes after a bridged restart (5.4): its state, start, trough or peak, pre-start trend, last power and last power cut are persisted as wall-clock times, and its timeout still runs from the saved start. After any other restart it is dropped, and the minimum OFF duration must be observed again in the new session before a detection can be armed.
 
-A response is detected once the temperature has moved by `0.05 °C` from its trough (heat) or peak (cool) since the power transition. The dead time runs from the transition to the last instant within `0.01 °C` of that trough or peak, tracked during the wait, so it does not depend on the retention of the temperature history. The wait gives up after `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s` for an active response (power started) and `DEADTIME_PASSIVE_TIMEOUT_S = 43200 s` for a passive response (power cut): after a cut, an emitter with a large stored heat (floor heating) keeps warming the room, then plateaus, and the drop can come several hours later. In the bootstrap the passive wait ends by a detection or a power restart, which needs a drop the detection sees first; the limit only bounds how late a drop is still attributed to the cut. A power transition aborts a pending wait. The outcome of the last wait per response and the age of the wait in progress are published (`analysis.deadtime`).
+A response is detected once the temperature has moved by `0.05 °C` from its trough (heat) or peak (cool) since the power transition. The dead time runs from the transition to the last instant within `0.01 °C` of that trough or peak, tracked during the wait, so it does not depend on the retention of the temperature history. The wait gives up after `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s`. A power cut aborts a pending wait. The outcome of the last wait per response and the age of the wait in progress are published (`analysis.deadtime`).
 
 The response to a power start is the deviation of the temperature from the course it followed before the start. Without heating, a room is flat or cools down: the trough tracking above then dates the response. A room that already warms with the heater off (occupants, sun, a neighbouring room) moves away from the start level by itself, and the trough tracking would date the response too early (in COOL, the same holds for a room that already cools before the cooling starts). So, at an active start (power on), `deadtime_trend.prestart_trend()` fits a line on the raw temperature of the OFF period before the start:
 
-- window: the last `DEADTIME_PRESTART_WINDOW_S = 1800 s` before the start, beginning no earlier than the last power cut plus the passive dead time (the emitter still acts on the room before that);
+- window: the last `DEADTIME_PRESTART_WINDOW_S = 1800 s` before the start, beginning no earlier than the last power cut plus the emitter lag $\theta + \tau_e$ of the response model of the mode (the emitter still acts on the room before that), plus the dead time after a start without a model;
 - with less than `DEADTIME_PRESTART_MIN_SPAN_S = 900 s` or fewer than `DEADTIME_PRESTART_MIN_SAMPLES = 4` samples, no trend is removed;
 - a trend whose fitted change stays within one sensor step (the smallest change observed in the window, at least `DEADTIME_PRESTART_STEP_FLOOR_C = 0.01 °C`), or that goes against the response, is not removed either: the detection is the trough (or peak) tracking above, unchanged. This is the usual case in the bootstrap, where the heating restarts because the room has cooled down;
 - a trend in the direction of the response is fitted on the whole window and on its recent half (at least `DEADTIME_PRESTART_MIN_HALF_SAMPLES = 3` samples per half). The detection is rejected if the trend is not a line: a residual rms above half the detection threshold (and above one sensor step), or a slope that grows towards the response from the first half to the second by more than the detection threshold per half window. A line would then under-estimate the trend at the start;
 - otherwise the detector follows the temperature minus the extrapolated trend, with the steepest slope of the two fits: removing too much only delays the detection. The trough, the `0.05 °C` threshold and the `0.01 °C` lookback apply to that difference;
 - at the detection, the measurement is rejected if the trend alone accounts for at least the detection threshold since the start: the response is then not separable from the trend.
 
-A rejected measurement publishes the outcome `rejected` and leaves the detections unchanged: the dead time keeps its previous value. A passive response (power cut) is not concerned: the trend before a cut is that of the heating itself.
+A rejected measurement publishes the outcome `rejected` and leaves the detections unchanged: the dead time keeps its previous value.
 
 A measurement that would lower the published dead time is also ignored (outcome `ignored`, the dead time keeps its value) when the evidence is weak: the trend before the start is clearly in the direction of the response (a fitted change of at least `DEADTIME_PRESTART_RISE_MIN_STEPS = 2` sensor steps over the window, even if it was removed rather than rejected), or the window is too short to evaluate any trend. A room that warms before the start can only make the response look earlier, so it never shortens the dead time. A measurement that equals or lengthens the published value follows the rules above, and so does any measurement before the first published value.
 
@@ -438,7 +439,9 @@ has detected the response, it stands three sensor steps out and the room is back
 within `PULSE_HEAT_BACK_C = 0.1 °C` of the demand side of the setpoint, the last
 condition only while the step has lasted less than `PULSE_HEAT_EXTEND_MAX_S =
 30 min` (at most `PULSE_HEAT_MAX_S = 2 h`, or as soon as the room is
-`PULSE_HEAT_OVER_C = 0.3 °C` on the other side), then stops until the temperature peak is confirmed (at most
+`PULSE_HEAT_OVER_C = 0.3 °C` on the other side), then stops until the
+measurement event of the pulse is closed: its cut seen and its peak search
+ended (at most
 `PULSE_STOP_MAX_S = 4 h`; the PI takes over when the room is `PULSE_TAKEOVER_C =
 0.5 °C` on the demand side and one sensor step lower than at the start of the stop,
 and in any case at `PULSE_TAKEOVER_CAP_C = 0.8 °C`). A pulse interrupted by a restart, a stop, a change
@@ -448,17 +451,7 @@ its own model they stand for it: `pre_model_gains` gives the gains from the kept
 `a` and the active dead time after a start (4.1; the IMC/SIMC rule of a slow room, neither gain
 above its fallback value), the kept emitter lag is the horizon of the
 anticipation (source `measurement pulses`). The integral term
-starts from zero at the calculation at which the learning stage ends. The
-dead-time estimator reads the dead time after a stop on the temperature peak,
-with the peak search of the measurement events and an earlier confirmation: the
-peak is also confirmed at the close of a bin later than the best one whose mean
-lies under the best mean by at least the largest of `STOP_PEAK_DROP_MIN_C =
-0.05 °C`, `STOP_PEAK_DROP_STEPS = 2` sensor steps (the smallest change of the
-last hour, at least 0.01 °C) and `STOP_PEAK_DROP_RISE_FRAC = 0.5` times the rise
-from the cut to the best bin; when the heating starts again, the bin in progress
-is closed and gets the same test, otherwise the stop gives no value. The 1800 s
-rule is the latest confirmation. Only stops after a cycle at full power feed
-the published value.
+starts from zero at the calculation at which the learning stage ends.
 
 **Calibration.** On request (`force_smartpi_calibration`), once the first model
 is published, a calibration (`calibration.py`) starts measurement pulses in
@@ -481,12 +474,12 @@ the emitter lag, both 0 without a model), the anticipation horizon in use `H` an
 | start | demand in [-`CALIBRATION_START_OVER_C` = -0.2 °C, `PULSE_START_UNDER_C` = 0.3 °C], previous command < 0.8, `clamp(2 H, 1 h, 6 h)` after the end of the previous pulse |
 | rest | ends at `min(S + CALIBRATION_REST_EXTRA_S, 4 h)` (`CALIBRATION_REST_EXTRA_S` = 900 s of free-running window + 300 s), or when `demand + s Le >= PULSE_REST_UNDER_C` = 0.5 °C |
 | heat | rise seen and (`demand <= PULSE_HEAT_BACK_C` = 0.1 °C or step >= `PULSE_HEAT_EXTEND_MAX_S` = 30 min), 0.3 °C over, or `clamp(2 (Le + H), 2 h, 4 h)` |
-| stop | event closed and stop response not pending; takeover at `demand >= 0.5 °C` once the room is one sensor step lower than at the stop start, or at `demand >= CALIBRATION_DEPTH_CAP_C` = 0.8 °C; 4 h |
+| stop | event closed; takeover at `demand >= 0.5 °C` once the room is one sensor step lower than at the stop start, or at `demand >= CALIBRATION_DEPTH_CAP_C` = 0.8 °C; 4 h |
 
 The pulses of the learning stage keep the constants of `measure_pulse.py`. A
 pulse is applied as an on/off command: committed at once, then the dead-time
 estimator is fed with the committed power, once per calculation; its samples
-join the median of the dead times as any other. The phase is `Calibration` while
+join the median of the dead times after a start as any other. The phase is `Calibration` while
 a pulse of the calibration commands the output; between pulses the regulation
 runs in the stable phase. The events of the calibration pulses (source
 `calibration`) are read like the others but form a set of their own, tested
@@ -537,7 +530,7 @@ also checked on a calculation cut by the guard
 (`LearningStart.follow_calibration`). While a calibration is in progress
 (request to end) `ABEstimator.learn` takes no `a` measure: a window with
 `u > U_ON_MIN` is skipped (`skip: calibration in progress`); `b` windows, the
-dead times, the measurement events and the power steps go on. After each
+dead time, the measurement events and the power steps go on. After each
 calibration pulse (`LearningStart.recovering`) the integral is held (`I:HOLD`,
 source `calibration_recovery`) until the room reaches the setpoint; the
 pulses of the learning stage do not hold it. A stop of the thermostat ends
@@ -1119,10 +1112,9 @@ is read from the mode:
   $\theta \in [0, S]$;
 - otherwise the emitter lag kept from the readings of the measurement pulses of
   the direct start in the mode, when positive, source `measurement pulses`;
-- otherwise the longer of the active dead time of the mode (the heating dead time
-  in HEAT, the cooling dead time in COOL) and half its passive dead time (the
-  cooling dead time in HEAT, the heating dead time in COOL), each counted only
-  when reliable and positive, source `dead times`;
+- otherwise the dead time after a start of the mode (the heating dead time in
+  HEAT, the cooling dead time in COOL) when reliable and positive, source
+  `dead time`;
 - otherwise 0: no anticipation, source `none`.
 
 `analysis.control` publishes `anticipation_c` (the correction applied at the last

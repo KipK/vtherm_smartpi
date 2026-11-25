@@ -512,10 +512,10 @@ def test_horizon_with_an_assumed_split_is_the_emitter_lag() -> None:
     assert (horizon.seconds, horizon.source) == (2400.0, "response model")
 
 
-def test_horizon_without_a_model_is_the_pulse_lag_then_the_longer_of_the_delays() -> None:
+def test_horizon_without_a_model_is_the_pulse_lag_then_the_dead_time_after_a_start() -> None:
     smartpi = _with_dead_times(_make(), heat=420.0, heat_ok=True, cool=1800.0, cool_ok=True)
-    assert smartpi.anticipation_horizon_in_use_s == 900.0  # half the cooling dead time
-    assert smartpi.anticipation_horizon().source == "dead times"
+    assert smartpi.anticipation_horizon_in_use_s == 420.0  # the cooling slot is not read in HEAT
+    assert smartpi.anticipation_horizon().source == "dead time"
     smartpi.dt_est.deadtime_heat_s = 1200.0
     assert smartpi.anticipation_horizon_in_use_s == 1200.0
     smartpi._start.reading._kept["heat"] = {"mode": "heat", "a_per_min": 0.02, "lag_s": 2000.0, "at_s": 0.0}
@@ -533,11 +533,11 @@ def test_horizon_without_a_model_nor_a_reliable_delay_is_zero() -> None:
 def test_cool_horizon_reads_the_cool_model_else_the_dead_times() -> None:
     smartpi = _with_dead_times(_make(), heat=1800.0, heat_ok=True, cool=420.0, cool_ok=True)
     horizon = smartpi.anticipation_horizon(VThermHvacMode_COOL)
-    assert (horizon.seconds, horizon.source) == (900.0, "dead times")
+    assert (horizon.seconds, horizon.source) == (420.0, "dead time")
     smartpi.dt_est.deadtime_cool_s = 1200.0
     assert smartpi.anticipation_horizon(VThermHvacMode_COOL).seconds == 1200.0
     _with_model(smartpi, 1600.0)  # a HEAT model does not serve the cooling
-    assert smartpi.anticipation_horizon(VThermHvacMode_COOL).source == "dead times"
+    assert smartpi.anticipation_horizon(VThermHvacMode_COOL).source == "dead time"
     assert smartpi.anticipation_horizon(VThermHvacMode_HEAT).source == "response model"
     _with_model(smartpi, 700.0, MODE_COOL)
     horizon = smartpi.anticipation_horizon(VThermHvacMode_COOL)
@@ -550,7 +550,7 @@ def test_cool_horizon_reads_the_cool_model_else_the_dead_times() -> None:
 
 def test_horizon_follows_the_mode_of_the_last_calculation(clock: _Clock) -> None:
     smartpi = _with_dead_times(_make_cool(), heat=300.0, heat_ok=True, cool=1000.0, cool_ok=True)
-    assert smartpi.anticipation_horizon_in_use_s == 500.0  # no mode yet: half the passive cooling one of HEAT
+    assert smartpi.anticipation_horizon_in_use_s == 300.0  # no mode yet: the heating slot
     _run(smartpi, clock, _fall(5), mode=VThermHvacMode_COOL)
     assert smartpi.anticipation_horizon_in_use_s == 1000.0  # active COOL (cooling) dead time
 
@@ -560,17 +560,17 @@ def test_cool_horizon_and_correction_are_published(clock: _Clock) -> None:
     _run(smartpi, clock, _fall(40), mode=VThermHvacMode_COOL)
     control = smartpi.get_published_diagnostics()["analysis"]["control"]
     assert control["anticipation_horizon_s"] == 900.0
-    assert control["anticipation_horizon_source"] == "dead times"
+    assert control["anticipation_horizon_source"] == "dead time"
     assert control["anticipation_c"] == pytest.approx(smartpi.anticipation_c, abs=1e-4)
     assert control["anticipation_c"] < 0.0
 
 
 def test_horizon_is_published(clock: _Clock) -> None:
-    smartpi = _with_dead_times(_make(), cool=900.0, cool_ok=True)
+    smartpi = _with_dead_times(_make(), heat=450.0, heat_ok=True)
     _run(smartpi, clock, _rise(40))
     control = smartpi.get_published_diagnostics()["analysis"]["control"]
     assert control["anticipation_horizon_s"] == 450.0
-    assert control["anticipation_horizon_source"] == "dead times"
+    assert control["anticipation_horizon_source"] == "dead time"
     _with_model(smartpi, 600.0)
     control = smartpi.get_published_diagnostics()["analysis"]["control"]
     assert control["anticipation_horizon_s"] == 600.0
@@ -600,41 +600,35 @@ def _horizon(pulse_lag, mode=VThermHvacMode_HEAT, model=None, **kwargs):
 @pytest.mark.parametrize(
     "heat, heat_ok, cool, cool_ok, expected",
     [
-        (420.0, True, 1800.0, True, 900.0),  # half the cooling one is longer
-        (1200.0, True, 1800.0, True, 1200.0),  # the HEAT one is longer
-        (420.0, True, 1800.0, False, 420.0),  # only HEAT reliable
-        (420.0, False, 1800.0, True, 900.0),  # only cooling reliable
-        (420.0, False, 1800.0, False, 0.0),  # none reliable
+        (420.0, True, 1800.0, True, 420.0),  # the cooling slot is not read
+        (1200.0, True, 1800.0, True, 1200.0),
+        (420.0, False, 1800.0, True, 0.0),  # the HEAT one not reliable
         (0.0, True, None, True, 0.0),  # reliable but not positive
-        (420.0, True, 0.0, True, 420.0),  # a null cooling dead time does not count
         (-5.0, True, -5.0, True, 0.0),
     ],
 )
-def test_select_horizon_from_the_dead_times(heat, heat_ok, cool, cool_ok, expected) -> None:
+def test_select_horizon_from_the_dead_time_after_a_start(heat, heat_ok, cool, cool_ok, expected) -> None:
     for lag in (None, 0.0, -10.0):
         horizon = _horizon(lag, heat=heat, heat_ok=heat_ok, cool=cool, cool_ok=cool_ok)
         assert horizon.seconds == expected
-        assert horizon.source == ("dead times" if expected > 0.0 else "none")
+        assert horizon.source == ("dead time" if expected > 0.0 else "none")
 
 
 @pytest.mark.parametrize(
     "cool, cool_ok, heat, heat_ok, expected",
     [
-        (420.0, True, 1800.0, True, 900.0),  # half the passive (heating) one is longer
-        (1200.0, True, 1800.0, True, 1200.0),  # the active (cooling) one is longer
-        (420.0, True, 1800.0, False, 420.0),  # only the active one reliable
-        (420.0, False, 1800.0, True, 900.0),  # only the passive one reliable
-        (420.0, False, 1800.0, False, 0.0),  # none reliable
+        (420.0, True, 1800.0, True, 420.0),  # the heating slot is not read
+        (1200.0, True, 1800.0, True, 1200.0),
+        (420.0, False, 1800.0, True, 0.0),  # the cooling one not reliable
         (0.0, True, None, True, 0.0),  # reliable but not positive
-        (420.0, True, 0.0, True, 420.0),  # a null passive dead time does not count
         (-5.0, True, -5.0, True, 0.0),
     ],
 )
-def test_select_horizon_in_cool_from_the_dead_times(cool, cool_ok, heat, heat_ok, expected) -> None:
+def test_select_horizon_in_cool_from_the_dead_time_after_a_start(cool, cool_ok, heat, heat_ok, expected) -> None:
     for lag in (None, 0.0, -10.0):
         horizon = _horizon(lag, VThermHvacMode_COOL, heat=heat, heat_ok=heat_ok, cool=cool, cool_ok=cool_ok)
         assert horizon.seconds == expected
-        assert horizon.source == ("dead times" if expected > 0.0 else "none")
+        assert horizon.source == ("dead time" if expected > 0.0 else "none")
 
 
 @pytest.mark.parametrize("mode", [VThermHvacMode_HEAT, VThermHvacMode_COOL])
@@ -645,7 +639,7 @@ def test_select_horizon_order_model_then_pulse_lag_then_dead_times(mode) -> None
     horizon = _horizon(650.0, mode, None, heat=420.0, heat_ok=True, cool=420.0, cool_ok=True)
     assert (horizon.seconds, horizon.source) == (650.0, "measurement pulses")
     horizon = _horizon(None, mode, {"theta_s": 0.0, "tau_e_s": 0.0}, heat=420.0, heat_ok=True, cool=420.0, cool_ok=True)
-    assert (horizon.seconds, horizon.source) == (420.0, "dead times")   # a null emitter lag does not count
+    assert (horizon.seconds, horizon.source) == (420.0, "dead time")   # a null emitter lag does not count
 
 
 def test_select_horizon_reads_the_dead_times_only_when_nothing_before_decides() -> None:

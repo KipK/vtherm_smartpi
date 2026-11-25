@@ -2,7 +2,7 @@
 
 While the first model is not published and the PI drives the command (``learning_start`` "direct"), a pulse replaces
 the PI command for a short sequence that gives the learning what the hysteresis gave it: a dead time after a
-start, a heating rate and a dead time after a stop. A pulse has three steps:
+start and a measurement event (a step and the peak that follows the stop). A pulse has three steps:
 
 1. rest: no heating for ``PULSE_REST_MAX_S``, or until the room is ``PULSE_REST_UNDER_C`` on the demand side of the
    setpoint (under it in HEAT, over it in COOL) if that comes first;
@@ -13,9 +13,8 @@ start, a heating rate and a dead time after a stop. A pulse has three steps:
    or for ``PULSE_HEAT_MAX_S`` at most, or as soon as the room is ``PULSE_HEAT_OVER_C`` on the other side of the setpoint
    (over it in HEAT, under it in COOL); in the last two cases the pulse gives no measure of the dead time after a
    start, and the stop step still runs;
-3. stop until the dead-time estimator has confirmed the temperature peak that follows the stop (for a pulse of a
-   calibration: until the measurement event of the pulse is closed and the estimator no longer waits for the
-   response to the stop), or for ``PULSE_STOP_MAX_S`` at most; the PI takes over earlier when the room is
+3. stop until the measurement event of the pulse (smartpi/measure_event.py) is closed: its cut has been seen and its
+   peak search has ended, or for ``PULSE_STOP_MAX_S`` at most; the PI takes over earlier when the room is
    ``PULSE_TAKEOVER_C`` on the demand side of the setpoint and one step of the sensor lower than at the start of
    the stop, and in any case at the cap (``PULSE_TAKEOVER_CAP_C``, or the calibration's own cap).
 
@@ -159,14 +158,15 @@ class MeasurePulse:
     ) -> None:
         """Advance the pulse for this calculation (called once per calculation, before the command is chosen).
 
-        ``model_known``: the response model of the mode is published. ``readings_pending``: the readings of the events
+        ``model_known``: the response model of the mode is published. ``dt_est``: the dead-time estimator, whose
+        detection of the response to the start ends the heating step. ``readings_pending``: the readings of the events
         (smartpi/event_reading.py) have not kept values yet, so the pulses go on even when the model is known.
         ``calibration``: a calibration is in progress; its pulses
         start while ``calibration_pulses_left``. ``event_stage``: stage of the measurement event in progress
-        (``MeasureEventDetector.phase_stage``), which ends the stop step of a calibration pulse. ``limits``: the limits of
-        the calibration pulses (``smartpi.calibration.PulseLimits``), read while a calibration is in progress. ``history``:
-        the raw room temperature samples (smartpi/temperature_history.py), the ``tin_history`` of ``dt_est`` when not given."""
-        self._temps = getattr(dt_est, "tin_history", []) if history is None else history
+        (``MeasureEventDetector.phase_stage``), which ends the stop step. ``limits``: the limits of the calibration pulses
+        (``smartpi.calibration.PulseLimits``), read while a calibration is in progress. ``history``: the raw room
+        temperature samples (smartpi/temperature_history.py)."""
+        self._temps = () if history is None else history
         self._calls += 1
         sign = -1.0 if cooling else 1.0
         demand = sign * (target - temp)           # > 0: the room is on the demand side of the setpoint
@@ -222,10 +222,10 @@ class MeasurePulse:
             self._advance_heat(now, temp, cooling, dt_est, demand)
             if self._state == STATE_STOP:
                 # the PI takes over at once when the room is far under
-                self._advance_stop(now, temp, sign, demand, dt_est, event_stage)
+                self._advance_stop(now, temp, sign, demand, event_stage)
             return
         if self._state == STATE_STOP:
-            self._advance_stop(now, temp, sign, demand, dt_est, event_stage)
+            self._advance_stop(now, temp, sign, demand, event_stage)
 
     def _begin(
         self, now: float, mode: str, cooling: bool, temp: float, target: float, calibration: bool, limits: Any = None,
@@ -304,20 +304,14 @@ class MeasurePulse:
         cur["heat_s"] = now - cur["heat_start_s"]
         cur["stop_start_s"], cur["temp_stop"] = now, float(temp)
         cur["temp_peak"] = float(temp)
-        cur["_stop_call"] = self._calls
         self._state = STATE_STOP
 
-    def _advance_stop(
-        self, now: float, temp: float, sign: float, demand: float, dt_est: Any, event_stage: str | None,
-    ) -> None:
+    def _advance_stop(self, now: float, temp: float, sign: float, demand: float, event_stage: str | None) -> None:
         cur = self._cur
         cur["temp_peak"] = max(cur["temp_peak"], temp) if sign > 0 else min(cur["temp_peak"], temp)
-        if cur["calibration"]:
-            # The event of the pulse is closed once its cut has been seen and it is no longer at that stage.
-            cur["_cut_seen"] = cur.get("_cut_seen", False) or event_stage == "cut"
-            peak = cur["_cut_seen"] and event_stage != "cut" and not getattr(dt_est, "stop_response_pending", False)
-        else:
-            peak = self._calls > cur["_stop_call"] and bool(getattr(dt_est, "stop_peak_confirmed", False))
+        # The event of the pulse is closed once its cut has been seen and it is no longer at that stage.
+        cur["_cut_seen"] = cur.get("_cut_seen", False) or event_stage == "cut"
+        peak = cur["_cut_seen"] and event_stage != "cut"
         own = cur["_limits"]
         # the regulation takes over once the room is far enough under the setpoint and lower than at the start of
         # the stop (the peak has then had time to show), at the cap in any case

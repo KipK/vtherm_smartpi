@@ -251,13 +251,13 @@ def _governance():
 
 def _window_update(win, est, dt, gov, now, temp, u):
     dt.tin_history.append((now, temp))
+    win.temperatures.raw = dt.tin_history
     win.update(
         dt_min=1.0,
         current_temp=temp,
         ext_temp=T_EXT,
         u_active=u,
         estimator=est,
-        dt_est=dt,
         governance=gov,
         now=now,
         hvac_mode=VThermHvacMode_HEAT,

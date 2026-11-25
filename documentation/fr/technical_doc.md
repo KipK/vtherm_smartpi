@@ -71,11 +71,9 @@ La sortie injectée dans le calcul est `u_ff1 + u_pi`, puis elle passe par :
 
 En phase `HYSTERESIS`, l'apprentissage suit un ordre strict :
 
-1. le temps mort de la réponse active doit être fiable avant toute collecte
-   utile pour `a` (`heat` en HEAT, `cool` en COOL),
-2. le temps mort de la réponse passive doit être fiable avant toute collecte
-   utile pour `b` (`cool` en HEAT, `heat` en COOL),
-3. `b` doit progresser avant `a` via un soft gate : une fenêtre `a` soumise
+1. le modèle de réponse du mode (3.7) doit être publié avant toute fenêtre
+   `a` ou `b`,
+2. `b` doit progresser avant `a` via un soft gate : une fenêtre `a` soumise
    alors que `b` a moins de `AB_A_SOFT_GATE_MIN_B` mesures est conservée
    (`skip: a kept until b is learned`), recalculée à la publication de `b` (3.4),
    et publiée avec la collecte dès que `b` a ses mesures.
@@ -278,29 +276,30 @@ relative jusqu'à 0,40).
 
 ### 3.6 Estimation du temps mort
 
-`DeadTimeEstimator` implémente une FSM indépendante. Les canaux décrivent la
+`DeadTimeEstimator` implémente une FSM indépendante qui mesure le temps mort
+après un démarrage de puissance (OFF -> ON). Ses canaux décrivent la
 réponse physique de la pièce, pas le sens de la transition de puissance :
 
 - `deadtime_heat` : temps mort avant une montée de température,
 - `deadtime_cool` : temps mort avant une baisse de température.
 
-Ainsi, OFF -> ON apprend `heat` en mode HEAT mais `cool` en mode COOL.
-La transition ON -> OFF apprend la réponse passive opposée.
+Ainsi, OFF -> ON apprend `heat` en mode HEAT et `cool` en mode COOL ; l'autre
+canal reste vide (une valeur qu'une version antérieure y avait enregistrée, un temps mort après un arrêt, est ignorée au chargement). Une coupure de puissance n'arme rien : ce qui suit un arrêt est lu par le modèle de réponse (3.7).
 
 La détection suit la température intérieure filtrée, en régulation comme pendant le bootstrap et les impulsions de mesure : une mesure brute qui oscille d'un pas de capteur détecterait sinon une réponse dès l'échelon de puissance. Une détection en cours reprend après un redémarrage ponté (5.4) : son état, son début, son creux ou son pic, la tendance avant le démarrage, la dernière puissance et la dernière coupure de puissance sont persistés en temps mural, et son délai d'expiration continue de courir depuis le début sauvegardé. Après tout autre redémarrage, elle est abandonnée, et la durée minimale OFF doit être observée à nouveau dans la session en cours avant qu'une détection puisse être armée.
 
-Une réponse est détectée dès que la température s'est écartée de `0.05 °C` de son creux (chauffe) ou de son pic (refroidissement) depuis la transition de puissance. Le temps mort court de la transition au dernier instant à moins de `0.01 °C` de ce creux ou de ce pic, suivi pendant l'attente : il ne dépend donc pas de la rétention de l'historique de température. L'attente abandonne après `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s` pour une réponse active (puissance démarrée) et `DEADTIME_PASSIVE_TIMEOUT_S = 43200 s` pour une réponse passive (puissance coupée) : après une coupure, un émetteur qui stocke beaucoup de chaleur (plancher chauffant) continue de réchauffer la pièce, puis plafonne, et la baisse peut arriver plusieurs heures plus tard. Pendant le bootstrap, l'attente passive se termine par une détection ou par une reprise de chauffe, qui exige une baisse que la détection voit d'abord ; la limite ne fait que borner le délai au-delà duquel une baisse n'est plus attribuée à la coupure. Une transition de puissance abandonne une attente en cours. L'issue de la dernière attente de chaque réponse et l'âge de l'attente en cours sont publiés (`analysis.deadtime`).
+Une réponse est détectée dès que la température s'est écartée de `0.05 °C` de son creux (chauffe) ou de son pic (refroidissement) depuis la transition de puissance. Le temps mort court de la transition au dernier instant à moins de `0.01 °C` de ce creux ou de ce pic, suivi pendant l'attente : il ne dépend donc pas de la rétention de l'historique de température. L'attente abandonne après `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s`. Une coupure de puissance interrompt une attente en cours. L'issue de la dernière attente de chaque réponse et l'âge de l'attente en cours sont publiés (`analysis.deadtime`).
 
 La réponse à un démarrage de puissance est l'écart de la température par rapport à l'évolution qu'elle suivait avant le démarrage. Sans chauffe, la température d'une pièce reste stable ou baisse : le suivi du creux ci-dessus date alors la réponse. Une pièce qui se réchauffe déjà avec le chauffage éteint (occupants, soleil, pièce voisine) s'éloigne par elle-même du niveau de démarrage, et le suivi du creux daterait la réponse trop tôt (en COOL, il en va de même pour une pièce qui se refroidit déjà avant le début du refroidissement). Ainsi, à un démarrage actif (puissance activée), `deadtime_trend.prestart_trend()` ajuste une droite sur la température brute de la période OFF précédant le démarrage :
 
-- fenêtre : les `DEADTIME_PRESTART_WINDOW_S = 1800 s` précédant le démarrage, commençant au plus tôt à la dernière coupure de puissance augmentée du temps mort passif (l'émetteur agit encore sur la pièce avant ce délai) ;
+- fenêtre : les `DEADTIME_PRESTART_WINDOW_S = 1800 s` précédant le démarrage, commençant au plus tôt à la dernière coupure de puissance augmentée du retard de l'émetteur `θ + τ_e` du modèle de réponse du mode (l'émetteur agit encore sur la pièce avant ce délai), plus le temps mort après un démarrage sans modèle ;
 - avec moins de `DEADTIME_PRESTART_MIN_SPAN_S = 900 s` ou moins de `DEADTIME_PRESTART_MIN_SAMPLES = 4` échantillons, aucune tendance n'est retirée ;
 - une tendance dont la variation ajustée reste dans un pas de capteur (la plus petite variation observée dans la fenêtre, au moins `DEADTIME_PRESTART_STEP_FLOOR_C = 0.01 °C`), ou qui va à l'encontre de la réponse, n'est pas non plus retirée : la détection est le suivi du creux (ou du pic) ci-dessus, inchangé. C'est le cas habituel pendant le bootstrap, où la chauffe reprend parce que la pièce s'est refroidie ;
 - une tendance dans le sens de la réponse est ajustée sur toute la fenêtre et sur sa moitié récente (au moins `DEADTIME_PRESTART_MIN_HALF_SAMPLES = 3` échantillons par moitié). La détection est rejetée si la tendance n'est pas une droite : un résidu rms supérieur à la moitié du seuil de détection (et supérieur à un pas de capteur), ou une pente qui, de la première moitié à la seconde, croît dans le sens de la réponse de plus du seuil de détection par demi-fenêtre. Une droite sous-estimerait alors la tendance au démarrage ;
 - sinon, le détecteur suit la température moins la tendance extrapolée, avec la pente la plus forte des deux ajustements : en retirer trop ne fait que retarder la détection. Le creux, le seuil de `0.05 °C` et la rétrospection de `0.01 °C` s'appliquent à cette différence ;
 - au moment de la détection, la mesure est rejetée si la tendance seule couvre au moins le seuil de détection depuis le démarrage : la réponse n'est alors pas séparable de la tendance.
 
-Une mesure rejetée publie l'issue `rejected` et laisse les détections inchangées : le temps mort conserve sa valeur précédente. Une réponse passive (coupure de puissance) n'est pas concernée : la tendance précédant une coupure est celle de la chauffe elle-même.
+Une mesure rejetée publie l'issue `rejected` et laisse les détections inchangées : le temps mort conserve sa valeur précédente.
 
 Une mesure qui ferait baisser le temps mort publié est aussi ignorée (issue `ignored`, le temps mort garde sa valeur) lorsque la preuve est faible : la tendance avant le démarrage va nettement dans le sens de la réponse (variation ajustée d'au moins `DEADTIME_PRESTART_RISE_MIN_STEPS = 2` pas du capteur sur la fenêtre, même si elle a été retirée plutôt que rejetée), ou la fenêtre est trop courte pour évaluer une tendance. Une pièce qui se réchauffe avant le démarrage ne peut que faire paraître la réponse plus précoce : elle ne raccourcit donc jamais le temps mort. Une mesure égale ou plus longue que la valeur publiée suit les règles ci-dessus, de même que toute mesure avant la première valeur publiée.
 
@@ -396,7 +395,7 @@ l'estimateur de temps mort ait détecté la réponse, qu'elle se détache de tro
 pièce soit revenue à moins de `PULSE_HEAT_BACK_C = 0,1 °C` du côté de la demande de la consigne, cette
 dernière condition seulement tant que l'étape a duré moins de `PULSE_HEAT_EXTEND_MAX_S = 30 min` (au plus
 `PULSE_HEAT_MAX_S = 2 h`, ou dès que la pièce est à `PULSE_HEAT_OVER_C = 0,3 °C` de l'autre côté), puis
-s'arrête jusqu'à la confirmation du pic de température (au plus `PULSE_STOP_MAX_S = 4 h` ; le PI reprend la
+s'arrête jusqu'à la fermeture de l'événement de mesure de l'impulsion : coupure vue et recherche de pic terminée (au plus `PULSE_STOP_MAX_S = 4 h` ; le PI reprend la
 main lorsque la pièce est à `PULSE_TAKEOVER_C = 0,5 °C` du côté de la demande et plus basse d'un pas de la
 sonde qu'au début de l'arrêt, et dans tous les cas à `PULSE_TAKEOVER_CAP_C = 0,8 °C`). Une impulsion interrompue
 par un redémarrage, un arrêt, un changement de consigne ou de mode n'est pas reprise et
@@ -405,15 +404,6 @@ l'apprentissage n'a pas publié son propre modèle, elles en tiennent lieu : `pr
 gains à partir du `a` retenu et du temps mort actif après un démarrage (4.1 ; la règle IMC/SIMC d'une pièce lente, aucun gain
 au-dessus de sa valeur de repli), le retard de l'émetteur retenu est l'horizon de l'anticipation (source
 `measurement pulses`). Le terme intégral repart de zéro au calcul où l'étape d'apprentissage se termine.
-L'estimateur de temps mort lit le temps mort après un arrêt sur le pic de température, avec la
-recherche de pic des événements de mesure et une confirmation plus précoce : le pic est aussi confirmé à
-la fermeture d'une tranche postérieure à la meilleure dont la moyenne est inférieure à la meilleure d'au
-moins le plus grand de `STOP_PEAK_DROP_MIN_C = 0,05 °C`, `STOP_PEAK_DROP_STEPS = 2` pas de la sonde (la
-plus petite variation de la dernière heure, au moins 0,01 °C) et `STOP_PEAK_DROP_RISE_FRAC = 0,5` fois la
-montée entre la coupure et la meilleure tranche ; quand la chauffe reprend, la tranche en cours est fermée
-et soumise au même test, sinon l'arrêt ne donne pas de valeur. La règle des 1800 s est la confirmation la
-plus tardive. Seuls les arrêts qui suivent un cycle à pleine puissance
-alimentent la valeur publiée.
 
 **Calibration.** Sur demande (`force_smartpi_calibration`), une fois le premier modèle publié, une
 calibration (`calibration.py`) lance des impulsions de mesure quel que soit le démarrage, avec son propre
@@ -434,11 +424,11 @@ limites statiques sont figées au début de l'impulsion :
 | démarrage | demande dans [-`CALIBRATION_START_OVER_C` = -0,2 °C, `PULSE_START_UNDER_C` = 0,3 °C], commande précédente < 0,8, `clamp(2 H, 1 h, 6 h)` après la fin de l'impulsion précédente |
 | repos | se termine à `min(S + CALIBRATION_REST_EXTRA_S, 4 h)` (`CALIBRATION_REST_EXTRA_S` = 900 s de fenêtre libre + 300 s), ou quand `demande + s Le >= PULSE_REST_UNDER_C` = 0,5 °C |
 | chauffe | montée vue et (`demande <= PULSE_HEAT_BACK_C` = 0,1 °C ou étape >= `PULSE_HEAT_EXTEND_MAX_S` = 30 min), 0,3 °C au-dessus, ou `clamp(2 (Le + H), 2 h, 4 h)` |
-| arrêt | événement fermé et réponse à l'arrêt non attendue ; reprise à `demande >= 0,5 °C` une fois la pièce plus basse d'un pas du capteur qu'au début de l'arrêt, ou à `demande >= CALIBRATION_DEPTH_CAP_C` = 0,8 °C ; 4 h |
+| arrêt | événement fermé ; reprise à `demande >= 0,5 °C` une fois la pièce plus basse d'un pas du capteur qu'au début de l'arrêt, ou à `demande >= CALIBRATION_DEPTH_CAP_C` = 0,8 °C ; 4 h |
 
 Les impulsions de l'étape d'apprentissage gardent les constantes de `measure_pulse.py`. Une impulsion est
 appliquée comme une commande tout-ou-rien : engagée aussitôt, puis l'estimateur de temps mort est alimenté
-avec la puissance engagée, une fois par calcul ; ses mesures rejoignent la médiane des temps morts comme
+avec la puissance engagée, une fois par calcul ; ses mesures rejoignent la médiane des temps morts après un démarrage comme
 toute autre. La phase est `Calibration` tant qu'une impulsion de la calibration commande la sortie ; entre
 deux impulsions, la régulation fonctionne en phase stable. Les événements des impulsions de calibration
 (source `calibration`) sont lus comme les autres mais forment un ensemble à part, comparés entre eux
@@ -480,7 +470,7 @@ calibration se termine au calcul où l'impulsion se termine, avant que le PI cal
 s'appliquent à ce calcul. La fin est aussi vérifiée sur un calcul coupé par la garde
 (`LearningStart.follow_calibration`). Pendant une calibration (de la demande à la fin), `ABEstimator.learn`
 ne prend aucune mesure de `a` : une fenêtre avec `u > U_ON_MIN` est écartée (`skip: calibration in
-progress`) ; les fenêtres de `b`, les temps morts, les événements de mesure et les échelons de puissance continuent.
+progress`) ; les fenêtres de `b`, le temps mort, les événements de mesure et les échelons de puissance continuent.
 Après chaque impulsion de calibration (`LearningStart.recovering`), l'intégrale est figée (`I:HOLD`, source
 `calibration_recovery`) jusqu'à ce que la pièce atteigne la consigne ; les impulsions de l'étape
 d'apprentissage ne la figent pas. Un arrêt du thermostat termine l'impulsion en cours, qui compte, et la calibration continue ; un changement de
@@ -879,7 +869,7 @@ L'horizon $H$ est le temps entre une commande et son effet sur la pièce. Il se 
 
 - le retard de l'émetteur $\theta + \tau_e$ du modèle de réponse du mode (3.7, Modèle de réponse) lorsqu'il est publié, source `response model` ; avec `dead time assumed`, c'est le retard de l'émetteur $S$ lui-même, l'extrémité prudente de $\theta \in [0, S]$ ;
 - sinon le retard de l'émetteur retenu des lectures des impulsions de mesure du démarrage direct dans le mode, lorsqu'il est positif, source `measurement pulses` ;
-- sinon le plus long entre le temps mort actif du mode (le temps mort de chauffe en HEAT, le temps mort de refroidissement en COOL) et la moitié de son temps mort passif (le temps mort de refroidissement en HEAT, le temps mort de chauffe en COOL), chacun compté seulement lorsqu'il est fiable et positif, source `dead times` ;
+- sinon le temps mort après un démarrage du mode (le temps mort de chauffe en HEAT, le temps mort de refroidissement en COOL) lorsqu'il est fiable et positif, source `dead time` ;
 - sinon 0 : pas d'anticipation, source `none`.
 
 `analysis.control` publie `anticipation_c` (la correction appliquée au dernier tick), `anticipation_horizon_s` et `anticipation_horizon_source`. `temperature.anticipated` publie la température anticipée (température mesurée plus correction), dans `live` et dans `history`.

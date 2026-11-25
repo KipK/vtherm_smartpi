@@ -218,8 +218,8 @@ def test_active_cool_response_is_measured_against_a_falling_trend() -> None:
     assert abs(est.deadtime_cool_s - flat.deadtime_cool_s) <= 2 * TICK_S
 
 
-def test_passive_response_is_not_detrended() -> None:
-    """A power cut keeps the peak tracking: the trend is that of the heating."""
+def test_a_power_cut_arms_no_detection() -> None:
+    """A power cut is not a response the estimator reads: nothing is armed nor detrended."""
     est = DeadTimeEstimator()
     now = START_TS
     for _ in range(30):
@@ -227,17 +227,23 @@ def test_passive_response_is_not_detrended() -> None:
         now += TICK_S
     est.update(now, 20.5, 0.0)
 
-    assert est.state == "WAITING_COOL_RESPONSE"
+    assert est.state == "OFF"
     assert est._trend_slope == 0.0
 
 
-def test_trend_window_starts_after_the_passive_delay() -> None:
-    """Right after a stop the emitter still acts: those samples are left out."""
-    est = DeadTimeEstimator()
+def test_trend_window_starts_one_emitter_lag_after_the_stop() -> None:
+    """Right after a stop the emitter still acts: those samples are left out (the emitter lag of the response model,
+    the dead time after a start without a model)."""
+    lag = {"value": None}
+    est = DeadTimeEstimator(emitter_lag=lambda _mode: lag["value"])
     est.last_stop_time = 1000.0
     assert est._free_running_since(VThermHvacMode_HEAT) == 1000.0
-    est._add_sample_cool(600.0)
-    assert est._free_running_since(VThermHvacMode_HEAT) == 1600.0
+    est._add_sample_cool(600.0)        # the slot of the falling response is not read in HEAT
+    assert est._free_running_since(VThermHvacMode_HEAT) == 1000.0
+    est._add_sample_heat(300.0)
+    assert est._free_running_since(VThermHvacMode_HEAT) == 1300.0
+    lag["value"] = 900.0
+    assert est._free_running_since(VThermHvacMode_HEAT) == 1900.0
     est.last_stop_time = None
     assert est._free_running_since(VThermHvacMode_HEAT) is None
 

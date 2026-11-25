@@ -77,7 +77,6 @@ def test_sliding_start_a_cumulative_timeout():
             ext_temp=ext_temp,
             u_active=1.0,
             estimator=est,
-            dt_est=dt_est,
             governance=gov,
             now=now,
         )
@@ -122,7 +121,6 @@ def test_sliding_start_b_cumulative_timeout():
             ext_temp=ext_temp,
             u_active=0.0,
             estimator=est,
-            dt_est=dt_est,
             governance=gov,
             now=now,
         )
@@ -157,7 +155,6 @@ def test_sliding_elapsed_resets_on_new_window():
             ext_temp=10.0,
             u_active=1.0,
             estimator=est,
-            dt_est=dt_est,
             governance=gov,
             now=base_now + i * dt_s,
         )

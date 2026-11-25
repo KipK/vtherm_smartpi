@@ -29,7 +29,7 @@ def _setpoint(t_wall: float) -> float:
 
 
 def seed_stable(algo: SmartPI) -> None:
-    """Stable model with reliable bootstrap dead times."""
+    """Stable model with a reliable bootstrap dead time after a start."""
     est = algo.est
     for _ in range(40):
         est.a_meas_hist.append(A_TRUE * 60.0)
@@ -44,8 +44,6 @@ def seed_stable(algo: SmartPI) -> None:
         est._b_hat_hist.append(b_min * (1.0 + 0.01 * (i - 5)))
     algo.dt_est.deadtime_heat_s = 480.0
     algo.dt_est.deadtime_heat_reliable = True
-    algo.dt_est.deadtime_cool_s = 900.0
-    algo.dt_est.deadtime_cool_reliable = True
     # the response model a state saved with these dead times is seeded with (effective dead time 480 s)
     algo._start.model.seed(str(VThermHvacMode_HEAT), 320.0, 320.0)
     algo._output_initialized = True

@@ -211,7 +211,7 @@ def test_state_of_the_fixed_hour_selection_keeps_only_raw_data() -> None:
 
 def _tick(m: TarLearningManager, t: float, sp: float, temp: float = 16.5) -> None:
     m.observe(t, hvac_mode=VThermHvacMode_HEAT, temp=temp, ext=2.0, setpoint=sp, phase="Stable", b=0.002,
-              dtc=900.0, dtc_reliable=True, lag=300.0, cycle_min=10.0)
+              lag=300.0, cycle_min=10.0)
 
 
 def test_comfort_step_detection() -> None:

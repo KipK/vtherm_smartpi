@@ -1,6 +1,7 @@
 """Steps of the measurement pulses that the pulses of the learning stage and those of a calibration share: the heating
 step lasts until the room is back near the setpoint (for 30 minutes at most once the rise is seen), the regulation takes over a stop only once the room is deeper (or
-at the cap). The sequences are driven by room temperatures, the dead-time estimator is a stand-in."""
+at the cap), the stop ends on the close of the measurement event of the pulse. The sequences are driven by room
+temperatures and the stage of the event, the dead-time estimator is a stand-in."""
 
 from types import SimpleNamespace
 
@@ -31,8 +32,6 @@ class _Est:
         self.cool_start_time = None
         self.state = "WAITING_COOL_RESPONSE" if cooling else "WAITING_HEAT_RESPONSE"
         self.last_outcome: dict = {}
-        self.stop_response_pending = False
-        self.stop_peak_confirmed = False
 
     def arm(self, now: float) -> None:
         if self.cooling:
@@ -50,6 +49,7 @@ class _Rig:
     def __init__(self, kind: str, mode, sign: float) -> None:
         self.kind, self.mode, self.sign = kind, mode, sign
         self.est = _Est(sign < 0)
+        self.event_stage = None   # stage of the measurement event of the pulse
         self.pulse = MeasurePulse()
         self.heat_max = PULSE_HEAT_MAX_S if kind == "learning" else 7200.0
         self.limits = PulseLimits(
@@ -67,7 +67,7 @@ class _Rig:
         self.pulse.update(
             self.now, TARGET, self.temp(demand), self.mode, cooling=self.sign < 0, heat_or_cool=True,
             learning_stage=not calibration, model_known=False,
-            dt_est=self.est, calibration=calibration, calibration_pulses_left=calibration,
+            dt_est=self.est, calibration=calibration, calibration_pulses_left=calibration, event_stage=self.event_stage,
             limits=self.limits if calibration else None,
         )
 
@@ -165,12 +165,18 @@ def test_a_stop_that_starts_far_under_waits_for_a_lower_room_or_the_cap(kind, mo
     assert not capped.pulse.active and capped.pulse.history[-1]["end_reason"] == "room under the setpoint"
 
 
-def test_the_stop_of_a_learning_pulse_ends_on_the_confirmed_peak_before_any_takeover():
-    rig = _Rig("learning", VThermHvacMode_HEAT, 1.0)
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize(("mode", "sign"), SIDES)
+def test_the_stop_ends_on_the_close_of_the_event_before_any_takeover(kind, mode, sign):
+    rig = _Rig(kind, mode, sign)
+    rig.event_stage = "heating"
     rig.to_stop_after_rise()
-    rig.step(60.0, 0.15)                   # the peak is not confirmed yet
-    assert rig.pulse.state == "stop"
-    rig.est.stop_peak_confirmed = True
+    rig.step(60.0, 0.1)
+    assert rig.pulse.state == "stop"       # the event has not seen the cut yet
+    rig.event_stage = "cut"
+    rig.step(60.0, 0.15)
+    assert rig.pulse.state == "stop"       # its peak is searched
+    rig.event_stage = None
     rig.step(1800.0, 0.2)
     assert not rig.pulse.active and rig.pulse.history[-1]["end_reason"] == "peak"
 

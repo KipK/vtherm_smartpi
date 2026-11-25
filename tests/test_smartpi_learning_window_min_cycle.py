@@ -41,13 +41,13 @@ def _run(minutes: int, min_active_window_min: float):
         now = 1000.0 + 60.0 * k
         temp = round(19.0 + 0.03 * k, 2)  # 1.8 C/h: robust within a few minutes
         dt.tin_history.append((now, temp))
+        win.temperatures.raw = dt.tin_history
         win.update(
             dt_min=1.0,
             current_temp=temp,
             ext_temp=5.0,
             u_active=1.0,
             estimator=est,
-            dt_est=dt,
             governance=gov,
             now=now,
             hvac_mode=VThermHvacMode_HEAT,
