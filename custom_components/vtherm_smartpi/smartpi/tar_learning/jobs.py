@@ -12,10 +12,10 @@ from typing import Any
 import numpy as np
 
 from . import gates, identification, morning, room_mass
-from .const import ID_DT, ID_WALL_WARMUP_S, TAR_GAIN_DEADTIME_FACTOR
+from .const import ID_DT, ID_WALL_WARMUP_S
 
-# First moment of a first-order emitter / its apparent dead time (inverse of the gain rule factor)
-TAR_BOOTSTRAP_MOMENT_FACTOR = 1.0 / TAR_GAIN_DEADTIME_FACTOR
+# First moment of a first-order emitter / its apparent dead time
+TAR_BOOTSTRAP_MOMENT_FACTOR = 2.0
 from .signals import Anchors, ExtTL
 
 
@@ -67,8 +67,8 @@ def delay_floor(te_pub: dict | None, fast_s: float | None, bootstrap_s: float | 
                 bound_s: float | None = None) -> float | None:
     """Shortest first moment of the emitter known before a step: the largest of the refined value in force,
     the published fast value, the lower bound in force and twice the bootstrap dead time. The bootstrap
-    measures an apparent dead time; the first moment of a first-order emitter is about twice that (the
-    factor the gain rule undoes, TAR_GAIN_DEADTIME_FACTOR). None without any of them."""
+    measures an apparent dead time; the first moment of a first-order emitter is about twice that. None without
+    any of them."""
     vals = [te_pub["value"] if te_pub else None, fast_s, bound_s,
             None if bootstrap_s is None else TAR_BOOTSTRAP_MOMENT_FACTOR * bootstrap_s]
     vals = [float(v) for v in vals if v is not None and v > 0.0]

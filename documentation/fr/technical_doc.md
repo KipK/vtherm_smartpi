@@ -402,7 +402,7 @@ sonde qu'au début de l'arrêt, et dans tous les cas à `PULSE_TAKEOVER_CAP_C = 
 par un redémarrage, un arrêt, un changement de consigne ou de mode n'est pas reprise et
 compte. Les lectures des événements que provoquent les impulsions donnent les valeurs retenues. Tant que
 l'apprentissage n'a pas publié son propre modèle, elles en tiennent lieu : `pre_model_gains` donne les
-gains à partir du `a` retenu et du temps mort actif (la règle IMC/SIMC d'une pièce lente, aucun gain
+gains à partir du `a` retenu et du temps mort actif après un démarrage (4.1 ; la règle IMC/SIMC d'une pièce lente, aucun gain
 au-dessus de sa valeur de repli), le retard de l'émetteur retenu est l'horizon de l'anticipation (source
 `measurement pulses`). Le terme intégral repart de zéro au calcul où l'étape d'apprentissage se termine.
 L'estimateur de temps mort lit le temps mort après un arrêt sur le pic de température, avec la
@@ -508,8 +508,8 @@ l'horizon d'anticipation (retard de l'émetteur $\theta + \tau_e$, 4.3), la band
 chauffage (temps mort effectif au-dessus de la consigne, retard de l'émetteur au-dessous,
 4.4), les limites des impulsions de calibration (ci-dessus) et les impulsions de mesure du
 démarrage direct, voulues tant que le modèle du mode n'est pas publié ou que les lectures
-ne retiennent pas de valeurs. Les gains et les maintiens de l'intégrale ne le lisent pas
-encore. Il est publié à côté des temps morts et des retards ci-dessus.
+ne retiennent pas de valeurs. Les maintiens de l'intégrale (4.3) lisent son temps mort
+effectif ; les gains (4.1) gardent le temps mort actif après un démarrage. Il est publié à côté des temps morts et des retards ci-dessus.
 
 Un second lecteur (`ModelReader`, `event_reading.py`) lit les événements de mesure avec
 les mêmes fenêtres que le lecteur ci-dessus (avance de 1800 s, première fin à la clôture
@@ -549,7 +549,7 @@ $n = \max(W/S, 1)$, $W$ étant la fenêtre après le début de la chauffe. Les c
 le coût est au plus le minimum multiplié par $1 + 3.84 / n$ donnent les plages de $\theta$
 et de $S$ ; l'ajustement distingue $\theta$ lorsque la plage de $\theta$ est au plus
 $\max(300\,s, 0.5\,S)$. Un ajustement est rejeté avec moins de 8 franchissements, une
-hausse de moins de 3 pas de sonde, aucune chauffe vue ($a = 0$), $\theta$ ou $\tau_e$ sur
+hausse de moins de 3 pas de sonde et de moins de 0.10 °C (avec une sonde à 0.1 °C la règle des pas donne 0.3 °C), aucune chauffe vue ($a = 0$), $\theta$ ou $\tau_e$ sur
 sa borne haute (5400 s, 4 h), ou une racine de la moyenne des carrés des résidus de plus de
 2 pas de sonde (0.01 °C au moins) : `fit too far from the room temperature`. Un ajustement
 dont $\tau_e$ est sur sa borne basse (60 s, un émetteur rapide dont la vraie valeur peut
@@ -571,9 +571,8 @@ $\min(\tau_e, 1800\,s)$ avant la coupure, lorsque $s_{cut} \ge \ell$ et que le p
 moins 600 s après $\theta$ ; les échantillons sont publiés seulement.
 
 Lorsque la séparation est incertaine (`dead time assumed`), chaque utilisateur du modèle
-prend pour son propre usage l'extrémité prudente de $\theta \in [0, S]$ : les gains lisent
-le temps mort effectif $3S/4$ (plus la demi-période d'échantillonnage $h/2$ là où les gains
-en tiennent compte), la bande proche au-dessus de la consigne et les impulsions de
+prend pour son propre usage l'extrémité prudente de $\theta \in [0, S]$ : les maintiens de
+l'intégrale lisent le temps mort effectif $3S/4$, la bande proche au-dessus de la consigne et les impulsions de
 calibration lisent aussi $3S/4$, et l'horizon d'anticipation et la bande proche au-dessous de
 la consigne lisent $S$. Les fenêtres de l'apprentissage attendent $S$ quelle que soit la
 répartition.
@@ -624,9 +623,10 @@ Les évaluations portent leur instant de décision (fin de leur dernier épisode
 
 `GainScheduler.calculate()` applique la logique suivante :
 
-1. si `tau`, le signe de `a` ou le temps mort actif ne sont pas fiables,
+1. si `tau` ou le signe de `a` ne sont pas fiables, ou qu'aucun retard $L$ n'est connu,
    repli sur `KP_SAFE = 0.55` et `KI_SAFE = 0.010`,
-2. sinon calcul IMC/SIMC avec la magnitude du gain actif :
+2. sinon calcul IMC/SIMC avec la magnitude du gain actif, avec
+   $\lambda = \max(3L, 2\,cycle, 5\,min)$ ($4L$ en mode vanne) :
 
 $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
@@ -654,19 +654,17 @@ pendant les maintiens.
 atténués (IMC/SIMC ou gains de sécurité). Elle n'avance que tant que les gains
 ne sont pas gelés et n'est pas avancée par l'atténuation en bande proche.
 
-Le temps mort actif est `deadtime_heat` en HEAT et `deadtime_cool` en COOL.
+Le retard $L$ de la règle (`gains.start_dead_time`) est le temps mort actif fiable après
+un démarrage du mode (`deadtime_heat` en HEAT, `deadtime_cool` en COOL), tel quel, source
+`dead time` ; sans lui, gains de sécurité. Le modèle de réponse (3.7) n'entre pas dans les
+gains : les maintiens de l'intégrale lisent son temps mort effectif $\theta + \tau_e/2$ (4.3).
+Le temps mort actif est une lecture à seuil de la première montée, plus courte que le temps
+mort effectif ; la règle et son facteur 3 sont calibrés sur lui.
 
-Avec l'apprentissage du retard de l'émetteur, le temps mort HEAT $L$ de la règle des gains provient de `tar_learning/policy.applied_value`. Le retard de l'émetteur appris $T$ est la valeur affinée lorsqu'elle est publiée, sinon la valeur rapide, relevée à la borne inférieure en vigueur (la médiane des 5 dernières bornes confirmées) lorsque celle-ci est plus grande. C'est un retard de l'émetteur (un premier moment), environ deux fois le temps mort apparent que mesure le bootstrap : la règle travaille donc avec $L_T = T/2$ (`TAR_GAIN_DEADTIME_FACTOR = 0.5`) face à la référence $L_b = \max(L_{b,0}, L_{boot})$, où $L_{b,0}$ est le premier temps mort de bootstrap fiable vu depuis le début de l'apprentissage (persisté, jamais abaissé) et $L_{boot}$ le courant :
-
-| Cas | $L$ des gains | Autres usages |
-|---|---|---|
-| pas de valeur apprise | $L_{boot}$ | $L_{boot}$ |
-| $L_T < L_b$ | $L_b$ | $L_{boot}$ |
-| $L_b \le L_T \le 2 L_b$ (`TAR_APPLY_LONG_FACTOR`) | $L_T$ | $T$ |
-| $L_T > 2 L_b$, valeur rapide et valeur de fenêtre concordent, $T$ non borne inférieure | $L_T$ | $T$ |
-| $L_T > 2 L_b$ sinon | $2 L_b$ | $L_{boot}$ |
-
-La valeur de fenêtre est la valeur affinée lorsqu'elle est publiée, sinon le `τe` de la dernière évaluation dont les deux fenêtres concordent (un diagnostic lorsque ses nuits ne sont pas régulées). Les deux concordent lorsque $|\ln(T_{fast}/T_{window})| \le \ln 1.25$ (`TAR_AGREE_TOL`). Un $L$ trop court laisse la plage de robustesse recommandée de la boucle, et un $L$ beaucoup trop court rend un émetteur lent instable ; un $L$ trop long coûte de l'erreur intégrée, jamais de la stabilité. Une valeur apprise seule ne raccourcit donc jamais $L$ en dessous de $L_b$, et seule une valeur confirmée par deux méthodes l'allonge au-delà de $2 L_b$. Le maintien de l'intégrale n'utilise $T$ que lorsque les gains utilisent $L_T$.
+Les gains d'avant modèle du démarrage direct (vitesse de chauffe retenue des impulsions,
+avant le premier modèle a/b) lisent le même $L$. `analysis.control` publie `gain_delay_s`,
+`gain_delay_source` et le temps en boucle fermée `gain_closed_loop_time_s` ($\lambda$).
+L'apprentissage du retard de l'émetteur (`tar_learning`) n'est pas lu par les gains.
 
 Important :
 
@@ -881,7 +879,7 @@ L'horizon $H$ est le temps entre une commande et son effet sur la pièce. Il se 
 
 - le retard de l'émetteur $\theta + \tau_e$ du modèle de réponse du mode (3.7, Modèle de réponse) lorsqu'il est publié, source `response model` ; avec `dead time assumed`, c'est le retard de l'émetteur $S$ lui-même, l'extrémité prudente de $\theta \in [0, S]$ ;
 - sinon le retard de l'émetteur retenu des lectures des impulsions de mesure du démarrage direct dans le mode, lorsqu'il est positif, source `measurement pulses` ;
-- sinon, avec la même source de temps mort que la règle des gains (`gain_dead_time`), le plus long entre le temps mort actif du mode (le temps mort de chauffe en HEAT, le temps mort de refroidissement en COOL) et la moitié de son temps mort passif (le temps mort de refroidissement en HEAT, le temps mort de chauffe en COOL), chacun compté seulement lorsqu'il est fiable et positif, source `dead times` ;
+- sinon le plus long entre le temps mort actif du mode (le temps mort de chauffe en HEAT, le temps mort de refroidissement en COOL) et la moitié de son temps mort passif (le temps mort de refroidissement en HEAT, le temps mort de chauffe en COOL), chacun compté seulement lorsqu'il est fiable et positif, source `dead times` ;
 - sinon 0 : pas d'anticipation, source `none`.
 
 `analysis.control` publie `anticipation_c` (la correction appliquée au dernier tick), `anticipation_horizon_s` et `anticipation_horizon_source`. `temperature.anticipated` publie la température anticipée (température mesurée plus correction), dans `live` et dans `history`.
@@ -896,22 +894,23 @@ Après un changement de consigne ou une reprise, l'intégrale suit l'erreur brut
 la coupure de surchauffe la limitent.
 
 Les reprises suivant détection d'ouverture et power shedding gèlent l'intégrale
-pendant le temps mort en chauffage :
+pendant le temps mort effectif du mode en chauffage : $\theta + \tau_e/2$ du modèle de
+réponse, sinon le temps mort actif fiable (`smartpi/resume_hold.py`) :
 
 - à la reprise, SmartPI arme un `I:HOLD` explicite (`window_resume` ou
   `power_shedding_resume`),
-- ce hold reste actif tant que la réaction de chauffe est encore dans la fenêtre exploitable de `deadtime_heat`,
+- ce hold reste actif tant que l'épisode de chauffe est plus jeune que ce temps mort effectif,
 - à la fin de cette fenêtre, l'intégrale reprend son fonctionnement normal,
 - une reprise dont l'erreur résiduelle signée est déjà sous le plancher
   d'erreur résiduelle termine le hold avant le début de la fenêtre de temps mort,
-- sans temps mort de chauffe fiable, aucun hold n'est appliqué.
+- sans temps mort effectif, aucun hold n'est appliqué.
 
-Cette séquence évite de faire apprendre à l'intégrale une dynamique de reprise encore dominée par le temps mort de chauffe.
+Cette séquence évite de faire apprendre à l'intégrale une dynamique de reprise encore dominée par le temps mort.
 
 La fin d'une période de chauffage indisponible (l'entité repasse à `off`, en
 chauffage ou en refroidissement) arme le même maintien (`heating_unavailable_resume`) ;
 l'épisode de chauffe ou de refroidissement en cours repart à cet instant, si bien que
-le maintien couvre le temps mort actif compté depuis lui. Contrairement à une reprise
+le maintien couvre le temps mort effectif compté depuis lui. Contrairement à une reprise
 de fenêtre, elle ne suspend pas l'apprentissage pendant `LEARNING_PAUSE_RESUME_MIN`.
 
 **Blocage de l'apprentissage** (`learning_block.py`). La pause de
@@ -955,12 +954,12 @@ Les protections complémentaires actuellement présentes sont :
 
 - `SmartPIGuards` (chauffage uniquement, hors bootstrap et impulsions d'une calibration) : `guard_cut` force la sortie à 0 lorsque la température mesurée dépasse `setpoint + near_band_above` pendant que le chauffage est actif, jusqu'à ce qu'elle redescende à ce seuil diminué du plus grand de `NEAR_BAND_HYSTERESIS_C = 0.05°C` et de `GUARD_CUT_RESET_STEPS = 1.5` pas de capteur observés (sans quoi une mesure qui oscille entre deux paliers autour du seuil relancerait la coupure, et le cycle, à chaque mesure). Pendant une coupure, la sortie reste à 0 (`I:OVERRIDE(guard_cut)`). Tant que le PI demande encore de la puissance, une intégrale positive suit les 0 % imposés par back-calculation, `d(Ki·I)/dt = −v/Ti` avec `v` la demande du PI et `Ti = Kp/Ki`, au plus un cycle par itération. Sa vitesse suit la demande, pas le dépassement : une intégrale qui porte plus que le besoin de chauffe redescend en quelques coupures, même quand la pièce dépasse à peine le seuil. Elle redescend jusqu'au point où elle seule maintiendrait la pièce au seuil de coupure diminué de `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`) ; en dessous, elle est conservée, de même que le besoin de chauffe qui reste après une baisse de consigne. Sans cela, un biais de l'intégrale restituait le même excès de puissance à chaque fin de coupure, et la pièce cyclait entre coupure et reprise. Le filtre de température, le détecteur de temps mort, la température publiée et l'apprentissage continuent de suivre la pièce. Le PI n'est pas calculé pendant une coupure : l'écart publié (`temperature.error`, `analysis.control.error_p`) est la consigne moins la température du calcul, l'anticipation publiée vaut `0` et `control.mode` vaut `heating cut above the setpoint` ; les termes d'écart internes et l'anticipation gardent leurs valeurs pour la fin de la coupure. La pièce refroidit alors sans chauffage, par exemple pendant toute la descente qui suit une baisse de consigne : c'est une fenêtre passive pour `b` et pour la ligne de base du retard de l'émetteur. La gouvernance y voit une commande nulle hors de toute bande, et les fenêtres `a` sont bloquées (`skip: guard cut`). L'apprentissage reste contigu à la fin de la coupure ; `guard_kick` relance le cycle lorsque, dans la near-band, la température descend sous `setpoint - near_band_below` alors que la commande est inférieure à 99 %. En refroidissement, aucune des deux gardes n'agit et la near-band n'est pas calculée automatiquement. Pendant le bootstrap, le chauffage fonctionne entre ses propres seuils d'hystérésis et une garde en cours est relâchée,
 - anti-windup à chaque tick sur la limite haute applicable (voir ci-dessous),
-- `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,
+- `I:HOLD` explicite pendant le temps mort effectif après une reprise pour `window_resume` et `power_shedding_resume` en chauffage,
 - `I:HOLD` avec source `vt_safety` pendant que le mode sécurité de Versatile Thermostat applique sa puissance par défaut à la place de la commande SmartPI,
 - `I:HOLD` avec source `deadband_hysteresis_shell` tant que l'état de deadband hystérétique est actif et que l'erreur est hors de la deadband centrale,
 - `I:HOLD` avec source `governance_sensor_invalid` tant qu'aucune température extérieure n'a été reçue (régime `DEGRADED`),
 - `I:HOLD` avec source `calibration_recovery` après chaque impulsion de calibration jusqu'à ce que la pièce atteigne la consigne,
-- `I:HOLD` avec source `heating_unavailable` tant que l'entité de chauffage indisponible est à `on` (`smartpi/learning_block.py`), puis le `I:HOLD` explicite `heating_unavailable_resume` sur le temps mort actif compté depuis son retour à `off` (l'épisode de chauffe ou de refroidissement repart à cet instant), par le maintien de reprise ci-dessus,
+- `I:HOLD` avec source `heating_unavailable` tant que l'entité de chauffage indisponible est à `on` (`smartpi/learning_block.py`), puis le `I:HOLD` explicite `heating_unavailable_resume` sur le temps mort effectif compté depuis son retour à `off` (l'épisode de chauffe ou de refroidissement repart à cet instant), par le maintien de reprise ci-dessus,
 - gel de P et I dans la deadband centrale.
 
 L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse. Il comporte deux parties :
@@ -995,7 +994,7 @@ Cette séparation évite de garder P et I gelés uniquement parce que l'hystér�
 | ---------------------- | -------------------------------------------------------- |
 | `const.py`             | constantes, enums, matrice de gouvernance                |
 | `ab_estimator.py`      | estimation de pente et `ABEstimator`                     |
-| `deadtime_estimator.py` | `DeadTimeEstimator`, débuts d’épisode actif et fenêtre de temps mort |
+| `deadtime_estimator.py` | `DeadTimeEstimator` et débuts d’épisode actif |
 | `ab_aggregator.py`     | agrégation médiane ou médiane pondérée des mesures `a/b` |
 | `ab_drift.py`          | détection et recentrage de dérive persistante sur `a/b`, avec une séquence de candidats par canal |
 | `learning_window.py`   | gestion des fenêtres d'apprentissage et de leurs gardes  |
@@ -1018,7 +1017,7 @@ Cette séparation évite de garder P et I gelés uniquement parce que l'hystér�
 | `deadband.py`          | deadband et near-band                                    |
 | `setpoint.py`          | consigne de régulation et état du boost |
 | `anticipation.py`      | horizon et correction de l'anticipation de la température mesurée (chauffage et refroidissement) |
-| `resume_hold.py`       | maintien I:HOLD pendant le temps mort après reprise de fenêtre, de délestage ou de chauffage indisponible, plancher d'erreur résiduelle |
+| `resume_hold.py`       | maintien I:HOLD pendant le temps mort effectif après un démarrage de chauffe (`control.in_deadtime_window`) et après reprise de fenêtre, de délestage ou de chauffage indisponible, plancher d'erreur résiduelle |
 | `feedforward.py`       | calcul de `u_ff1`, gain FF signé `b/a`, facteur de montée en charge et FF1 du modèle de pièce |
 | `room_model/feedforward.py` | source de puissance de maintien issue du modèle de pièce publié et du modèle statique du bilan énergétique en vigueur, transfert sans à-coup des variations discrètes de sa part statique, fondu de sa part des murs, gain statique pour la prédiction de freinage |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |

@@ -233,6 +233,7 @@ PROFILE_TAU_S = tuple(60.0 * 240.0 ** (k / 23.0) for k in range(24))    # 60 s .
 PROFILE_CHI2 = 3.84            # chi-square level (one parameter, 95 %) of the confidence region
 FIT_MIN_CROSSINGS = 8
 FIT_MIN_RISE_STEPS = 3.0       # smallest rise of the room, in sensor steps
+FIT_MIN_RISE_C = 0.10          # smallest rise of the room, in degrees: a rise of a few steps of a fine sensor fits nonsense
 FIT_MAX_RMS_STEPS = 2.0        # largest distance of the fit to the room temperature (rms), in sensor steps
 SPLIT_MIN_S = 300.0            # the dead time is told apart when its range is at most max(this, SPLIT_REL x S)
 SPLIT_REL = 0.5
@@ -323,7 +324,7 @@ def fit_response(
     the confidence region holds the cells whose cost is at most the minimum x (1 + ``PROFILE_CHI2`` / n), n = the
     window after the heating step divided by S (1 at least). ``t_heat`` is the heating step (the rise is counted
     from it). None when the window is too short to fit; a result with ``reject`` set (plain words) when it is not
-    usable: a rise under ``FIT_MIN_RISE_STEPS`` sensor steps, no heating, theta or tau_e at its upper bound, or an
+    usable: a rise under ``FIT_MIN_RISE_STEPS`` sensor steps or ``FIT_MIN_RISE_C``, no heating, theta or tau_e at its upper bound, or an
     rms over ``FIT_MAX_RMS_STEPS`` sensor steps (``SENSOR_STEP_FLOOR_C`` at least). ``tau_e_lower_limit`` marks a
     tau_e on the lower bound of the grid (a fast emitter: its true value may be shorter). With ``model`` (theta,
     tau_e of the model in force), ``prediction_rms_c`` is the rms of that model on the window, ``a``, ``b`` and the
@@ -382,7 +383,7 @@ def fit_response(
     s_range = [min(r[1] for r in region), max(r[1] for r in region)]
     rms = float(np.sqrt(ssr / len(tc)))
     reject = (
-        REJECT_RISE if rise < FIT_MIN_RISE_STEPS * step - 1e-9
+        REJECT_RISE if rise < max(FIT_MIN_RISE_STEPS * step, FIT_MIN_RISE_C) - 1e-9
         else REJECT_NO_HEAT if a <= 0.0
         else REJECT_DEAD_TIME if theta >= FIT_D_MAX_S - dt / 2
         else REJECT_TIME_CONSTANT if tau >= PROFILE_TAU_S[-1] / 1.02

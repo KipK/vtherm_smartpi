@@ -219,7 +219,7 @@ def test_a_disturbance_leaves_the_integral_free(clock):
     assert algo.ctl.last_integral_hold_source == "none"
 
 
-def test_heating_unavailable_holds_the_integral_then_for_the_dead_time_without_learning_pause(clock):
+def test_heating_unavailable_holds_the_integral_then_for_the_effective_dead_time_without_learning_pause(clock):
     algo = _learned()
     states = _with_entities(algo)
     room = _Room(algo, clock, temp=TARGET - 1.0)
@@ -238,9 +238,9 @@ def test_heating_unavailable_holds_the_integral_then_for_the_dead_time_without_l
     assert algo.ctl.integral_hold_mode == "heating_unavailable_resume"
     assert _published(algo)["temperature"]["integral_hold_source"] == "heating_unavailable_resume"
     assert algo.learn_win.learning_resume_ts is None or algo.learn_win.learning_resume_ts <= resumed_at
-    room.run(8)                                        # within the 600 s active dead time
+    room.run(4)                                        # within the 270 s effective dead time of the model
     assert algo.integral == held
-    room.run(4)
+    room.run(3)
     assert algo.ctl.integral_hold_mode == "none" and algo.integral != held
 
 

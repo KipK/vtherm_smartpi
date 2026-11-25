@@ -26,10 +26,12 @@ published: nothing is published before a first qualified balance, and the
 published value is checked again against the slope in force when it is
 published. A model published by an earlier version stays in force.
 
-Emitter: the first moment of the emitter response is the HEAT dead time in
-force (learned T_ar or bootstrap); its first-order part tau_e is the refined
-T_ar value when published (else the whole first moment), the delay L the rest.
-The identification refines that first moment within a bounded grid.
+Emitter: the HEAT response model (smartpi/response_model.py) when published,
+delay L = its dead time theta, first-order part its response time constant
+tau_e. Without it, the first moment of the emitter response is the HEAT dead
+time of the dead-time estimator; its first-order part tau_e is the refined T_ar
+value when published (else the whole first moment), the delay L the rest. The
+identification refines the first moment within a bounded grid.
 
 Restarts: the time of the last tick and of the save are kept with the state, so
 that a bridged restart (restart_bridge.py) holds the command applied at the
@@ -196,18 +198,25 @@ class RoomModelManager:
     # Inputs (called from the regulation, must stay cheap)
     # ------------------------------------------------------------------
     def observe(self, now: float, *, hvac_mode, temp: float | None, measure_id: Any, ext: float | None,
-                excluded: str | None, a_per_min: float | None, first_moment_s: float | None) -> None:
+                excluded: str | None, a_per_min: float | None, first_moment_s: float | None,
+                response: dict | None = None) -> None:
         """Record one regulation tick.
 
         excluded: why SmartPI is not in control of the heater, None when it is. An open window is
         followed with the measured air; power shedding is tracked with the heater off; any other
         reason pauses the observer.
-        first_moment_s: HEAT dead time in force, the first moment of the emitter response.
+        response: HEAT response model (``ResponseModel.values``: theta_s, tau_e_s), the emitter of the room
+        model (delay theta, first order tau_e); None without one.
+        first_moment_s: HEAT dead time of the dead-time estimator, the first moment of the emitter response
+        when there is no response model.
         """
         self._settle_restart()
         self._last_t = now
         self._a_per_min = a_per_min if a_per_min and a_per_min > 0.0 else None
-        self._emitter = self._emitter_split(first_moment_s)
+        self._emitter = (
+            self._emitter_split(first_moment_s) if response is None
+            else (float(response["tau_e_s"]), float(response["theta_s"]))
+        )
         key, meas_t = _measure_key(measure_id)
         heating = hvac_mode == VThermHvacMode_HEAT
         shedding = heating and excluded == RM_EXCLUDED_SHEDDING

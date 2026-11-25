@@ -47,8 +47,8 @@ def select_horizon(
     Without a model: ``pulse_lag_s`` (the lag kept from the readings of the measurement pulses in ``hvac_mode``, None
     when no values are kept in that mode) when positive, else the longer of the active dead time of the mode and half
     its passive dead time, each counted only when reliable and positive; 0 when none counts. ``dead_time_view``
-    returns the dead-time source of the gain rule (``active_deadtime`` and ``passive_deadtime`` by mode) and is called
-    only when nothing before decides.
+    returns the dead-time estimator (``active_deadtime`` and ``passive_deadtime`` by mode) and is called only when
+    nothing before decides.
     """
     if model is not None:
         lag = float(model["theta_s"]) + float(model["tau_e_s"])

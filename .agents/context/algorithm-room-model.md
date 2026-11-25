@@ -9,7 +9,7 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 
 | Subsystem | Code | Regulation reads it? |
 |---|---|---|
-| Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | Yes (HEAT, PWM only): gives the dead time in force used by gains, I-hold |
+| Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | No: its history, quiet periods and refined `tau_e` serve the room model |
 | Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the two learnings above and below |
 | Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1). Forecasts, forecast errors, `a`/`b_eq` display: no |
 | Response model (theta, tau_e) | `smartpi/response_model.py` | Yes: a/b learning (learning-stage gate, delivered power, settling waits, `smartpi/power_steps.py`), anticipation horizon, HEAT near band, calibration limits, direct-start pulses wanted; not the gains nor the holds |
@@ -81,9 +81,10 @@ the room model. Pure Python, no Home Assistant import. Times are epoch seconds, 
 ## 3. Emitter lag learning (`smartpi/tar_learning/`)
 
 Purpose: learn the HEAT emitter lag `T_ar` (first moment of the emitter response; about twice the apparent
-dead time the bootstrap measures) during normal regulation, and derive from it the dead time in force of the
-regulation (`applied_s`, `gains_s`: dead times, `applied_s` takes the learned emitter lag value when it is used,
-the gains read half of it, bounded). `bootstrap_s`, `reference_s` and `history.deadtime.applied_s` are dead times too.
+dead time the bootstrap measures) during normal regulation. The regulation does not read it (gains and holds
+read the response model, `algorithm-core.md` section 3); the room model reads its history, quiet periods and
+refined `tau_e`. `bootstrap_s` (a dead time) is the last reliable bootstrap HEAT value, kept by
+`TarLearningManager.note_bootstrap` (fed by `observe(dth=...)` and the diagnostics); twice it floors the morning fits.
 
 Inputs recorded each tick (`history.py::TarHistory.record`, `applied_cycle`): indoor/outdoor temperature,
 setpoint, SmartPI phase, published `b`, reliable cool dead time, emitter lag on constant-power phases, heater edges (PWM cycles
@@ -115,46 +116,32 @@ Gates (`gates.py`, `const.py`):
 Policy (`policy.py`):
 - Fast value: >= `PUB_MIN_ACCEPTED = 3` accepted and confirmed mornings, median of last `PUB_LAST = 5`,
   MAD/median <= `PUB_MAD_REL = 0.25`.
-- Lower bound: median of last 5 confirmed cut steps; never enters the fast value, never confirmed by a second method.
-- In force: refined value if published, else fast value; raised to the lower bound when that is larger.
-- Applied (`policy.py::applied_value`): effective dead time of the gains `L_T = TAR_GAIN_DEADTIME_FACTOR (0.5) x learned emitter lag`
-  versus reference `L_b` (larger of the first reliable bootstrap HEAT dead time seen since the learning started,
-  frozen and stored in `reference_heat_s`, and the current one):
-  - `L_T < L_b`: gains keep `L_b` (limit `short`);
-  - `L_b <= L_T <= TAR_APPLY_LONG_FACTOR (2.0) x L_b`: gains use `L_T`;
-  - above: `L_T` only if fast and window values agree within `TAR_AGREE_TOL = ln 1.25` and the learned source
-    is not a lower bound; else `2 x L_b` (limit `long`).
-- Without a reliable bootstrap dead time, or when inactive, the bootstrap value stays (`source = bootstrap`).
+- Lower bound: median of last 5 confirmed cut steps; never enters the fast value.
 
-What it influences (`algo.py::SmartPI.regulation_dead_time`, `gain_dead_time`): in HEAT only, a
-`RegulationDeadTime` view replaces the HEAT active dead time. Gains use `gains_s`; near band, I-hold
-and the room-model emitter first moment use `applied_s`. The bootstrap/calibration value is never modified;
-`a`/`b` learning keeps the bootstrap value.
 Observation only: `refined.last_evaluation.a` and `.b` ("information only, never applied"), `refined.k_per_s`,
 `refined.tau_w_h` (the room-model identification does not read them; room class is used inside tar morning
 fits), `night_room_class`, `pending_steps`, `history_h`, `fast.last_morning`.
 
 Persistence: own store (`state_store.py::SmartPITarStore`, key suffix `.tar_learning`), `STATE_VERSION = 3`
 (history, pending steps, catalogue, night entries, regulated decisions, windows, evaluations, confirmed values,
-bounds, publications, frozen reference, home position). v2 read whole; v1 keeps only history and pending rises
+bounds, publications, home position; a stored `reference_heat_s` of an earlier apply rule is ignored). v2 read whole; v1 keeps only history and pending rises
 (evidence recomputed); later versions ignored. Debounce `TAR_SAVE_DELAY_S = 1800`. Home position change forgets
 period evidence. `reset()` (learning reset service) clears everything.
 
 Published at `live.tar_learning` (built by `smartpi/diagnostics.py::_build_tar_learning` ->
 `TarLearningManager.diagnostics`). Translation of internal codes to plain text is `tar_learning/public.py`
-(room class, morning reasons, unconfirmed reasons, limit reasons); user-facing fields never carry internal codes.
+(room class, morning reasons, unconfirmed reasons); user-facing fields never carry internal codes.
 
 Silent / declining states and the field that says why:
 | Situation | Field |
 |---|---|
-| numpy/scipy missing | `status = dependencies_unavailable` (history dropped; bootstrap value used) |
+| numpy/scipy missing | `status = dependencies_unavailable` (history dropped) |
 | before thermostat start | `status = checking_dependencies` |
 | valve mode | `status = valve_mode_not_supported` |
 | no home position / no astral | `quiet_periods.reason` |
 | step gave no value | `fast.last_morning.reason` (plain wording), `accepted = false` |
 | accepted step not confirmed | `fast.last_status = unconfirmed`, `fast.last_unconfirmed_reason` |
 | refined value not handed over (nights not regulated) | `refined.last_evaluation.regulated_nights = false`; `refined.tau_e_s` stays null |
-| learned value not used as is | `out_of_bound = true`, `limit_reason` |
 | computation failed | `last_error` |
 | data currently excluded | `data_invalid_reason` |
 
@@ -171,7 +158,8 @@ fit, variable projection, residual checks, precision from the Jacobian), `gates.
 dead time L and first order `tau_e`), `public.py` (plain-wording translation), `manager.py` (orchestration, persistence).
 
 Inputs: regulation tick (indoor temperature with measurement identity, outdoor temperature, `a` online, emitter
-first moment = HEAT dead time in force), applied commands (`on_applied`), emitter lag history and quiet-period catalogue.
+= HEAT response model (delay theta, first order tau_e) when published, else the HEAT dead time of `dt_est` as first
+moment split by the refined T_ar `tau_e`), applied commands (`on_applied`), emitter lag history and quiet-period catalogue.
 Observer runs only while SmartPI is in control in heating; power shedding keeps it running with zero heat; open
 window pins the air to the measurement; other exclusions pause it. A downtime up to `RM_RESUME_MAX_S = 3 h` keeps
 the state; longer restarts it at wall equilibrium and it settles for `RM_SETTLE_S = 3 h`.
@@ -280,9 +268,9 @@ bridge only in HEAT (`RestartDecision.heat_bridged`).
 
 Resume hold (`smartpi/resume_hold.py::ResumeDeadtimeHold`): a different mechanism, not a restart feature.
 After a window or power-shedding resume (`ResumeHoldSource.WINDOW_RESUME`, `POWER_SHEDDING_RESUME`) it starts an
-integral hold (`start_integral_hold`) covering the active dead time of the resumed episode, so the integral does
-not accumulate while the emitter has not answered. It ends when the dead-time window ends, when no reliable
-active dead time exists, or immediately when the residual error is already within the recovery floor. Not
+integral hold (`start_integral_hold`) covering the effective dead time of the resumed episode (`hold_s`: the
+response model's theta + tau_e/2, else the reliable active dead time), so the integral does not accumulate while
+the emitter has not answered. It ends when that window ends, when no effective dead time exists, or immediately when the residual error is already within the recovery floor. Not
 persisted (cleared on reset). The hold
 source is reported as `control.integral_hold_source` / `integral_hold_mode`.
 

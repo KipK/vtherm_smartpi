@@ -20,8 +20,8 @@ def _effective_dead_time(model: Mapping[str, Any]) -> int | None:
 def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
     """Return the stable Recorder payload.
 
-    The feed-forward, room model, dead-time and effective dead time series are
-    always present, null when their block is missing or not computed yet.
+    The feed-forward, room model and effective dead time series are always
+    present, null when their block is missing or not computed yet.
     """
     control = live["control"]
     temperature = live["temperature"]
@@ -29,7 +29,6 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
     model = live["model"]
     feedforward = live.get("feedforward") or {}
     room = live.get("room_model") or {}
-    tar = live.get("tar_learning") or {}
     errors = room.get("forecast_error_c")
     return {
         "control": {
@@ -61,9 +60,6 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
             "b_eq": room.get("b_eq"),
             "forecast_error_1h_c": _horizon(errors, "1h"),
             "forecast_error_12h_c": _horizon(errors, "12h"),
-        },
-        "deadtime": {
-            "applied_s": tar.get("applied_s"),
         },
     }
 

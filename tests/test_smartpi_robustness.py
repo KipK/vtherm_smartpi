@@ -17,7 +17,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     KP_MIN,
     KP_SAFE,
 )
-from custom_components.vtherm_smartpi.smartpi.gains import GainScheduler
+from custom_components.vtherm_smartpi.smartpi.gains import GainScheduler, start_dead_time
 from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
@@ -46,16 +46,13 @@ def _calculate_gains(
     estimator = MagicMock()
     estimator.a = a
     dt_est = MagicMock()
-    dt_est.deadtime_heat_reliable = deadtime_reliable
-    dt_est.deadtime_heat_s = deadtime_s
-    dt_est.deadtime_cool_reliable = deadtime_reliable
-    dt_est.deadtime_cool_s = deadtime_s
+    dt_est.active_deadtime.return_value = (deadtime_s, deadtime_reliable)
 
     return scheduler.calculate(
         tau_reliable=tau_reliable,
         tau_min=tau_min,
         estimator=estimator,
-        dt_est=dt_est,
+        delay=start_dead_time(dt_est, hvac_mode),
         in_near_band=in_near_band,
         governance_decision=governance_decision,
         near_band_ratio=near_band_ratio,

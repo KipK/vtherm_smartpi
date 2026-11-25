@@ -7,8 +7,8 @@ Three causes block the learning, each on its own:
   auxiliary heater). The integral stays free: it is what compensates the disturbance;
 - the optional heating-unavailable entity (``heating unavailable``): the driven emitter does not produce (boiler off,
   hot-water priority, heat-pump defrost, tariff cut-off, circulator stopped), in HEAT and COOL alike. The integral is
-  held (``INTEGRAL_HOLD_SOURCE_HEATING_UNAVAILABLE``); back to off, the integral stays held for the active dead time
-  of the emitter through the resume hold (smartpi/resume_hold.py), counted from that instant.
+  held (``INTEGRAL_HOLD_SOURCE_HEATING_UNAVAILABLE``); back to off, the integral stays held for the effective dead
+  time of the emitter through the resume hold (smartpi/resume_hold.py), counted from that instant.
 
 An entity is a ``binary_sensor`` or an ``input_boolean``; only the state ``on`` counts as on: ``off``, ``unavailable``,
 ``unknown`` and an absent entity count as off. The states are read at the start of every calculation, the first one
@@ -138,7 +138,7 @@ class LearningBlock:
                      f"blocked ({self.reason})" if blocked else "resumed")
 
     def _heating_back(self, now: float) -> None:
-        """The emitter produces again: its active dead time counts from now, and the integral is held over it."""
+        """The emitter produces again: its effective dead time counts from now, and the integral is held over it."""
         owner = self._owner
         if owner._t_heat_episode_start is not None:
             owner._t_heat_episode_start = now

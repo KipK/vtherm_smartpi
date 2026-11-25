@@ -843,36 +843,6 @@ def _direction(response: str) -> float:
     return -1.0 if response == "cool" else 1.0
 
 
-def deadtime_window_active(
-    dt_est: DeadTimeEstimator,
-    t_heat_episode_start: float | None,
-    t_cool_episode_start: float | None,
-    now: float,
-) -> bool:
-    """Return True while an active episode is younger than its reliable dead time."""
-    # Check Heat Deadtime
-    if dt_est.deadtime_heat_reliable and t_heat_episode_start is not None and dt_est.deadtime_heat_s is not None:
-        dt_s = dt_est.deadtime_heat_s
-        t_start = t_heat_episode_start
-        # Robustness: ensure both are real numbers (not MagicMock)
-        if isinstance(dt_s, (int, float)) and isinstance(t_start, (int, float)):
-            elapsed = now - t_start
-            if elapsed < dt_s:
-                return True
-
-    # Check Cool Deadtime
-    if dt_est.deadtime_cool_reliable and t_cool_episode_start is not None and dt_est.deadtime_cool_s is not None:
-        dt_s = dt_est.deadtime_cool_s
-        t_start = t_cool_episode_start
-        # Robustness: ensure both are real numbers (not MagicMock)
-        if isinstance(dt_s, (int, float)) and isinstance(t_start, (int, float)):
-            elapsed = now - t_start
-            if elapsed < dt_s:
-                return True
-
-    return False
-
-
 def update_episode_starts(
     u_applied: float,
     hvac_mode: VThermHvacMode,

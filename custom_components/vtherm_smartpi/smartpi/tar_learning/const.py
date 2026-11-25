@@ -10,23 +10,6 @@ import math
 H = 3600.0
 DAY = 86400.0
 
-# ---------------------------------------------------------------------------
-# Applied value
-# ---------------------------------------------------------------------------
-# The gain rule expects an effective dead time. The learned value is the first
-# moment of the emitter response, twice the effective dead time of a first-order lag.
-TAR_GAIN_DEADTIME_FACTOR = 0.5
-# The rule that applies a learned value works in these units (gain units): the
-# learned effective dead time L_T = TAR_GAIN_DEADTIME_FACTOR x the learned value is
-# compared with the reference L_b, the larger of the bootstrap HEAT dead time
-# frozen at the start of the learning and the current one.
-# - L_T < L_b: the gains keep L_b (a learned value alone never shortens the dead time);
-# - L_b <= L_T <= TAR_APPLY_LONG_FACTOR x L_b: the gains use L_T;
-# - above: the gains use L_T only when the morning-step value and the window value
-#   agree within TAR_AGREE_TOL, else TAR_APPLY_LONG_FACTOR x L_b.
-TAR_APPLY_LONG_FACTOR = 2.0
-TAR_AGREE_TOL = math.log(1.25)
-
 # Comfort step cut by sunrise: the fit is an estimate only when its window holds
 # at least TAR_CUT_ESTIMATE_WINDOW_T x the largest of the fitted value and the
 # shortest delay known before the step. A shorter cut window that passes every
@@ -45,15 +28,6 @@ TAR_FAST_GATE = TAR_GATE_G1
 # right as the valve curve that converts the opening to heating power, and on a
 # slow emitter its use left the comfort rise short of the setpoint.
 TAR_VALVE_MODE_SUPPORTED = False
-
-SOURCE_BOOTSTRAP = "bootstrap"
-SOURCE_FAST = "fast"
-SOURCE_REFINED = "refined"
-SOURCE_LOWER_BOUND = "lower_bound"
-
-# Why a learned value is not used as it is (translated in public.py)
-LIMIT_SHORT = "short"
-LIMIT_LONG = "long"
 
 # ---------------------------------------------------------------------------
 # History and memory bounds

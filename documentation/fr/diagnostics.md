@@ -53,16 +53,15 @@ Le bloc `history` contient ces dix-neuf séries :
 | `power.ff_percent` | Contribution feed-forward |
 | `model.a` | Gain de chauffe appris |
 | `model.b` | Coefficient de déperdition appris |
-| `model.effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (`model.dead_time_s` plus la moitié de `model.response_time_constant_s`) ; la bande proche au-dessus de la consigne et les impulsions de calibration le lisent, les gains non |
+| `model.effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (`model.dead_time_s` plus la moitié de `model.response_time_constant_s`) ; les maintiens de l'intégrale, la bande proche au-dessus de la consigne et les impulsions de calibration le lisent |
 | `feedforward.source` | Source de la puissance de maintien en vigueur, comme dans `live.feedforward.source` |
 | `feedforward.wall_power_percent` | Part des murs du feed-forward appliquée, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` lorsqu'aucune part des murs n'est appliquée |
 | `room_model.a` | Réponse de chauffe du modèle de pièce, dans les unités de `model.a` ; `null` avant une publication |
 | `room_model.b_eq` | Déperdition statique du modèle de pièce, dans les unités de `model.b` ; `null` avant une publication |
 | `room_model.forecast_error_1h_c` | Racine de l'erreur quadratique moyenne des prévisions à 1 h sur les 7 derniers jours (°C) |
 | `room_model.forecast_error_12h_c` | Idem pour les prévisions à 12 h (°C) |
-| `deadtime.applied_s` | Temps mort de chauffe en vigueur pour la régulation, en secondes (le temps mort du bootstrap, ou la valeur dérivée du retard de l'émetteur appris) |
 
-Les séries feed-forward, modèle de pièce, temps mort et temps mort effectif sont
+Les séries feed-forward, modèle de pièce et temps mort effectif sont
 toujours présentes et valent `null` lorsque le bloc correspondant n'est pas calculé.
 La commande appliquée ne mesure pas la chaleur délivrée.
 
@@ -98,8 +97,8 @@ température du dernier calcul, `analysis.control.anticipation_c` vaut `0` et
 l'intégrale est figée après une impulsion de calibration, jusqu'à ce que la
 pièce atteigne la consigne. Il vaut `heating_unavailable` tant que l'entité de
 chauffage indisponible est à `on`, puis `heating_unavailable_resume` tant que
-l'intégrale reste figée pendant le temps mort de l'émetteur après son retour à
-`off`.
+l'intégrale reste figée pendant le temps mort effectif de l'émetteur après son
+retour à `off`.
 
 `learning.enabled` est le réglage du service `set_smartpi_learning`.
 `learning.block_reason` vaut `null` quand SmartPI apprend, sinon la raison pour
@@ -176,7 +175,10 @@ l'anticipation de la température, en chauffage et en refroidissement :
 | `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon, sans pente montante ou descendante, ou pendant une coupure de la garde) |
 | `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le temps entre une commande et son effet), `0` lorsqu'il n'y en a pas |
 | `anticipation_horizon_source` | Origine de l'horizon : `response model` (retard de l'émetteur du modèle de réponse du mode : temps mort plus constante de temps de réponse), et sans modèle `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` |
-| `effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (temps mort plus la moitié de la constante de temps de réponse), `null` sans modèle ; la bande proche au-dessus de la consigne et les impulsions de calibration le lisent |
+| `effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (temps mort plus la moitié de la constante de temps de réponse), `null` sans modèle ; les maintiens de l'intégrale, la bande proche au-dessus de la consigne et les impulsions de calibration le lisent |
+| `gain_delay_s` | Retard lu par la règle des gains, en secondes : le temps mort fiable de chauffe (HEAT) ou de refroidissement (COOL) après un démarrage, tel quel ; `null` sans lui (gains de sécurité) |
+| `gain_delay_source` | Origine de `gain_delay_s` : `dead time` ; `null` sans retard |
+| `gain_closed_loop_time_s` | Temps en boucle fermée de la règle des gains, en secondes : le plus grand entre 3 fois `gain_delay_s` (4 fois pour une vanne), 2 cycles et 5 minutes ; `null` sans retard |
 
 `analysis.deadtime` suit la détection du temps mort :
 
@@ -218,8 +220,9 @@ mort plus constante de temps de réponse), la bande proche en chauffage (le temp
 au-dessus de la consigne, le retard de l'émetteur au-dessous), les limites des impulsions de
 calibration et les impulsions de mesure du démarrage direct (elles continuent tant que le modèle
 du mode n'est pas publié). Avec `dead time assumed` ces valeurs sont les bornes prudentes :
-l'horizon est le retard de l'émetteur entier et le temps mort effectif ses trois quarts. Les gains
-et les maintiens de l'intégrale ne le lisent pas.
+l'horizon est le retard de l'émetteur entier et le temps mort effectif ses trois quarts. Les maintiens
+de l'intégrale après un démarrage ou une reprise durent le temps mort effectif ; les gains lisent le
+temps mort après un démarrage, pas ce modèle.
 
 | Chemin | Signification |
 |---|---|
@@ -240,19 +243,12 @@ et les maintiens de l'intégrale ne le lisent pas.
 
 ### Apprentissage du retard de l'émetteur
 
-`tar_learning` décrit l'apprentissage du retard de l'émetteur (voir [Apprentissage du retard de l'émetteur](./vtherm_smartpi.md#apprentissage-du-retard-de-lémetteur)) :
+`tar_learning` décrit l'apprentissage du retard de l'émetteur (voir [Apprentissage du retard de l'émetteur](./vtherm_smartpi.md#apprentissage-du-retard-de-lémetteur)) ; la régulation ne lit pas ses valeurs :
 
 | Champ | Signification |
 |---|---|
-| `status` | `active`, `checking_dependencies` (jusqu'au démarrage du thermostat), `dependencies_unavailable` (numpy/scipy ne peuvent pas être chargés : valeur du bootstrap utilisée) ou `valve_mode_not_supported` |
-| `applied_s` | Temps mort HEAT actif en vigueur pour la régulation (bande proche, maintien de l'intégrale), en secondes : le retard de l'émetteur appris lorsque les gains l'utilisent, sinon `bootstrap_s` |
-| `source` | Origine de `applied_s` et de `gains_s` : `bootstrap`, `fast`, `refined` ou `lower_bound` (une borne inférieure issue de montées de confort coupées par le lever) |
-| `gains_s` | Temps mort utilisé par les gains, en secondes : la moitié de `applied_s` pour un retard de l'émetteur appris ; sinon `reference_s` lorsqu'il est plus court, deux fois `reference_s` lorsqu'il est plus long et non confirmé, `bootstrap_s` sans retard de l'émetteur appris |
-| `bootstrap_s` | Temps mort de chauffe du bootstrap/calibration (`model.deadtime_heat_s`), jamais modifié |
-| `reference_s` | Référence des gains, en secondes : le plus grand entre le premier `bootstrap_s` mesuré depuis le début de l'apprentissage (conservé) et le `bootstrap_s` actuel ; `null` tant qu'aucune valeur du bootstrap n'est mesurée |
-| `in_force_s` / `in_force_source` | Retard de l'émetteur appris en vigueur (affinée, sinon rapide) et son origine, `null` avant toute publication |
-| `out_of_bound` | `true` lorsqu'un retard de l'émetteur appris existe et que les gains ne l'utilisent pas tel quel (voir `limit_reason`) |
-| `limit_reason` | Raison pour laquelle les gains n'utilisent pas le retard de l'émetteur appris tel quel (`learned delay shorter than the reference: the gains keep the reference dead time`, ou `learned delay above twice the reference and not confirmed by a second method: the gains use twice the reference dead time`), `null` sinon |
+| `status` | `active`, `checking_dependencies` (jusqu'au démarrage du thermostat), `dependencies_unavailable` (numpy/scipy ne peuvent pas être chargés : rien n'est appris) ou `valve_mode_not_supported` |
+| `bootstrap_s` | Temps mort de chauffe du bootstrap/calibration (`model.deadtime_heat_s`) ; son double est un plancher du retard de l'émetteur ajusté sur une montée de confort |
 | `fast.value_s` | Retard de l'émetteur rapide publié (montées de confort confirmées), `null` avant 3 montées confirmées |
 | `fast.confirmed_mornings` | Nombre de montées de confort acceptées et confirmées, une par période calme au plus |
 | `fast.lower_bound_s` | Borne inférieure du retard de l'émetteur en vigueur : médiane des 5 dernières montées de confort confirmées coupées par le lever trop tôt pour donner une valeur, `null` sans aucune |

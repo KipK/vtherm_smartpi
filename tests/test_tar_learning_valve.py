@@ -216,11 +216,10 @@ def test_smartpi_records_the_heat_equivalent_valve_power(valve_supported, curve:
     assert algo.get_published_diagnostics()["tar_learning"]["status"] == "active"
 
 
-def test_smartpi_in_valve_mode_keeps_the_bootstrap_dead_time() -> None:
+def test_smartpi_in_valve_mode_records_nothing() -> None:
     algo = _valve_algo(True)
     algo.tar_learning.fast_pub = {"value_s": 300.0, "day": 0}
     algo.observe_tar_learning(19.0, 18.5, 2.0, VThermHvacMode_HEAT)
     algo._commit_applied_command(0.15, VThermHvacMode_HEAT, cycle_start=True)
-    assert algo.regulation_dead_time(VThermHvacMode_HEAT) is algo.dt_est
     assert algo.tar_learning.history.is_empty()
     assert algo.get_published_diagnostics()["tar_learning"]["status"] == "valve_mode_not_supported"

@@ -45,10 +45,10 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 
 **Control core**
 - `controller.py`: `SmartPIController`: integral state, hysteresis output, PWM calculation, anti-windup (`track_output_limit`), bounded integral-power transfer.
-- `gains.py`: `GainScheduler`: Kp/Ki from the model (IMC rule), near-band adjustment.
+- `gains.py`: `GainScheduler`: Kp/Ki from the model (IMC rule), near-band adjustment; `start_dead_time`: delay of the gains (dead time after a start); `effective_dead_time`: delay of the holds (response model, else that dead time).
 - `governance.py`: `SmartPIGovernance`: regime (warm-up, stable, perturbed...) and whether learning/gains may adapt.
 - `guards.py`: `SmartPIGuards`: guard cut / guard kick safety actions.
-- `resume_hold.py`: `ResumeDeadtimeHold`: integral hold after window, shedding or heating-unavailable resume; `recovery_error_floor_c`.
+- `resume_hold.py`: `deadtime_window_active` (integral hold for the effective dead time after an episode start), `ResumeDeadtimeHold`: integral hold after window, shedding or heating-unavailable resume; `recovery_error_floor_c`.
 - `learning_block.py`: `LearningBlock` (`SmartPI.learning_block`): service pause and the disturbance / heating-unavailable entities block every learning; tests `test_smartpi_learning_block.py`.
 - `anticipation.py`: slope anticipation (`correction_c`, `select_horizon`, `anticipated_error`): the P and I errors read the measured temperature plus the expected travel over the horizon (the emitter lag of the response model), in HEAT and COOL.
 - `const.py`: algorithm constants, enums, `clamp`, governance matrix.
@@ -171,7 +171,7 @@ Rules for any user-visible change: update `documentation/en` and `documentation/
 
 `algo.py` and `handler.py` must not grow. New logic goes into a new or existing module under `smartpi/`; `algo.py` only wires it (construct, call, persist, publish), and `handler.py` only bridges VT. Extract before adding.
 
-Current sizes (lines): `algo.py` 2173, `handler.py` 760, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 21799. Largest `smartpi/` files: `ab_estimator.py` 1329, `learning_window.py` 1030, `deadtime_estimator.py` 909, `event_reading.py` 753.
+Current sizes (lines): `algo.py` 2152, `handler.py` 760, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 21606. Largest `smartpi/` files: `ab_estimator.py` 1329, `learning_window.py` 1030, `deadtime_estimator.py` 879, `event_reading.py` 753.
 
 ## 7. Names that do not exist (do not look for them)
 

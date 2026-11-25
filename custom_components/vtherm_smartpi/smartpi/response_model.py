@@ -40,7 +40,8 @@ The anticipation horizon reads the emitter lag theta + tau_e (smartpi/anticipati
 effective dead time above the setpoint and the emitter lag below it (smartpi/deadband.py); the calibration pulses size
 their limits from both (smartpi/calibration.py); the learning pulses of the direct start go on while the model of the
 mode is not published (smartpi/measure_pulse.py). When the split is assumed (theta = S / 2) those values are the
-cautious ends: emitter lag S, effective dead time 3 S / 4. The gains and the integral holds do not read this model.
+cautious ends: emitter lag S, effective dead time 3 S / 4. The integral holds read the effective dead time
+(smartpi/gains.py, smartpi/resume_hold.py); the gains keep the dead time after a start.
 Internal codes become plain words here.
 """
 from __future__ import annotations

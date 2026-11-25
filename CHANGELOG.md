@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Response model: a fit is rejected (`temperature rise too small`) when the rise of the room is under 0.10 °C, besides the floor of three sensor steps; on a 0.01 °C sensor a rise of a few steps fitted a wrong dead time and response time constant, and being in darkness replaced the good event in daylight.
+- Integral holds read the response model: the holds after a heater start, after a window or power-shedding resume and after a heating unavailable period last the effective dead time of the model of the mode (dead time plus half the response time constant; three quarters of the emitter lag when the dead time is assumed); without a published model they last the dead time as before. The gains, and the pre-model gains of the direct start, read the dead time after a start of the mode. The emitter lag learning no longer changes the gains or the holds: its diagnostics `tar_learning.applied_s`, `gains_s`, `source`, `reference_s`, `in_force_s`, `in_force_source`, `out_of_bound` and `limit_reason`, and the history series `deadtime.applied_s`, are removed. New diagnostics `analysis.control.gain_delay_s` (the dead time read by the gain rule), `gain_delay_source` (`dead time`) and `gain_closed_loop_time_s`. The room model takes its emitter from the heating response model when published.
 - Regulation reads the response model: the anticipation horizon is its emitter lag (dead time plus response time constant) in heating and in cooling, source `response model`; without a published model it falls back to the emitter lag kept from the direct start's measurement pulses, then to the dead times. The heating near band uses the model's effective dead time (dead time plus half the response time constant) above the setpoint and its emitter lag below it, instead of the heating and cooling dead times. When the model cannot tell the dead time apart, each of them takes the cautious end: the whole emitter lag for the horizon and the near band below the setpoint, three quarters of it as effective dead time. The calibration pulses rest the emitter lag plus 20 minutes, count the fall of the room over the effective dead time and heat at most twice the effective dead time plus the horizon. The measurement pulses of the direct start go on while the readings keep no values or the model of the mode is not published (instead of while a dead time is unknown).
 - Calibration: the emitter lag is corrected by the response model's own rule (two agreeing calibration events replace its history when they are more than 30 % off), in either start mode; the calibration's separate lag correction is removed and `calibration.corrected` no longer lists `emitter lag`. A saved corrected lag is ignored.
 - The heating balance is removed with its diagnostics `analysis.learning.heating_balance` (`state`, `measurements`, `a`, `lag_s`, `kept_lag_s`, `kept_lags`, `last_reason`, `last`). The measurement event detector it carried belongs to the learning window; a heating phase saved by an earlier version still resumes after a bridged restart. `analysis.control.anticipation_horizon_source` no longer takes `heating balance`; `analysis.control.near_band_source` takes `no response model` instead of `fallback_deadtime`.
@@ -109,10 +111,8 @@ All notable changes to this project will be documented in this file.
   removed: they only drove the trajectory.
 - Emitter delay learning (heating, PWM heaters, always on): SmartPI learns how
   long the heater takes to warm the room, from the morning comfort steps and
-  from a multi-day model of the room, and uses it for the gains. A learned
-  value never makes the gains more aggressive than the bootstrap dead time;
-  above twice that dead time it is used only when both methods agree. The
-  bootstrap value is kept. Shown in `tar_learning`.
+  from a multi-day model of the room, for the room model. Shown in
+  `tar_learning`.
 - Quiet periods: these learnings use only stretches without sun (computed from
   the home position set in Home Assistant), at a constant setpoint, with valid
   data. No hour is fixed and nothing has to be declared. Without a home

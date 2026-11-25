@@ -555,15 +555,6 @@ def test_horizon_follows_the_mode_of_the_last_calculation(clock: _Clock) -> None
     assert smartpi.anticipation_horizon_in_use_s == 1000.0  # active COOL (cooling) dead time
 
 
-def test_horizon_follows_the_dead_time_given_to_the_gain_rule() -> None:
-    """With the T_ar learning applying another HEAT dead time, the horizon is that one."""
-    from custom_components.vtherm_smartpi.smartpi.tar_learning.policy import RegulationDeadTime
-
-    smartpi = _with_dead_times(_make(), heat=420.0, heat_ok=True, cool=1000.0, cool_ok=True)
-    smartpi.gain_dead_time = lambda mode=None: RegulationDeadTime(smartpi.dt_est, 750.0)
-    assert smartpi.anticipation_horizon_in_use_s == 750.0
-
-
 def test_cool_horizon_and_correction_are_published(clock: _Clock) -> None:
     smartpi = _make_cool(horizon_s=900.0)
     _run(smartpi, clock, _fall(40), mode=VThermHvacMode_COOL)

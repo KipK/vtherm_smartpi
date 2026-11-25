@@ -43,12 +43,12 @@ The scheduler (VT) later reports the power really applied (receipt or cycle star
 
 ## 3. Gains (`smartpi/gains.py::GainScheduler`)
 
-- Needs a complete model: tau reliable, `a` of the right sign (|a| > 1e-6), active dead time reliable and > 1 s. Otherwise safe gains `KP_SAFE` 0.55 / `KI_SAFE` 0.010 (source `safe`).
-- Rule (IMC/SIMC): `L` = active dead time in min; `lambda = max(3*L (4*L in valve mode), 2*cycle_min, 5)`; `Kp = clamp(1/(|a|*(lambda+L)), KP_MIN 0.10, KP_MAX 5.0)`; `Ti = min(tau, 4*(lambda+L))` (`GAIN_TI_LAMBDA_FACTOR`); `Ki = clamp(Kp/Ti, KI_MIN 0.001, KI_MAX 0.050)`. Constants `GAIN_LAMBDA_*` in const.
+- Needs tau reliable, `a` of the right sign (|a| > 1e-6), a delay `L` > 1 s. Otherwise safe gains `KP_SAFE` 0.55 / `KI_SAFE` 0.010 (source `safe`).
+- Rule (IMC/SIMC): `L` in min (below); `lambda = max(3*L (4*L in valve mode), 2*cycle_min, 5)`; `Kp = clamp(1/(|a|*(lambda+L)), KP_MIN 0.10, KP_MAX 5.0)`; `Ti = min(tau, 4*(lambda+L))` (`GAIN_TI_LAMBDA_FACTOR`); `Ki = clamp(Kp/Ti, KI_MIN 0.001, KI_MAX 0.050)`. Constants `GAIN_LAMBDA_*` in const.
 - Near-band taper (deterministic in the error): `Kp *= 0.75 + 0.25*r`, `Ki *= 0.45 + 0.55*r`, `r = |e|/threshold` in [0,1] (`NEAR_BAND_TAPER_KP_MIN/KI_MIN`). Sources get a `_nearband` suffix.
 - Governance gate (`gains` domain): HARD_FREEZE/FREEZE keep previous Kp/Ki (source `frozen`); SOFT_FREEZE_DOWN lets gains only decrease (`_softfreeze`).
 - Persisted `gs_state`: kp, ki, sources. Live: `live.control.{kp,ki,ti_min}`, `live.analysis.governance.{kp_source,last_decision_gains,last_freeze_reason_gains}`.
-- Dead-time input of the rule is `SmartPI.gain_dead_time`: the estimator itself unless the emitter lag learning substitutes an effective dead time (out of scope).
+- `L` (`gains.start_dead_time`): reliable active dead time after a start of the mode, source `dead time`; none: safe gains. Pre-model gains too; published `analysis.control.gain_*`. Not the response model (lot b4 rejected).
 
 ## 4. Setpoint handling and anticipation (`smartpi/anticipation.py`, `smartpi/setpoint.py`)
 

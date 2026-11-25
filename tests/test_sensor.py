@@ -529,7 +529,6 @@ def test_diagnostic_sensor_builds_stable_envelope_and_deduplicates(hass) -> None
                 "forecast_error_1h_c": None,
                 "forecast_error_12h_c": None,
             },
-            "deadtime": {"applied_s": None},
         },
     }
     assert sensor.force_update is False

@@ -299,6 +299,18 @@ def _build_analysis_control(algo: SmartPI) -> Dict[str, Any]:
         "near_band_source": deadband_mgr.near_band_source,
         "temperature_slope_h": _round_optional(algo.temperature_slope_h, 6),
         "effective_dead_time_s": algo._start.model.public_effective_dead_time_s(algo.est.model_hvac_mode),
+        **_gain_inputs(algo),
+    }
+
+
+def _gain_inputs(algo: SmartPI) -> Dict[str, Any]:
+    """Delay L read by the gain rule, its source and the closed-loop time lambda of the rule (None without L)."""
+    gains = algo.gain_scheduler
+    delay = gains.delay
+    return {
+        "gain_delay_s": None if delay is None else round(delay.seconds),
+        "gain_delay_source": None if delay is None else delay.source,
+        "gain_closed_loop_time_s": None if gains.closed_loop_time_s is None else round(gains.closed_loop_time_s),
     }
 
 
@@ -388,7 +400,7 @@ def _build_valve_diagnostics(algo: SmartPI) -> Dict[str, Any] | None:
 
 
 def _build_tar_learning(algo: SmartPI) -> Dict[str, Any]:
-    """Return the T_ar learning state (fast and refined values, applied value)."""
+    """Return the T_ar learning state (fast and refined values)."""
     dt_est = algo.dt_est
     return algo.tar_learning.diagnostics(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
 

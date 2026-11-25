@@ -93,6 +93,15 @@ def test_the_fit_rejects_a_window_with_few_changes_or_a_small_rise():
     assert run_response_fit(dict(snap, ext=[])) is None
 
 
+def test_the_fit_needs_a_rise_of_a_tenth_of_a_degree_on_a_fine_sensor():
+    weak = run_response_fit(_trace(300.0, 1200.0, 0.01, a=0.03, on_s=900.0, total=4 * 3600.0))
+    assert 0.05 <= weak["rise_c"] < 0.10 and weak["reject"] == REJECT_RISE      # 5 or more sensor steps, under 0.10 C
+    firm = run_response_fit(_trace(300.0, 1200.0, 0.01, a=0.04, on_s=800.0, total=4 * 3600.0))
+    assert 0.10 <= firm["rise_c"] < 0.20 and firm["reject"] is None
+    coarse = run_response_fit(_trace(300.0, 1200.0, 0.1, a=0.03, on_s=900.0, total=4 * 3600.0))
+    assert coarse["rise_c"] < 0.3 and coarse["reject"] == REJECT_RISE           # on a 0.1 C sensor three steps rule
+
+
 def test_the_fit_rejects_a_room_it_cannot_follow_and_flags_a_time_constant_on_the_lower_bound():
     far = run_response_fit(_trace(300.0, 1200.0, 0.01, wave=0.1))
     assert far["reject"] == REJECT_RMS and far["rms_c"] > 2 * 0.01

@@ -445,7 +445,7 @@ and in any case at `PULSE_TAKEOVER_CAP_C = 0.8 °C`). A pulse interrupted by a r
 of setpoint or of mode is not resumed and counts. The readings of
 the events the pulses cause give the kept values. Until the learning publishes
 its own model they stand for it: `pre_model_gains` gives the gains from the kept
-`a` and the active dead time (the IMC/SIMC rule of a slow room, neither gain
+`a` and the active dead time after a start (4.1; the IMC/SIMC rule of a slow room, neither gain
 above its fallback value), the kept emitter lag is the horizon of the
 anticipation (source `measurement pulses`). The integral term
 starts from zero at the calculation at which the learning stage ends. The
@@ -567,8 +567,8 @@ horizon (emitter lag $\theta + \tau_e$, 4.3), the near band in heating (effectiv
 dead time above the setpoint, emitter lag below, 4.4), the limits of the
 calibration pulses (above) and the measurement pulses of the direct start, wanted
 while the model of the mode is not published or the readings keep no values. The
-gains and the integral holds do not read it yet. It is published next to the dead
-times and lags above.
+integral holds (4.3) read its effective dead time; the gains (4.1) keep the active
+dead time after a start. It is published next to the dead times and lags above.
 
 A second reader (`ModelReader`, `event_reading.py`) reads the measurement events
 with the same windows as the reader above (lead 1800 s, first end at the close of
@@ -607,7 +607,8 @@ $n = \max(W/S, 1)$, with $W$ the window after the heating step. The cells whose
 cost is at most the minimum times $1 + 3.84 / n$ give the ranges of $\theta$
 and of $S$; the fit tells $\theta$ apart when the range of $\theta$ is at most
 $\max(300\,s, 0.5\,S)$. A fit is rejected with fewer than 8 crossings, a rise
-of less than 3 sensor steps, no heating seen ($a = 0$), $\theta$ or $\tau_e$ at
+of less than 3 sensor steps and of less than 0.10 °C (on a 0.1 °C sensor the steps
+rule gives 0.3 °C), no heating seen ($a = 0$), $\theta$ or $\tau_e$ at
 its upper bound (5400 s, 4 h), or a root mean square residual above 2 sensor
 steps (0.01 °C at least): `fit too far from the room temperature`. A fit with
 $\tau_e$ on its lower bound (60 s, a fast emitter whose true value may be
@@ -629,9 +630,8 @@ $\min(\tau_e, 1800\,s)$ before the cut, when $s_{cut} \ge \ell$ and the peak
 comes at least 600 s after $\theta$; the samples are published only.
 
 When the split is uncertain (`dead time assumed`), a consumer of the model takes
-the cautious end of $\theta \in [0, S]$ for its own use: the gains read the
-effective dead time $3S/4$ (plus half the sampling period $h/2$ where the gains
-account for it), the near band above the setpoint and the calibration pulses read
+the cautious end of $\theta \in [0, S]$ for its own use: the integral holds read
+the effective dead time $3S/4$, the near band above the setpoint and the calibration pulses read
 $3S/4$ too, and the anticipation horizon and the near band below the setpoint read
 $S$. The windows of the learning wait $S$ whatever the split.
 
@@ -732,9 +732,10 @@ The local date of the diagnostics (`day`) is for display only.
 
 `GainScheduler.calculate()` applies the following logic:
 
-1. if `tau`, the sign of `a`, or the active dead time is unreliable, fall
+1. if `tau` or the sign of `a` is unreliable, or no delay $L$ is known, fall
    back to `KP_SAFE = 0.55` and `KI_SAFE = 0.010`,
-2. otherwise compute IMC/SIMC from the active-gain magnitude:
+2. otherwise compute IMC/SIMC from the active-gain magnitude, with
+   $\lambda = \max(3L, 2\,cycle, 5\,min)$ ($4L$ in valve mode):
 
 $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
@@ -761,35 +762,19 @@ moves $K_i$ by small steps, and a threshold would let $K_i \cdot I$ drift during
 (IMC/SIMC or safe gains). It advances only while the gains are not frozen and
 is not advanced by the near-band taper.
 
-The active dead time is `deadtime_heat` in HEAT and `deadtime_cool` in COOL.
+The delay $L$ of the rule (`gains.start_dead_time`) is the reliable active dead
+time after a start of the mode (`deadtime_heat` in HEAT, `deadtime_cool` in COOL),
+as it is, source `dead time`; without it, safe gains. The response model (3.7)
+does not enter the gains: the integral holds read its effective dead time
+$\theta + \tau_e/2$ (4.3). The active dead time is a threshold reading of the
+first rise, shorter than the effective dead time; the rule and its factor 3 are
+calibrated on it.
 
-With the emitter lag learning, the HEAT dead time $L$ of the gain rule comes
-from `tar_learning/policy.applied_value`. The learned emitter lag $T$ is the refined
-value when published, else the fast value, raised to the lower bound in force
-(the median of the last 5 confirmed bounds) when that is larger. It is an emitter lag (a first
-moment), about twice the apparent dead time that the bootstrap measures, so the
-rule works on $L_T = T/2$ (`TAR_GAIN_DEADTIME_FACTOR = 0.5`) against the
-reference $L_b = \max(L_{b,0}, L_{boot})$, with $L_{b,0}$ the first reliable
-bootstrap dead time seen since the learning started (persisted, never lowered)
-and $L_{boot}$ the current one:
-
-| Case | $L$ of the gains | Other consumers |
-|---|---|---|
-| no learned value | $L_{boot}$ | $L_{boot}$ |
-| $L_T < L_b$ | $L_b$ | $L_{boot}$ |
-| $L_b \le L_T \le 2 L_b$ (`TAR_APPLY_LONG_FACTOR`) | $L_T$ | $T$ |
-| $L_T > 2 L_b$, fast value and window value agree, $T$ not a lower bound | $L_T$ | $T$ |
-| $L_T > 2 L_b$ otherwise | $2 L_b$ | $L_{boot}$ |
-
-The window value is the refined value when published, else the `τe` of the
-latest evaluation whose two windows agree (a diagnostic when its nights are not
-regulated). The two agree when $|\ln(T_{fast}/T_{window})| \le \ln 1.25$
-(`TAR_AGREE_TOL`). An $L$ that is too short leaves the recommended robustness
-range of the loop, and much too short makes a slow emitter unstable; an $L$
-that is too long costs integrated error, never stability. A learned value
-alone therefore never shortens $L$ below $L_b$, and only a value confirmed by
-two methods lengthens it beyond $2 L_b$. The integral hold uses $T$ only when
-the gains use $L_T$.
+The pre-model gains of the direct start (heating rate kept from the pulses,
+before the first a/b model) read the same $L$. `analysis.control` publishes
+`gain_delay_s`, `gain_delay_source` and the closed-loop time
+`gain_closed_loop_time_s` ($\lambda$). The emitter lag learning
+(`tar_learning`) is not read by the gains.
 
 Important:
 
@@ -1134,8 +1119,7 @@ is read from the mode:
   $\theta \in [0, S]$;
 - otherwise the emitter lag kept from the readings of the measurement pulses of
   the direct start in the mode, when positive, source `measurement pulses`;
-- otherwise, with the same dead-time source as the gain rule
-  (`gain_dead_time`), the longer of the active dead time of the mode (the heating dead time
+- otherwise the longer of the active dead time of the mode (the heating dead time
   in HEAT, the cooling dead time in COOL) and half its passive dead time (the
   cooling dead time in HEAT, the heating dead time in COOL), each counted only
   when reliable and positive, source `dead times`;
@@ -1156,21 +1140,22 @@ error without any extra recovery rule: it is limited only by the anti-windup
 cut.
 
 Window resumes and power-shedding resumes in heating mode hold the integral
-during the dead time:
+during the effective dead time of the mode: $\theta + \tau_e/2$ of the response
+model, else the reliable active dead time (`smartpi/resume_hold.py`):
 
 - on resume, SmartPI arms an explicit `I:HOLD` (`window_resume` or
   `power_shedding_resume`),
-- that hold remains active while the heating response is still inside the usable `deadtime_heat` window,
+- that hold remains active while the heating episode is younger than that effective dead time,
 - when that window ends, the integral runs normally again,
 - a resume whose signed residual error is already below the residual error
   floor ends the hold before the dead-time window starts,
-- without a reliable heating dead time, no hold is applied.
+- without an effective dead time, no hold is applied.
 
-This sequence prevents the integral from learning a resume transient that is still dominated by heating dead time.
+This sequence prevents the integral from learning a resume transient that is still dominated by the dead time.
 
 The end of a heating unavailable period (the entity turns off, heating or cooling)
 arms the same hold (`heating_unavailable_resume`); the heating or cooling episode in
-progress restarts at that instant, so the hold covers the active dead time counted
+progress restarts at that instant, so the hold covers the effective dead time counted
 from it. Unlike a window resume, it does not pause the learning for
 `LEARNING_PAUSE_RESUME_MIN`.
 
@@ -1212,12 +1197,12 @@ Additional protections currently present are:
 
 - `SmartPIGuards` (heating mode only, outside the bootstrap and the pulses of a calibration): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus the larger of `NEAR_BAND_HYSTERESIS_C = 0.05°C` and `GUARD_CUT_RESET_STEPS = 1.5` observed sensor steps (a reading flickering between two levels around the threshold would otherwise re-trigger the cut, and restart the cycle, at every measurement). During a cut the output stays at 0 (`I:OVERRIDE(guard_cut)`). While the PI still requests power, a positive integral tracks the forced 0 % by back-calculation, `d(Ki·I)/dt = −v/Ti` with `v` the PI request and `Ti = Kp/Ki`, at most one cycle per tick. Its rate follows the request, not the overshoot: an integral that carries more than the heat need comes down within a few cuts, even when the room barely exceeds the threshold. It comes down until it alone would hold the room at the cut threshold minus `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`); below that point it is kept, as is the heating need left after a setpoint decrease. Without this, a bias of the integral restored the same excess power at each release and the room cycled between cut and restart. The temperature filter, the dead time detector, the published temperature and the learning keep following the room. The PI is not computed during a cut: the published error (`temperature.error`, `analysis.control.error_p`) is the setpoint minus the temperature of the calculation, the published anticipation is `0` and `control.mode` is `heating cut above the setpoint`; the internal error terms and the anticipation keep their values for the release. The room then cools without heating, for example during the whole fall after a setpoint decrease: this is a passive window for `b` and for the emitter lag baseline. The governance sees a zero command outside any band, and `a` windows are blocked (`skip: guard cut`). The learning stays contiguous at the end of the cut; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized. In the bootstrap the heating runs between its own hysteresis thresholds and a running guard is released,
 - per-tick anti-windup on the applicable upper limit (see below),
-- explicit `I:HOLD` during the post-resume `deadtime_heat` phase for `window_resume` and `power_shedding_resume` in heating mode,
+- explicit `I:HOLD` during the effective dead time after a resume for `window_resume` and `power_shedding_resume` in heating mode,
 - `I:HOLD` with source `vt_safety` while Versatile Thermostat safety mode applies its default power instead of the SmartPI command,
 - `I:HOLD` with source `deadband_hysteresis_shell` while the hysteretic deadband state is active and the error is outside the core deadband,
 - `I:HOLD` with source `governance_sensor_invalid` while no outdoor temperature has been received yet (`DEGRADED` regime),
 - `I:HOLD` with source `calibration_recovery` after each calibration pulse until the room reaches the setpoint,
-- `I:HOLD` with source `heating_unavailable` while the heating unavailable entity is on (`smartpi/learning_block.py`), then the explicit `I:HOLD` `heating_unavailable_resume` over the active dead time counted from the instant it turns off (the heating or cooling episode restarts then), through the resume hold below,
+- `I:HOLD` with source `heating_unavailable` while the heating unavailable entity is on (`smartpi/learning_block.py`), then the explicit `I:HOLD` `heating_unavailable_resume` over the effective dead time counted from the instant it turns off (the heating or cooling episode restarts then), through the resume hold below,
 - freeze of P and I inside the core deadband.
 
 The anti-windup acts at every calculation, in the linear demand space, on the applicable upper limit: `1`, or the linear image of `max_on_percent` when it is lower. It has two parts:
@@ -1245,7 +1230,7 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | ---------------------- | ----------------------------------------------------------- |
 | `const.py`             | constants, enums, governance matrix                         |
 | `ab_estimator.py`      | slope estimation and `ABEstimator`                          |
-| `deadtime_estimator.py` | `DeadTimeEstimator`, active-episode starts and dead-time window |
+| `deadtime_estimator.py` | `DeadTimeEstimator` and active-episode starts |
 | `ab_aggregator.py`     | median or weighted-median aggregation of `a/b` measurements |
 | `ab_drift.py`          | persistent drift detection and recentering for `a/b`, with one candidate sequence per channel |
 | `learning_window.py`   | learning-window management and guardrails                   |
@@ -1268,7 +1253,7 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | `deadband.py`          | deadband and near-band                                      |
 | `setpoint.py`          | control setpoint and setpoint boost state                   |
 | `anticipation.py`      | horizon and correction of the anticipation of the measured temperature (heating and cooling) |
-| `resume_hold.py`       | I:HOLD during the dead time after a window, power-shedding or heating-unavailable resume, residual error floor |
+| `resume_hold.py`       | I:HOLD during the effective dead time after a heater start (`control.in_deadtime_window`) and after a window, power-shedding or heating-unavailable resume, residual error floor |
 | `feedforward.py`       | `u_ff1` computation, signed FF gain `b/a` and warmup scale, room model FF1 |
 | `room_model/feedforward.py` | holding power source from the published room model and the static model of the energy balance in force, bumpless transfer of the discrete changes of its static part, blend of its wall part, static gain for the braking prediction |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |

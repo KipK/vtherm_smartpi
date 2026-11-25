@@ -3,12 +3,9 @@
 The manager records the room signals (history.py), keeps the catalogue of the
 quiet periods of that history (quiet_periods: no sun, constant setpoint, valid
 data), detects the comfort steps, schedules the computations (jobs.py, run in
-an executor), keeps their results and gives the regulation the HEAT active
-dead time to use (policy.applied_value). It never modifies the
-bootstrap/calibration dead time. The reference of the apply rule is the
-larger of the first reliable bootstrap HEAT dead time seen since the learning
-started (frozen and stored, so a bootstrap that later falls never lowers it)
-and the current one.
+an executor) and keeps their results. The regulation does not read them (its
+gains read the dead time after a start, its integral holds the response model); the room model reads the
+history, the quiet periods and the refined emitter time constant.
 
 The catalogue holds the closed and complete quiet periods with their keys and
 origins, so a period keeps its key when the history is pruned. Every piece of
@@ -49,7 +46,6 @@ from .const import (
     MORNING_EVAL_DELAY_S,
     PUB_LAST,
     R_SPAN_S,
-    SOURCE_BOOTSTRAP,
     STEP_MERGE_S,
     STEP_MIN_RISE_C,
     STEP_RESTART_GUARD_S,
@@ -61,7 +57,7 @@ from .const import (
     TAR_VALVE_MODE_SUPPORTED,
 )
 from .history import TarHistory
-from .policy import AppliedValue, RegulationDeadTime, applied_value, bound_publication, fast_publication
+from .policy import bound_publication, fast_publication
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,7 +67,7 @@ STATUS_UNAVAILABLE = "dependencies_unavailable"
 STATUS_UNSUPPORTED = "valve_mode_not_supported"
 
 # 2: quiet periods (keys by period, catalogue of periods, position of the evidence)
-# 3: frozen reference of the apply rule, lower bounds of the comfort steps cut by sunrise
+# 3: lower bounds of the comfort steps cut by sunrise
 STATE_VERSION = 3
 _PRUNE_EVERY_S = 3600.0
 # The catalogue of the quiet periods is rebuilt at most this often
@@ -139,8 +135,6 @@ class TarLearningManager:
         self._evidence_position: Position | None = None
         # Last reliable bootstrap HEAT dead time seen (reference of the steps cut by sunrise)
         self.bootstrap_heat_s: float | None = None
-        # First reliable bootstrap HEAT dead time seen since the learning started (reference of the apply rule)
-        self.reference_heat_s: float | None = None
         # Results of a computation started before a reset or a change of position are dropped
         self._generation = 0
         # Set at a stop: the computation running in the executor ends as soon as it can
@@ -256,7 +250,6 @@ class TarLearningManager:
         self.history = TarHistory()
         self._reset_results()
         self._evidence_position = None
-        self.reference_heat_s = None
         self.dirty = True
 
     # ------------------------------------------------------------------
@@ -278,8 +271,11 @@ class TarLearningManager:
         cycle_min: float,
         valve: bool = False,
         excluded: str | None = None,
+        dth: float | None = None,
     ) -> None:
         """Record one regulation tick.
+
+        dth: reliable HEAT dead time of the dead-time estimator (floor of the comfort-step fits), None without one.
 
         valve: the heater is a valve (applied power recorded as a level), not a PWM switch.
         excluded: why SmartPI is not in control of the heater (window open, power
@@ -292,6 +288,7 @@ class TarLearningManager:
                 self.history = TarHistory()
             return
         self.supported = True
+        self.note_bootstrap(dth)
         if self.status == STATUS_UNAVAILABLE:
             return
         if bool(valve) != self.history.valve:
@@ -363,64 +360,16 @@ class TarLearningManager:
         self.pending.append({"t_sp": t, "eco": old, "sp_to": new})
 
     # ------------------------------------------------------------------
-    # Value used by the regulation
+    # Bootstrap dead time
     # ------------------------------------------------------------------
-    def applied(self, bootstrap_s: float | None, bootstrap_reliable: bool) -> AppliedValue:
-        valid = bool(bootstrap_reliable) and bootstrap_s is not None and math.isfinite(bootstrap_s) and bootstrap_s > 0.0
-        if valid:
+    def note_bootstrap(self, bootstrap_s: float | None) -> None:
+        """Keep the last reliable bootstrap HEAT dead time (``bootstrap_s``, None when not reliable)."""
+        if bootstrap_s is not None and math.isfinite(bootstrap_s) and bootstrap_s > 0.0:
             self.bootstrap_heat_s = float(bootstrap_s)
-        if not self.active:
-            return AppliedValue(bootstrap_s, SOURCE_BOOTSTRAP, None, None, False, bootstrap_s)
-        if valid and self.reference_heat_s is None:
-            self.reference_heat_s = float(bootstrap_s)
-            self.dirty = True
-        ref = self.reference_heat_s
-        if ref is not None and valid:
-            ref = max(ref, float(bootstrap_s))
-        return applied_value(
-            bootstrap_s,
-            bootstrap_reliable,
-            self.fast_pub["value_s"] if self.fast_pub else None,
-            self.te_pub["value"] if self.te_pub else None,
-            reference_s=ref,
-            window_s=self.window_value(),
-            bound_s=self.bound_value(),
-        )
 
     def bound_value(self) -> float | None:
         """Lower bound in force from the comfort steps cut by sunrise, None without any."""
         return bound_publication([v[1] for v in self.bound_values])
-
-    def window_value(self) -> float | None:
-        """Window value that may confirm the fast value: the refined value, else the emitter time constant of
-        the latest evaluation whose two windows agree (kept as a diagnostic when its nights are not
-        regulated)."""
-        if self.te_pub:
-            return float(self.te_pub["value"])
-        for e in reversed(self.evals):
-            if e.get("te_ok") and e.get("te"):
-                return float(e["te"])
-            if e.get("te_ok_raw") and e.get("te_raw"):
-                return float(e["te_raw"])
-        return None
-
-    def regulation_dead_time(self, dt_est, hvac_mode):
-        """Dead-time source of the regulation: dt_est itself unless the gains use a learned HEAT value."""
-        if hvac_mode != VThermHvacMode_HEAT or not self.active:
-            return dt_est
-        ap = self.applied(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
-        if ap.source == SOURCE_BOOTSTRAP or ap.value_s is None:
-            return dt_est
-        return RegulationDeadTime(dt_est, ap.value_s)
-
-    def gain_dead_time(self, dt_est, hvac_mode):
-        """Dead-time source of the gain rule: the effective dead time of the apply rule."""
-        if hvac_mode != VThermHvacMode_HEAT or not self.active:
-            return dt_est
-        ap = self.applied(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
-        if ap.gains_s is None or (ap.source == SOURCE_BOOTSTRAP and ap.gains_s == dt_est.deadtime_heat_s):
-            return dt_est
-        return RegulationDeadTime(dt_est, ap.gains_s)
 
     # ------------------------------------------------------------------
     # Scheduling
@@ -735,7 +684,7 @@ class TarLearningManager:
     # Diagnostics
     # ------------------------------------------------------------------
     def diagnostics(self, bootstrap_s: float | None, bootstrap_reliable: bool) -> dict[str, Any]:
-        ap = self.applied(bootstrap_s, bootstrap_reliable)
+        self.note_bootstrap(bootstrap_s if bootstrap_reliable else None)
         last = self.mornings[-1] if self.mornings else None
         last_acc = next((m for m in reversed(self.mornings) if m.get("accepted")), None)
         if last_acc is None:
@@ -748,15 +697,7 @@ class TarLearningManager:
         bound = self.bound_value()
         return {
             "status": self.public_status,
-            "applied_s": _r(ap.value_s),
-            "gains_s": _r(ap.gains_s),
-            "source": ap.source,
             "bootstrap_s": _r(bootstrap_s),
-            "reference_s": _r(ap.reference_s) if self.active else None,
-            "in_force_s": _r(ap.in_force_s),
-            "in_force_source": ap.in_force_source,
-            "out_of_bound": ap.out_of_bound,
-            "limit_reason": public.limit_reason(ap.limit),
             "fast": {
                 "value_s": _r(self.fast_pub["value_s"]) if self.fast_pub else None,
                 "confirmed_mornings": self.fast_count,
@@ -834,7 +775,6 @@ class TarLearningManager:
             "bound_values": self.bound_values,
             "bound_ids": self.bound_ids,
             "bound_count": self.bound_count,
-            "reference_heat_s": self.reference_heat_s,
             "te_pub": self.te_pub,
             "refined_cls": self.refined_cls,
             "refined_wall": self.refined_wall,
@@ -855,7 +795,6 @@ class TarLearningManager:
             return
         if not self._load_evidence(state):
             return
-        self.reference_heat_s = _positive_or_none(state.get("reference_heat_s"))
         try:
             self.bound_values = [[str(k), float(v)] for k, v in state.get("bound_values") or []]
             if not all(math.isfinite(v) and v > 0.0 for _, v in self.bound_values):
@@ -868,19 +807,13 @@ class TarLearningManager:
         self._after_load()
 
     def _load_v2(self, state: dict[str, Any]) -> None:
-        """State before the frozen reference and the lower bounds: everything is kept.
-
-        The reference of the apply rule was not stored; the last reliable bootstrap
-        dead time of that state takes its place. Its fast values were accepted under
-        the earlier rule for the comfort steps cut by sunrise and stay as they are.
-        """
+        """State before the lower bounds: everything is kept. Its fast values were accepted under the earlier
+        rule for the comfort steps cut by sunrise and stay as they are."""
         if not self._load_evidence(state):
             return
-        self.reference_heat_s = self.bootstrap_heat_s
         self.dirty = True
         self._after_load()
-        _LOGGER.info("%s - T_ar learning: earlier state format, the reference dead time starts from its last "
-                     "bootstrap value", self._name)
+        _LOGGER.info("%s - T_ar learning: earlier state format read", self._name)
 
     def _load_evidence(self, state: dict[str, Any]) -> bool:
         """Fields shared by the formats 2 and 3; False (and a reset) when the state is not valid."""

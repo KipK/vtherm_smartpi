@@ -1,16 +1,33 @@
-"""Integral hold after a window, power-shedding or heating-unavailable resume."""
+"""Integral holds over the effective dead time: after a heater start, and after a window, power-shedding or
+heating-unavailable resume.
+
+The hold lasts the effective dead time of the mode (smartpi/gains.py, ``effective_dead_time``): theta + tau_e / 2 of
+the response model, else the reliable active dead time.
+"""
 from __future__ import annotations
 
 from enum import Enum
 from typing import TYPE_CHECKING, Callable
 
-from ..hvac_mode import VThermHvacMode
 from .const import DEADBAND_HYSTERESIS, RECOVERY_ERROR_FLOOR_DEADBAND_RATIO
 
 
 if TYPE_CHECKING:
     from .controller import SmartPIController
-    from .deadtime_estimator import DeadTimeEstimator
+
+
+def deadtime_window_active(
+    heat_hold_s: float | None,
+    cool_hold_s: float | None,
+    t_heat_episode_start: float | None,
+    t_cool_episode_start: float | None,
+    now: float,
+) -> bool:
+    """Return True while an active episode is younger than the hold of its mode (None: no hold)."""
+    for hold_s, t_start in ((heat_hold_s, t_heat_episode_start), (cool_hold_s, t_cool_episode_start)):
+        if hold_s is not None and isinstance(t_start, (int, float)) and now - t_start < hold_s:
+            return True
+    return False
 
 
 def recovery_error_floor_c(deadband_c: float) -> float:
@@ -33,7 +50,7 @@ class ResumeHoldSource(str, Enum):
 class ResumeDeadtimeHold:
     """Temporary I:HOLD after a window, power-shedding or heating-unavailable resume.
 
-    The hold covers the active dead time of the resumed episode, so that the
+    The hold covers the effective dead time of the resumed episode, so that the
     integral does not accumulate the error while the emitter has not answered
     yet. A resume whose residual error is already small ends the hold before
     the dead time window starts.
@@ -82,25 +99,17 @@ class ResumeDeadtimeHold:
         error_i: float,
         in_core_deadband: bool,
         deadband_c: float,
-        hvac_mode: VThermHvacMode,
-        dt_est: DeadTimeEstimator,
+        hold_s: float | None,
         ctl: SmartPIController,
         in_deadtime_window: Callable[[], bool],
     ) -> None:
-        """Manage the temporary I:HOLD window after a resume."""
+        """Manage the temporary I:HOLD window after a resume; ``hold_s`` is the effective dead time of the mode
+        (None without one: no hold)."""
         source = self.source
         if source == ResumeHoldSource.NONE:
             return
 
-        active_deadtime_s, active_deadtime_reliable = (
-            dt_est.active_deadtime(hvac_mode)
-        )
-        active_deadtime_ready = (
-            active_deadtime_reliable
-            and active_deadtime_s is not None
-            and active_deadtime_s > 0.0
-        )
-        if not active_deadtime_ready:
+        if hold_s is None or hold_s <= 0.0:
             self._end(ctl)
             return
 

@@ -109,12 +109,12 @@ async def test_end_to_end_run_on_quiet_periods(name: str) -> None:
     assert diag["quiet_periods"]["last"]["start"].startswith("2026-01-15T18:00")
     assert "gate" not in diag and "path" not in diag["fast"]["last_morning"]
 
-    # Persistence across a restart: same learned values, same applied value, nothing evaluated again
+    # Persistence across a restart: same learned values, nothing evaluated again
     restored = TarLearningManager("e2e", "UTC")
     restored.load_state(m.save_state())
     restored.set_position(LAT, LON)
     restored.set_dependencies(True)
-    assert restored.applied(480.0, True) == m.applied(480.0, True)
+    assert (restored.fast_pub, restored.te_pub) == (m.fast_pub, m.te_pub)
     assert restored.evals == m.evals and restored.mornings == m.mornings and restored.episodes == m.episodes
     assert restored.history.temp_v == m.history.temp_v
     n_eval, n_morn = len(restored.evals), len(restored.mornings)
@@ -261,10 +261,9 @@ def test_restoration_after_a_restart_is_not_a_step(sequence) -> None:
     assert len(m.pending) == 1
 
 
-async def test_missing_numerical_packages_fall_back_to_bootstrap(monkeypatch) -> None:
+async def test_missing_numerical_packages_stop_the_learning(monkeypatch) -> None:
     m, _ = _feed("pr_d5n3")
     m.fast_pub = {"value_s": 1500.0, "day": 0}
-    assert m.applied(480.0, True).source == "fast"
 
     def boom(kind, snap):
         raise ImportError("No module named 'scipy'")
@@ -272,7 +271,6 @@ async def test_missing_numerical_packages_fall_back_to_bootstrap(monkeypatch) ->
     monkeypatch.setattr(manager_mod, "_run_job", boom)
     await m.async_run(_SyncHass(), W + 3 * 86400.0 + 2 * 3600.0 + 700.0)
     assert m.status == "dependencies_unavailable"
-    assert m.applied(480.0, True).source == "bootstrap"
     assert m.history.is_empty()
 
 

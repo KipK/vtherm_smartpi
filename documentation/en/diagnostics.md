@@ -53,16 +53,15 @@ The `history` block contains these nineteen series:
 | `power.ff_percent` | Feed-forward contribution |
 | `model.a` | Learned heating gain |
 | `model.b` | Learned heat-loss coefficient |
-| `model.effective_dead_time_s` | Effective dead time of the response model in seconds (`model.dead_time_s` plus half of `model.response_time_constant_s`); the near band above the setpoint and the calibration pulses read it, the gains do not |
+| `model.effective_dead_time_s` | Effective dead time of the response model in seconds (`model.dead_time_s` plus half of `model.response_time_constant_s`); the integral holds, the near band above the setpoint and the calibration pulses read it |
 | `feedforward.source` | Holding power source in force, as in `live.feedforward.source` |
 | `feedforward.wall_power_percent` | Wall part of the feed-forward applied, in % of full power (negative when the walls give heat back); `null` when no wall part is applied |
 | `room_model.a` | Heating response of the room model, in the units of `model.a`; `null` before a publication |
 | `room_model.b_eq` | Static loss of the room model, in the units of `model.b`; `null` before a publication |
 | `room_model.forecast_error_1h_c` | Root mean square error of the 1 h forecasts over the last 7 days (°C) |
 | `room_model.forecast_error_12h_c` | Same for the 12 h forecasts (°C) |
-| `deadtime.applied_s` | Heating dead time in force for the regulation, in seconds (the bootstrap dead time, or the value derived from the learned emitter lag) |
 
-The feed-forward, room model, dead-time and effective dead time series are
+The feed-forward, room model and effective dead time series are
 always present and are `null` when the corresponding block is not computed. The applied command does
 not measure delivered heat.
 
@@ -97,8 +96,8 @@ indoor temperature.
 `temperature.integral_hold_source` is `calibration_recovery` while the integral
 is held after a calibration pulse, until the room reaches the setpoint. It is
 `heating_unavailable` while the heating unavailable entity is on, then
-`heating_unavailable_resume` while the integral stays held for the dead time of
-the emitter after it turns off.
+`heating_unavailable_resume` while the integral stays held for the effective dead
+time of the emitter after it turns off.
 
 `learning.enabled` is the setting of the `set_smartpi_learning` service.
 `learning.block_reason` is `null` while SmartPI learns, else why every learning is
@@ -172,7 +171,10 @@ anticipation of the temperature, in heating and in cooling:
 | `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon, without a rising or falling slope, or during a guard cut) |
 | `anticipation_horizon_s` | Horizon of the anticipation in seconds (the time between a command and its effect), `0` when none |
 | `anticipation_horizon_source` | Where the horizon comes from: `response model` (emitter lag of the response model of the mode: dead time plus response time constant), and without a model `measurement pulses` (emitter lag kept from the measurement pulses of the direct start), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none` |
-| `effective_dead_time_s` | Effective dead time of the response model in seconds (dead time plus half the response time constant), `null` without a model; the near band above the setpoint and the calibration pulses read it |
+| `effective_dead_time_s` | Effective dead time of the response model in seconds (dead time plus half the response time constant), `null` without a model; the integral holds, the near band above the setpoint and the calibration pulses read it |
+| `gain_delay_s` | Delay read by the gain rule, in seconds: the reliable heating (HEAT) or cooling (COOL) dead time after a start, as it is; `null` without it (safe gains) |
+| `gain_delay_source` | Where `gain_delay_s` comes from: `dead time`; `null` without a delay |
+| `gain_closed_loop_time_s` | Closed-loop time of the gain rule in seconds: the largest of 3 times `gain_delay_s` (4 times for a valve), 2 cycles and 5 minutes; `null` without a delay |
 
 `analysis.deadtime` follows the dead time detection:
 
@@ -215,7 +217,8 @@ the setpoint, the emitter lag below it), the limits of the calibration pulses an
 the measurement pulses of the direct start (they go on while the model of the mode
 is not published). With `dead time assumed` these values are the cautious ends:
 the horizon is the whole emitter lag and the effective dead time three quarters of
-it. The gains and the integral holds do not read it.
+it. The integral holds after a start or a resume last the effective dead time; the
+gains read the dead time after a start, not this model.
 
 | Path | Meaning |
 |---|---|
@@ -236,19 +239,12 @@ it. The gains and the integral holds do not read it.
 
 ### Emitter lag learning
 
-`tar_learning` describes the emitter lag learning (see [Emitter lag learning](./vtherm_smartpi.md#emitter-lag-learning)):
+`tar_learning` describes the emitter lag learning (see [Emitter lag learning](./vtherm_smartpi.md#emitter-lag-learning)); the regulation does not read its values:
 
 | Field | Meaning |
 |---|---|
-| `status` | `active`, `checking_dependencies` (until the thermostat has started), `dependencies_unavailable` (numpy/scipy cannot be loaded: bootstrap value in use) or `valve_mode_not_supported` |
-| `applied_s` | HEAT active dead time in force for the regulation (near band, integral hold), in seconds: the learned emitter lag when the gains use it, else `bootstrap_s` |
-| `source` | Origin of `applied_s` and `gains_s`: `bootstrap`, `fast`, `refined` or `lower_bound` (a lower bound from comfort steps cut by sunrise) |
-| `gains_s` | Dead time used by the gains, in seconds: half of `applied_s` for a learned emitter lag; otherwise `reference_s` when it is shorter, twice `reference_s` when it is longer and not confirmed, `bootstrap_s` without a learned emitter lag |
-| `bootstrap_s` | Bootstrap/calibration heating dead time (`model.deadtime_heat_s`), never modified |
-| `reference_s` | Reference of the gains, in seconds: the larger of the first `bootstrap_s` measured since the learning started (kept) and the current one; `null` until a bootstrap value is measured |
-| `in_force_s` / `in_force_source` | Learned emitter lag in force (refined, else fast) and its origin, `null` before any publication |
-| `out_of_bound` | `true` when a learned emitter lag exists and the gains do not use it as it is (see `limit_reason`) |
-| `limit_reason` | Why the gains do not use the learned emitter lag as it is (`learned delay shorter than the reference: the gains keep the reference dead time`, or `learned delay above twice the reference and not confirmed by a second method: the gains use twice the reference dead time`), `null` otherwise |
+| `status` | `active`, `checking_dependencies` (until the thermostat has started), `dependencies_unavailable` (numpy/scipy cannot be loaded: nothing is learned) or `valve_mode_not_supported` |
+| `bootstrap_s` | Bootstrap/calibration heating dead time (`model.deadtime_heat_s`); twice it is a floor of the emitter lag fitted on a comfort step |
 | `fast.value_s` | Published fast emitter lag (confirmed comfort steps), `null` before 3 confirmed steps |
 | `fast.confirmed_mornings` | Number of accepted and confirmed comfort steps, one per quiet period at most |
 | `fast.lower_bound_s` | Lower bound of the emitter lag in force: median of the last 5 confirmed comfort steps cut by sunrise too early for a value, `null` without any |
