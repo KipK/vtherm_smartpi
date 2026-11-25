@@ -17,6 +17,13 @@ mode has no event yet: it is then kept until the first event in darkness replace
 - the events of a calibration enter the history; when two of them agree on S and their mean S is off the S published
   before them by more than ``CALIBRATION_CORRECT_REL``, those two replace the history of the mode.
 
+Outliers need a confirming event. The reference of a mode is its published S (the median of its events, or the seed
+while it has none). Any other event whose S lies outside [S_ref / ``OUTLIER_RATIO``, ``OUTLIER_RATIO`` S_ref] is kept
+pending (at most ``OUTLIERS_KEPT`` per mode, the oldest dropped) and changes nothing. A later event outside the band
+on the same side that agrees with a pending one on S within ``READING_AGREE_REL`` confirms it: both replace the
+history of the mode (a durable change of the room, such as a new emitter, still moves the model) and the pending
+events of the mode are dropped. A mode without a reference feeds its first event.
+
 Derived values: effective dead time theta + tau_e / 2 (gains, holds), emitter lag theta + tau_e (horizon).
 
 The a/b learning (smartpi/learning_window.py, smartpi/power_steps.py) reads the model of its mode: no window of the
@@ -28,7 +35,9 @@ the cut (``settle_s``; the split does not change it, assumed or not): the delive
 A state saved without this model is seeded once (``seed_from_saved``) so that the effective dead time equals the saved
 active dead time L: with an emitter lag S of the earlier estimators theta = clamp(2L - S, 0, L), with L only
 theta = tau_e = 2 L / 3 (the split of S / 2 each). The seed is published as ``previous version``,
-``provisional``, until the first accepted event of the mode.
+``provisional``, until the first event fed to the mode. A model saved without pending events (before the outlier
+rule) is repaired at load (``repair``): a mode whose seed can be computed again from the saved state and was dropped
+gets it back as its reference, and its saved events are read again in order through the rule.
 
 Prediction: each fed event carries the rms of the model in force before it on its window (theta and tau_e fixed,
 ``a``, ``b`` and the start temperature solved); the median of the last ``PREDICTIONS_KEPT`` is published. Shown only.
@@ -68,6 +77,8 @@ PEAK_SAMPLES_KEPT = 7
 PREDICTIONS_KEPT = 7
 PEAK_MIN_S = 600.0             # time from the dead time to the peak of a usable peak sample (two peak bins)
 PEAK_SLOPE_MAX_S = 1800.0      # longest span of the slope before the cut
+OUTLIER_RATIO = 2.0            # an event with S off the published S by this factor needs a confirming event
+OUTLIERS_KEPT = 3              # pending events kept per mode
 
 SOURCE_PREVIOUS = "previous"
 _SOURCES = {
@@ -82,6 +93,8 @@ OUTCOME_ACCEPTED = "accepted"
 OUTCOME_DAYTIME = "not used in daylight"
 OUTCOME_DAYTIME_FIRST = "used in daylight until an event in darkness"
 OUTCOME_LOWER_LIMIT = "accepted, response time constant at its lower limit"
+OUTCOME_OUTLIER = "not used: far from the model in force, waiting for a confirming event"
+OUTCOME_CONFIRMED = "accepted with an earlier event far from the model, both replace it"
 
 _EVENT_KEYS = ("theta_s", "tau_e_s", "s_s")
 
@@ -104,6 +117,7 @@ class ResponseModel:
         """Blank start: no event, no seed, no diagnostics."""
         self._events: dict[str, list[dict[str, Any]]] = {}
         self._seed: dict[str, dict[str, float]] = {}
+        self._pending: dict[str, list[dict[str, Any]]] = {}       # outliers waiting for a confirming event
         self._cal: dict[str, list[dict[str, Any]] | None] = {}   # accepted events of the calibration in progress
         self.last: dict[str, Any] | None = None
         self.last_reason: str | None = None
@@ -140,6 +154,9 @@ class ResponseModel:
     def event_count(self, mode: object) -> int:
         return len(self._events.get(None if mode is None else str(mode)) or [])
 
+    def pending_count(self, mode: object) -> int:
+        return len(self._pending.get(None if mode is None else str(mode)) or [])
+
     # -- events --------------------------------------------------------------------------------------------------
     def start_calibration(self) -> None:
         """A calibration starts: its events are compared among themselves."""
@@ -168,19 +185,49 @@ class ResponseModel:
         prediction = _number(fit.get("prediction_rms_c"))
         if prediction is not None:
             self.last["prediction_rms_c"] = round(prediction, 4)
-            self._predictions.append((mode, prediction))
-            del self._predictions[:-PREDICTIONS_KEPT]
         event = {key: float(fit[key]) for key in _EVENT_KEYS}
         event.update(split_ok=bool(fit["split_ok"]), source=source, daytime=bool(daytime), at_wall=monotonic_to_wall_ts(now))
-        if not daytime:
+        placed = self._place(mode, event)
+        if placed is not None:
+            outcome = self.last["outcome"] = self.last_reason = placed
+        if placed != OUTCOME_OUTLIER and prediction is not None:
+            self._predictions.append((mode, prediction))
+            del self._predictions[:-PREDICTIONS_KEPT]
+        return outcome
+
+    def _side(self, mode: str, s_s: float) -> int:
+        """+1 (above) or -1 (below) when ``s_s`` lies outside the band of the published S of ``mode``, 0 inside it or
+        without a published S."""
+        ref = self.emitter_lag_s(mode)
+        if ref is None or ref <= 0.0:
+            return 0
+        return 1 if s_s > OUTLIER_RATIO * ref + 1e-9 else -1 if s_s < ref / OUTLIER_RATIO - 1e-9 else 0
+
+    def _place(self, mode: str, event: dict[str, Any], replay: bool = False) -> str | None:
+        """Feed ``event`` to ``mode`` or keep it pending. Returns ``OUTCOME_OUTLIER`` (pending), ``OUTCOME_CONFIRMED``
+        (fed with the pending event it confirms) or None (fed). A saved calibration event read again (``replay``)
+        is fed as it was."""
+        events = self._events.setdefault(mode, [])
+        calibration = event["source"] == SOURCE_CALIBRATION
+        side = 0 if calibration else self._side(mode, event["s_s"])
+        pending = self._pending.setdefault(mode, [])
+        match = next((p for p in reversed(pending) if p["side"] == side and _agree(p["s_s"], event["s_s"])), None)
+        if side and match is None:
+            pending.append(dict(event, side=side))
+            del pending[:-OUTLIERS_KEPT]
+            return OUTCOME_OUTLIER
+        if side:
+            pending.clear()                # the model moves: the other pending events were read against the former one
+            events[:] = [{k: v for k, v in match.items() if k != "side"}]
+        if not event["daytime"]:
             events[:] = [e for e in events if not e["daytime"]]
-        if source == SOURCE_CALIBRATION:
+        if calibration and not replay:
             self._add_calibration(mode, event, events)
         else:
             events.append(event)
         del events[:-RESPONSE_MODEL_HISTORY]
         self._seed.pop(mode, None)
-        return outcome
+        return OUTCOME_CONFIRMED if side else None
 
     def _add_calibration(self, mode: str, event: dict[str, Any], events: list[dict[str, Any]]) -> None:
         cal = self._cal.setdefault(mode, [])
@@ -203,9 +250,22 @@ class ResponseModel:
         del self._peaks[:-PEAK_SAMPLES_KEPT]
 
     def seed(self, mode: str, theta_s: float, tau_e_s: float) -> None:
-        """Values of the previous estimators, published until the first accepted event of ``mode``."""
+        """Values of the previous estimators, published until the first event fed to ``mode``."""
         if not self._events.get(mode):
             self._seed[mode] = {"theta_s": float(theta_s), "tau_e_s": float(tau_e_s)}
+
+    def repair(self, seeds: dict[str, tuple[float, float]]) -> None:
+        """A model saved before the outlier rule: each mode of ``seeds`` (theta_s, tau_e_s computed again from the
+        saved state) that has events and no seed gets the seed back as its reference; its saved events are read again
+        in order through the rule, those it would not feed become pending. A mode without a seed keeps its events."""
+        for mode, (theta, tau) in seeds.items():
+            saved = self._events.get(mode)
+            if not saved or mode in self._seed or self._pending.get(mode):
+                continue
+            self._events[mode] = []
+            self._seed[mode] = {"theta_s": float(theta), "tau_e_s": float(tau)}
+            for event in saved:
+                self._place(mode, event, replay=True)
 
     # -- published diagnostics -----------------------------------------------------------------------------------
     def public_effective_dead_time_s(self, mode: object) -> int | None:
@@ -227,6 +287,7 @@ class ResponseModel:
         mode = None if mode is None else str(mode)
         return {
             "events": self.event_count(mode),
+            "pending_outliers": self.pending_count(mode),
             "last": None if self.last is None else dict(self.last),
             "last_reason": self.last_reason,
             "peak_samples": [round(tau) for m, tau in self._peaks if m == mode],
@@ -238,6 +299,7 @@ class ResponseModel:
         return {
             "events": {mode: [dict(e) for e in events] for mode, events in self._events.items() if events},
             "seed": {mode: dict(seed) for mode, seed in self._seed.items()},
+            "pending": {mode: [dict(e) for e in pending] for mode, pending in self._pending.items() if pending},
             "last": self.last, "last_reason": self.last_reason, "peaks": [list(p) for p in self._peaks],
             "predictions": [list(p) for p in self._predictions],
         }
@@ -248,17 +310,17 @@ class ResponseModel:
         if not isinstance(saved, dict):
             return
         for mode, events in _items(saved.get("events")):
-            for e in events if isinstance(events, list) else []:
-                if (mode in (MODE_HEAT, MODE_COOL) and isinstance(e, dict)
-                        and all(_number(e.get(k)) is not None for k in _EVENT_KEYS)):
-                    self._events.setdefault(mode, []).append({
-                        **{k: float(e[k]) for k in _EVENT_KEYS}, "split_ok": e.get("split_ok") is True,
-                        "daytime": e.get("daytime") is True,
-                        "source": e["source"] if isinstance(e.get("source"), str) else SOURCE_REGULATION,
-                        "at_wall": _number(e.get("at_wall")),
-                    })
+            for e in events if isinstance(events, list) and mode in (MODE_HEAT, MODE_COOL) else []:
+                if (event := _load_event(e)) is not None:
+                    self._events.setdefault(mode, []).append(event)
             if mode in self._events:
                 del self._events[mode][:-RESPONSE_MODEL_HISTORY]
+        for mode, pending in _items(saved.get("pending")):
+            for e in pending if isinstance(pending, list) and mode in (MODE_HEAT, MODE_COOL) else []:
+                if (event := _load_event(e)) is not None and e.get("side") in (1, -1):
+                    self._pending.setdefault(mode, []).append(dict(event, side=e["side"]))
+            if mode in self._pending:
+                del self._pending[mode][:-OUTLIERS_KEPT]
         for mode, seed in _items(saved.get("seed")):
             if mode in (MODE_HEAT, MODE_COOL) and isinstance(seed, dict) and all(
                     _number(seed.get(k)) is not None for k in ("theta_s", "tau_e_s")):
@@ -271,6 +333,18 @@ class ResponseModel:
         for p in saved.get("predictions") if isinstance(saved.get("predictions"), list) else []:
             if isinstance(p, list) and len(p) == 2 and p[0] in (MODE_HEAT, MODE_COOL) and _number(p[1]) is not None:
                 self._predictions.append((p[0], float(p[1])))
+
+
+def _load_event(e: object) -> dict[str, Any] | None:
+    """A saved event, None when malformed."""
+    if not isinstance(e, dict) or not all(_number(e.get(k)) is not None for k in _EVENT_KEYS):
+        return None
+    return {
+        **{k: float(e[k]) for k in _EVENT_KEYS}, "split_ok": e.get("split_ok") is True,
+        "daytime": e.get("daytime") is True,
+        "source": e["source"] if isinstance(e.get("source"), str) else SOURCE_REGULATION,
+        "at_wall": _number(e.get("at_wall")),
+    }
 
 
 def _round(value: Any) -> int | None:

@@ -560,6 +560,20 @@ stabilisation de l'apprentissage de a/b (3.7). Chaque pic confirmé après une c
 $\min(\tau_e, 1800\,s)$ avant la coupure, lorsque $s_{cut} \ge \ell$ et que le pic vient au
 moins 600 s après $\theta$ ; les échantillons sont publiés seulement.
 
+Un événement éloigné du modèle en vigueur doit être confirmé. La référence d'un mode est son
+$S_{ref}$ publié : la médiane de ses événements, ou l'amorçage tant qu'il n'en a pas. Un
+événement (hors calibration) dont le $S$ sort de $[S_{ref}/2, 2\,S_{ref}]$ est mis en
+attente, 3 au plus par mode (le plus ancien abandonné), et ne change rien : `not used: far
+from the model in force, waiting for a confirming event`. Un événement ultérieur hors de la
+bande du même côté, dont le $S$ concorde à 20 % près avec un événement en attente, le
+confirme : les deux remplacent l'historique du mode (`accepted with an earlier event far
+from the model, both replace it`) et les événements en attente du mode sont abandonnés, de
+sorte qu'un changement durable de la pièce, comme un nouvel émetteur, déplace encore le
+modèle. Un mode sans référence (ni événement, ni amorçage) prend son premier événement tel
+quel. Sans cette règle, un seul événement peut lire un mode lent de la pièce au lieu de
+l'émetteur (par exemple la nuit dans une chambre occupée) et multiplier par dix l'horizon
+d'anticipation.
+
 Lorsque la séparation est incertaine (`dead time assumed`), chaque utilisateur du modèle
 prend pour son propre usage l'extrémité prudente de $\theta \in [0, S]$ : les maintiens de
 l'intégrale lisent le temps mort effectif $3S/4$, la bande proche au-dessus de la consigne et les impulsions de
@@ -573,8 +587,13 @@ chaque mode (`dt_est_state`) et du premier retard de l'émetteur $S$ parmi le re
 retenu des lectures, le retard retenu d'un bilan de chauffe sauvegardé (en chauffage) et le retard de
 l'ancien estimateur de retard de réponse : $\theta = \mathrm{clamp}(2L - S, 0, L)$, ou $2L/3$ sans $S$ (la séparation en
 moitiés de $S = 4L/3$), et $\tau_e = 2(L - \theta)$, de sorte que le temps mort effectif égale $L$. L'amorçage est
-publié en `previous version`, `provisional`, jusqu'au premier événement accepté du mode ;
-un mode sans $L$ fiable n'a pas d'amorçage.
+publié en `previous version`, `provisional`, jusqu'au premier événement donné au mode ;
+un mode sans $L$ fiable n'a pas d'amorçage. Un modèle sauvegardé sans événements en attente
+(avant la règle ci-dessus) est réparé à son chargement : un mode qui a des événements et pas
+d'amorçage, et dont l'amorçage peut être recalculé à partir de l'état sauvegardé, le
+retrouve comme référence, et ses événements sauvegardés sont relus dans l'ordre selon la
+règle ; ceux qu'elle ne donnerait pas au modèle passent en attente. Un mode dont l'amorçage
+ne peut pas être recalculé garde ses événements sauvegardés.
 
 ### 3.8 Périodes calmes de l'apprentissage du retard de l'émetteur
 

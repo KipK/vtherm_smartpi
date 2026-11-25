@@ -482,7 +482,8 @@ class LearningStart:
 
     def _load_model(self, state: dict[str, Any]) -> None:
         """The response model, its readings and record; a state saved without it seeds the model from the dead times
-        and lags of the earlier estimators (smartpi/response_model.py)."""
+        and lags of the earlier estimators, a model saved before the outlier rule is repaired from the same seed
+        (smartpi/response_model.py)."""
         saved = state.get("response_state")
         if not isinstance(saved, dict):
             self.model_reading.reset()
@@ -491,5 +492,7 @@ class LearningStart:
                 self.model.seed(mode, theta, tau)
             return
         self.model.load(saved.get("model"))
+        if isinstance(saved.get("model"), dict) and "pending" not in saved["model"]:
+            self.model.repair(seed_from_saved(state))
         self.model_reading.load(saved.get("reading"))
         self.model_reading.record.load(saved.get("record"))

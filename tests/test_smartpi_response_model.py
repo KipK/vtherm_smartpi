@@ -33,9 +33,12 @@ from custom_components.vtherm_smartpi.smartpi.response_model import (
     CONFIDENCE_MEASURED,
     CONFIDENCE_PROVISIONAL,
     OUTCOME_ACCEPTED,
+    OUTCOME_CONFIRMED,
     OUTCOME_DAYTIME,
     OUTCOME_DAYTIME_FIRST,
     OUTCOME_LOWER_LIMIT,
+    OUTCOME_OUTLIER,
+    OUTLIERS_KEPT,
     RESPONSE_MODEL_HISTORY,
     ResponseModel,
     peak_sample,
@@ -235,6 +238,133 @@ def test_two_agreeing_calibration_events_far_from_the_model_replace_its_history(
     assert close.event_count(MODE_HEAT) == 5
 
 
+def test_an_event_far_from_the_model_in_force_is_kept_pending():
+    model = ResponseModel()
+    model.add(MODE_HEAT, SOURCE_REGULATION, _fit(100.0, 200.0), 0.0)
+    before = model.values(MODE_HEAT)
+    assert model.add(MODE_HEAT, SOURCE_REGULATION, _fit(540.0, 9343.0, split_ok=False), 1.0) == OUTCOME_OUTLIER
+    assert model.values(MODE_HEAT) == before and model.event_count(MODE_HEAT) == 1
+    assert model.last["outcome"] == model.last_reason == OUTCOME_OUTLIER
+    assert model.public_learning(MODE_HEAT)["pending_outliers"] == 1
+    assert model.add(MODE_HEAT, SOURCE_REGULATION, _fit(30.0, 100.0), 2.0) == OUTCOME_OUTLIER     # below the band
+    assert model.add(MODE_HEAT, SOURCE_REGULATION, _fit(200.0, 400.0), 3.0) == OUTCOME_ACCEPTED   # 2 S_ref: inside
+    for k in range(OUTLIERS_KEPT + 2):
+        model.add(MODE_HEAT, SOURCE_REGULATION, _fit(100.0, 1500.0 * 3 ** k), 4.0 + k)          # no two agree
+    assert model.pending_count(MODE_HEAT) == OUTLIERS_KEPT and model.event_count(MODE_HEAT) == 2
+
+
+def test_two_agreeing_outliers_on_the_same_side_replace_the_history():
+    model = ResponseModel()
+    for k in range(3):
+        model.add(MODE_HEAT, SOURCE_REGULATION, _fit(100.0, 200.0), float(k))
+    model.add(MODE_HEAT, SOURCE_REGULATION, _fit(30.0, 100.0), 3.0)                 # pending, below the band
+    model.add(MODE_HEAT, SOURCE_REGULATION, _fit(300.0, 1000.0), 4.0)               # pending, above it
+    assert model.add(MODE_HEAT, SOURCE_REGULATION, _fit(350.0, 1100.0), 5.0) == OUTCOME_CONFIRMED   # agrees within 20 %
+    assert model.event_count(MODE_HEAT) == 2 and model.pending_count(MODE_HEAT) == 0
+    assert model.emitter_lag_s(MODE_HEAT) == pytest.approx(0.5 * (1300.0 + 1450.0))
+    assert model.values(MODE_HEAT)["confidence"] == CONFIDENCE_MEASURED
+
+
+def test_two_outliers_that_disagree_or_lie_on_both_sides_do_not_move_the_model():
+    model = ResponseModel()
+    model.add(MODE_HEAT, SOURCE_REGULATION, _fit(100.0, 200.0), 0.0)
+    model.add(MODE_HEAT, SOURCE_REGULATION, _fit(300.0, 1000.0), 1.0)
+    assert model.add(MODE_HEAT, SOURCE_REGULATION, _fit(300.0, 1500.0), 2.0) == OUTCOME_OUTLIER     # 1800 vs 1300
+    assert model.emitter_lag_s(MODE_HEAT) == 300.0 and model.pending_count(MODE_HEAT) == 2
+    seeded = ResponseModel()
+    seeded.seed(MODE_HEAT, 500.0, 500.0)
+    seeded.add(MODE_HEAT, SOURCE_REGULATION, _fit(100.0, 300.0), 0.0)               # below 500
+    assert seeded.add(MODE_HEAT, SOURCE_REGULATION, _fit(1000.0, 3000.0), 1.0) == OUTCOME_OUTLIER   # above 2000
+    assert seeded.values(MODE_HEAT)["source"] == "previous"
+
+
+def test_a_blank_mode_feeds_its_first_event_and_a_seed_stays_the_reference_until_one_is_fed():
+    blank = ResponseModel()
+    assert blank.add(MODE_HEAT, SOURCE_REGULATION, _fit(540.0, 9343.0, split_ok=False), 0.0) == OUTCOME_ACCEPTED
+    assert blank.emitter_lag_s(MODE_HEAT) == pytest.approx(9883.0)
+    model = ResponseModel()
+    model.seed(MODE_HEAT, 156.0, 156.0)
+    assert model.add(MODE_HEAT, SOURCE_REGULATION, _fit(540.0, 9343.0, split_ok=False), 0.0) == OUTCOME_OUTLIER
+    assert model.values(MODE_HEAT)["source"] == "previous" and model.emitter_lag_s(MODE_HEAT) == 312.0
+    assert "heat" in model.save()["seed"]
+    assert model.add(MODE_HEAT, SOURCE_REGULATION, _fit(100.0, 300.0), 1.0) == OUTCOME_ACCEPTED
+    assert model.save()["seed"] == {} and model.emitter_lag_s(MODE_HEAT) == 400.0
+
+
+def test_calibration_events_skip_the_outlier_rule():
+    model = ResponseModel()
+    model.seed(MODE_HEAT, 100.0, 100.0)
+    model.start_calibration()
+    assert model.add(MODE_HEAT, SOURCE_CALIBRATION, _fit(400.0, 1600.0), 0.0) == OUTCOME_ACCEPTED
+    assert model.event_count(MODE_HEAT) == 1 and model.pending_count(MODE_HEAT) == 0
+
+
+def test_the_pending_outliers_are_saved_and_loaded_back():
+    model = ResponseModel()
+    model.add(MODE_HEAT, SOURCE_REGULATION, _fit(100.0, 200.0), 0.0)
+    model.add(MODE_HEAT, SOURCE_REGULATION, _fit(300.0, 1000.0), 1.0)
+    saved = model.save()
+    saved["pending"][MODE_HEAT].append({"theta_s": 1.0, "tau_e_s": 1.0, "s_s": 2.0, "side": 0})    # malformed
+    other = ResponseModel()
+    other.load(saved)
+    assert other.pending_count(MODE_HEAT) == 1
+    assert other.add(MODE_HEAT, SOURCE_REGULATION, _fit(350.0, 1100.0), 2.0) == OUTCOME_CONFIRMED
+
+
+def _field_state(events, seed=None, dead=234.0):
+    """A state saved before the outlier rule: its response model holds ``events`` and no pending entry."""
+    state = _saved(dead=dead)
+    state["response_state"] = {"model": {"events": {MODE_HEAT: events}, "seed": seed or {}, "last": None,
+                                         "last_reason": None, "peaks": [], "predictions": []}}
+    return state
+
+
+def test_a_model_saved_before_the_outlier_rule_gets_its_seed_back_at_load():
+    """A bedroom occupied at night: one regulation event read the slow mode of the room (dead time assumed) and
+    replaced the seed of the previous version; the anticipation horizon went from about 300 s to about 9900 s."""
+    outlier = dict(_fit(540.0, 9343.0, split_ok=False), source=SOURCE_REGULATION, daytime=False, at_wall=1.0)
+    before = ResponseModel()
+    before.load(_field_state([outlier])["response_state"]["model"])
+    assert before.emitter_lag_s(MODE_HEAT) == pytest.approx(9883.0)
+    start = LearningStart("bootstrap", MagicMock())
+    start.load(_field_state([outlier]))
+    assert start.model.emitter_lag_s(MODE_HEAT) == pytest.approx(312.0)          # theta = tau_e = 2 L / 3
+    assert start.model.values(MODE_HEAT)["source"] == "previous"
+    assert start.model.event_count(MODE_HEAT) == 0 and start.model.pending_count(MODE_HEAT) == 1
+    again = LearningStart("bootstrap", MagicMock())
+    again.load(start.save(0.0))
+    assert again.model.emitter_lag_s(MODE_HEAT) == pytest.approx(312.0) and again.model.pending_count(MODE_HEAT) == 1
+    # events the rule feeds stay fed; without a seed to compute the saved events stay as they are
+    near = dict(outlier, theta_s=150.0, tau_e_s=250.0, s_s=400.0, split_ok=True)
+    kept = LearningStart("bootstrap", MagicMock())
+    kept.load(_field_state([near, outlier]))
+    assert kept.model.event_count(MODE_HEAT) == 1 and kept.model.emitter_lag_s(MODE_HEAT) == 400.0
+    blank = LearningStart("bootstrap", MagicMock())
+    blank.load(_field_state([outlier], dead=None))
+    assert blank.model.emitter_lag_s(MODE_HEAT) == pytest.approx(9883.0)
+
+
+def test_the_anticipation_horizon_of_the_field_case_comes_back_to_the_seed_after_a_load():
+    from custom_components.vtherm_smartpi.algo import SmartPI
+
+    def _algo():
+        return SmartPI(hass=MagicMock(), cycle_min=10.0, minimal_activation_delay=0, minimal_deactivation_delay=0,
+                       name="Field case")
+
+    state = _algo().save_state()
+    state["dt_est_state"].update(model_hvac_mode=MODE_HEAT, deadtime_heat_s=234.0, deadtime_heat_reliable=True)
+    outlier = dict(_fit(540.0, 9343.0, split_ok=False), source=SOURCE_REGULATION, daytime=False, at_wall=1.0)
+    model = state["response_state"]["model"]
+    model.update(events={MODE_HEAT: [outlier]}, seed={})
+    del model["pending"]
+    algo = _algo()
+    algo.load_state(state)
+    assert algo.anticipation_horizon(VThermHvacMode_HEAT).seconds == pytest.approx(312.0)
+    algo.calculate(target_temp=20.0, current_temp=19.0, ext_current_temp=5.0, hvac_mode=VThermHvacMode_HEAT)
+    learning = algo.get_published_diagnostics()["analysis"]["learning"]["response_model"]
+    assert learning["pending_outliers"] == 1 and learning["events"] == 0
+
+
 def test_a_peak_sample_follows_the_first_order_emitter():
     # a q decays from s + l at the cut + theta; the peak comes when a q = l
     theta, tau, slope, loss = 120.0, 900.0, 0.02, 0.005
@@ -349,8 +479,9 @@ def test_the_saved_model_loads_back_and_malformed_parts_are_skipped():
 def test_the_published_block_uses_plain_words():
     model = ResponseModel()
     model.refuse("heating too short")
-    assert model.public_learning(MODE_HEAT) == {"events": 0, "last": None, "last_reason": "heating too short",
-                                               "peak_samples": [], "prediction_rms_c": None}
+    assert model.public_learning(MODE_HEAT) == {"events": 0, "pending_outliers": 0, "last": None,
+                                               "last_reason": "heating too short", "peak_samples": [],
+                                               "prediction_rms_c": None}
     model.add(MODE_HEAT, SOURCE_PULSE, _fit(150.4, 700.6), 0.0)
     model.add_peak(MODE_HEAT, 640.2)
     model.add_peak(MODE_COOL, 100.0)

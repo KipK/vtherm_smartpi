@@ -46,6 +46,7 @@
   "analysis.learning.response_model.last",
   "analysis.learning.response_model.last_reason",
   "analysis.learning.response_model.peak_samples",
+  "analysis.learning.response_model.pending_outliers",
   "analysis.learning.response_model.prediction_rms_c",
   "analysis.learning.window_mean_power",
   "analysis.learning.window_outcomes_24h",

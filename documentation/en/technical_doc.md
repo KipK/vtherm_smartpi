@@ -622,6 +622,21 @@ $\tau_e = (t_{peak} - \theta) / \ln(1 + s_{cut}/\ell)$, with $\ell = b\,(T_{cut}
 $\min(\tau_e, 1800\,s)$ before the cut, when $s_{cut} \ge \ell$ and the peak
 comes at least 600 s after $\theta$; the samples are published only.
 
+An event far from the model in force needs a confirming event. The reference
+of a mode is its published $S_{ref}$: the median of its events, or the seed
+while it has none. An event (not of a calibration) whose $S$ lies outside
+$[S_{ref}/2, 2\,S_{ref}]$ is kept pending, at most 3 per mode (the oldest
+dropped), and changes nothing: `not used: far from the model in force, waiting
+for a confirming event`. A later event outside the band on the same side whose
+$S$ agrees with a pending one within 20 % confirms it: both replace the history
+of the mode (`accepted with an earlier event far from the model, both replace
+it`) and the pending events of the mode are dropped, so that a durable change of
+the room, such as a new emitter, still moves the model. A mode without a
+reference (no event, no seed) takes its first event as it comes. A single
+event can otherwise read a slow mode of the room instead of the emitter (for
+example at night in an occupied bedroom) and stretch the anticipation horizon
+tenfold.
+
 When the split is uncertain (`dead time assumed`), a consumer of the model takes
 the cautious end of $\theta \in [0, S]$ for its own use: the integral holds read
 the effective dead time $3S/4$, the near band above the setpoint and the calibration pulses read
@@ -635,8 +650,13 @@ readings, the kept lag of a saved heating balance (heating) and the lag of the
 former response-lag estimator:
 $\theta = \mathrm{clamp}(2L - S, 0, L)$, or $2L/3$ without $S$ (the split in
 halves of $S = 4L/3$), and $\tau_e = 2(L - \theta)$, so that the effective dead time equals $L$. The seed is
-published as `previous version`, `provisional`, until the first accepted event
-of the mode; a mode without a reliable $L$ has no seed.
+published as `previous version`, `provisional`, until the first event fed to
+the mode; a mode without a reliable $L$ has no seed. A model saved without
+pending events (before the rule above) is repaired at its load: a mode with
+events and no seed whose seed can be computed again from the saved state gets
+it back as its reference, and its saved events are read again in order through
+the rule; those it would not feed become pending. A mode whose seed cannot be
+computed keeps its saved events.
 
 ### 3.8 Quiet periods of the emitter lag learning
 
