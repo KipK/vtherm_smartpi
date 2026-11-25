@@ -11,6 +11,7 @@ from custom_components.vtherm_smartpi.smartpi.measure_event import (
     MeasureEventDetector,
     MeasureRecord,
 )
+from custom_components.vtherm_smartpi.smartpi.learning_window import LearningWindowManager
 from custom_components.vtherm_smartpi.smartpi.peak_search import PEAK_CONFIRMED
 
 STEP_S = 60.0
@@ -117,6 +118,33 @@ def test_unbridged_restart_drops_the_saved_phase_and_a_bridged_one_resumes_it():
             assert detector.phase_stage(str(VThermHvacMode_HEAT)) == "cut"
         else:
             assert [e.reason for e in events] == ["interrupted by restart"]
+
+
+def test_the_learning_window_saves_and_resumes_the_heating_phase_of_its_detector():
+    """The learning window owns the detector: the heating phase in progress is saved, resumed on a bridged restart and
+    dropped otherwise; a state saved under the former key of the heating balance is read too; COOL phases are not
+    saved."""
+    rig = _Rig()
+    rig.run(0.0, 60)
+    rig.run(1.0, 40)
+    rig.run(0.0, 25)
+    window = LearningWindowManager("t")
+    window._events = rig.detector
+    saved = window.save_state()["event_restart"]
+    assert saved["phase"]["stage"] == "cut" and saved["phase"]["bin_n"] > 0
+    for state in ({"event_restart": saved}, {"heating_balance": {"results": [], "restart": saved}}):
+        for bridged in (True, False):
+            other = LearningWindowManager("t")
+            other.load_state(state)
+            other.resume_after_restart(bridged)
+            assert other.events.phase_stage(str(VThermHvacMode_HEAT)) == ("cut" if bridged else None)
+    other.reset_all()
+    assert other.events.restart_context() is None
+    cool = _Rig(sign=-1.0)
+    cool.run(0.0, 60)
+    cool.run(1.0, 40)
+    window._events = cool.detector
+    assert window.save_state()["event_restart"] is None
 
 
 # -- the power of the record: real on and off edges of a switch, the applied fraction otherwise -----------------------

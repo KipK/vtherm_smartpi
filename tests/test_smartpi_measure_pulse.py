@@ -2,6 +2,8 @@
 step lasts until the room is back near the setpoint (for 30 minutes at most once the rise is seen), the regulation takes over a stop only once the room is deeper (or
 at the cap). The sequences are driven by room temperatures, the dead-time estimator is a stand-in."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
@@ -64,7 +66,7 @@ class _Rig:
         calibration = self.kind == "calibration"
         self.pulse.update(
             self.now, TARGET, self.temp(demand), self.mode, cooling=self.sign < 0, heat_or_cool=True,
-            learning_stage=not calibration, active_deadtime_known=False, passive_deadtime_known=False,
+            learning_stage=not calibration, model_known=False,
             dt_est=self.est, calibration=calibration, calibration_pulses_left=calibration,
             limits=self.limits if calibration else None,
         )
@@ -171,3 +173,17 @@ def test_the_stop_of_a_learning_pulse_ends_on_the_confirmed_peak_before_any_take
     rig.est.stop_peak_confirmed = True
     rig.step(1800.0, 0.2)
     assert not rig.pulse.active and rig.pulse.history[-1]["end_reason"] == "peak"
+
+
+@pytest.mark.parametrize(
+    "model_known, readings_pending, wanted",
+    [(False, False, True), (False, True, True), (True, True, True), (True, False, False)],
+)
+def test_learning_pulses_are_wanted_while_readings_are_pending_or_the_model_is_unknown(
+        model_known, readings_pending, wanted):
+    pulse = MeasurePulse()
+    pulse.update(
+        0.0, TARGET, TARGET, VThermHvacMode_HEAT, cooling=False, heat_or_cool=True, learning_stage=True,
+        model_known=model_known, dt_est=SimpleNamespace(tin_history=[]), readings_pending=readings_pending,
+    )
+    assert (pulse.state == "rest") is wanted

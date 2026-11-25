@@ -36,8 +36,12 @@ Prediction: each fed event carries the rms of the model in force before it on it
 Peak samples: each confirmed peak after a cut gives tau_e = (t_peak - theta) / ln(1 + s_cut / l), with l the loss rate
 b (T_cut - T_outdoor) and s_cut the slope before the cut. They are published only.
 
-The regulator itself (gains, holds, horizon, near band) does not read this model. Internal codes become plain words
-here.
+The anticipation horizon reads the emitter lag theta + tau_e (smartpi/anticipation.py); the near band reads the
+effective dead time above the setpoint and the emitter lag below it (smartpi/deadband.py); the calibration pulses size
+their limits from both (smartpi/calibration.py); the learning pulses of the direct start go on while the model of the
+mode is not published (smartpi/measure_pulse.py). When the split is assumed (theta = S / 2) those values are the
+cautious ends: emitter lag S, effective dead time 3 S / 4. The gains and the integral holds do not read this model.
+Internal codes become plain words here.
 """
 from __future__ import annotations
 
@@ -330,7 +334,7 @@ def _saved_dead_time(dt_state: dict, mode: str) -> float | None:
 
 
 def _saved_lag(state: dict, mode: str) -> float | None:
-    """Emitter lag S of the earlier estimators: the kept lag of the readings, the kept lag of the heating balance
+    """Emitter lag S of the earlier estimators: the kept lag of the readings, the kept lag of a saved heating balance
     (HEAT), the response lag."""
     reading = state.get("event_reading") or state.get("pulse_reading")
     kept = reading.get("kept") if isinstance(reading, dict) else None

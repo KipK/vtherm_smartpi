@@ -185,7 +185,7 @@
 {% set anticipation_horizon_source = analysis_control.get('anticipation_horizon_source', 'none') %}
 {% set anticipation_horizon_source_label = {
   'measurement pulses': 'measurement pulses',
-  'heating balance': 'heating balance',
+  'response model': 'response model',
   'dead times': 'dead times',
   'none': 'none'
 }.get(anticipation_horizon_source, anticipation_horizon_source) %}

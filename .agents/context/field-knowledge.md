@@ -28,7 +28,7 @@ What real installations look like, to calibrate judgement and benches. Generic o
 - Without an integral guard, the post-rise temperature dip falls from 75-180 min to under 30 min on fast emitters, with overshoot <= 0.15 C; floor heating overshoots more.
 - Slope anticipation (regulate on `T + slope * horizon`, faded in only near the setpoint, horizon about half the emitter inertia) reduced simulated overshoot by large factors in slow-emitter cells with a rise-time cost of 5-10 min; it is a candidate not yet adopted (see `decisions.md`).
 - Gains of massive slow rooms already sit at the floors (`KP_MIN`/`KI_MIN`); counting emitter inertia in the gains alone does not fix floor heating in a massive room.
-- A heating-balance estimate (heating rate at full power, emitter lag) is unusable in regulation at variable power, usable in bootstrap/calibration; it is biased low 25-60 % in massive rooms and good in massless rooms. It is published for observation only.
+- A heating-balance estimate (heating rate at full power, emitter lag from the peak after a cut) was unusable in regulation at variable power, usable in bootstrap/calibration, biased low 25-60 % in massive rooms and good in massless rooms; the response model replaced it.
 - Simulated field-like cells leave the bootstrap after about 36 h through the "full collection" path (31 measurements of a and b); with full histories SmartPI must never remain in bootstrap.
 
 ## Home Assistant access (for maintainers' agents)

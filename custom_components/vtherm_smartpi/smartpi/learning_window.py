@@ -25,8 +25,7 @@ from .const import (
 )
 from .ab_window_balance import ABWindowBalance
 from .learning_outcomes import LearningOutcomes
-from .heating_balance import HeatingBalance
-from .measure_event import MeasureEventDetector
+from .measure_event import MODE_HEAT, MeasureEventDetector
 from .power_steps import PowerSteps
 from .response_model import delivered_fraction
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
@@ -113,8 +112,8 @@ class LearningWindowManager:
         self._steps = PowerSteps(name)
         # Response model (smartpi/response_model.py) that the windows read, given by LearningStart.
         self.response_model: "ResponseModel | None" = None
-        # Heating rate and emitter lag measured on heating phases.
-        self._heating_balance = HeatingBalance(name)
+        # Detector of the measurement events (smartpi/measure_event.py): it feeds the readers of the events.
+        self._events = MeasureEventDetector(name)
         # (theta, tau_e) of the power model of the collected a measurements, None without a model.
         self._power_model: object = None
         # End of the last observed interval (contiguity of the observations).
@@ -190,14 +189,9 @@ class LearningWindowManager:
         return self.model(hvac_mode) is not None or self._steps.phases_resolve
 
     @property
-    def heating_balance(self) -> HeatingBalance:
-        """Return the heating balance (diagnostics)."""
-        return self._heating_balance
-
-    @property
     def events(self) -> MeasureEventDetector:
-        """Return the detector of the measurement events (it feeds the heating balance)."""
-        return self._heating_balance.events
+        """Return the detector of the measurement events."""
+        return self._events
 
     def outcomes_summary(self, now: float) -> dict[str, list[list]]:
         """Return the most frequent window outcomes of the sliding period."""
@@ -235,7 +229,7 @@ class LearningWindowManager:
         self._balance.clear()
         self._outcomes.clear()
         self._steps.clear()
-        self._heating_balance.clear()
+        self._events.clear()
         self._power_model = None
         self._last_update_now = None
         self._T_int_start = 0.0
@@ -312,9 +306,20 @@ class LearningWindowManager:
         # A state saved before the power steps holds them under the former key.
         self._steps.load_state(state.get("power_steps", state.get("response_lag")))
         self._power_model = _UNSET
-        self._heating_balance.load_state(state.get("heating_balance"))
+        self._events.clear()
+        restart = state.get("event_restart")
+        if restart is None and isinstance(state.get("heating_balance"), dict):
+            restart = state["heating_balance"].get("restart")   # saved by a version with the heating balance
+        self._events.load_context(restart)
         window = state.get("window")
         self._restart_window = dict(window) if isinstance(window, dict) else None
+
+    def _event_restart(self) -> dict | None:
+        """The heating phase or rest of the event detector to resume after a restart (heating mode), None without."""
+        context = self._events.restart_context()
+        if context is None or context["mode"] != MODE_HEAT:
+            return None
+        return self._events.save_context(context)
 
     def _window_state(self) -> dict | None:
         """Window in progress and end of the last observed interval, in wall-clock time."""
@@ -350,7 +355,7 @@ class LearningWindowManager:
         nothing is resumed (as a window cleared at startup).
         """
         self._steps.resolve_restart(bridged)
-        self._heating_balance.resolve_restart(bridged)
+        self._events.resolve_restart(bridged)
         saved, self._restart_window = self._restart_window, None
         if not bridged or not saved:
             return
@@ -400,7 +405,7 @@ class LearningWindowManager:
                 if self._learning_start_date else None
             ),
             "power_steps": self._steps.save_state(),
-            "heating_balance": self._heating_balance.save_state(),
+            "event_restart": self._event_restart(),
             "window": self._window_state(),
         }
 
@@ -443,12 +448,11 @@ class LearningWindowManager:
                 hvac_mode=hvac_mode,
                 model=model,
             )
-            self._heating_balance.observe(
+            self._events.observe(
                 now=now,
                 dt_s=dt_min * 60.0,
                 u=clamp(u_active, 0.0, 1.0),
                 hvac_mode=hvac_mode,
-                b=_published_b(estimator),
                 tin_history=self._tin_history(dt_est),
                 context=(
                     "calibration" if is_calibrating
@@ -1024,14 +1028,3 @@ class LearningWindowManager:
             estimator.learn_last_reason = "skip: low excitation (u mid)"
 
         self.reset()
-
-
-def _published_b(estimator: "ABEstimator") -> float | None:
-    """Return the published b, or None before its first publication."""
-    # Attributes are read defensively: tests drive the window with mocks.
-    count = getattr(estimator, "learn_ok_count_b", 0)
-    b = getattr(estimator, "b", None)
-    if isinstance(count, int) and count > 0 and isinstance(b, (int, float)):
-        return float(b)
-    return None
-

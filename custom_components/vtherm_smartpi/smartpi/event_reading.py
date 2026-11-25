@@ -49,7 +49,7 @@ from typing import Any
 from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from . import job_abort
 from .calibration import readings_agree_on
-from .const import HEATING_BALANCE_MIN_ON_S, HEATING_BALANCE_MIN_RISE_C
+from .const import EVENT_MIN_ON_S, EVENT_MIN_RISE_C
 from .event_fit import readings_agree, run_fit, run_response_fit
 from .measure_event import (
     MODE_COOL,
@@ -546,8 +546,8 @@ class ModelReader(EventReader):
     their own that runs in every stage, for every closed event of the detector, fitted by ``run_response_fit``.
 
     Pulse, bootstrap and calibration events are read as the base reader reads them, whatever values are kept.
-    Regulation events are read after a rest of ``HEATING_BALANCE_MIN_REST_S`` (the event has no reason), with
-    ``HEATING_BALANCE_MIN_ON_S`` of full-power-equivalent heating and a rise of ``HEATING_BALANCE_MIN_RISE_C`` to the
+    Regulation events are read after a rest of ``EVENT_MIN_REST_S`` (the event has no reason), with
+    ``EVENT_MIN_ON_S`` of full-power-equivalent heating and a rise of ``EVENT_MIN_RISE_C`` to the
     peak, while SmartPI is in control over the window (no stop, no exclusion seen by the thermostat), and only with a
     known home position. The window of a regulation reading ends ``READING_WINDOW_LAGS`` emitter lags after the
     heating step (the published lag, else the lag of its last fit), whenever the regulated phase closes.
@@ -628,11 +628,11 @@ class ModelReader(EventReader):
         if event.reason:
             return event.reason
         phase, search = event.phase, event.phase["search"]
-        if phase["on_s"] < HEATING_BALANCE_MIN_ON_S:
+        if phase["on_s"] < EVENT_MIN_ON_S:
             return "heating too short"
         t_peak = phase["t_cut"] + search.peak_delay_s
         baseline = phase["base_value"] + phase["base_slope"] * (t_peak - phase["t_start"])
-        if (-1.0 if event.mode == MODE_COOL else 1.0) * (search.peak_value - baseline) < HEATING_BALANCE_MIN_RISE_C:
+        if (-1.0 if event.mode == MODE_COOL else 1.0) * (search.peak_value - baseline) < EVENT_MIN_RISE_C:
             return "temperature rise too small"
         start = phase["t_start"] - READING_LEAD_S
         if self._excluded_at is not None and self._excluded_at >= start:

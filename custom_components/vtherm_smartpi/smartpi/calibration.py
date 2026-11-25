@@ -9,12 +9,15 @@ the pulses wait for the room to be ready.
 
 A calibration drives the measurement pulses of the direct start (smartpi/measure_pulse.py), in either start mode,
 with its own count (at most ``PULSE_MAX_COUNT`` pulses) and its own limits, sized from what the learning knows of the
-room (``pulse_limits``): a pulse may start from ``CALIBRATION_START_OVER_C`` past the setpoint; the next one waits
-twice the anticipation horizon after the end of the previous one (one to six hours); the rest lasts the passive dead
-time plus ``CALIBRATION_REST_EXTRA_S`` (the free-running window the dead-time estimator needs to measure the start),
-and ends earlier when the lowest point the room is heading to (the room plus its fall during the active dead time)
-reaches ``PULSE_REST_UNDER_C`` on the demand side; the heating step ends like that of the other pulses (response seen and the room back within
-``PULSE_HEAT_BACK_C`` of the setpoint) or lasts twice the active dead time plus the horizon (two to four hours) at most; during the stop the regulation takes over only when the room is ``PULSE_TAKEOVER_C`` on
+room (``pulse_limits``, from the response model of the mode, smartpi/response_model.py: effective dead time
+theta + tau_e / 2 and emitter lag theta + tau_e, both 0 without a model): a pulse may start from
+``CALIBRATION_START_OVER_C`` past the setpoint; the next one waits twice the anticipation horizon after the end of the
+previous one (one to six hours); the rest lasts the emitter lag plus ``CALIBRATION_REST_EXTRA_S`` (the free-running
+window the dead-time estimator needs to measure the start), and ends earlier when the lowest point the room is heading
+to (the room plus its fall during the effective dead time) reaches ``PULSE_REST_UNDER_C`` on the demand side; the
+heating step ends like that of the other pulses (response seen and the room back within ``PULSE_HEAT_BACK_C`` of the
+setpoint) or lasts twice the effective dead time plus the horizon (two to four hours) at most; during the stop the
+regulation takes over only when the room is ``PULSE_TAKEOVER_C`` on
 the demand side and lower than at the start of the stop by one step of the sensor, or ``CALIBRATION_DEPTH_CAP_C`` on
 the demand side in any case. No step lasts more than ``CALIBRATION_STEP_MAX_S``. The command of a pulse is applied as
 an on/off command like any pulse: the dead-time estimator measures the start and the stop as usual and its samples go
@@ -23,7 +26,8 @@ confirmed) and the estimator no longer waits for the response to the stop.
 
 The events of the calibration pulses are read like those of the start (smartpi/event_reading.py) but apart from them:
 two agreeing readings give the calibration reading (heating rate, loss coefficient, emitter lag). When the calibration
-ends on that reading, each quantity is compared with the value in force in the mode of the calibration (``in_force``)
+ends on that reading, the heating rate and the loss coefficient are compared with the values in force in the mode of
+the calibration (``in_force``, with the anticipation horizon in use, published beside the emitter lag of the reading)
 and corrected only when the value in force is off the reading by more than ``CALIBRATION_CORRECT_REL`` of the reading
 (the reading is the estimate of the truth; ``corrections``):
 
@@ -32,11 +36,12 @@ and corrected only when the value in force is off the reading by more than ``CAL
 - the loss coefficient is read and published, not corrected (the reading of a pulse is biased in a room with heavy
   walls). With ``CALIBRATION_CORRECT_B`` and when the two readings' own values agree within the agreement margin of
   the readings, it is corrected: the channel restarts and the reading stands until the learning's own time constant
-  is reliable again;
-- the emitter lag, with the direct start only: it is noted (``lag_s``, ``corrected``) and published; what the learning
-  reads is the response model, which takes the events of the calibration and replaces the history of the mode by its
-  two agreeing events under the same rule (smartpi/response_model.py). It never sets the anticipation horizon. With
-  the bootstrap start it is published only.
+  is reliable again.
+
+The emitter lag is corrected by the response model itself (smartpi/response_model.py), in either start mode: it takes
+the events of the calibration and, when two of them agree and their emitter lag is off the one it published before
+them by more than ``CALIBRATION_CORRECT_REL``, they replace the history of the mode; the horizon, the near band and the
+learning read that model.
 
 With ``CALIBRATION_SKIP_WHEN_OWN_AGREE``, a quantity is not corrected while the learning's own recent measures agree
 with the value in force (no drift candidate and the last ``CALIBRATION_OWN_RECENT`` measures within the threshold).
@@ -49,13 +54,13 @@ before the regulation computes its command. The step of the learned holding powe
 the feed-forward and the integral term do not jump, at the first regulation calculation after the correction; a
 change of Kp acts on the error as usual (it is not moved into the integral). While a calibration is in progress the
 learning takes no measure of the heating rate (its pulses and the recoveries after them would bias it); the loss
-coefficient, the dead times and the heating balance go on. After each calibration pulse the integral is held until
+coefficient, the dead times and the measurement events go on. After each calibration pulse the integral is held until
 the room reaches the setpoint. A pulse counts for its
 calibration once it reaches its heating step; one that ends before (a setpoint change during its rest, for example)
 does not count and the next one may start at once. A stop of the thermostat (off, window, shedding) ends the pulse in
 progress; the calibration goes on with its next pulse. A change of mode, a return of the learning stage, a learning
 reset or a pause of the learning cancels it. The calibration in progress, its pulses done and its start, the last
-corrections and the corrected lag are saved; a pulse in progress at a restart ends (smartpi/measure_pulse.py).
+corrections are saved; a pulse in progress at a restart ends (smartpi/measure_pulse.py).
 """
 from __future__ import annotations
 
@@ -96,13 +101,13 @@ CALIBRATION_START_OVER_C = 0.2               # a pulse may start up to this far 
 CALIBRATION_GAP_MIN_S = 3600.0               # gap after the previous pulse: twice the horizon, within these bounds
 CALIBRATION_GAP_MAX_S = 6.0 * 3600.0
 CALIBRATION_REST_EXTRA_S = DEADTIME_PRESTART_MIN_SPAN_S + 300.0   # free-running window + one sensor heartbeat
-CALIBRATION_HEAT_MIN_S = 2.0 * 3600.0        # heating step limit: twice (active dead time + horizon), within these
+CALIBRATION_HEAT_MIN_S = 2.0 * 3600.0        # heating step limit: twice (effective dead time + horizon), within these
 CALIBRATION_STEP_MAX_S = 4.0 * 3600.0        # longest step of a calibration pulse
 CALIBRATION_DEPTH_CAP_C = 0.8                # the regulation takes over at this distance on the demand side
 CALIBRATION_FALL_WINDOW_S = 900.0            # window of the fall rate of the room
 
-QUANTITIES = ("a", "b", "lag")
-_WORDS = {"a": "heating rate", "b": "loss coefficient", "lag": "emitter lag"}
+QUANTITIES = ("a", "b")
+_WORDS = {"a": "heating rate", "b": "loss coefficient"}
 
 
 def _seconds(value: object) -> float | None:
@@ -119,7 +124,7 @@ class PulseLimits(NamedTuple):
     start_over_c: float     # the pulse may start this far past the setpoint
     gap_s: float            # after the end of the previous pulse
     rest_s: float           # rest: the free-running window
-    trough_lead_s: float    # rest: the fall of the room is counted over this time (active dead time)
+    trough_lead_s: float    # rest: the fall of the room is counted over this time (effective dead time)
     fall_c_per_s: float     # rest: fall rate of the room on the demand side (>= 0)
     heat_max_s: float
     depth_cap_c: float
@@ -144,25 +149,21 @@ def fall_rate(tin_history: Iterable[tuple[float, float]], cooling: bool) -> floa
     return max(0.0, slope if cooling else -slope)
 
 
-def pulse_limits(dt_est: Any, hvac_mode: object, horizon_s: float, history: Any = None) -> PulseLimits:
-    """Limits of a calibration pulse from the dead times of ``hvac_mode`` (0 when not reliable), the anticipation
-    horizon in use and the recent fall of the room (``history``: the raw room temperature samples, the ``tin_history``
-    of ``dt_est`` when not given)."""
-    def reliable(view: tuple[float | None, bool]) -> float:
-        value, ok = view
-        return float(value) if ok and value is not None and value > 0.0 else 0.0
-
-    active = reliable(dt_est.active_deadtime(hvac_mode))
-    passive = reliable(dt_est.passive_deadtime(hvac_mode))
+def pulse_limits(model: dict | None, hvac_mode: object, horizon_s: float, history: Any = ()) -> PulseLimits:
+    """Limits of a calibration pulse from the response model of ``hvac_mode`` (``ResponseModel.values``, None without
+    one: its times count 0), the anticipation horizon in use and the recent fall of the room (``history``: the raw room
+    temperature samples). The rest waits the emitter lag theta + tau_e (the wait of the a/b windows) and the fall of
+    the room is counted over the effective dead time theta + tau_e / 2."""
+    theta, tau_e = (0.0, 0.0) if model is None else (float(model["theta_s"]), float(model["tau_e_s"]))
+    lag, effective = theta + tau_e, theta + 0.5 * tau_e
     horizon = max(float(horizon_s or 0.0), 0.0)
     return PulseLimits(
         start_over_c=CALIBRATION_START_OVER_C,
         gap_s=_clamp(2.0 * horizon, CALIBRATION_GAP_MIN_S, CALIBRATION_GAP_MAX_S),
-        rest_s=min(passive + CALIBRATION_REST_EXTRA_S, CALIBRATION_STEP_MAX_S),
-        trough_lead_s=active,
-        fall_c_per_s=fall_rate(
-            (getattr(dt_est, "tin_history", ()) if history is None else history) or (), hvac_mode == VThermHvacMode_COOL),
-        heat_max_s=_clamp(2.0 * (active + horizon), CALIBRATION_HEAT_MIN_S, CALIBRATION_STEP_MAX_S),
+        rest_s=min(lag + CALIBRATION_REST_EXTRA_S, CALIBRATION_STEP_MAX_S),
+        trough_lead_s=effective,
+        fall_c_per_s=fall_rate(history or (), hvac_mode == VThermHvacMode_COOL),
+        heat_max_s=_clamp(2.0 * (effective + horizon), CALIBRATION_HEAT_MIN_S, CALIBRATION_STEP_MAX_S),
         depth_cap_c=CALIBRATION_DEPTH_CAP_C,
         step_max_s=CALIBRATION_STEP_MAX_S,
     )
@@ -181,10 +182,9 @@ def own_measures_agree(history: Iterable[float], drift_buffer: Iterable[Any], in
             and all(not _differs(abs(v), abs(in_force)) for v in recent))
 
 
-def corrections(reading: dict[str, Any], in_force: dict[str, float], own_agree: dict[str, bool], lag: bool) -> list[str]:
+def corrections(reading: dict[str, Any], in_force: dict[str, float], own_agree: dict[str, bool]) -> list[str]:
     """Quantities of the agreeing ``reading`` to correct: those whose value ``in_force`` is off the reading by more than
-    ``CALIBRATION_CORRECT_REL`` of the reading (``b`` also needs the two readings to agree on it; the lag needs ``lag``: it acts with
-    the direct start only)."""
+    ``CALIBRATION_CORRECT_REL`` of the reading (``b`` also needs the two readings to agree on it)."""
     skip = own_agree if CALIBRATION_SKIP_WHEN_OWN_AGREE else {}
     out = []
     if _differs(in_force["a"], float(reading["a_per_min"])) and not skip.get("a"):
@@ -193,8 +193,6 @@ def corrections(reading: dict[str, Any], in_force: dict[str, float], own_agree: 
     if (CALIBRATION_CORRECT_B and b is not None and reading.get("b_agree") and _differs(in_force["b"], float(b))
             and not skip.get("b")):
         out.append("b")
-    if lag and _differs(in_force["lag_s"], float(reading["lag_s"])):
-        out.append("lag")
     return out
 
 
@@ -212,12 +210,11 @@ class Calibration:
         self.last_end_wall: float | None = None   # wall time of the last calibration that was not cancelled
         self.result: str | None = None
         self.last_request: str | None = None
-        self.lag_s: dict[str, float] = {}         # corrected emitter lag in force, by mode (direct start)
         self.clear()
 
     def clear(self) -> None:
-        """No calibration in progress, nothing measured nor corrected (the last result, request, end time and
-        corrected lag are kept)."""
+        """No calibration in progress, nothing measured nor corrected (the last result, request and end time are
+        kept)."""
         self.in_progress = False
         self.pulses = 0
         self.start_s: float | None = None
@@ -259,10 +256,6 @@ class Calibration:
         self.result = result
         if result != RESULT_CANCELLED:
             self.last_end_wall = time.time()
-
-    def forget_lag(self) -> None:
-        """Learning reset: the corrected lag stops."""
-        self.lag_s = {}
 
     def check(
         self, now: float, hvac_mode: object, learning_stage: bool, pulse_active: bool, readings_waiting: bool,
@@ -314,8 +307,6 @@ class Calibration:
         }
         if self.in_force is not None:
             saved.update(in_force=dict(self.in_force), corrected=list(self.corrected))
-        if self.lag_s:
-            saved["lag_s"] = dict(self.lag_s)
         return saved
 
     def load(self, saved: object, legacy: object = None) -> None:
@@ -325,7 +316,6 @@ class Calibration:
         self.result = None
         self.last_end_wall = None
         self.last_request = None
-        self.lag_s = {}
         if not isinstance(saved, dict):
             if isinstance(legacy, dict):
                 self.last_end_wall = normalize_wall_timestamp(legacy.get("last_calibration_time"))
@@ -345,10 +335,6 @@ class Calibration:
             self.in_force = {q: float(in_force[q]) for q in ("a", "b", "lag_s")}
             corrected = saved.get("corrected")
             self.corrected = [q for q in QUANTITIES if isinstance(corrected, list) and q in corrected]
-        lags = saved.get("lag_s")
-        for mode, lag in (lags.items() if isinstance(lags, dict) else ()):
-            if isinstance(mode, str) and _seconds(lag):
-                self.lag_s[mode] = float(lag)
         if saved.get("in_progress") is not True:
             if self.result == RESULT_IN_PROGRESS:
                 self.result = RESULT_CANCELLED

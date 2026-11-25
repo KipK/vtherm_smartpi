@@ -908,8 +908,7 @@ class SmartPI:
         """Horizon (s) of the anticipation read now and its source (see smartpi/anticipation.py)."""
         mode = hvac_mode if hvac_mode is not None else self._last_hvac_mode
         return select_horizon(
-            self.learn_win.heating_balance.kept_lag_s, lambda: self.gain_dead_time(mode), mode,
-            self._start.kept_lag_s(mode),
+            self.learn_win.model(mode), lambda: self.gain_dead_time(mode), mode, self._start.kept_lag_s(mode),
         )
 
     @property
@@ -1091,7 +1090,7 @@ class SmartPI:
     # Phase 2: Helper for Near-Band Auto-Calculation
     def update_near_band_auto(self, hvac_mode: VThermHvacMode, current_temp: float, ext_temp: Optional[float]) -> None:
         """
-        Calculate Near-Band thresholds based on Dead Time and Model Slopes (Phase 2).
+        Calculate Near-Band thresholds based on the response model and the model slopes.
 
         Delegates to DeadbandManager component.
         """
@@ -1100,7 +1099,7 @@ class SmartPI:
             hvac_mode=hvac_mode,
             current_temp=current_temp,
             ext_temp=ext_temp,
-            dt_est=self.regulation_dead_time(hvac_mode),
+            response=self.learn_win.model(hvac_mode),
             estimator=self.est,
             cycle_min=self.cycle_min,
             deadband_c=self.deadband_c,
@@ -1685,7 +1684,7 @@ class SmartPI:
             near_band_error=self._e_filt if self._e_filt is not None else error_i,
             hvac_mode=hvac_mode,
             tau_reliable=self._tau_reliable,
-            dt_est=self.regulation_dead_time(hvac_mode),
+            response=self.learn_win.model(hvac_mode),
             estimator=self.est,
             current_temp=current_temp,
             ext_temp=ext_current_temp,

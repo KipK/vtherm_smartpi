@@ -2,10 +2,10 @@
 
 import pytest
 
-from custom_components.vtherm_smartpi.smartpi.const import HEATING_BALANCE_PEAK_BIN_S, HEATING_BALANCE_PEAK_CONFIRM_S
+from custom_components.vtherm_smartpi.smartpi.const import EVENT_PEAK_BIN_S, EVENT_PEAK_CONFIRM_S
 from custom_components.vtherm_smartpi.smartpi.deadtime_estimator import DeadTimeEstimator
 
-BIN = HEATING_BALANCE_PEAK_BIN_S
+BIN = EVENT_PEAK_BIN_S
 TICK = 60.0
 
 
@@ -49,7 +49,7 @@ def test_fast_falling_room_confirms_after_one_closed_bin():
     est, cut, measured_at = _run(_profile(0.12, 600.0, 3.0), 3 * 3600.0)
     # Best bin 1; bin 2 is closed by the first sample of bin 3 and lies 0.06 C under it.
     assert measured_at == pytest.approx(cut + 3 * BIN)
-    assert measured_at < cut + BIN + HEATING_BALANCE_PEAK_CONFIRM_S
+    assert measured_at < cut + BIN + EVENT_PEAK_CONFIRM_S
     assert est.passive_measures[0]["value_s"] == pytest.approx(1.5 * BIN)
     assert est.passive_measures[0]["origin"] == "peak" and est.passive_measures[0]["fed"] is True
     assert est.deadtime_cool_s == pytest.approx(1.5 * BIN)

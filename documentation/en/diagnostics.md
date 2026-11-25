@@ -53,7 +53,7 @@ The `history` block contains these nineteen series:
 | `power.ff_percent` | Feed-forward contribution |
 | `model.a` | Learned heating gain |
 | `model.b` | Learned heat-loss coefficient |
-| `model.effective_dead_time_s` | Effective dead time of the response model in seconds (`model.dead_time_s` plus half of `model.response_time_constant_s`); published only, not used by the regulation |
+| `model.effective_dead_time_s` | Effective dead time of the response model in seconds (`model.dead_time_s` plus half of `model.response_time_constant_s`); the near band above the setpoint and the calibration pulses read it, the gains do not |
 | `feedforward.source` | Holding power source in force, as in `live.feedforward.source` |
 | `feedforward.wall_power_percent` | Wall part of the feed-forward applied, in % of full power (negative when the walls give heat back); `null` when no wall part is applied |
 | `room_model.a` | Heating response of the room model, in the units of `model.a`; `null` before a publication |
@@ -150,14 +150,16 @@ last one until the next request.
 | `reading_lag_s` | Emitter lag of the two agreeing pulses in seconds, `null` until two pulses agree |
 | `in_force_a` | Heating rate in use when the pulses agreed, in °C/min at full power (5 decimals), compared with `reading_a`; `null` until two pulses agree |
 | `in_force_b` | Loss coefficient in use when the pulses agreed, in 1/min (6 decimals); `null` until two pulses agree |
-| `in_force_lag_s` | Horizon of the anticipation in use when the pulses agreed, in seconds, compared with `reading_lag_s`; `null` until two pulses agree |
-| `corrected` | What the calibration corrected: a list of `heating rate`, `emitter lag`; empty when nothing was corrected |
+| `in_force_lag_s` | Horizon of the anticipation in use when the pulses agreed, in seconds, shown beside `reading_lag_s`; `null` until two pulses agree |
+| `corrected` | What the calibration corrected: a list of `heating rate`, `loss coefficient`; empty when nothing was corrected |
 
 The dead times measured by the pulses join the learned dead times like any other
 measurement. A quantity of the reading is corrected only when it differs from
 the value in use by more than 30 % (see **Calibration** in the
-[SmartPI documentation](vtherm_smartpi.md)); the reading never sets the horizon
-of the anticipation.
+[SmartPI documentation](vtherm_smartpi.md)). The emitter lag is corrected by the
+response model itself: the calibration pulses are events of the model, and two
+of them that agree replace its history when their emitter lag is more than 30 %
+off the one it published before them.
 
 `analysis` groups the advanced live values into `control`, `learning`,
 `deadtime`, `governance` and `feedforward`.
@@ -169,8 +171,8 @@ anticipation of the temperature, in heating and in cooling:
 |---|---|
 | `anticipation_c` | Correction in °C added to the measured temperature for the proportional and integral errors at the last tick, `0` when off (outside the stable phase, without horizon, without a rising or falling slope, or during a guard cut) |
 | `anticipation_horizon_s` | Horizon of the anticipation in seconds (the time between a command and its effect), `0` when none |
-| `anticipation_horizon_source` | Where the horizon comes from: `measurement pulses` (emitter lag kept from the measurement pulses of the direct start, in heating and in cooling), `heating balance` (median of the last emitter lags measured), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none`; the heating balance is used in heating only |
-| `effective_dead_time_s` | Effective dead time of the response model in seconds (dead time plus half the response time constant), `null` without a model; published only |
+| `anticipation_horizon_source` | Where the horizon comes from: `response model` (emitter lag of the response model of the mode: dead time plus response time constant), and without a model `measurement pulses` (emitter lag kept from the measurement pulses of the direct start), `dead times` (the longer of the active dead time of the mode and half its passive dead time) or `none` |
+| `effective_dead_time_s` | Effective dead time of the response model in seconds (dead time plus half the response time constant), `null` without a model; the near band above the setpoint and the calibration pulses read it |
 
 `analysis.deadtime` follows the dead time detection:
 
@@ -180,20 +182,6 @@ anticipation of the temperature, in heating and in cooling:
 | `last_power` | Last power seen by the detector |
 | `waiting_elapsed_s` | Age of the response being waited for in seconds, `null` when no detection is armed |
 | `heat_last_outcome` / `cool_last_outcome` | Outcome of the last wait for a rising / falling response: `detected`, `timeout`, `aborted` (power transition before a detection), `rejected` (the temperature already moved in the direction of the response before the power start, too steeply or too irregularly to measure it), `ignored` (a measurement shorter than the published dead time, dropped because the temperature was already moving in the direction of the response before the start or the window before the start was too short to tell), `null` before the first one |
-
-`analysis.learning.heating_balance` describes the heating rate and the emitter
-lag measured on heating phases. The regulation reads only `kept_lag_s`:
-
-| Field | Meaning |
-|---|---|
-| `state` | `resting`, `heating` or `waiting for the peak` (after the cut) |
-| `measurements` | Number of retained measurements (at most 7) |
-| `a` | Median heating rate in °C/min at full power (5 decimals), `null` without measurement |
-| `lag_s` | Median emitter lag in seconds, `null` without a measurement that resolves it |
-| `kept_lag_s` | Median of the last 7 emitter lags measured, in seconds, `null` while none was measured; a measurement without emitter lag removes none of them. It is the horizon of the anticipation when positive |
-| `kept_lags` | Number of emitter lags kept (at most 7) |
-| `last_reason` | Outcome of the last ended phase: `measured`, or why it gave nothing (`rest before heating too short`, `baseline samples insufficient`, `heating too short`, `temperature rise too small`, `still rising at the next heating`, `no peak within the wait`, `observation gap`, `heating mode left`, `interrupted by restart`). Empty before the first phase |
-| `last` | Last measurement, `null` without one: `heating_min` (full-power heating time in minutes), `rise_c` (temperature rise at the peak above the passive trajectory), `peak_delay_min` (minutes from the cut to the peak), `a`, `lag_s` (`null` when the power was not constant or the emitter lag is not resolved), `constant_power`, `context` (`bootstrap`, `calibration` or `regulation`, at the start of the phase) |
 
 During the bootstrap, `learning.bootstrap_status` describes the current step:
 
@@ -220,8 +208,14 @@ response time constant (the emitter, the air and the nearby mass together). It i
 pulses, the bootstrap phases, the calibration pulses and the comfort returns of
 the regulation after a rest (those only at night, with the home position known).
 The learning of `a` and `b` reads it (no learning window of the learning phase
-before it, delivered power, delay of a learning window after a start or a stop);
-the regulator itself (gains, holds, anticipation, near band) does not read it.
+before it, delivered power, delay of a learning window after a start or a stop),
+and so do the horizon of the anticipation (the emitter lag, dead time plus
+response time constant), the near band in heating (the effective dead time above
+the setpoint, the emitter lag below it), the limits of the calibration pulses and
+the measurement pulses of the direct start (they go on while the model of the mode
+is not published). With `dead time assumed` these values are the cautious ends:
+the horizon is the whole emitter lag and the effective dead time three quarters of
+it. The gains and the integral holds do not read it.
 
 | Path | Meaning |
 |---|---|

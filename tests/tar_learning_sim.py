@@ -46,6 +46,8 @@ def seed_stable(algo: SmartPI) -> None:
     algo.dt_est.deadtime_heat_reliable = True
     algo.dt_est.deadtime_cool_s = 900.0
     algo.dt_est.deadtime_cool_reliable = True
+    # the response model a state saved with these dead times is seeded with (effective dead time 480 s)
+    algo._start.model.seed(str(VThermHvacMode_HEAT), 320.0, 320.0)
     algo._output_initialized = True
 
 

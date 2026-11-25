@@ -3,9 +3,9 @@
 import pytest
 
 from custom_components.vtherm_smartpi.smartpi.const import (
-    HEATING_BALANCE_PEAK_BIN_S,
-    HEATING_BALANCE_PEAK_CONFIRM_S,
-    HEATING_BALANCE_PEAK_MAX_S,
+    EVENT_PEAK_BIN_S,
+    EVENT_PEAK_CONFIRM_S,
+    EVENT_PEAK_MAX_S,
 )
 from custom_components.vtherm_smartpi.smartpi.peak_search import (
     PEAK_CONFIRMED,
@@ -14,8 +14,8 @@ from custom_components.vtherm_smartpi.smartpi.peak_search import (
     PeakSearch,
 )
 
-BIN = HEATING_BALANCE_PEAK_BIN_S
-CONFIRM_BINS = int(HEATING_BALANCE_PEAK_CONFIRM_S // BIN)
+BIN = EVENT_PEAK_BIN_S
+CONFIRM_BINS = int(EVENT_PEAK_CONFIRM_S // BIN)
 
 
 def _feed(search: PeakSearch, values: list[float], step_s: float = 60.0, t0: float = 0.0) -> int | None:
@@ -62,8 +62,8 @@ def test_empty_bins_are_skipped():
 def test_search_without_confirmation_gives_none_until_it_expires():
     search = PeakSearch(100.0)
     assert _feed(search, [20.0 + 0.001 * i for i in range(300)], t0=100.0) is None
-    assert not search.expired(100.0 + HEATING_BALANCE_PEAK_MAX_S - 1.0)
-    assert search.expired(100.0 + HEATING_BALANCE_PEAK_MAX_S)
+    assert not search.expired(100.0 + EVENT_PEAK_MAX_S - 1.0)
+    assert search.expired(100.0 + EVENT_PEAK_MAX_S)
 
 
 def test_heating_again_before_the_confirmation_keeps_a_peak_that_is_not_the_last_bin():

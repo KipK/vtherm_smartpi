@@ -11,8 +11,9 @@ separate. The learning keeps its stage and everything keyed on it. ``learning_st
   Its model readers see no published model during the stage, so the feed-forward is zero. Up to three measurement
   pulses (smartpi/measure_pulse.py) replace the PI command for a short sequence that gives the learning a dead time
   after a start and after a stop, and the readings of the measurement events they cause (smartpi/event_reading.py)
-  keep a heating rate, a loss coefficient and an emitter lag that stand in for the first model. The dead time after
-  a stop is read on the temperature peak (smartpi/peak_search.py). The integral term of the regulator starts from zero
+  keep a heating rate, a loss coefficient and an emitter lag that stand in for the first model. The pulses go on while
+  no values are kept in the mode or its response model is not published. The dead time after a stop is read on the
+  temperature peak (smartpi/peak_search.py). The integral term of the regulator starts from zero
   at the calculation at which the learning stage ends.
 
 The values kept from the readings are given to the a/b estimator as starting values (smartpi/starting_values.py),
@@ -126,7 +127,6 @@ class LearningStart:
         dropped, a calibration in progress is cancelled."""
         self._use(self.configured)
         self.cancel_calibration()
-        self.calibration.forget_lag()
         self.pulse.reset()
         self.reading.reset()
         self.model_reading.reset()
@@ -180,8 +180,8 @@ class LearningStart:
         return self.reading.kept_a_per_min(hvac_mode) if self.direct and self.learning_stage else None
 
     def kept_lag_s(self, hvac_mode: object) -> float | None:
-        """Emitter lag kept from the readings in ``hvac_mode`` (anticipation horizon), None when none is kept and with
-        the bootstrap start, whose kept lag is published only."""
+        """Emitter lag kept from the readings in ``hvac_mode`` (anticipation horizon while the response model of the mode
+        is not published), None when none is kept and with the bootstrap start, whose kept lag is published only."""
         return self.reading.kept_lag_s(hvac_mode) if self.direct else None
 
     def _blocked(self) -> bool:
@@ -253,8 +253,7 @@ class LearningStart:
                 cooling=hvac_mode == VThermHvacMode_COOL,
                 heat_or_cool=hvac_mode in (VThermHvacMode_HEAT, VThermHvacMode_COOL),
                 learning_stage=learning_stage,
-                active_deadtime_known=dt_est.active_deadtime(hvac_mode)[1],
-                passive_deadtime_known=dt_est.passive_deadtime(hvac_mode)[1],
+                model_known=owner.learn_win.model(hvac_mode) is not None,
                 dt_est=dt_est,
                 history=owner.learn_win.temperatures.raw,
                 previous_command=previous_command,
@@ -263,7 +262,8 @@ class LearningStart:
                 calibration_pulses_left=cal.pulses < PULSE_MAX_COUNT,
                 event_stage=owner.learn_win.events.phase_stage(str(hvac_mode)) if calibrating else None,
                 limits=pulse_limits(
-                    dt_est, hvac_mode, owner.anticipation_horizon(hvac_mode).seconds, owner.learn_win.temperatures.raw,
+                    owner.learn_win.model(hvac_mode), hvac_mode, owner.anticipation_horizon(hvac_mode).seconds,
+                    owner.learn_win.temperatures.raw,
                 ) if calibrating else None,
             )
             if calibrating and self.pulse.calibration_heated > heated:
@@ -369,7 +369,7 @@ class LearningStart:
         in_force = {"a": abs(est.a), "b": est.b, "lag_s": owner.anticipation_horizon(mode).seconds}
         own = {"a": own_measures_agree(est.a_meas_hist, est.a_drift.drift_buffer, in_force["a"]),
                "b": own_measures_agree(est.b_meas_hist, est.b_drift.drift_buffer, in_force["b"])}
-        wanted = corrections(reading, in_force, own, lag=self.direct)
+        wanted = corrections(reading, in_force, own)
         cal.in_force = in_force
         if not wanted:
             return
@@ -381,12 +381,9 @@ class LearningStart:
         if "a" in wanted:
             est.correct_a(mode, float(reading["a_per_min"]))
             done.append("a")
-        if "lag" in wanted:
-            cal.lag_s[mode] = float(reading["lag_s"])
-            done.append("lag")
         est.start.latch(ramp)
         owner._ff_holding.note_learned_step(k_ff)
-        cal.corrected = [q for q in ("a", "b", "lag") if q in done]
+        cal.corrected = [q for q in ("a", "b") if q in done]
 
     def interrupt(self, now: float, reason: str) -> None:
         """The thermostat stops (off, window, shedding): the pulse and the readings in progress end."""

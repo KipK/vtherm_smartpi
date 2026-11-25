@@ -282,22 +282,20 @@ RESPONSE_LAG_U_TOL = 0.05              # Power deviation ending a constant-power
 RESTART_BRIDGE_MAX_GAP_S = 600.0
 # Same bound for the power-step episode resumed across a restart.
 RESPONSE_LAG_RESTART_MAX_GAP_S = RESTART_BRIDGE_MAX_GAP_S
-# Heating balance: heating rate and emitter lag measured on
-# a heating phase followed by a stop, from the energy balance of the room.
-HEATING_BALANCE_MIN_REST_S = 1800.0    # Rest before the heating, for a settled baseline
-HEATING_BALANCE_BASELINE_SPAN_S = 3600.0  # Max rest tail used to fit the baseline
-HEATING_BALANCE_MIN_ON_S = 600.0       # Full-power seconds required in a phase
-HEATING_BALANCE_PHASE_MIN_OFF_S = RESPONSE_LAG_PHASE_MIN_OFF_S  # Shorter cut: same phase
-HEATING_BALANCE_PEAK_BIN_S = 300.0     # Width of the bins of the peak search
-HEATING_BALANCE_PEAK_CONFIRM_S = 1800.0  # A bin this long after the best bin confirms the peak
-HEATING_BALANCE_PEAK_MAX_S = 4 * 3600.0  # Longest wait for the peak after the cut
+# Measurement events (smartpi/measure_event.py): a rest, a heating phase, its cut and the peak that follows.
+EVENT_MIN_REST_S = 1800.0    # Rest before the heating, for a settled baseline
+EVENT_BASELINE_SPAN_S = 3600.0  # Max rest tail used to fit the baseline
+EVENT_MIN_ON_S = 600.0       # Full-power seconds required in a regulation event
+EVENT_PHASE_MIN_OFF_S = RESPONSE_LAG_PHASE_MIN_OFF_S  # Shorter cut: same phase
+EVENT_PEAK_BIN_S = 300.0     # Width of the bins of the peak search
+EVENT_PEAK_CONFIRM_S = 1800.0  # A bin this long after the best bin confirms the peak
+EVENT_PEAK_MAX_S = 4 * 3600.0  # Longest wait for the peak after the cut
 # Early confirmation of the peak of a stop (dead-time estimator only): a closed bin after the best one, lower than
 # it by max(STOP_PEAK_DROP_MIN_C, STOP_PEAK_DROP_STEPS sensor steps, STOP_PEAK_DROP_RISE_FRAC of the rise since the cut).
 STOP_PEAK_DROP_MIN_C = 0.05
 STOP_PEAK_DROP_STEPS = 2.0
 STOP_PEAK_DROP_RISE_FRAC = 0.5
-HEATING_BALANCE_MIN_RISE_C = 0.3       # Smallest temperature rise of a measurement
-HEATING_BALANCE_HISTORY = 7            # Measurements kept (published values: their median)
+EVENT_MIN_RISE_C = 0.3       # Smallest temperature rise of a regulation event read by the response model
 # Active gate cap, fraction of the median episode (the settling waits: smartpi/response_model.py).
 AB_SETTLE_ACTIVE_CAP_FRAC = 0.5
 

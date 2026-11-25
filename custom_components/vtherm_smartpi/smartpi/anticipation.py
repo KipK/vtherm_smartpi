@@ -20,7 +20,7 @@ from .const import (
     clamp,
 )
 
-SOURCE_HEATING_BALANCE = "heating balance"
+SOURCE_RESPONSE_MODEL = "response model"
 SOURCE_PULSES = "measurement pulses"
 SOURCE_DEAD_TIMES = "dead times"
 SOURCE_NONE = "none"
@@ -34,27 +34,28 @@ class AnticipationHorizon(NamedTuple):
 
 
 def select_horizon(
-    kept_lag_s: float | None,
+    model: dict | None,
     dead_time_view: Callable[[], object],
     hvac_mode,
     pulse_lag_s: float | None = None,
 ) -> AnticipationHorizon:
     """Return the horizon of the anticipation for ``hvac_mode``.
 
-    In heating it is the median of the last lags measured by the heating balance
-    when that is positive. Otherwise, and always in cooling (the balance is
-    measured in heating only), it is the longer of the active dead time of the
-    mode and half its passive dead time, each counted only when reliable and
-    positive. It is 0 when none counts. ``dead_time_view`` returns the dead-time
-    source of the gain rule (``active_deadtime`` and ``passive_deadtime`` by mode)
-    and is called only when the lag does not decide. ``pulse_lag_s`` (the lag kept from the readings of the
-    measurement pulses in ``hvac_mode``, None when no values are kept in that mode) is the horizon whenever it is
-    positive, in heating and in cooling; otherwise the order above applies.
+    ``model`` is the response model of the mode (``ResponseModel.values``: ``theta_s``, ``tau_e_s``), None without
+    one. With a model the horizon is its emitter lag theta + tau_e, the mean arrival time of the commanded heat; when
+    the split of the model is assumed that sum is the emitter lag S itself (the cautious end of theta in [0, S]).
+    Without a model: ``pulse_lag_s`` (the lag kept from the readings of the measurement pulses in ``hvac_mode``, None
+    when no values are kept in that mode) when positive, else the longer of the active dead time of the mode and half
+    its passive dead time, each counted only when reliable and positive; 0 when none counts. ``dead_time_view``
+    returns the dead-time source of the gain rule (``active_deadtime`` and ``passive_deadtime`` by mode) and is called
+    only when nothing before decides.
     """
+    if model is not None:
+        lag = float(model["theta_s"]) + float(model["tau_e_s"])
+        if lag > 0.0:
+            return AnticipationHorizon(lag, SOURCE_RESPONSE_MODEL)
     if pulse_lag_s is not None and pulse_lag_s > 0.0:
         return AnticipationHorizon(float(pulse_lag_s), SOURCE_PULSES)
-    if hvac_mode != VThermHvacMode_COOL and kept_lag_s is not None and kept_lag_s > 0.0:
-        return AnticipationHorizon(float(kept_lag_s), SOURCE_HEATING_BALANCE)
     view = dead_time_view()
     active, active_reliable = view.active_deadtime(hvac_mode)
     passive, passive_reliable = view.passive_deadtime(hvac_mode)

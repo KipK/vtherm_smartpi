@@ -14,7 +14,7 @@ An entity is a ``binary_sensor`` or an ``input_boolean``; only the state ``on`` 
 ``unknown`` and an absent entity count as off. The states are read at the start of every calculation, the first one
 after a restart included. The entities never change the saved pause.
 
-While the learning is blocked: the a/b windows, the emitter lag, the heating balance, the measurement events and
+While the learning is blocked: the a/b windows, the emitter lag, the measurement events and
 their readings (start values and response model) are not fed, and no fit runs; the dead-time detection is suspended
 but the temperature history that the anticipation and the pulses read is fed as usual; the records of the
 measurement events are fed so that they stay continuous; the T_ar learning and the room model record each tick with

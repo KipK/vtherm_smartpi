@@ -122,9 +122,9 @@ def test_published_calibration_summary_has_plain_values() -> None:
     assert cal["state"] == "idle" and cal["pulses_done"] == 0 and cal["result"] is None
     assert cal["last_request"] is None and cal["corrected"] == [] and cal["in_force_a"] is None
     algo._start.calibration.in_force = {"a": 0.05, "b": 0.0003, "lag_s": 600.0}
-    algo._start.calibration.corrected = ["a", "b", "lag"]
+    algo._start.calibration.corrected = ["a", "b"]
     cal = algo.get_published_diagnostics()["calibration"]
-    assert cal["corrected"] == ["heating rate", "loss coefficient", "emitter lag"]
+    assert cal["corrected"] == ["heating rate", "loss coefficient"]
     assert (cal["in_force_a"], cal["in_force_b"], cal["in_force_lag_s"]) == (0.05, 0.0003, 600)
     force_smartpi_stable_mode(algo)
     algo._start.calibration.begin()

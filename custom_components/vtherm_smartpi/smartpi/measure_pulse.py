@@ -24,7 +24,8 @@ A pulse starts at the first calculation where the room is at or on the demand si
 (a heating already at that power is a full-power start the estimator measures; while the room is further away the PI
 regulates), at most
 ``PULSE_MAX_COUNT`` times per mode and blank start and ``PULSE_MIN_GAP_S`` after the end of the previous one, while the
-learning stage lasts and the dead time after a start or the dead time after a stop is not published. A calibration
+learning stage lasts and the readings have kept no values in the mode or the response model of the mode
+(smartpi/response_model.py) is not published. A calibration
 (smartpi/calibration.py) starts pulses in either start mode, with its own count and its own limits (``limits``, given
 by the calibration: start window, gap, rest, heating step and stop); those pulses do not count for the learning stage.
 A pulse interrupted by a restart, a stop of the thermostat, a change of the
@@ -34,7 +35,7 @@ ended before its heating step: it does not count for its calibration and the nex
 be followed by the dead-time estimator (it did not arm its detection on that start) ends at once and counts.
 The sequence is the same in COOL, mirrored.
 
-The command, the learning, the heating balance and the dead-time estimator see a pulse as an on/off command:
+The command, the learning, the measurement events and the dead-time estimator see a pulse as an on/off command:
 the algorithm applies it immediately and feeds the estimator after the commit. The readings of the events they cause
 (smartpi/event_reading.py) give the gains of the learning stage (smartpi/gains.py) their heating rate.
 """
@@ -146,8 +147,7 @@ class MeasurePulse:
         cooling: bool,
         heat_or_cool: bool,
         learning_stage: bool,
-        active_deadtime_known: bool,
-        passive_deadtime_known: bool,
+        model_known: bool,
         dt_est: Any,
         previous_command: float = 0.0,
         readings_pending: bool = False,
@@ -159,8 +159,9 @@ class MeasurePulse:
     ) -> None:
         """Advance the pulse for this calculation (called once per calculation, before the command is chosen).
 
-        ``readings_pending``: the readings of the events (smartpi/event_reading.py) have not kept values yet, so the
-        pulses go on even when both dead times are known. ``calibration``: a calibration is in progress; its pulses
+        ``model_known``: the response model of the mode is published. ``readings_pending``: the readings of the events
+        (smartpi/event_reading.py) have not kept values yet, so the pulses go on even when the model is known.
+        ``calibration``: a calibration is in progress; its pulses
         start while ``calibration_pulses_left``. ``event_stage``: stage of the measurement event in progress
         (``MeasureEventDetector.phase_stage``), which ends the stop step of a calibration pulse. ``limits``: the limits of
         the calibration pulses (``smartpi.calibration.PulseLimits``), read while a calibration is in progress. ``history``:
@@ -174,7 +175,7 @@ class MeasurePulse:
             wanted = calibration_pulses_left if calibration else (
                 learning_stage
                 and self.count_for(hvac_mode) < PULSE_MAX_COUNT
-                and (readings_pending or not (active_deadtime_known and passive_deadtime_known))
+                and (readings_pending or not model_known)
             )
             own = limits if calibration else None
             low, gap = (0.0, PULSE_MIN_GAP_S) if own is None else (-own.start_over_c - 1e-9, own.gap_s)

@@ -22,7 +22,7 @@ unless they start with `tests/`. Format: symptom/trap -> why -> what to do.
 - A directional/non-directional integral block after a setpoint change can pin a steady error (P-only equilibrium = deficit/Kp) or create a catch-22 with opposing integral memory; any hold must be signed and let opposing memory unwind to zero.
 - Resume after window/shedding holds the integral for the active dead time (`smartpi/resume_hold.py`); a resume with small residual error ends the hold early.
 - HEAT<->COOL: `calculate` resets the PI and calls `est.ensure_hvac_mode`; model is signed mono-mode (a>0 HEAT, a<0 COOL, b>0). Legacy COOL states used a positive A: the migration keeps b and resets A. A mode change stashes the outgoing mode-dependent model (a channel, dead times, emitter lag) and restores the incoming one; `ensure_hvac_mode` still returns True then, so the PI/FF warm-up restarts. Tests must not switch mode on a prepared model (A history is cleared).
-- Dead-time channels are physical: `deadtime_heat` = temperature rise, `deadtime_cool` = fall; map active/passive through the current mode. The anticipation horizon uses `SmartPI.gain_dead_time(hvac_mode)` active/passive accessors (`smartpi/anticipation.py::select_horizon`), never `deadtime_cool_*` directly.
+- Dead-time channels are physical: `deadtime_heat` = temperature rise, `deadtime_cool` = fall; map active/passive through the current mode. Without a response model the anticipation horizon falls back to `SmartPI.gain_dead_time(hvac_mode)` active/passive accessors (`smartpi/anticipation.py::select_horizon`), never `deadtime_cool_*` directly.
 
 ## Learning windows A/B and dead time
 

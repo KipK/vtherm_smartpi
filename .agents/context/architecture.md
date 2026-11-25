@@ -50,7 +50,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `guards.py`: `SmartPIGuards`: guard cut / guard kick safety actions.
 - `resume_hold.py`: `ResumeDeadtimeHold`: integral hold after window, shedding or heating-unavailable resume; `recovery_error_floor_c`.
 - `learning_block.py`: `LearningBlock` (`SmartPI.learning_block`): service pause and the disturbance / heating-unavailable entities block every learning; tests `test_smartpi_learning_block.py`.
-- `anticipation.py`: slope anticipation (`correction_c`, `select_horizon`, `anticipated_error`): the P and I errors read the measured temperature plus the expected travel over the horizon, in HEAT and COOL.
+- `anticipation.py`: slope anticipation (`correction_c`, `select_horizon`, `anticipated_error`): the P and I errors read the measured temperature plus the expected travel over the horizon (the emitter lag of the response model), in HEAT and COOL.
 - `const.py`: algorithm constants, enums, `clamp`, governance matrix.
 
 **Setpoint / deadband**
@@ -64,8 +64,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `ab_aggregator.py`: published a_hat / b_hat aggregation.
 - `ab_drift.py`: persistent drift helpers.
 - `ab_window_balance.py`: integral-balance pools for windows without a robust slope.
-- `heating_balance.py`: heating-balance estimator reading the HEAT events of the detector (its median kept emitter lag is the HEAT horizon of the anticipation; the rest is observation only).
-- `learning_window.py`: `LearningWindowManager`: multi-cycle learning windows, acceptance.
+- `learning_window.py`: `LearningWindowManager`: multi-cycle learning windows, acceptance; owns the measurement event detector (`events`).
 - `learning_outcomes.py`: bounded counters of window outcomes.
 - `tint_filter.py`: adaptive filter on indoor temperature (`t_int_lp`, `t_int_clean`).
 
@@ -125,7 +124,7 @@ Find a test by module name: `tests/test_<module>.py` or `tests/test_smartpi_<top
 | Control core | `test_smartpi_{antiwindup,bumpless_transfer,feedback,gain_transfer,governance,guards,guard_cut_*,integral_hold,max_on_percent,pause,shedding,robustness*}`, `test_algo_{deadband_hysteresis,off_mode}` |
 | Setpoint / deadband | `test_smartpi_setpoint*`, `test_algo_setpoint_boost`, `test_smartpi_deadband_output`, `test_smartpi_near_band_unwind`, `test_smartpi_nearband_model`, `test_smartpi_valve_curve`, `test_smartpi_valve_runtime_sync` |
 | Measurement events | `test_smartpi_{peak_search,measure_event,event_reading,starting_values,learning_start,start_per_mode,response_model}` |
-| Learning A/B | `test_ab_window_balance`, `test_smartpi_ab_*`, `test_smartpi_learning_*`, `test_learning_outcomes`, `test_smartpi_heating_balance`, `test_smartpi_b_heat_learning_guard`, `test_smartpi_hysteresis_learning`, `test_smartpi_tin_history_coverage` |
+| Learning A/B | `test_ab_window_balance`, `test_smartpi_ab_*`, `test_smartpi_learning_*`, `test_learning_outcomes`, `test_smartpi_b_heat_learning_guard`, `test_smartpi_hysteresis_learning`, `test_smartpi_tin_history_coverage` |
 | Dead time / emitter lag / calibration | `test_smartpi_deadtime_*`, `test_smartpi_power_steps*`, `test_smartpi_passive_cut_gate`, `test_smartpi_calibration*` |
 | Feed-forward | `test_smartpi_feedforward`, `test_room_model_feedforward` |
 | Restart | `test_restart_bridge*`, `test_smartpi_restart_*` |
@@ -158,8 +157,8 @@ Support files:
 | Change the landing on the setpoint (anticipation) / boost | `smartpi/anticipation.py` (rule), `algo.py::SmartPI.calculate` (wiring), `smartpi/setpoint.py` (boost) |
 | Change restart behavior | `smartpi/restart_bridge.py`, `handler.py` (`_restart_exclusion`) |
 | Add a numerical learning job | new module in `smartpi/<pkg>/jobs.py` style (snapshot in, plain data out, executor, `job_abort.check`); numpy/scipy imported lazily in the job only; give its manager `active`, `async_run`, `stop`, `dirty` and add it to `SmartPIHandler._learning_jobs` (one background loop runs them one after the other) |
-| Change the peak search after a cut | `smartpi/peak_search.py` only (its constants `HEATING_BALANCE_PEAK_*` live in `const.py`); callers are `measure_event.py` and `deadtime_estimator.py` |
-| Change what a heating event is (rest, phase, cut, source) | `smartpi/measure_event.py`; consumers pick events by source (`heating_balance.py`, `event_reading.py`) |
+| Change the peak search after a cut | `smartpi/peak_search.py` only (its constants `EVENT_PEAK_*` live in `const.py`); callers are `measure_event.py` and `deadtime_estimator.py` |
+| Change what a heating event is (rest, phase, cut, source) | `smartpi/measure_event.py`; consumers pick events by source (`event_reading.py`: `EventReader`, `ModelReader`) |
 | Change the fit of an event or the agreement rule | `smartpi/event_fit.py` (fit), `smartpi/event_reading.py` (windows, queue, kept values) |
 | Change the response model (theta, tau_e) | `smartpi/response_model.py` (aggregation, publication, seed), `event_reading.py::ModelReader` (admission), `event_fit.py::fit_response` |
 | Change the starting values, their release or the warm-up credit | `smartpi/starting_values.py`, hand-over in `smartpi/learning_start.py`, release calls in `smartpi/ab_estimator.py` |
@@ -172,7 +171,7 @@ Rules for any user-visible change: update `documentation/en` and `documentation/
 
 `algo.py` and `handler.py` must not grow. New logic goes into a new or existing module under `smartpi/`; `algo.py` only wires it (construct, call, persist, publish), and `handler.py` only bridges VT. Extract before adding.
 
-Current sizes (lines): `algo.py` 2206, `handler.py` 760, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 21932. Largest `smartpi/` files: `ab_estimator.py` 1222, `learning_window.py` 1048, `deadtime_estimator.py` 907, `measure_event.py` 750.
+Current sizes (lines): `algo.py` 2173, `handler.py` 760, all of `custom_components/vtherm_smartpi/smartpi/` (including subpackages) 21799. Largest `smartpi/` files: `ab_estimator.py` 1329, `learning_window.py` 1030, `deadtime_estimator.py` 909, `event_reading.py` 753.
 
 ## 7. Names that do not exist (do not look for them)
 

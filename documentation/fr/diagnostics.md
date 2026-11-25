@@ -53,7 +53,7 @@ Le bloc `history` contient ces dix-neuf séries :
 | `power.ff_percent` | Contribution feed-forward |
 | `model.a` | Gain de chauffe appris |
 | `model.b` | Coefficient de déperdition appris |
-| `model.effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (`model.dead_time_s` plus la moitié de `model.response_time_constant_s`) ; publié seulement, non utilisé par la régulation |
+| `model.effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (`model.dead_time_s` plus la moitié de `model.response_time_constant_s`) ; la bande proche au-dessus de la consigne et les impulsions de calibration le lisent, les gains non |
 | `feedforward.source` | Source de la puissance de maintien en vigueur, comme dans `live.feedforward.source` |
 | `feedforward.wall_power_percent` | Part des murs du feed-forward appliquée, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` lorsqu'aucune part des murs n'est appliquée |
 | `room_model.a` | Réponse de chauffe du modèle de pièce, dans les unités de `model.a` ; `null` avant une publication |
@@ -153,14 +153,17 @@ dernière jusqu'à la demande suivante.
 | `reading_lag_s` | Retard de l'émetteur des deux impulsions concordantes en secondes, `null` tant que deux impulsions ne concordent pas |
 | `in_force_a` | Vitesse de chauffe en usage lorsque les impulsions ont concordé, en °C/min à pleine puissance (5 décimales), comparée à `reading_a` ; `null` tant que deux impulsions ne concordent pas |
 | `in_force_b` | Coefficient de pertes en usage lorsque les impulsions ont concordé, en 1/min (6 décimales) ; `null` tant que deux impulsions ne concordent pas |
-| `in_force_lag_s` | Horizon de l'anticipation en usage lorsque les impulsions ont concordé, en secondes, comparé à `reading_lag_s` ; `null` tant que deux impulsions ne concordent pas |
-| `corrected` | Ce que la calibration a corrigé : une liste parmi `heating rate` (vitesse de chauffe), `emitter lag` (retard de l'émetteur) ; vide si rien n'a été corrigé |
+| `in_force_lag_s` | Horizon de l'anticipation en usage lorsque les impulsions ont concordé, en secondes, affiché à côté de `reading_lag_s` ; `null` tant que deux impulsions ne concordent pas |
+| `corrected` | Ce que la calibration a corrigé : une liste parmi `heating rate` (vitesse de chauffe), `loss coefficient` (coefficient de pertes) ; vide si rien n'a été corrigé |
 
 Les temps morts mesurés par les impulsions rejoignent les temps morts appris
 comme toute autre mesure. Une grandeur de la lecture n'est corrigée que si elle
 s'écarte de plus de 30 % de la valeur en usage (voir **Calibration** dans la
-[documentation SmartPI](vtherm_smartpi.md)) ; la lecture ne fixe jamais
-l'horizon de l'anticipation.
+[documentation SmartPI](vtherm_smartpi.md)). Le retard de l'émetteur est corrigé
+par le modèle de réponse lui-même : les impulsions de calibration sont des
+événements du modèle, et deux d'entre elles qui concordent remplacent son
+historique lorsque leur retard de l'émetteur s'écarte de plus de 30 % de celui
+qu'il publiait avant elles.
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
 `deadtime`, `governance` et `feedforward`.
@@ -172,8 +175,8 @@ l'anticipation de la température, en chauffage et en refroidissement :
 |---|---|
 | `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon, sans pente montante ou descendante, ou pendant une coupure de la garde) |
 | `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le temps entre une commande et son effet), `0` lorsqu'il n'y en a pas |
-| `anticipation_horizon_source` | Origine de l'horizon : `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct, en chauffage et en refroidissement), `heating balance` (médiane des derniers retards de l'émetteur mesurés), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` ; le bilan de chauffe n'est utilisé qu'en chauffage |
-| `effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (temps mort plus la moitié de la constante de temps de réponse), `null` sans modèle ; publié seulement |
+| `anticipation_horizon_source` | Origine de l'horizon : `response model` (retard de l'émetteur du modèle de réponse du mode : temps mort plus constante de temps de réponse), et sans modèle `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct), `dead times` (le plus long entre le temps mort actif du mode et la moitié de son temps mort passif) ou `none` |
+| `effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (temps mort plus la moitié de la constante de temps de réponse), `null` sans modèle ; la bande proche au-dessus de la consigne et les impulsions de calibration le lisent |
 
 `analysis.deadtime` suit la détection du temps mort :
 
@@ -183,19 +186,6 @@ l'anticipation de la température, en chauffage et en refroidissement :
 | `last_power` | Dernière puissance vue par le détecteur |
 | `waiting_elapsed_s` | Âge de la réponse attendue en secondes, `null` quand aucune détection n'est armée |
 | `heat_last_outcome` / `cool_last_outcome` | Issue de la dernière attente d'une réponse montante / descendante : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger), `null` avant la première |
-
-`analysis.learning.heating_balance` décrit la vitesse de chauffe et le retard de l'émetteur mesurés sur les phases de chauffe. La régulation ne lit que `kept_lag_s` :
-
-| Champ | Signification |
-|---|---|
-| `state` | `resting`, `heating` ou `waiting for the peak` (après la coupure) |
-| `measurements` | Nombre de mesures conservées (7 au plus) |
-| `a` | Vitesse de chauffe médiane en °C/min à pleine puissance (5 décimales), `null` sans mesure |
-| `lag_s` | Retard médian de l'émetteur en secondes, `null` sans mesure qui le résout |
-| `kept_lag_s` | Médiane des 7 derniers retards de l'émetteur mesurés, en secondes, `null` tant qu'aucun n'a été mesuré ; une mesure sans retard de l'émetteur n'en retire aucun. C'est l'horizon de l'anticipation lorsqu'il est positif |
-| `kept_lags` | Nombre de retards de l'émetteur retenus (7 au plus) |
-| `last_reason` | Issue de la dernière phase terminée : `measured`, ou la raison pour laquelle elle n'a rien donné (`rest before heating too short`, `baseline samples insufficient`, `heating too short`, `temperature rise too small`, `still rising at the next heating`, `no peak within the wait`, `observation gap`, `heating mode left`, `interrupted by restart`). Vide avant la première phase |
-| `last` | Dernière mesure, `null` sans mesure : `heating_min` (durée de chauffe à pleine puissance en minutes), `rise_c` (hausse de température au pic au-dessus de la trajectoire passive), `peak_delay_min` (minutes entre la coupure et le pic), `a`, `lag_s` (`null` lorsque la puissance n'était pas constante ou que le retard de l'émetteur n'est pas résolu), `constant_power`, `context` (`bootstrap`, `calibration` ou `regulation`, au début de la phase) |
 
 Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 
@@ -223,8 +213,13 @@ entiers : les impulsions, les phases du bootstrap, les impulsions de calibration
 montées de confort de la régulation après un repos (celles-ci seulement la nuit, la position
 du domicile étant connue). L'apprentissage de `a` et `b` le lit (aucune fenêtre d'apprentissage de la phase
 d'apprentissage avant lui, puissance délivrée, délai d'une fenêtre d'apprentissage après un
-démarrage ou un arrêt) ; le régulateur lui-même (gains, maintiens, anticipation, bande proche)
-ne le lit pas.
+démarrage ou un arrêt), de même que l'horizon de l'anticipation (le retard de l'émetteur, temps
+mort plus constante de temps de réponse), la bande proche en chauffage (le temps mort effectif
+au-dessus de la consigne, le retard de l'émetteur au-dessous), les limites des impulsions de
+calibration et les impulsions de mesure du démarrage direct (elles continuent tant que le modèle
+du mode n'est pas publié). Avec `dead time assumed` ces valeurs sont les bornes prudentes :
+l'horizon est le retard de l'émetteur entier et le temps mort effectif ses trois quarts. Les gains
+et les maintiens de l'intégrale ne le lisent pas.
 
 | Chemin | Signification |
 |---|---|

@@ -2,7 +2,7 @@
 
 The detector watches the power applied to the emitter and the room temperature samples of the dead-time estimator.
 An event is a rest, then a phase of power above ``_POWER_ON``, then a cut. Cuts shorter than
-``HEATING_BALANCE_PHASE_MIN_OFF_S`` belong to the same phase. After the cut the peak of the temperature is
+``EVENT_PHASE_MIN_OFF_S`` belong to the same phase. After the cut the peak of the temperature is
 searched with ``peak_search.PeakSearch`` (a maximum in HEAT, a minimum in COOL). While the phase runs the
 detector accumulates what its consumers need: the baseline fitted over the rest, the area between the temperature
 and that baseline, the temperature at the cut and the energy applied.
@@ -36,9 +36,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Tuple
 
 from .const import (
-    HEATING_BALANCE_BASELINE_SPAN_S,
-    HEATING_BALANCE_MIN_REST_S,
-    HEATING_BALANCE_PHASE_MIN_OFF_S,
+    EVENT_BASELINE_SPAN_S,
+    EVENT_MIN_REST_S,
+    EVENT_PHASE_MIN_OFF_S,
 )
 from .peak_search import PEAK_CONFIRMED, PEAK_NONE, PeakSearch
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
@@ -514,10 +514,10 @@ class MeasureEventDetector:
         rest_s = None if self._rest_start is None else t_start - self._rest_start
         reason: str | None = None
         base = None
-        if rest_s is None or rest_s < HEATING_BALANCE_MIN_REST_S:
+        if rest_s is None or rest_s < EVENT_MIN_REST_S:
             reason = "rest before heating too short"
         else:
-            span = min(HEATING_BALANCE_BASELINE_SPAN_S, rest_s)
+            span = min(EVENT_BASELINE_SPAN_S, rest_s)
             base = _baseline(history, t_start - span, t_start)
             if base is None:
                 reason = "baseline samples insufficient"
@@ -570,7 +570,7 @@ class MeasureEventDetector:
     ) -> None:
         t_cut = phase["t_cut"]
         search = phase["search"]
-        if on and t_step - t_cut < HEATING_BALANCE_PHASE_MIN_OFF_S:
+        if on and t_step - t_cut < EVENT_PHASE_MIN_OFF_S:
             # The cut was short: the same heating phase continues.
             phase["stage"] = _HEATING
             for key in ("t_cut", "area_cut", "cut_temp", "search"):

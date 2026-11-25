@@ -2,9 +2,9 @@
 
 After the power falls to zero the room keeps moving in the direction of the heating (rising in HEAT, falling in
 COOL) until the emitter and the room have delivered what was commanded. The extreme is found on bins of
-``HEATING_BALANCE_PEAK_BIN_S``: a bin is closed by the first sample of a later bin, its value is the mean of its
+``EVENT_PEAK_BIN_S``: a bin is closed by the first sample of a later bin, its value is the mean of its
 samples, empty bins are skipped. The best bin is the earliest closed bin with the strictly highest mean (of
-``sign * temperature``). The peak is confirmed when a closed bin lies ``HEATING_BALANCE_PEAK_CONFIRM_S`` or more after
+``sign * temperature``). The peak is confirmed when a closed bin lies ``EVENT_PEAK_CONFIRM_S`` or more after
 the best one. It is at the middle of the best bin: ``peak_delay_s`` after the cut.
 
 A search built with a ``drop_floor_c`` also confirms the peak early: at the close of a bin later than the best one
@@ -18,7 +18,7 @@ The caller reads the outcome:
 - ``PEAK_CUT_SHORT``: the heating starts again before the confirmation (``cut_short``) and the best bin is not the
   last closed one, so the temperature was falling away from it;
 - ``PEAK_NONE``: no peak (the best bin is the last one, no sample, or ``expired``: no confirmation within
-  ``HEATING_BALANCE_PEAK_MAX_S`` of the cut).
+  ``EVENT_PEAK_MAX_S`` of the cut).
 
 Each caller applies its own acceptance of the outcomes. The search keeps its bins as plain numbers
 (``fields``/``from_fields``) so that a caller can save it and resume it after a restart.
@@ -28,9 +28,9 @@ Each caller applies its own acceptance of the outcomes. The search keeps its bin
 from __future__ import annotations
 
 from .const import (
-    HEATING_BALANCE_PEAK_BIN_S,
-    HEATING_BALANCE_PEAK_CONFIRM_S,
-    HEATING_BALANCE_PEAK_MAX_S,
+    EVENT_PEAK_BIN_S,
+    EVENT_PEAK_CONFIRM_S,
+    EVENT_PEAK_MAX_S,
     STOP_PEAK_DROP_RISE_FRAC,
 )
 
@@ -69,7 +69,7 @@ class PeakSearch:
         """Add a temperature sample taken after the cut; True when closing the bin in progress confirms the peak
         (the remaining samples are not used)."""
         v = self.sign * value
-        k = max(0, int((t - self.t_cut) // HEATING_BALANCE_PEAK_BIN_S))
+        k = max(0, int((t - self.t_cut) // EVENT_PEAK_BIN_S))
         if self.bin_k is None:
             self.bin_k, self.bin_sum, self.bin_n = k, v, 1
         elif k == self.bin_k:
@@ -88,7 +88,7 @@ class PeakSearch:
         if self.best_mean is None or mean > self.best_mean:
             self.best_k, self.best_mean, self.best_mark = k, mean, mark
         self.last_k = k
-        return (k - self.best_k) * HEATING_BALANCE_PEAK_BIN_S >= HEATING_BALANCE_PEAK_CONFIRM_S or self._dropped(k, mean)
+        return (k - self.best_k) * EVENT_PEAK_BIN_S >= EVENT_PEAK_CONFIRM_S or self._dropped(k, mean)
 
     def _dropped(self, k: int, mean: float) -> bool:
         """True when the closed bin ``k`` of mean ``mean`` confirms the best bin early."""
@@ -117,7 +117,7 @@ class PeakSearch:
 
     def expired(self, t: float) -> bool:
         """True when ``t`` is at or beyond the longest wait for the peak."""
-        return t - self.t_cut >= HEATING_BALANCE_PEAK_MAX_S
+        return t - self.t_cut >= EVENT_PEAK_MAX_S
 
     # ------------------------------------------------------------------
     # Peak
@@ -126,7 +126,7 @@ class PeakSearch:
     @property
     def peak_delay_s(self) -> float:
         """Time from the cut to the middle of the best bin (s)."""
-        return float((self.best_k + 0.5) * HEATING_BALANCE_PEAK_BIN_S)
+        return float((self.best_k + 0.5) * EVENT_PEAK_BIN_S)
 
     @property
     def peak_value(self) -> float:

@@ -204,7 +204,7 @@ def test_the_pause_leaves_the_temperature_history_and_the_anticipation_unchanged
         history = [(t - start, v) for t, v in algo.learn_win.temperatures.raw]
         runs[paused] = (history, anticipated, commands)
     assert runs[True] == runs[False]
-    assert runs[True][1][-1] > 19.6 + 0.01 * 29 + 0.05      # the anticipation works during the pause
+    assert runs[True][1][-1] > 19.6 + 0.01 * 29 + 0.03      # the anticipation works during the pause
 
 
 def test_a_disturbance_leaves_the_integral_free(clock):

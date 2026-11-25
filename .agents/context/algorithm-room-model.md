@@ -9,11 +9,10 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 
 | Subsystem | Code | Regulation reads it? |
 |---|---|---|
-| Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | Yes (HEAT, PWM only): gives the dead time in force used by gains, near band, I-hold |
+| Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | Yes (HEAT, PWM only): gives the dead time in force used by gains, I-hold |
 | Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the two learnings above and below |
 | Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1). Forecasts, forecast errors, `a`/`b_eq` display: no |
-| Response model (theta, tau_e) | `smartpi/response_model.py` | Yes, a/b learning only: learning-stage gate, delivered power, settling waits (`smartpi/power_steps.py`) |
-| Heating balance | `smartpi/heating_balance.py` | Yes, one value: the median kept emitter lag is the HEAT horizon of the anticipation (`smartpi/anticipation.py`); `a` and the other values are observation only |
+| Response model (theta, tau_e) | `smartpi/response_model.py` | Yes: a/b learning (learning-stage gate, delivered power, settling waits, `smartpi/power_steps.py`), anticipation horizon, HEAT near band, calibration limits, direct-start pulses wanted; not the gains nor the holds |
 | Restart bridge | `smartpi/restart_bridge.py` | Yes: decides resume vs conservative restart for every component |
 | Resume hold | `smartpi/resume_hold.py` | Yes: temporary I-hold after window / power-shedding resume; `recovery_error_floor_c` (residual error under which a recovery counts as closed) |
 | Job abort | `smartpi/job_abort.py` | Plumbing for executor jobs |
@@ -258,28 +257,7 @@ response model) and the settling gates (waits in `smartpi/response_model.py`; fo
 No estimation of its own. Persistence: `lw_state["power_steps"]` (an old `response_lag` block loads its durations
 and episodes), restart context with the delivered power and temperatures at the cut. No published block.
 
-## 6. Heating balance (`smartpi/heating_balance.py`, class `HeatingBalance`)
-
-Measures heating rate `a` (C/min at full power) and emitter lag from an energy balance of each heating phase
-followed by a stop, in HEAT, from the same observations as the emitter lag on constant-power phases (`learning_window.py` owns it).
-The phases, rests, baselines and peaks come from the measurement event detector (`smartpi/measure_event.py`, peak by
-`smartpi/peak_search.py`; `algorithm-core.md` section 6b); the balance reads its HEAT events and keeps the arithmetic.
-Conditions: rest >= `HEATING_BALANCE_MIN_REST_S = 1800`, baseline of up to 3600 s (>= 4 samples), peak search in
-`HEATING_BALANCE_PEAK_BIN_S = 300` bins (earliest strictly highest mean) confirmed after `HEATING_BALANCE_PEAK_CONFIRM_S = 1800`, wait at most
-`HEATING_BALANCE_PEAK_MAX_S = 4 h`, kept when full-power time >= 600 s and rise >= 0.3 C. Last
-`HEATING_BALANCE_HISTORY = 7` measurements; published values are medians; emitter lag only for constant-power phases.
-On a constant-power phase the heat still to come at the peak is counted: late power `max(0, b*rise - baseline slope)` (C/min, flat
-temperature at the peak), arriving over one lag, added to the heat of the phase; `a` and the lag are solved together by iteration
-(`_LAG_ITERATIONS = 60`, `_LAG_TOL_S = 1`; no lag when it does not settle). Reading against the true lag (simulation): exact in massless
-rooms, about 60-90 % of it with wall mass (35-55 % without the term), about 30 % over with floor heating (pure delay + lag).
-Regulation consumer: only `kept_lag_s` (median of the last `HEATING_BALANCE_HISTORY` emitter lags, None while none measured), the HEAT
-horizon of the anticipation (`smartpi/anticipation.py::select_horizon`); no learning consumer. `a` and `lag_s` are observation only.
-Persistence: with the learning state (`lw_state["heating_balance"]`); the detector's phase in progress resumes after a bridged
-restart, dropped otherwise. A saved state with a published `lag_s` but no kept emitter lag (`lags` missing or empty) keeps it as the
-single kept value. Diagnostics: `analysis.learning.heating_balance` (`state`, `measurements`, `a`,
-`lag_s`, `kept_lag_s`, `kept_lags`, `last_reason`, `last`). Silent: `a`/`lag_s` null, `last_reason` gives the refusal.
-
-## 7. Restart bridge and resume hold
+## 6. Restart bridge and resume hold
 
 Restart bridge (`smartpi/restart_bridge.py::decide`, `RestartBridge`, `command_holdable`): one decision, taken at the
 first calculation of a ready thermostat, whether a stop is bridged. All must hold: downtime (wall clock, from the
@@ -292,8 +270,8 @@ bridge only in HEAT (`RestartDecision.heat_bridged`).
   committed command of before the stop while the restart is pending, as long as `command_holdable` stays true
   (stop plus wait <= 600 s). Past that the output goes to 0 until the temperature comes and the restart is
   not bridged (`indoor temperature unknown`). The heater cut during the wait is the reason it cannot be bridged.
-- Consumers (`SmartPI._apply_restart_decision`): dead-time detection, learning window, emitter lag on constant-power phases,
-  heating balance, bootstrap hysteresis output, tar history, room model resume (bridged) or take the
+- Consumers (`SmartPI._apply_restart_decision`): dead-time detection, learning window (with the event detector),
+  power steps, bootstrap hysteresis output, tar history, room model resume (bridged) or take the
   conservative path (other restart). Component behaviour table: technical_doc.md section 5.4 "Restarts".
 - Persistence: context of the last tick and committed power in the algorithm store (`restart`), plus last ticks of
   the two learning stores.
@@ -328,6 +306,6 @@ source is reported as `control.integral_hold_source` / `integral_hold_mode`.
 - User docs: `documentation/en/vtherm_smartpi.md` ("Emitter lag learning", "Room model", "Restarts").
 - Diagnostics reference: `documentation/en/diagnostics.md` (`tar_learning`, `room_model`, `feedforward`,
   `control.last_restart`, `analysis.learning.*`).
-- Constants: `smartpi/const.py` (emitter lag, heating balance, anticipation, restart bridge),
+- Constants: `smartpi/const.py` (emitter lag, measurement events `EVENT_*`, anticipation, restart bridge),
   `tar_learning/const.py`, `room_model/const.py`, `quiet_periods/const.py`. These are method parameters, not
   configuration knobs.

@@ -20,7 +20,6 @@ from ..hvac_mode import VThermHvacMode_COOL
 
 if TYPE_CHECKING:
     from .ab_estimator import ABEstimator
-    from .deadtime_estimator import DeadTimeEstimator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class DeadbandManager:
 
     Features:
     - Configured deadband thresholds with hysteresis
-    - Auto-calculation of near-band thresholds based on dead time and model slopes
+    - Auto-calculation of near-band thresholds based on the response model and model slopes
     - State persistence for restart recovery
     """
 
@@ -82,7 +81,7 @@ class DeadbandManager:
         near_band_error: float | None,
         hvac_mode,  # VThermHvacMode
         tau_reliable: bool,
-        dt_est: "DeadTimeEstimator",
+        response: dict | None,
         estimator: "ABEstimator",
         current_temp: float,
         ext_temp: Optional[float],
@@ -97,7 +96,7 @@ class DeadbandManager:
             near_band_error: Error used for near-band detection, if different
             hvac_mode: Current HVAC mode (VThermHvacMode)
             tau_reliable: Whether tau (time constant) is reliable
-            dt_est: DeadTimeEstimator instance for dead time values
+            response: Response model of the mode (``ResponseModel.values``), None without one
             estimator: ABEstimator instance for model parameters
             current_temp: Current indoor temperature (°C)
             ext_temp: Current outdoor temperature (°C), optional
@@ -137,9 +136,9 @@ class DeadbandManager:
         else:
             # HEAT mode keeps the model-aware asymmetric near-band.
             if hvac_mode is not None and hvac_mode != VThermHvacMode_COOL:
-                if dt_est.deadtime_heat_reliable:
+                if response is not None:
                     self.update_near_band_auto(
-                        hvac_mode, current_temp, ext_temp, dt_est, estimator, cycle_min, deadband_c
+                        hvac_mode, current_temp, ext_temp, response, estimator, cycle_min, deadband_c
                     )
 
             band_error = near_band_error if near_band_error is not None else error
@@ -172,29 +171,32 @@ class DeadbandManager:
         hvac_mode,  # VThermHvacMode - reserved for future mode-specific logic
         current_temp: float,
         ext_temp: Optional[float],
-        dt_est: "DeadTimeEstimator",
+        response: dict | None,
         estimator: "ABEstimator",
         cycle_min: float,
         deadband_c: float,
     ) -> None:
         """
-        Calculate Near-Band thresholds based on Dead Time and Model Slopes.
+        Calculate Near-Band thresholds based on the response model and the model slopes.
 
         Logic:
-        1. If deadtime not reliable, fallback to manual config.
-        2. Calculate Horizons (H) based on Dead Time (L) + half cycle.
-           - L_cool uses deadtime_cool_s if available/reliable, else defaults to L_heat.
+        1. Without a response model of the mode, fallback to manual config.
+        2. Calculate Horizons (H) from the response model (dead time theta, response time
+           constant tau_e) + half cycle:
+           - above the setpoint: the effective dead time theta + tau_e / 2 (3 S / 4 when
+             the split of the emitter lag S is assumed);
+           - below the setpoint: the emitter lag theta + tau_e.
         3. Estimate Slopes from Model (a, b):
            - s_cool = b * (Tin - Text)
            - s_heat_net = a - s_cool
         4. Apply formulas: NB = Slope * H.
         5. Store results in self._near_band_* variables.
         """
-        # 1. Fallback Check (Deadtime)
-        if not dt_est.deadtime_heat_reliable or dt_est.deadtime_heat_s is None:
+        # 1. Fallback Check (response model)
+        if response is None:
             self._near_band_below_deg = self._near_band_deg
             self._near_band_above_deg = self._near_band_deg * NEAR_BAND_ABOVE_FACTOR
-            self._near_band_source = "fallback_deadtime"
+            self._near_band_source = "no response model"
             return
 
         # Check External Temp availability for Slope Estimation
@@ -204,17 +206,16 @@ class DeadbandManager:
             self._near_band_source = "fallback_no_ext"
             return
 
-        # Horizons Configuration
-        L_heat = dt_est.deadtime_heat_s or 0.0
-        use_cool_deadtime = dt_est.deadtime_cool_reliable and dt_est.deadtime_cool_s is not None
-        L_cool = dt_est.deadtime_cool_s if use_cool_deadtime else L_heat
-        assert L_heat is not None and L_cool is not None
+        # Horizons Configuration: effective dead time above, emitter lag below
+        theta, tau_e = float(response["theta_s"]), float(response["tau_e_s"])
+        L_above = theta + 0.5 * tau_e
+        L_below = theta + tau_e
 
         cycle_s = max(cycle_min * 60.0, 60.0)  # Safety
 
         # Horizon H = L + delta (delta = half cycle delay approx)
-        H_below = L_cool + (cycle_s / 2.0)
-        H_above = L_heat + (cycle_s / 2.0)
+        H_below = L_below + (cycle_s / 2.0)
+        H_above = L_above + (cycle_s / 2.0)
 
         # 2. Model-based Slope Estimation
         # Check basic model reliability
@@ -272,10 +273,11 @@ class DeadbandManager:
         self._near_band_above_deg = nb_above_constrained
 
         _LOGGER.debug(
-            "%s - nearband auto: using deadtime_cool=%ss (fallback=%s) -> nb_above=%s",
+            "%s - nearband auto: horizons below=%ss above=%ss -> nb_below=%s nb_above=%s",
             self._name,
-            f"{L_cool:.1f}",
-            not use_cool_deadtime,
+            f"{H_below:.1f}",
+            f"{H_above:.1f}",
+            f"{self._near_band_below_deg:.3f}",
             f"{self._near_band_above_deg:.3f}",
         )
 
@@ -357,7 +359,7 @@ class DeadbandManager:
 
     @property
     def near_band_source(self) -> str:
-        """Source of near-band thresholds (e.g., 'auto_model_aware', 'fallback_deadtime')."""
+        """Source of near-band thresholds (e.g., 'auto_model_aware', 'no response model')."""
         return self._near_band_source
 
     @property

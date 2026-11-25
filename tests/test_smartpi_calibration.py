@@ -75,7 +75,9 @@ def _learned(start: str = "bootstrap", saved_state: dict | None = None) -> Smart
     if start == "direct":
         algo.est.give_starting_values(A_ROOM, B_ROOM, "heat", 1.0)
     algo.dt_est.deadtime_heat_s, algo.dt_est.deadtime_heat_reliable = 600.0, True
-    algo.dt_est.deadtime_cool_s, algo.dt_est.deadtime_cool_reliable = 900.0, True
+    algo.dt_est.deadtime_cool_s, algo.dt_est.deadtime_cool_reliable = 480.0, True
+    if saved_state is None:
+        algo._start.model.seed("heat", 60.0, 60.0 * LAG_MIN - 60.0)   # the response model of the room: S = its lag
     assert algo.phase == SmartPIPhase.STABLE
     return algo
 
@@ -368,18 +370,24 @@ class _Est:
         return self._passive
 
 
-def test_the_limits_follow_the_dead_times_and_the_horizon_within_their_bounds():
-    est = _Est(active=(1200.0, True), passive=(1800.0, True))
-    lim = pulse_limits(est, VThermHvacMode_HEAT, 2400.0)
-    assert lim.gap_s == 4800.0 and lim.rest_s == 1800.0 + CALIBRATION_REST_EXTRA_S
-    assert lim.heat_max_s == 2.0 * (1200.0 + 2400.0) and lim.trough_lead_s == 1200.0
-    short = pulse_limits(_Est(), VThermHvacMode_HEAT, 0.0)       # nothing known: the lower bounds
+def test_the_limits_follow_the_response_model_and_the_horizon_within_their_bounds():
+    """theta 1200 s, tau_e 2400 s: effective dead time 2400 s, emitter lag 3600 s (the horizon in use)."""
+    lim = pulse_limits({"theta_s": 1200.0, "tau_e_s": 2400.0}, VThermHvacMode_HEAT, 3600.0)
+    assert lim.gap_s == 7200.0 and lim.rest_s == 3600.0 + CALIBRATION_REST_EXTRA_S
+    assert lim.heat_max_s == 2.0 * (2400.0 + 3600.0) and lim.trough_lead_s == 2400.0
+    short = pulse_limits(None, VThermHvacMode_HEAT, 0.0)       # no model: the lower bounds
     assert short.gap_s == CALIBRATION_GAP_MIN_S and short.heat_max_s == CALIBRATION_HEAT_MIN_S
     assert short.rest_s == CALIBRATION_REST_EXTRA_S and short.trough_lead_s == 0.0
-    slow = pulse_limits(_Est(active=(9000.0, True), passive=(20000.0, True)), VThermHvacMode_HEAT, 12000.0)
+    slow = pulse_limits({"theta_s": 3000.0, "tau_e_s": 12000.0}, VThermHvacMode_HEAT, 15000.0)
     assert slow.gap_s == CALIBRATION_GAP_MAX_S and slow.heat_max_s == CALIBRATION_STEP_MAX_S
     assert slow.rest_s == CALIBRATION_STEP_MAX_S
-    assert pulse_limits(_Est(active=(1200.0, False)), VThermHvacMode_HEAT, 0.0).trough_lead_s == 0.0   # not reliable
+
+
+def test_the_limits_with_an_assumed_split_take_the_cautious_ends():
+    """theta = S / 2: the fall is counted over 3 S / 4, the rest waits S."""
+    lim = pulse_limits({"theta_s": 2000.0, "tau_e_s": 2000.0}, VThermHvacMode_HEAT, 4000.0)
+    assert lim.trough_lead_s == 3000.0 and lim.rest_s == 4000.0 + CALIBRATION_REST_EXTRA_S
+    assert lim.heat_max_s == 2.0 * (3000.0 + 4000.0)
 
 
 def test_the_fall_rate_is_read_on_the_demand_side():
@@ -399,7 +407,7 @@ def _limits(**kw) -> PulseLimits:
 def _step(pulse: MeasurePulse, now: float, temp: float, est: _Est, limits: PulseLimits | None, calibration=True,
           learning_stage=False) -> None:
     pulse.update(now, TARGET, temp, VThermHvacMode_HEAT, cooling=False, heat_or_cool=True,
-                 learning_stage=learning_stage, active_deadtime_known=False, passive_deadtime_known=False,
+                 learning_stage=learning_stage, model_known=False,
                  dt_est=est, calibration=calibration, calibration_pulses_left=calibration,
                  limits=limits if calibration else None)
 
@@ -580,7 +588,8 @@ def test_the_fallback_switch_keeps_a_value_the_learnings_own_measures_agree_with
     assert _calibration(algo)["corrected"] == ["heating rate"]
 
 
-def test_the_emitter_lag_is_corrected_with_the_direct_start_only_and_never_sets_the_horizon(clock):
+def test_the_emitter_lag_of_the_reading_is_published_not_corrected_by_the_calibration(clock):
+    """The emitter lag is corrected by the response model's own rule on the calibration events, not here."""
     for start in ("bootstrap", "direct"):
         algo = _modelled(start)
         room = _Room(algo, clock)
@@ -590,12 +599,9 @@ def test_the_emitter_lag_is_corrected_with_the_direct_start_only_and_never_sets_
         room.tick()
         cal = _calibration(algo)
         assert cal["in_force_lag_s"] == round(horizon.seconds)
+        assert cal["reading_lag_s"] == round(3.0 * horizon.seconds)
+        assert cal["corrected"] == []
         assert algo.anticipation_horizon(VThermHvacMode_HEAT) == horizon
-        if start == "direct":
-            assert cal["corrected"] == ["emitter lag"]
-            assert algo._start.calibration.lag_s == {"heat": 3.0 * horizon.seconds}
-        else:
-            assert cal["corrected"] == [] and algo._start.calibration.lag_s == {}
 
 
 def test_the_command_stays_continuous_at_a_correction(clock):
@@ -611,7 +617,7 @@ def test_the_command_stays_continuous_at_a_correction(clock):
     assert abs(algo.on_percent - before) <= 0.02  # the command moves by 2 points at most
 
 
-def test_corrected_values_and_the_corrected_lag_survive_a_restart(clock, monkeypatch):
+def test_corrected_values_survive_a_restart(clock, monkeypatch):
     monkeypatch.setattr(calibration_module, "CALIBRATION_CORRECT_B", True)
     algo = _modelled("bootstrap")
     room = _Room(algo, clock)
@@ -626,13 +632,6 @@ def test_corrected_values_and_the_corrected_lag_survive_a_restart(clock, monkeyp
     cal = other.get_published_diagnostics()["calibration"]
     assert cal["corrected"] == ["heating rate", "loss coefficient"] and cal["in_force_a"] == A_ROOM
     assert cal["last_request"] == REQUEST_STARTED
-    direct = _modelled("direct")
-    room = _Room(direct, clock)
-    room.run(5)
-    clock.advance(CALIBRATION_MIN_INTERVAL_S)
-    _agree(direct, clock, room, lag=2400.0)
-    restored = _learned("direct", saved_state=json.loads(json.dumps(direct.save_state())))
-    assert restored._start.calibration.lag_s == {"heat": 2400.0}
 
 
 def test_a_learning_reset_drops_the_corrections(clock):
@@ -641,16 +640,16 @@ def test_a_learning_reset_drops_the_corrections(clock):
     room.run(5)
     _agree(algo, clock, room, a=0.08, lag=2400.0)
     algo.reset_learning()
-    assert not algo.est.start.standing("a") and algo._start.calibration.lag_s == {}
+    assert not algo.est.start.standing("a")
 
 
 def test_the_threshold_is_relative_to_the_reading():
     """A heating rate in force 34 % over the reading is corrected, although it is only 25 % off the value in force."""
     reading = {"a_per_min": 0.0331, "b_per_min": None, "lag_s": 300.0, "b_agree": False}
     in_force = {"a": 0.0443, "b": 0.0007, "lag_s": 300.0}
-    assert "a" in calibration_module.corrections(reading, in_force, {}, lag=False)
+    assert "a" in calibration_module.corrections(reading, in_force, {})
     in_force["a"] = 0.0420   # 27 % over the reading: left as it is
-    assert "a" not in calibration_module.corrections(reading, in_force, {}, lag=False)
+    assert "a" not in calibration_module.corrections(reading, in_force, {})
 
 
 # -- the end of a calibration, the learning and the integral around its pulses ------------------------------------------

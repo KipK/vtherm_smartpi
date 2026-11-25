@@ -359,91 +359,28 @@ any other restart the passive period is dropped and an episode is counted as
 ended. The episodes are saved under `lw_state.power_steps` (a state of the former
 `response_lag` block loads its durations and heating phases).
 
-#### Heating balance
-
-`HeatingBalance` (`heating_balance.py`) measures, on each heating phase followed
-by a stop, the heating rate `a` (°C/min at full power) and the emitter lag from
-an energy balance of the room. It is published; the regulation reads only the
-median of the last emitter lags it measured, as the horizon of the anticipation (see
-section 4.3). It works in heating mode only, from the heating events of the
-measurement event detector (3.7, Measurement events and starting values).
-
-A phase starts at the first interval with a power above 1 % and ends after its
-cut. Heating runs separated by less than `HEATING_BALANCE_PHASE_MIN_OFF_S`
-(10 minutes) without heating belong to the same phase. Before the phase, the
-rest (heater off) must last at least `HEATING_BALANCE_MIN_REST_S = 1800 s`. A
-baseline, the least-squares line of the temperature samples over the rest tail
-(at most `HEATING_BALANCE_BASELINE_SPAN_S = 3600 s`, at least 4 samples),
-stands for the passive trajectory: $T_0(t) = T_0 + s\,(t - t_{start})$. During
-the phase the estimator accumulates the full-power time $t_{on}$ (the sum of
-power × interval) and the area $A$ of $T - T_0(t)$ in °C·min.
-
-After the cut it looks for the temperature peak: the samples are grouped in
-consecutive bins of `HEATING_BALANCE_PEAK_BIN_S = 300 s` from the cut, and the
-earliest bin with the strictly highest mean is the peak, confirmed when a closed
-bin lies at least `HEATING_BALANCE_PEAK_CONFIRM_S = 1800 s` after it. The phase ends without
-a measurement when the heating restarts while the best bin is the last one
-holding samples, or when `HEATING_BALANCE_PEAK_MAX_S = 4 h` elapse without a
-confirmed peak. With $\Delta_p = T_{peak} - T_0(t_{peak})$, $A_p$ the area at
-the peak, $b$ the published loss rate (0 when unknown) and $t_{on}$ in minutes:
-
-$$a = \frac{\Delta_p + b\,A_p}{t_{on}}$$
-
-The measurement is kept when $t_{on} \ge$ `HEATING_BALANCE_MIN_ON_S = 600 s` and
-$\Delta_p \ge$ `HEATING_BALANCE_MIN_RISE_C = 0.3 °C`. The last
-`HEATING_BALANCE_HISTORY = 7` measurements are kept; the published `a` and emitter lag
-are their medians.
-
-The emitter lags are also kept in a history of their own, of the same length: a
-measurement that gives no emitter lag (power not constant, not resolved) removes
-none of them, unlike the retained measurements. The median of that history is
-the kept emitter lag, published as `kept_lag_s` (`kept_lags` is their number). A saved
-state that holds a published emitter lag but no kept one keeps it as the single
-kept value.
-
-For a phase at constant power (its mean power $u_0 = t_{on}/D$ is at least
-`1 - RESPONSE_LAG_U_TOL` times its highest interval power), the heat still
-missing at the cut gives the emitter lag. With
-$\Delta_c = T_{cut} - T_0(t_{cut})$ ($T_{cut}$ is the mean of the samples within
-±150 s of the cut), $A_c$ the area at the cut and $D$ the phase duration, the
-delivery deficit is $\delta = \left(t_{on} - 60\,(\Delta_c + b\,A_c)/a\right)/u_0$
-in seconds. A first-order emitter of time constant $\tau$ gives
-$\delta = \tau\,(1 - e^{-D/\tau})$, solved for $\tau$ by bisection; the emitter lag is 0
-when $\delta \le 0$ and unknown when $\delta \ge 0.98\,D$.
-
-On such a phase the heat the emitter still holds at the peak is counted as
-well. At the peak the temperature is flat, so the emitter still gives what the
-room loses: $p = \max(0,\ b\,\Delta_p - 60\,s)$ in °C/min, with $s$ in °C/s.
-That power is taken to arrive over one emitter lag, which adds $p\,\tau/60$ to
-the heat of the phase:
-
-$$a(\tau) = \frac{\Delta_p + b\,A_p + p\,\tau/60}{t_{on}}$$
-
-The heating rate and the emitter lag are solved together: starting from
-$\tau = 0$, the deficit computed with $a(\tau)$ gives the next $\tau$, until two
-successive values differ by less than 1 s, in at most 60 steps. The emitter lag
-is unknown when the iteration does not settle. The measurement keeps $a(\tau)$
-as its heating rate. Without that term the emitter lag is read short in a room
-whose walls absorb heat, where the peak comes while the emitter is still warm.
-
-The state is published in `analysis.learning.heating_balance` and persisted with
-the learning state. The measurements are restored after a restart; the phase in
-progress resumes after a bridged restart and is dropped otherwise. The kept emitter lags
-are restored too.
-
 #### Measurement events and starting values
 
-One detector (`measure_event.py`, `MeasureEventDetector`) watches the power
-applied to the emitter and the room temperature, in heating and in cooling. An
-event is a rest, a phase of power above 1 % (cuts shorter than
-`HEATING_BALANCE_PHASE_MIN_OFF_S` belong to the phase) and a cut, then the
-search of the temperature peak. The peak search (`peak_search.py`) is the one
-described for the heating balance: 300 s bins, the earliest strictly highest
-mean (the lowest in cooling), confirmed by a closed bin 1800 s later, abandoned
-after 4 hours. Each event carries the source that drove the command when its
-phase began: measurement pulse, bootstrap hysteresis, pulse of a calibration or
-regulation. The heating balance reads the heating events whatever their source;
-the reader below reads those of the bootstrap and of the pulses.
+One detector (`measure_event.py`, `MeasureEventDetector`, owned by the learning
+window) watches the power applied to the emitter and the room temperature, in
+heating and in cooling. An event is a rest, a phase of power above 1 % and a cut,
+then the search of the temperature peak. Heating runs separated by less than
+`EVENT_PHASE_MIN_OFF_S` (10 minutes) belong to the same phase. A rest shorter
+than `EVENT_MIN_REST_S = 1800 s` before the phase marks the event as such (the
+regulation events are then not read). A baseline, the least-squares line of the
+temperature samples over the rest tail (at most `EVENT_BASELINE_SPAN_S = 3600 s`,
+at least 4 samples), stands for the passive trajectory. The peak search
+(`peak_search.py`) groups the samples in consecutive bins of
+`EVENT_PEAK_BIN_S = 300 s` from the cut; the earliest bin with the strictly
+highest mean (the lowest in cooling) is the peak, confirmed when a closed bin lies
+at least `EVENT_PEAK_CONFIRM_S = 1800 s` after it; the search is abandoned when
+the heating restarts while the best bin is the last one holding samples, or after
+`EVENT_PEAK_MAX_S = 4 h`. Each event carries the source that drove the command
+when its phase began: measurement pulse, bootstrap hysteresis, pulse of a
+calibration or regulation. The reader below reads those of the bootstrap and of
+the pulses; the reader of the response model reads all of them (3.7, Response model). The heating
+phase in progress, or the rest before it, is saved (`lw_state.event_restart`),
+resumed after a bridged restart and dropped otherwise.
 
 Until values are kept, during the learning stage, a calibration or a reading, a bounded record (`MeasureRecord`) keeps
 the applied power, the room temperature and the outdoor temperature as change
@@ -533,17 +470,17 @@ the learning stage, with the learning paused, with the thermostat off by the use
 `CALIBRATION_MIN_INTERVAL_S = 24 h` after the end of the last calibration that
 was not cancelled; ignored while one is in progress; a window, a guard cut or a
 power shedding defers the pulses only. The pulses of a calibration have their own
-limits, computed at each calculation by `pulse_limits` from the reliable dead
-times of the mode (`La` active, `Lp` passive, 0 when not reliable), the
-anticipation horizon in use `H` and the least-squares fall rate `s` of the last
+limits, computed at each calculation by `pulse_limits` from the response model of
+the mode (`Le` = $\theta + \tau_e/2$ the effective dead time, `S` = $\theta + \tau_e$
+the emitter lag, both 0 without a model), the anticipation horizon in use `H` and the least-squares fall rate `s` of the last
 `CALIBRATION_FALL_WINDOW_S = 900 s` of the raw temperature on the demand side
 (floored at 0); the static limits are frozen at the start of the pulse:
 
 | Step | Pulse of a calibration |
 |---|---|
 | start | demand in [-`CALIBRATION_START_OVER_C` = -0.2 °C, `PULSE_START_UNDER_C` = 0.3 °C], previous command < 0.8, `clamp(2 H, 1 h, 6 h)` after the end of the previous pulse |
-| rest | ends at `min(Lp + CALIBRATION_REST_EXTRA_S, 4 h)` (`CALIBRATION_REST_EXTRA_S` = 900 s of free-running window + 300 s), or when `demand + s La >= PULSE_REST_UNDER_C` = 0.5 °C |
-| heat | rise seen and (`demand <= PULSE_HEAT_BACK_C` = 0.1 °C or step >= `PULSE_HEAT_EXTEND_MAX_S` = 30 min), 0.3 °C over, or `clamp(2 (La + H), 2 h, 4 h)` |
+| rest | ends at `min(S + CALIBRATION_REST_EXTRA_S, 4 h)` (`CALIBRATION_REST_EXTRA_S` = 900 s of free-running window + 300 s), or when `demand + s Le >= PULSE_REST_UNDER_C` = 0.5 °C |
+| heat | rise seen and (`demand <= PULSE_HEAT_BACK_C` = 0.1 °C or step >= `PULSE_HEAT_EXTEND_MAX_S` = 30 min), 0.3 °C over, or `clamp(2 (Le + H), 2 h, 4 h)` |
 | stop | event closed and stop response not pending; takeover at `demand >= 0.5 °C` once the room is one sensor step lower than at the stop start, or at `demand >= CALIBRATION_DEPTH_CAP_C` = 0.8 °C; 4 h |
 
 The pulses of the learning stage keep the constants of `measure_pulse.py`. A
@@ -555,10 +492,11 @@ runs in the stable phase. The events of the calibration pulses (source
 `calibration`) are read like the others but form a set of their own, tested
 among themselves only: two agreeing readings (`a` and lag within 20 %) give the
 reading of the calibration (`a`, `b`, emitter lag, and whether the two `b` agree
-within 20 %). At the end on that reading, `LearningStart._correct` compares each
-quantity with the value in force in the mode of the calibration (`|a|`, `b`, the
-anticipation horizon in use) and corrects it when `|reading - in force| >
-CALIBRATION_CORRECT_REL * in force` (0.30):
+within 20 %). At the end on that reading, `LearningStart._correct` compares `a`
+and `b` with the values in force in the mode of the calibration (`|a|`, `b`; the
+anticipation horizon in use is published beside the lag of the reading) and
+corrects them when `|reading - in force| > CALIBRATION_CORRECT_REL * in force`
+(0.30):
 
 - `a`: `ABEstimator.correct_a` resets the channel of the mode and stands the
   reading as a starting value (`StartingValues.correct`), released at the first
@@ -568,11 +506,12 @@ CALIBRATION_CORRECT_REL * in force` (0.30):
   two `b` agreeing, `ABEstimator.correct_b` clears the `b` channel (measures,
   published history, counter, drift, `own_b`) and stands the reading, released
   when the own time constant is reliable again; the `a` measures are replayed
-  with it;
-- lag (direct start only): kept in `calibration.lag_s` by mode and published;
-  the learning reads the response model, whose history the agreeing calibration
-  events replace under the same 30 % rule (Response model, below); it never
-  enters the anticipation horizon.
+  with it.
+
+The emitter lag is corrected by the response model itself, in either start
+mode: the agreeing calibration events replace its history under the same 30 %
+rule (Response model, below), and the horizon, the near band and the a/b
+learning follow it.
 
 With `CALIBRATION_SKIP_WHEN_OWN_AGREE = True` (off by default), `a` or `b` is not
 corrected while its drift buffer is empty and its last
@@ -584,8 +523,8 @@ the step of the learned holding power, evaluated at the same setpoint, outdoor
 temperature and warmup, is moved into the integral. A change of `Kp` that follows
 a correction is not moved into the integral: the proportional term acts on the error as
 usual, and a change of `Ki` only rescales the integral (`SmartPIController.transfer_gains`). A bootstrap start whose `b`
-stands from a correction does not return to its learning stage. The heating
-balance and the power steps observe the pulses as any heating phase.
+stands from a correction does not return to its learning stage. The event
+detector and the power steps observe the pulses as any heating phase.
 A calibration ends when two of its readings agree (`readings agree`), when its
 pulses are done and their readings have ended (`pulses done`), or
 `CALIBRATION_MAX_S = 48 h` after its first calculation (`time limit`); its
@@ -598,15 +537,15 @@ also checked on a calculation cut by the guard
 (`LearningStart.follow_calibration`). While a calibration is in progress
 (request to end) `ABEstimator.learn` takes no `a` measure: a window with
 `u > U_ON_MIN` is skipped (`skip: calibration in progress`); `b` windows, the
-dead times, the heating balance and the power steps go on. After each
+dead times, the measurement events and the power steps go on. After each
 calibration pulse (`LearningStart.recovering`) the integral is held (`I:HOLD`,
 source `calibration_recovery`) until the room reaches the setpoint; the
 pulses of the learning stage do not hold it. A stop of the thermostat ends
 the pulse in progress, which counts, and the calibration goes on; a change of
 HVAC mode, a return of the learning stage, a learning reset or a pause of the
 learning cancels it (`cancelled`) and ends its pulse at once. The request, the pulses done, the mode, the
-start, the last request, the values in force, the corrections and the corrected
-lag are saved (`calibration`); corrected starting values are saved with
+start, the last request, the values in force and the corrections are saved
+(`calibration`); corrected starting values are saved with
 `corrected` in `starting_values` and load even when nothing was handed over; a
 state saved with the former calibration blocks (`cal_state`, `ac_state`) loads
 without a calibration in progress.
@@ -623,9 +562,13 @@ otherwise the readings in progress end and the record is dropped.
 to the power: a pure dead time $\theta$ (sensor, transport, actuator) followed by
 a first-order response time constant $\tau_e$ (the emitter, the air and the
 nearby mass together). The a/b learning reads it (3.7: no window of the learning
-stage before it, delivered power, settling waits); the regulator itself (gains,
-holds, horizon, near band) does not read it yet. It is published next to the
-dead times and lags above.
+stage before it, delivered power, settling waits), and so do the anticipation
+horizon (emitter lag $\theta + \tau_e$, 4.3), the near band in heating (effective
+dead time above the setpoint, emitter lag below, 4.4), the limits of the
+calibration pulses (above) and the measurement pulses of the direct start, wanted
+while the model of the mode is not published or the readings keep no values. The
+gains and the integral holds do not read it yet. It is published next to the dead
+times and lags above.
 
 A second reader (`ModelReader`, `event_reading.py`) reads the measurement events
 with the same windows as the reader above (lead 1800 s, first end at the close of
@@ -688,14 +631,15 @@ comes at least 600 s after $\theta$; the samples are published only.
 When the split is uncertain (`dead time assumed`), a consumer of the model takes
 the cautious end of $\theta \in [0, S]$ for its own use: the gains read the
 effective dead time $3S/4$ (plus half the sampling period $h/2$ where the gains
-account for it) and the anticipation horizon reads $S$. The windows of the
-learning wait $S$ whatever the split.
+account for it), the near band above the setpoint and the calibration pulses read
+$3S/4$ too, and the anticipation horizon and the near band below the setpoint read
+$S$. The windows of the learning wait $S$ whatever the split.
 
 The model, its readings and its record are saved under `response_state`. A
 state saved without it is seeded from the active dead time $L$ of each mode
 (`dt_est_state`) and the first emitter lag $S$ among the kept lag of the
-readings, the kept lag of the heating balance (heating) and the lag of the former
-response-lag estimator:
+readings, the kept lag of a saved heating balance (heating) and the lag of the
+former response-lag estimator:
 $\theta = \mathrm{clamp}(2L - S, 0, L)$, or $2L/3$ without $S$ (the split in
 halves of $S = 4L/3$), and $\tau_e = 2(L - \theta)$, so that the effective dead time equals $L$. The seed is
 published as `previous version`, `provisional`, until the first accepted event
@@ -844,8 +788,8 @@ regulated). The two agree when $|\ln(T_{fast}/T_{window})| \le \ln 1.25$
 range of the loop, and much too short makes a slow emitter unstable; an $L$
 that is too long costs integrated error, never stability. A learned value
 alone therefore never shortens $L$ below $L_b$, and only a value confirmed by
-two methods lengthens it beyond $2 L_b$. The other consumers (near band,
-integral hold) use $T$ only when the gains use $L_T$.
+two methods lengthens it beyond $2 L_b$. The integral hold uses $T$ only when
+the gains use $L_T$.
 
 Important:
 
@@ -1182,13 +1126,16 @@ the mode (target $-$ temperature in HEAT, temperature $-$ target in COOL):
 - COOL: $e_P = (T + c) - \text{target}$ and $e_I = (T - \text{target}) + c$.
 
 The horizon $H$ is the time between a command and its effect on the room. It
-is read from the mode, with the same dead-time source as the gain rule
-(`gain_dead_time`):
+is read from the mode:
 
-- in HEAT, the median of the last emitter lags measured by the heating balance (the kept
-  emitter lags, section 3.7) when it is positive, published source `heating balance`;
-- otherwise, and always in COOL (the heating balance is measured in heating
-  only), the longer of the active dead time of the mode (the heating dead time
+- the emitter lag $\theta + \tau_e$ of the response model of the mode (3.7,
+  Response model) when one is published, source `response model`; with
+  `dead time assumed` it is the emitter lag $S$ itself, the cautious end of
+  $\theta \in [0, S]$;
+- otherwise the emitter lag kept from the readings of the measurement pulses of
+  the direct start in the mode, when positive, source `measurement pulses`;
+- otherwise, with the same dead-time source as the gain rule
+  (`gain_dead_time`), the longer of the active dead time of the mode (the heating dead time
   in HEAT, the cooling dead time in COOL) and half its passive dead time (the
   cooling dead time in HEAT, the heating dead time in COOL), each counted only
   when reliable and positive, source `dead times`;
@@ -1232,8 +1179,8 @@ from it. Unlike a window resume, it does not pause the learning for
 learning; their states are read at the start of every calculation, and only the
 state `on` counts (`off`, `unavailable`, `unknown` and an absent entity count as
 off). While blocked: `update_learning` only feeds the records of the measurement
-events (so they stay continuous) and skips the windows, the emitter lag, the heating
-balance and the event detector; the dead-time detection is suspended but the
+events (so they stay continuous) and skips the windows, the emitter lag and the
+event detector; the dead-time detection is suspended but the
 temperature history is fed (anticipation, pulses); the T_ar learning and the room
 model receive the block as exclusion reason (an open window keeps its own reason)
 and the handler starts none of their computations; no measurement pulse is advanced
@@ -1258,7 +1205,7 @@ The restart therefore keeps only useful persistent PI memory, without restoring 
 
 - a symmetric deadband with absolute hysteresis (`DEADBAND_HYSTERESIS = 0.025`),
 - an asymmetric near-band in heating mode; in cooling mode the near-band uses the configured `near_band_deg` on both sides of the setpoint,
-- automatic near-band sizing in heating mode only, when `deadtime_heat` and the model are usable,
+- automatic near-band sizing in heating mode only, when the response model of the mode and the a/b model are usable: $NB = db + slope \cdot (L + cycle/2)$ with $L$ the effective dead time $\theta + \tau_e/2$ above the setpoint and the emitter lag $\theta + \tau_e$ below it ($3S/4$ and $S$ with `dead time assumed`); `near_band_source` is `no response model` without a response model,
 - fallback to configured thresholds otherwise.
 
 Additional protections currently present are:
@@ -1304,7 +1251,6 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | `learning_window.py`   | learning-window management and guardrails                   |
 | `ab_window_balance.py` | integral balance of windows without a robust slope and `a/b` pools |
 | `power_steps.py`       | `PowerSteps`: power steps of the a/b learning (episodes, heating phases), delivered power and settling gates from the response model |
-| `heating_balance.py`   | `HeatingBalance`: heating rate and emitter lag measured on heating phases |
 | `peak_search.py`       | the search of the temperature peak after a cut |
 | `sensor_step.py`       | the step of the sensor, read on the last hour of samples |
 | `measure_event.py`     | detector of the measurement events and record of the power and temperatures |
@@ -1469,8 +1415,7 @@ until the decision.
 | Dead time detection | the detection in progress resumes (3.6) | dropped, minimum OFF time from the load |
 | a/b learning window | the window in progress resumes with its accumulators; its integral balance segment starts again | cleared |
 | Emitter lag (constant-power phases) | passive period or episode resumed (3.7) | episode counted as interrupted |
-| Heating balance | rest or phase in progress resumed (3.7, heating balance) | phase dropped, measurements kept |
-| Measurement readings | the record, the readings in progress and the phase of the detector resume (3.7) | the readings in progress end, the record is dropped, the kept values stay |
+| Measurement readings | the record, the readings in progress and the rest or phase of the detector (heating) resume (3.7) | the readings in progress end, the record is dropped, the kept values stay |
 | Response model readings | the record and the readings in progress resume (3.7) | the readings in progress end, the record is dropped, the model stays |
 | Bootstrap on/off output | resumed inside the band (3.1) | starts at 0 |
 | Emitter lag history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |

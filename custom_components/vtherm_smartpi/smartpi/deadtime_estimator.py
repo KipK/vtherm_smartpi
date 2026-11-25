@@ -648,7 +648,7 @@ class DeadTimeEstimator:
         search = self._stop_peak
         confirmed = False
         if self._tin_history and self._tin_history[-1][0] == now and now >= search.t_cut:
-            # The raw samples of the history feed the peak search, as they feed the heating balance.
+            # The raw samples of the history feed the peak search, as they feed the measurement events.
             confirmed = search.feed(now, self._tin_history[-1][1])
             if not confirmed and search.expired(now):
                 self._stop_peak = None
