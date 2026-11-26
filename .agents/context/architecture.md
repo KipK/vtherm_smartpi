@@ -121,7 +121,7 @@ Find a test by module name: `tests/test_<module>.py` or `tests/test_smartpi_<top
 | Area | Files (glob) |
 |---|---|
 | Root modules | `test_config_flow`, `test_factory`, `test_init_lifecycle`, `test_services`, `test_sensor`, `test_valve_config_check`, `test_device_link`, `test_vtherm_compatibility`, `test_handler_*`, `test_smartpi_handler_*`, `test_smartpi_vt_recalculate_contract` |
-| Control core | `test_smartpi_{antiwindup,bumpless_transfer,feedback,gain_transfer,governance,guards,guard_cut_*,integral_hold,max_on_percent,pause,shedding,robustness*}`, `test_algo_{deadband_hysteresis,off_mode}` |
+| Control core | `test_smartpi_{antiwindup,bumpless_transfer,control_law,feedback,gain_transfer,governance,guards,guard_cut_*,integral_hold,max_on_percent,pause,shedding,robustness*}`, `test_algo_{deadband_hysteresis,off_mode}` |
 | Setpoint / deadband | `test_smartpi_setpoint*`, `test_algo_setpoint_boost`, `test_smartpi_deadband_output`, `test_smartpi_near_band_unwind`, `test_smartpi_nearband_model`, `test_smartpi_valve_curve`, `test_smartpi_valve_runtime_sync` |
 | Measurement events | `test_smartpi_{peak_search,measure_event,event_reading,starting_values,learning_start,start_per_mode,response_model}` |
 | Learning A/B | `test_ab_window_balance`, `test_smartpi_ab_*`, `test_smartpi_learning_*`, `test_learning_outcomes`, `test_smartpi_b_heat_learning_guard`, `test_smartpi_hysteresis_learning`, `test_smartpi_tin_history_coverage` |

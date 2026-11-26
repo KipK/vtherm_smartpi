@@ -1,6 +1,6 @@
 # Control theory and thermal physics used by SmartPI
 
-Reference notes for design discussions. They are not the implementation: verify against code (`algorithm-core.md`). Separate in every debate: what the literature says, what is a SmartPI hypothesis, what simulation or field data validated.
+Reference notes for design discussions. Except the per-tick law below, they are not the implementation: verify against code (`algorithm-core.md`). Separate in every debate: what the literature says, what is a SmartPI hypothesis, what simulation or field data validated.
 
 ## Plant
 
@@ -27,6 +27,29 @@ Reference notes for design discussions. They are not the implementation: verify 
 - Estimation under quantization: with a coarse staircase sensor, an OLS slope over held values is biased by roughly `(1 - 1/m^2)` over `m` levels and a threshold-triggered episode biases the held values up to half a step: use change instants, not periodic samples.
 - Model selection (Bacher & Madsen 2011): choose model order by data support (likelihood-ratio tests, cross-validation); 1R1C is the default, higher orders only with evidence.
 - Predictive PI/PID for dead-time processes (Peterle, Rampazzo, Beghi 2018) and event-based/dead-band self-triggered PI are background references for the dead-time handling; adopt a technique only with a bench showing the gain.
+
+## Control law per tick (what the code computes)
+
+HEAT signs; COOL mirrors through the signed error (sigma = +1 HEAT, -1 COOL). r raw setpoint, y raw measurement, dt in minutes (capped at one cycle, 0 on the first tick), db = `deadband_c` (0.05). Tests: `tests/test_smartpi_control_law.py`. Source functions in brackets.
+
+1. Error `[SmartPI._manage_setpoint]`: e = sigma (r - y). Deadband, near band, guards, FF and learning read e.
+2. Horizon H `[anticipation.select_horizon]`: theta + tau_e of the mode's response model, else the pulse-kept lag, else the reliable dead time after a start, else 0. Slope window W = min(max(600 s, H), 1800 s).
+3. Correction `[anticipation.correction_c]`: s = least-squares slope of the raw history points in [t - W, t] plus the current sample (history sample on a change > 0.001 or after 60 s, `TemperatureHistory`); s = 0 with < 3 samples or a span < W/2. c~ = clamp(s H, +-1 C). Fade w = clamp(2 - (r - y)/c~, 0, 1), c_w = c~ w. c~ = 0 when H = 0 or the command is on/off (bootstrap hysteresis, measurement pulse). Deadband gate `[DeadbandGate.apply]`: c = c_w outside the deadband state left by the previous tick; inside it c_w is kept until it is 0 or of the sign opposite to the previous tick's, then 0 until the room leaves.
+4. Anticipated error `[anticipated_error]`: eps = e - sigma c. It is both the P and the I error. With w = 1: eps = e - c~ (P gain Kp on y, Kp H on the slope). For e in [c~, 2 c~] (c~ > 0): c_w = 2 c~ - e, eps = 2 e - 2 c~ (twice both gains). For e > 2 c~: eps = e.
+5. P error `[deadband_output.deadband_proportional_error]`: eps_p = 0 in the core deadband (|e| < db, tau reliable, stateless); otherwise 0 when |eps| <= db, else sign(eps) (|eps| - db). The integral reads eps, not eps_p. (`deadband_allow_p` on: the damped edge, see `algorithm-core.md`.)
+6. Gains `[gains.GainScheduler.calculate]`: L = reliable dead time after a start; lambda = max(3 L, 2 cycle, 5 min) (4 L valve); Kp = clamp(1/(|a| (lambda + L)), 0.10, 5.0); Ti = min(tau, 4 (lambda + L)); Ki = clamp(Kp/Ti, 0.001, 0.05). No complete model: Kp 0.55, Ki 0.010 (`measurement pulses` gains before the first model). In the near band: Kp (0.75 + 0.25 rho), Ki (0.45 + 0.55 rho), rho = |e|/threshold. Governance freeze keeps the previous gains. Any Ki change rescales I by old Ki / new Ki `[transfer_gains]`.
+7. Feed-forward `[feedforward.compute_ff]`: u_ff = clamp(k_ff (r - T_out), 0, 1) warmup, k_ff = clamp(b/a, -3, 3), 0 without a usable model or an outdoor value. A setpoint step steps u_ff by k_ff dr.
+8. Integral `[SmartPIController.compute_pwm]`, first matching branch; P is in the output in every branch:
+   - FREEZE: core deadband. I kept (clamped to +-2/Ki); eps_p = 0; u = u_ff + Ki I. A generic hold ends here.
+   - HOLD: a generic hold mode (window, shedding, heating-unavailable resume) or the hold flag of the tick (dead-time window theta + tau_e/2 after the heater started, shell of the deadband, no outdoor value, calibration recovery, heating unavailable, VT safety). I kept.
+   - Otherwise, with u_pre = u_ff + Kp eps_p + Ki I against [0, u_max]: SKIP when saturated against eps (SAT_HI with eps > 0, SAT_LO with eps < 0), I kept; UNWIND instead of SKIP when 0 < |eps| <= 1.5 sensor steps, FF + Ki I inside the limits and I eps < 0: d = eps dt limited so that I does not pass 0; RUN: d = eps dt. CLAMP: with eps <= 0.04 a positive d is set to 0 (negative d passes). Then I = clamp(I + d, +-2/Ki).
+9. Output: u_cmd = clamp(u_ff + Kp eps_p + Ki I, 0, 1).
+10. Back-calculation `[track_output_limit]`, modes RUN, SKIP, CLAMP only: du = min(u_cmd, u_max) - u_cmd (<= 0, nonzero only with a static limit u_max < 1); I moves by (dt / max(Tt, dt)) du / Ki toward 0 and never across it, Tt = Kp/Ki. The [0, 1] saturation has no back-calculation: conditional integration alone.
+11. Rate limit 0.25/min (0.50 boost, none on a setpoint change, the first tick or dt = 0), clamp to [0, u_max], minimum activation. Guard cut (HEAT, y > r + near band above, device active): 0 %, I unwound on the raw error `[SmartPI._unwind_integral_during_guard_cut]`; guard kick `[guards]`.
+
+Series-PID reading. With w = 1, db = 0, no hold, no saturation and every tick integrating: u - u_ff = Kp eps + Ki sum eps dt = Kp (1 + 1/(Ti s)) (r - y - H s_y), a series PID with the derivative on the measurement, Td = H, Ti = Kp/Ki. The P gain on y of the parallel form is Kp + Ki H = Kp (1 + H/Ti). It is exact in the discrete sum on a straight ramp (the OLS slope is the ramp rate; the integrated slope term is Ki H (y_k - y_before)); on any other trajectory the slope is a window derivative (delay about W/2). Departures: the fade ramp (item 4: 2 Kp, 2 Kp H), the dead-band projection (item 5), and the integral modes (item 8).
+
+The anticipation enters the integral, through eps, on RUN and UNWIND ticks and on CLAMP ticks with eps < 0. FREEZE, HOLD, SKIP and CLAMP with 0 < eps <= 0.04 integrate nothing: the whole eps dt is lost, so is its c part, Ki c dt (the braking). What a stretch of such ticks leaves, against an integral that never stops, is +Ki integral of c dt (less braking in I) and -Ki integral of e dt (the intended anti-windup). Because of the fade, c is 0 while e > 2 c~: the c part is lost only in stretches inside the ramp or the full-correction zone (e <= 2 c~): a saturated command or a hold there.
 
 ## Practical reading rules
 
