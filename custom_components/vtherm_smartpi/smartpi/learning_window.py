@@ -551,10 +551,11 @@ class LearningWindowManager:
         model: dict | None,
         hvac_mode: "VThermHvacMode | None",
     ) -> None:
-        """Recompute the a collection of the learning stage when the response model changes.
+        """Recompute the b measurements and the a collection of the learning stage when the response model changes.
 
-        The model of a blank start is published before the first window of the stage, so its first publication finds
-        no collection to recompute.
+        The b measurements of the mode take the delivered power of their window recomputed from the command history
+        (those it no longer covers keep theirs), then the a collection is recomputed. The model of a blank start is
+        published before the first window of the stage, so its first publication finds nothing to recompute there.
         """
         current = None if model is None else (model["theta_s"], model["tau_e_s"])
         previous = self._power_model
@@ -570,11 +571,20 @@ class LearningWindowManager:
         if not changed:
             return
         self._power_model = current
+        from ..hvac_mode import VThermHvacMode_COOL
+
+        mode_sign = -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0
+        replay_b = getattr(estimator, "replay_b_power", None)
+        if callable(replay_b) and replay_b(
+            lambda window: self._steps.window_power(model, *window), mode_sign
+        ) is True:
+            _LOGGER.debug(
+                "%s - b measurements recomputed: response model %s -> %s",
+                self._name, previous, current,
+            )
         replay = getattr(estimator, "replay_a_power", None)
         if not callable(replay):
             return
-        from ..hvac_mode import VThermHvacMode_COOL
-
         settle = self._steps.active_settle_s(model)
 
         def power_of(geometry: tuple[float, float, float]) -> float | None:
@@ -586,7 +596,6 @@ class LearningWindowManager:
                 return None
             return u_applied * delivered_fraction(start_s, duration_s, model)
 
-        mode_sign = -1.0 if hvac_mode == VThermHvacMode_COOL else 1.0
         if replay(power_of, mode_sign, "replay: response model changed") is True:
             _LOGGER.debug(
                 "%s - a collection recomputed: response model %s -> %s",
@@ -803,6 +812,8 @@ class LearningWindowManager:
 
         # An early submit uses the already-accumulated data and does not add the
         # transition tick.
+        # End of the accumulated data: this observation, or the last one before an early submit.
+        data_end = now if not early_submit else close_at if close_at is not None else now - dt_s
         if not early_submit:
             # Accumulate current sample into power stats and energy integral
             self._update_u_stats(u_active)
@@ -989,6 +1000,7 @@ class LearningWindowManager:
                 dT_int_per_min=slope_val,
                 u=0.0,
                 residual_power=self._uf_int / self._t_int_s,
+                power_window=(data_end - self._t_int_s, data_end),
                 t_int=self._T_int_start,
                 t_ext=self._T_ext_start,
                 hvac_mode=(

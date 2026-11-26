@@ -226,13 +226,15 @@ measurement restored without an observation, or whose recomputation would
 contradict the mode sign, keeps its value.
 
 Likewise each `b` measurement keeps its observation (`dT/dt`, `T_int - T_ext`,
-`p`, mode). Each time `a` is published, given as a starting value or corrected,
+`p`, mode, and the start and end of its window, saved as wall-clock times). Each
+time `a` is published, given as a starting value or corrected,
 the retained `b` measurements of that mode with a residual power are recomputed
 with that `a`, then `b` is aggregated again if it has already been published
 (unless a starting value of `b` stands). A change below `AB_VAL_TOLERANCE`
 recomputes nothing. A recomputation never starts another one: a change of `b`
 recomputes the `a` measurements, a change of `a` recomputes the `b` measurements,
-once each.
+once each. A change of the response model recomputes the `p` of the `b`
+measurements (3.7, model settled); the `b` it gives recomputes nothing either.
 
 ### 3.5 Integral balance of windows without a robust slope
 
@@ -320,7 +322,16 @@ groups the active episodes separated by power cuts shorter than
 $\theta$, then a first order of $\tau_e$ (the published split). Without a
 model the delivered power equals the applied power. `a` is referred to the mean
 delivered power of its window; the residual delivered power of a `b` window
-enters `b` (3.4); the balance pools of `b` (3.5) keep the applied power. For an active
+enters `b` (3.4); the balance pools of `b` (3.5) keep the applied power. The
+applied command is kept as change points over the last `RECORD_SPAN_S` (30.5 h,
+at most `RECORD_MAX_POINTS = 6000` points), the unobserved stretches marked. When
+the filter followed the applied power (no model yet, or a restart without its
+history) and the model of the mode is published, the filter is rebuilt over the
+commands observed since the last unobserved stretch, its output equal to the
+oldest of them at its start: the first `b` windows after a cut count the heat the
+emitter still gives, instead of a filter starting from the applied power (0).
+After an unobserved stretch (guard cut, OFF, interval capped at one cycle) the
+filter starts again at the applied power. For an active
 window starting $t_0$ after the step and lasting $W$, the mean delivered fraction
 is (`response_model.delivered_fraction`):
 
@@ -344,7 +355,12 @@ later by more than `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` of its emitter lag (on
 $S$ or on $\theta$) before the first publication of `a`, the collected
 measurements are recomputed with the new delivered power. Only the windows that
 the settling wait admits are recomputed; the others are dropped, since their
-correction depends on the shape of the response. With no model, no window of the
+correction depends on the shape of the response. On the same change (the first
+publication included, not the first update after a load), the `b` measurements
+of the mode recompute their delivered power over their window from the command
+history with the new model, then their value (3.4); a window the history does not
+cover (before it, within `RECORD_PRE_S` = 6 h of its trimmed front, or across an
+unobserved stretch) keeps its power. With no model, no window of the
 learning stage opens, so the stage waits for the model (`learning.bootstrap_status`
 reads `step1 - waiting response model`).
 
@@ -358,7 +374,11 @@ that power: a passive period goes on and the stop counts as passive; an episode
 goes on, and the first observation continues or ends it like any other. After
 any other restart the passive period is dropped and an episode is counted as
 ended. The episodes are saved under `lw_state.power_steps` (a state of the former
-`response_lag` block loads its durations and heating phases).
+`response_lag` block loads its durations and heating phases), and the command
+history under `lw_state.power_steps.commands` (wall-clock origin, offsets in
+seconds): a bridged restart resumes it, the heater having kept its command over
+the stop, and a model published later rebuilds the filter over it; after any
+other restart the history and the filter start again at the first observation.
 
 #### Measurement events and starting values
 

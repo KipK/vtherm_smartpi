@@ -195,3 +195,87 @@ def test_state_without_b_observations_keeps_the_b_measurements():
     assert list(restored._b_obs_hist) == [None]
     _give_a(restored)
     assert restored.b_meas_hist[0] == pytest.approx(-B_SLOPE / DELTA)
+
+
+# -- response model change -> b replay -----------------------------------------------------------------------------
+WINDOW = (5000.0, 5600.0)
+
+
+def _learn_b_window(est, power=POWER, window=WINDOW, slope=B_SLOPE):
+    est.learn(dT_int_per_min=slope, u=0.0, residual_power=power, t_int=T_INT, t_ext=T_EXT,
+              hvac_mode=VThermHvacMode_HEAT, power_window=window)
+
+
+def test_b_observation_keeps_its_window():
+    est = ABEstimator()
+    _learn_b_window(est)
+    assert est._b_obs_hist[-1] == (B_SLOPE, DELTA, POWER, 1.0, *WINDOW)
+
+
+def test_model_change_recomputes_the_b_measurements_with_their_window_power():
+    est = ABEstimator()
+    _give_a(est)
+    for _ in range(AB_MIN_SAMPLES_B):
+        _learn_b_window(est, power=0.0)
+    est.b_meas_hist.appendleft(0.0005)             # without observation: kept
+    _learn_b(est, power=0.0)                       # without window: kept
+    seen = []
+
+    def power_of(window):
+        seen.append(window)
+        return 0.3
+
+    assert est.replay_b_power(power_of, 1.0) is True
+    assert seen == [WINDOW] * AB_MIN_SAMPLES_B
+    expected = (A * 0.3 - B_SLOPE) / DELTA
+    assert list(est.b_meas_hist) == pytest.approx([0.0005] + [expected] * AB_MIN_SAMPLES_B + [-B_SLOPE / DELTA])
+    assert est.b == pytest.approx(expected)
+    assert est._b_obs_hist[1][2] == 0.3
+    # A later change of a counts the new power.
+    est.correct_a(VThermHvacMode_HEAT, 2.0 * A)
+    assert est.b_meas_hist[1] == pytest.approx((2.0 * A * 0.3 - B_SLOPE) / DELTA)
+
+
+def test_model_change_keeps_the_measurements_the_history_no_longer_covers():
+    est = ABEstimator()
+    _give_a(est)
+    _learn_b_window(est)
+    before = list(est.b_meas_hist), list(est._b_obs_hist)
+    assert est.replay_b_power(lambda window: None, 1.0) is False
+    assert (list(est.b_meas_hist), list(est._b_obs_hist)) == before
+
+
+def test_model_change_before_a_is_known_keeps_the_new_power_for_a():
+    est = ABEstimator()
+    _learn_b_window(est, power=0.0)
+    assert est.replay_b_power(lambda window: POWER, 1.0) is False     # a not usable: same value
+    assert est._b_obs_hist[-1][2] == POWER
+    _give_a(est)
+    assert est.b_meas_hist[-1] == pytest.approx((A * POWER - B_SLOPE) / DELTA)
+
+
+def test_b_replayed_by_the_model_starts_no_other_replay():
+    est = ABEstimator()
+    for _ in range(AB_MIN_SAMPLES_B):
+        _learn_b_window(est, power=0.0)
+    _publish_a(est)
+    est._a_obs_hist.extend([(0.02, DELTA, 1.0)] * 5)
+    est._replay_a_measurements = MagicMock(wraps=est._replay_a_measurements)
+    est._replay_b_measurements = MagicMock(wraps=est._replay_b_measurements)
+    b_before = est.b
+    assert est.replay_b_power(lambda window: POWER, 1.0) is True
+    assert est.b != b_before
+    est._replay_a_measurements.assert_not_called()
+    est._replay_b_measurements.assert_not_called()
+
+
+def test_b_window_survives_save_and_load():
+    est = ABEstimator()
+    _learn_b_window(est)
+    saved = est.save_state()["b_obs_hist"][-1]
+    assert len(saved) == 6 and saved[4] != WINDOW[0]           # wall-clock time
+    restored = ABEstimator()
+    restored.load_state(est.save_state())
+    obs = restored._b_obs_hist[-1]
+    assert obs[:4] == (B_SLOPE, DELTA, POWER, 1.0)
+    assert obs[4:] == pytest.approx(WINDOW, abs=1e-3)

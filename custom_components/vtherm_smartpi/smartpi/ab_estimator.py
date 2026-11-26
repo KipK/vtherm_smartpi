@@ -71,6 +71,7 @@ from .const import (
     clamp,
 )
 from .starting_values import StartingValues
+from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,8 +106,9 @@ def _aligned(observations: Deque[tuple | None], measurements: Deque[float]) -> D
 
 
 def _b_observation(value: object) -> tuple | None:
-    """A saved b observation (dT/dt, delta, delivered power, mode sign), None when malformed."""
-    if not isinstance(value, (list, tuple)) or len(value) != 4:
+    """A saved b observation (dT/dt, delta, delivered power, mode sign, then the window start and end in wall-clock time
+    when known), None when malformed; the window comes back in monotonic time."""
+    if not isinstance(value, (list, tuple)) or len(value) not in (4, 6):
         return None
     try:
         obs = tuple(float(v) for v in value)
@@ -114,7 +116,13 @@ def _b_observation(value: object) -> tuple | None:
         return None
     if not all(math.isfinite(v) for v in obs) or obs[1] == 0.0 or obs[3] not in (-1.0, 1.0):
         return None
-    return obs
+    window = tuple(wall_to_monotonic_ts(t) for t in obs[4:])
+    return obs[:4] if None in window else obs[:4] + window
+
+
+def _saved_b_observation(obs: tuple) -> list:
+    """A b observation as saved state, its window in wall-clock time."""
+    return list(obs[:4]) + [monotonic_to_wall_ts(t) for t in obs[4:]]
 
 
 @dataclass(frozen=True)
@@ -166,9 +174,10 @@ class ABEstimator:
         # element, not persisted, holds the power geometry of the window
         # (applied power, start after the power step, duration) when known.
         self._a_obs_hist: Deque[tuple | None] = deque(maxlen=AB_HISTORY_SIZE)
-        # Observation (dT/dt, T_int - T_ext, delivered power, mode sign) behind each b measurement, aligned with
-        # b_meas_hist, so that the measurements follow later changes of a (residual heat a p of the emitter after a
-        # cut). None for a measurement without its observation.
+        # Observation (dT/dt, T_int - T_ext, delivered power, mode sign, then the window start and end when known)
+        # behind each b measurement, aligned with b_meas_hist, so that the measurements follow later changes of a
+        # (residual heat a p of the emitter after a cut) and of the response model (the delivered power of the
+        # window). None for a measurement without its observation.
         self._b_obs_hist: Deque[tuple | None] = deque(maxlen=AB_HISTORY_SIZE)
 
         # Stability tracking for a and b (tau) - used for reliability check
@@ -805,6 +814,7 @@ class ABEstimator:
         hvac_mode: VThermHvacMode = VThermHvacMode_HEAT,
         power_geometry: tuple[float, float, float] | None = None,
         residual_power: float = 0.0,
+        power_window: tuple[float, float] | None = None,
     ) -> None:
         """
         Update (a,b) using Median + MAD approach.
@@ -816,7 +826,9 @@ class ABEstimator:
         residual_power is the mean delivered power over a passive window (the
         heat the emitter still gives after a cut): b = (a p - dT/dt) / delta,
         with the usable a (published or starting value), else p is not counted
-        until a is known (the measurement follows the changes of a).
+        until a is known (the measurement follows the changes of a). power_window
+        (start, end of the passive window, monotonic s) lets the measurement
+        follow a later change of the response model (replay_b_power).
 
         Model: dT/dt = a*u - b*(T_int - T_ext)
         """
@@ -859,6 +871,8 @@ class ABEstimator:
             )
             self.diag_b_last_reason = decision.accepted_reason
             b_obs = (dTdt, delta, power, mode_sign)
+            if power_window is not None:
+                b_obs += tuple(float(t) for t in power_window)
 
             if decision.accepted_reason == "COLLECTING":
                 self._b_obs_hist = _aligned(self._b_obs_hist, self.b_meas_hist)
@@ -1134,20 +1148,52 @@ class ABEstimator:
         if not self.b_meas_hist or not self.usable_a:
             return
         self._b_obs_hist = _aligned(self._b_obs_hist, self.b_meas_hist)
-        values, changed = [], False
+        values = []
         for value, obs in zip(self.b_meas_hist, self._b_obs_hist):
             if obs is None or obs[3] != mode_sign or obs[2] <= 0.0:
                 values.append(value)
                 continue
             d_t_dt, delta, power = obs[:3]
             replayed = (self.a * power - d_t_dt) / delta
-            if replayed > 0.0 and replayed != value:
-                values.append(replayed)
-                changed = True
-            else:
+            values.append(replayed if replayed > 0.0 else value)
+        self._set_b_measurements(values)
+
+    def replay_b_power(
+        self,
+        power_of: Callable[[tuple[float, float]], float | None],
+        mode_sign: float,
+    ) -> bool:
+        """Recompute the b measurements of the mode with a new delivered power.
+
+        Used when the response model of the mode changes: power_of maps the
+        window of a measurement (start, end) to its delivered power, None when
+        the command history no longer covers it. A recomputed measurement keeps
+        its new power for later changes of a; as in _replay_b_measurements, one
+        whose recomputed value is not positive keeps its value and its power.
+        Like the other replays it starts none: the b it gives does not
+        recompute the a measurements. Returns whether a measurement changed.
+        """
+        if not self.b_meas_hist:
+            return False
+        self._b_obs_hist = _aligned(self._b_obs_hist, self.b_meas_hist)
+        values, observations = [], []
+        for value, obs in zip(self.b_meas_hist, self._b_obs_hist):
+            power = power_of(obs[4:6]) if obs is not None and len(obs) == 6 and obs[3] == mode_sign else None
+            replayed = None if power is None else (self._a_for_b() * power - obs[0]) / obs[1]
+            if replayed is None or replayed <= 0.0:
                 values.append(value)
-        if not changed:
-            return
+                observations.append(obs)
+                continue
+            values.append(replayed)
+            observations.append(obs[:2] + (power,) + obs[3:])
+        self._b_obs_hist = deque(observations, maxlen=AB_HISTORY_SIZE)
+        return self._set_b_measurements(values)
+
+    def _set_b_measurements(self, values: list[float]) -> bool:
+        """Replace the b measurements by their recomputed values and aggregate the published b again (once published,
+        unless a starting value stands). Returns whether a value changed."""
+        if values == list(self.b_meas_hist):
+            return False
         self.b_meas_hist = deque(values, maxlen=AB_HISTORY_SIZE)
         if self.learn_ok_count_b > 0 and not self.start.standing("b"):
             new_b, _ = ab_publish(
@@ -1158,6 +1204,7 @@ class ABEstimator:
             )
             self.b = clamp(new_b, self.B_MIN, self.B_MAX)
         self._update_mad_diag("b", self.b_meas_hist)
+        return True
 
     def tau_reliability(self) -> TauReliability:
         """
@@ -1237,7 +1284,10 @@ class ABEstimator:
             "a_meas_hist": list(self.a_meas_hist),
             "a_obs_hist": [None if obs is None else list(obs[:3]) for obs in self._a_obs_hist],
             "b_meas_hist": list(self.b_meas_hist),
-            "b_obs_hist": [None if obs is None else list(obs) for obs in _aligned(self._b_obs_hist, self.b_meas_hist)],
+            "b_obs_hist": [
+                None if obs is None else _saved_b_observation(obs)
+                for obs in _aligned(self._b_obs_hist, self.b_meas_hist)
+            ],
             "a_hat_hist": list(self._a_hat_hist),
             "b_hat_hist": list(self._b_hat_hist),
             "learn_seq_a": self._learn_seq_a,

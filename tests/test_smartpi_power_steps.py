@@ -362,3 +362,115 @@ def test_window_closed_at_a_gap_uses_only_the_data_before_it():
     assert est._a_obs_hist
     # No submitted slope mixes the rising data with the post-gap cooling.
     assert all(obs[0] == pytest.approx(0.025, rel=0.05) for obs in est._a_obs_hist)
+
+
+# -- command history: rebuild at the first model, window power, restart ------------------------------------------
+_CUT_MODEL = _model(120.0, 300.0)
+
+
+def _heat_then_cut(steps: PowerSteps, model_from: int, n: int = 100, start: float = 1000.0) -> list[float]:
+    """Rest 10 min, heat 60 min, then cut, at a 60 s step; the model is given from tick model_from."""
+    now, means = start, []
+    for k in range(n):
+        now += 60.0
+        u = 1.0 if 10 <= k < 70 else 0.0
+        steps.observe(now=now, dt_s=60.0, u=u, hvac_mode=VThermHvacMode_HEAT,
+                      model=_CUT_MODEL if k >= model_from else None)
+        means.append(steps.interval_mean_power)
+    return means
+
+
+def test_first_model_rebuilds_the_delivered_power_over_the_applied_commands():
+    """A model published after the cut does not restart the filter from the applied power (0): the delivered power
+    is the one of a filter that had the model from the start."""
+    reference = _heat_then_cut(PowerSteps("t"), model_from=0)
+    late = _heat_then_cut(PowerSteps("t"), model_from=80)
+    assert late[:80] == [1.0 if 10 <= k < 70 else 0.0 for k in range(80)]
+    assert late[80:] == pytest.approx(reference[80:], rel=1e-9)
+    assert late[80] > 0.1
+
+
+def test_window_power_recomputes_the_filter_from_the_history():
+    steps = PowerSteps("t")
+    means = _heat_then_cut(steps, model_from=0)
+    t0, t1 = 1000.0 + 72 * 60.0, 1000.0 + 90 * 60.0
+    assert steps.window_power(_CUT_MODEL, t0, t1) == pytest.approx(sum(means[72:90]) / 18.0, rel=1e-9)
+    # Another model: the same history filtered with it.
+    other = _model(0.0, 900.0)
+    expected = sum(_heat_then_cut_with(other)[72:90]) / 18.0
+    assert steps.window_power(other, t0, t1) == pytest.approx(expected, rel=1e-9)
+    assert steps.window_power(None, t0, t1) is None
+    assert steps.window_power(_CUT_MODEL, 0.0, t1) is None          # before the history
+    assert steps.window_power(_CUT_MODEL, t0, t1 + 3600.0) is None  # after the last observation
+
+
+def _heat_then_cut_with(model: dict) -> list[float]:
+    steps, now, means = PowerSteps("t"), 1000.0, []
+    for k in range(100):
+        now += 60.0
+        steps.observe(now=now, dt_s=60.0, u=1.0 if 10 <= k < 70 else 0.0, hvac_mode=VThermHvacMode_HEAT, model=model)
+        means.append(steps.interval_mean_power)
+    return means
+
+
+def test_window_across_an_observation_gap_is_not_recomputed():
+    steps = PowerSteps("t")
+    now = _runs(steps, [(1.0, 600.0)])
+    gap_end = now + 1800.0
+    steps.observe(now=gap_end + 60.0, dt_s=60.0, u=0.0, hvac_mode=VThermHvacMode_HEAT, model=None)
+    assert steps.window_power(_CUT_MODEL, now - 300.0, gap_end + 60.0) is None
+    # After the gap the filter starts again at the applied power, as the history does.
+    assert steps.window_power(_CUT_MODEL, gap_end, gap_end + 60.0) == 0.0
+
+
+def test_history_is_bounded():
+    steps = PowerSteps("t")
+    now = 0.0
+    for k in range(4000):
+        now += 60.0
+        steps.observe(now=now, dt_s=60.0, u=float(k % 2), hvac_mode=VThermHvacMode_HEAT, model=None)
+    from custom_components.vtherm_smartpi.smartpi.event_reading import RECORD_PRE_S, RECORD_SPAN_S
+
+    assert steps._hist[1][0] > now - 60.0 - RECORD_SPAN_S
+    assert steps._hist_from == pytest.approx(steps._hist[0][0] + RECORD_PRE_S)
+    assert steps.window_power(_CUT_MODEL, steps._hist[0][0] + 60.0, now) is None
+
+
+@pytest.mark.parametrize("bridged", [True, False])
+def test_command_history_after_a_restart(bridged):
+    """Bridged: the history saved before the stop is resumed (the heater kept its command), and a model published
+    after the restart rebuilds the filter over it; otherwise the filter starts again at the applied power."""
+    reference = _heat_then_cut(PowerSteps("t"), model_from=0)
+    steps = PowerSteps("t")
+    _heat_then_cut(steps, model_from=200, n=75)
+    restored = PowerSteps("t")
+    restored.load_state(steps.save_state())
+    restored.resolve_restart(bridged)
+    now, means = 1000.0 + 75 * 60.0, []
+    for _ in range(25):
+        now += 60.0
+        restored.observe(now=now, dt_s=60.0, u=0.0, hvac_mode=VThermHvacMode_HEAT, model=_CUT_MODEL)
+        means.append(restored.interval_mean_power)
+    if bridged:
+        assert means == pytest.approx(reference[75:], rel=1e-3)
+    else:
+        assert means == [0.0] * 25
+
+
+def test_saved_history_of_a_restart_not_yet_applied_is_saved_again():
+    steps = PowerSteps("t")
+    _heat_then_cut(steps, model_from=200, n=75)
+    saved = steps.save_state()
+    restored = PowerSteps("t")
+    restored.load_state(saved)
+    again = restored.save_state()["commands"]
+    assert [u for _, u in again["points"]] == [u for _, u in saved["commands"]["points"]] == [0.0, 1.0, 0.0]
+    assert [t for t, _ in again["points"]] == pytest.approx([t for t, _ in saved["commands"]["points"]], abs=0.2)
+
+
+@pytest.mark.parametrize("value", [None, "x", {"origin": 1.0}, {"origin": 1.0, "from_s": 0.0, "end_s": 1.0,
+                                                               "points": [[0.0, "x"]]}])
+def test_malformed_saved_history_is_ignored(value):
+    steps = PowerSteps("t")
+    steps.load_state({"durations": [], "hvac_mode": HEAT, "commands": value})
+    assert steps._hist_restore is None

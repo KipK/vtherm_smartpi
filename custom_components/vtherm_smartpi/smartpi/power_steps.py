@@ -5,7 +5,10 @@ An episode is a run of applied power after a step from rest; it ends at a cut. T
 phases (runs separated by less than RESPONSE_LAG_PHASE_MIN_OFF_S of cut count once), keeps the recent episode
 durations, and follows the power delivered to the room with the response model of the mode
 (smartpi/response_model.py): the command delayed by the dead time theta, then a first order of the response time
-constant tau_e. Without a model the delivered power is the applied power.
+constant tau_e. Without a model the delivered power is the applied power. The applied command is kept as a history
+(change points over RECORD_SPAN_S, unobserved stretches marked): when the filter followed the applied power (no model
+yet, or a restart) and a model is published, the delivered power is rebuilt over that history, and the passive windows
+of the b learning recompute their delivered power from it when the model changes (``window_power``).
 
 Settling gates (wait ``settle_s`` in smartpi/response_model.py, the emitter lag S): an active window starts S after
 the power step, capped at AB_SETTLE_ACTIVE_CAP_FRAC of the median episode; a passive window starts S after the cut.
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from bisect import bisect_right
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +31,8 @@ from .const import (
     RESPONSE_LAG_RESTART_MAX_GAP_S,
     RESPONSE_LAG_U_TOL,
 )
+from .event_reading import RECORD_PRE_S, RECORD_SPAN_S
+from .measure_event import RECORD_MAX_POINTS
 from .response_model import settle_s
 from .timestamp_utils import monotonic_to_wall_ts, wall_to_monotonic_ts
 
@@ -44,6 +50,30 @@ def _number(v: object) -> float | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
         return None
     return float(v)
+
+
+def _delivered(cmd, delay: float, tau: float, u_filt: float, t_a: float, t_b: float) -> tuple[float, float]:
+    """Delivered energy over [t_a, t_b] and the filter output at t_b.
+
+    ``cmd`` holds the applied command as change points (time, power) in time order, the oldest held before them; the
+    command is delayed by ``delay``, then filtered by a first order of ``tau`` whose output is ``u_filt`` at t_a.
+    """
+    times = [ts for ts, _ in cmd]
+    edges = [t_a]
+    edges += sorted(ts + delay for ts in times if t_a < ts + delay < t_b)
+    edges.append(t_b)
+    total = 0.0
+    for x0, x1 in zip(edges, edges[1:]):
+        value = cmd[max(bisect_right(times, x0 - delay) - 1, 0)][1]
+        h = x1 - x0
+        if tau <= 0.0:
+            total += value * h
+            u_filt = value
+            continue
+        gap = u_filt - value
+        total += value * h + gap * tau * (-math.expm1(-h / tau))
+        u_filt = value + gap * math.exp(-h / tau)
+    return total, u_filt
 
 
 class PowerSteps:
@@ -70,6 +100,17 @@ class PowerSteps:
         self._interval_mean: float = 0.0
         # Applied command segments (start, power) feeding the delayed input.
         self._cmd: deque[tuple[float, float]] = deque(maxlen=512)
+        # Applied command change points (time, power; None from the end of an observation to the next one), over
+        # RECORD_SPAN_S and RECORD_MAX_POINTS at most.
+        self._hist: deque[tuple[float, float | None]] = deque()
+        # Earliest window start whose delivered power the history gives as the filter would (None: no history). The
+        # first observation and each resume start the filter at the applied power, as the history does; a trimmed
+        # front leaves RECORD_PRE_S for the filter to forget it.
+        self._hist_from: float | None = None
+        # Whether the filter output follows a response model (False: the applied power).
+        self._filt_model: bool = False
+        # Command history saved before a restart, resumed on the first observation when the restart is bridged.
+        self._hist_restore: dict | None = None
         self._ep_start: float | None = None
         self._ep_u0: float = 0.0
         self._ep_const: bool = False
@@ -138,6 +179,35 @@ class PowerSteps:
         settle = settle_s(model)
         return None if settle is None else self._off_start + settle
 
+    def window_power(self, model: dict[str, Any] | None, t0: float, t1: float) -> float | None:
+        """Mean delivered power over [t0, t1] (monotonic s) with ``model``, recomputed from the command history as the
+        filter gives it; None without a model or when the history does not cover the window."""
+        if (
+            model is None
+            or self._hist_from is None
+            or self._last_now is None
+            or t1 <= t0
+            or t0 < self._hist_from - _CONTIGUITY_TOL_S
+            or t1 > self._last_now + _CONTIGUITY_TOL_S
+        ):
+            return None
+        run: list[tuple[float, float]] = []
+        for ts, u in self._hist:
+            if ts >= t1:
+                break
+            if u is not None:
+                run.append((ts, u))
+            elif ts >= t0:
+                return None
+            else:
+                run = []
+        if not run or run[0][0] > t0 + _CONTIGUITY_TOL_S:
+            return None
+        delay, tau = model["theta_s"], model["tau_e_s"]
+        _, u_filt = _delivered(run, delay, tau, run[0][1], min(run[0][0], t0), t0)
+        total, _ = _delivered(run, delay, tau, u_filt, t0, t1)
+        return total / (t1 - t0)
+
     # ------------------------------------------------------------------
     # Observation
     # ------------------------------------------------------------------
@@ -169,6 +239,8 @@ class PowerSteps:
         t_step = now - dt_s
         if self._restore is not None:
             self._resume_after_restart(t_step, u, mode)
+        if self._hist_restore is not None:
+            self._resume_history(t_step, mode)
         if self._last_now is not None and t_step > self._last_now + _CONTIGUITY_TOL_S:
             # Unobserved time (guard cut, OFF, interval capped at one cycle):
             # the power over the gap is unknown.
@@ -197,6 +269,11 @@ class PowerSteps:
         Otherwise the passive period is dropped and an episode is counted as
         ended.
         """
+        if self._hist_restore is not None:
+            if bridged:
+                self._hist_restore["bridged"] = True
+            else:
+                self._hist_restore = None
         restore = self._restore
         if restore is None:
             return
@@ -244,6 +321,19 @@ class PowerSteps:
             return
         self._count_episode(episode["start"], restore["last_obs"])
 
+    def _resume_history(self, t_resume: float, mode: str | None) -> None:
+        """Resume the command history saved before a restart when the actuator kept its last command over the stop (a
+        bridged restart, or without a restart decision a stop of at most RESPONSE_LAG_RESTART_MAX_GAP_S in the saved
+        mode); otherwise the history starts again at this observation."""
+        saved, self._hist_restore = self._hist_restore, None
+        if saved.get("bridged") or (
+            0.0 <= t_resume - saved["end"] <= RESPONSE_LAG_RESTART_MAX_GAP_S
+            and mode is not None
+            and mode == self._model_hvac_mode
+        ):
+            self._hist = saved["points"]
+            self._hist_from = saved["from"]
+
     def _count_episode(self, t_start: float, t_end: float) -> None:
         """Count an ended active episode unless it continues the previous phase."""
         previous = self._last_episode_end
@@ -262,45 +352,68 @@ class PowerSteps:
         self._ep_start = None
         self._u_filt = None
         self._cmd.clear()
+        if self._hist and self._last_now is not None:
+            self._hist.append((self._last_now, None))
         # The power cut time is unknown: settling is counted from the resume.
         self._off_start = t_resume
 
     def _advance_filter(self, t_a: float, t_b: float, u: float, model: dict[str, Any] | None) -> None:
         """Advance the delivered power over [t_a, t_b] (command u applied): the command delayed by theta, then a
-        first order of tau_e; the applied power without a model."""
+        first order of tau_e; the applied power without a model.
+
+        A model found by a filter that followed the applied power is first applied over the command history observed
+        since the last unobserved stretch (``_rebuild_filter``).
+        """
+        self._note_command(t_a, u)
+        if model is not None and not self._filt_model:
+            self._rebuild_filter(t_a, model)
         if not self._cmd or self._cmd[-1][1] != u:
             self._cmd.append((t_a, u))
         if self._u_filt is None or model is None:
             self._u_filt = u
             self._interval_mean = u
+            self._filt_model = model is not None
             self._prune_cmd(t_b, 0.0)
             return
         delay, tau = model["theta_s"], model["tau_e_s"]
-        edges = [t_a]
-        edges += sorted(ts + delay for ts, _ in self._cmd if t_a < ts + delay < t_b)
-        edges.append(t_b)
-        total = 0.0
-        for x0, x1 in zip(edges, edges[1:]):
-            value = self._cmd_at(x0 - delay)
-            h = x1 - x0
-            if tau <= 0.0:
-                total += value * h
-                self._u_filt = value
-                continue
-            gap = self._u_filt - value
-            total += value * h + gap * tau * (-math.expm1(-h / tau))
-            self._u_filt = value + gap * math.exp(-h / tau)
+        total, self._u_filt = _delivered(self._cmd, delay, tau, self._u_filt, t_a, t_b)
         self._interval_mean = total / (t_b - t_a)
         self._prune_cmd(t_b, delay)
 
-    def _cmd_at(self, t: float) -> float:
-        """Applied command at time t (the oldest known before the history)."""
-        value = self._cmd[0][1]
-        for ts, u in self._cmd:
-            if ts > t:
+    def _rebuild_filter(self, t: float, model: dict[str, Any]) -> None:
+        """Set the filter output at ``t`` and its delayed input from the command observed before ``t`` since the last
+        unobserved stretch, with ``model``; nothing when no command was observed there (the filter starts at the
+        applied power)."""
+        run: list[tuple[float, float]] = []
+        for ts, u in self._hist:
+            if ts >= t:
                 break
-            value = u
-        return value
+            if u is None:
+                run = []
+            else:
+                run.append((ts, u))
+        if not run:
+            return
+        delay, tau = model["theta_s"], model["tau_e_s"]
+        _, self._u_filt = _delivered(run, delay, tau, run[0][1], run[0][0], t)
+        self._cmd = deque(run, maxlen=self._cmd.maxlen)
+        self._prune_cmd(t, delay)
+        self._filt_model = True
+
+    def _note_command(self, t: float, u: float) -> None:
+        """Add the command applied from ``t`` to the history and trim it to RECORD_SPAN_S and RECORD_MAX_POINTS."""
+        if not self._hist or self._hist[-1][1] != u:
+            self._hist.append((t, u))
+        if self._hist_from is None:
+            self._hist_from = t
+        trimmed = False
+        while len(self._hist) >= 2 and (
+            self._hist[1][0] <= t - RECORD_SPAN_S or len(self._hist) > RECORD_MAX_POINTS
+        ):
+            self._hist.popleft()
+            trimmed = True
+        if trimmed:
+            self._hist_from = max(self._hist_from, self._hist[0][0] + RECORD_PRE_S)
 
     def _prune_cmd(self, now: float, delay: float) -> None:
         """Keep the segment active at now - delay and the later ones."""
@@ -378,6 +491,9 @@ class PowerSteps:
         }
         if self._mode_stash:
             state["mode_stash"] = {mode: dict(snap) for mode, snap in self._mode_stash.items()}
+        history = self._history_state()
+        if history is not None:
+            state["commands"] = history
         context = self._restart_context()
         if context is not None:
             episode = context["episode"]
@@ -391,6 +507,60 @@ class PowerSteps:
                 },
             }
         return state
+
+    def _history_state(self) -> dict | None:
+        """The command history as saved state (wall-clock origin, offsets in s), None without one."""
+        if self._hist_restore is not None:
+            # Not yet applied: no observation since the previous restart.
+            points, t_from, end = self._hist_restore["points"], self._hist_restore["from"], self._hist_restore["end"]
+        elif self._hist and self._hist_from is not None and self._last_now is not None:
+            points, t_from, end = self._hist, self._hist_from, self._last_now
+        else:
+            return None
+        first = monotonic_to_wall_ts(points[0][0])
+        origin = int(first)
+
+        def offset(t: float) -> float:
+            return round(t - points[0][0] + first - origin, 1)
+
+        return {
+            "origin": origin,
+            "from_s": offset(t_from),
+            "end_s": offset(end),
+            "points": [[offset(t), None if u is None else round(u, 4)] for t, u in points],
+        }
+
+    @staticmethod
+    def _load_history(value: object) -> dict | None:
+        """Validate a saved command history and convert it to monotonic time, None when absent or malformed."""
+        if not isinstance(value, dict):
+            return None
+        origin, t_from, end = (_number(value.get(key)) for key in ("origin", "from_s", "end_s"))
+        saved = value.get("points")
+        if origin is None or t_from is None or end is None or not isinstance(saved, list) or not saved:
+            return None
+        points: deque[tuple[float, float | None]] = deque()
+        for point in saved:
+            if not isinstance(point, list) or len(point) != 2:
+                return None
+            t, u = _number(point[0]), point[1]
+            if u is not None:
+                u = _number(u)
+                if u is None:
+                    return None
+            if t is None or (points and t < points[-1][0]):
+                return None
+            points.append((t, u))
+        while points and points[0][1] is None:
+            points.popleft()
+        base = wall_to_monotonic_ts(origin)
+        if base is None or not points:
+            return None
+        return {
+            "points": deque((base + t, u) for t, u in points),
+            "from": base + t_from,
+            "end": base + end,
+        }
 
     @staticmethod
     def _load_restart(value: object) -> dict | None:
@@ -454,3 +624,4 @@ class PowerSteps:
         }
         if self._model_hvac_mode is not None:
             self._restore = self._load_restart(state.get("restart"))
+            self._hist_restore = self._load_history(state.get("commands"))

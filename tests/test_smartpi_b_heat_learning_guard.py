@@ -1,5 +1,5 @@
 """Tests for heat-mode B learning guards."""
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
@@ -119,6 +119,7 @@ def test_b_learning_allowed_when_real_heat_loss_gradient_exists():
         dT_int_per_min=-0.1,
         u=0.0,
         residual_power=0.0,
+        power_window=ANY,
         t_int=21.0,
         t_ext=8.0,
         hvac_mode=VThermHvacMode_HEAT,
@@ -169,6 +170,7 @@ def test_b_learning_allowed_with_passive_heat_gain_in_cool():
         dT_int_per_min=0.1,
         u=0.0,
         residual_power=0.0,
+        power_window=ANY,
         t_int=20.0,
         t_ext=30.0,
         hvac_mode=VThermHvacMode_COOL,
