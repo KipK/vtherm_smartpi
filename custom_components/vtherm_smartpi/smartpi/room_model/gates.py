@@ -133,7 +133,7 @@ def info_ok(info: dict | None, struct: str, params: dict) -> bool:
 
     Simple model: a and b_eq / a. Model with walls: a and its wall dynamics, alpha and c; its b_eq / a is the
     small difference alpha - c, never used as the static loss (the energy balance is) and checked against the
-    energy balance in force within 5 % before a publication and before any use. A full fit without a real
+    energy balance in force within 5 % before a publication. A full fit without a real
     wall share is not used (decide), so its precision is not required.
     """
     if struct == STRUCT_FULL:

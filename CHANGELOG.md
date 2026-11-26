@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Room model out of the regulation: the room model identifies, tracks and forecasts as before and publishes `room_model`, but it never changes the command. The holding power (feed-forward) always comes from the learned `b / a`: the static part from the daily heat balance and the wall extra power of a published model no longer replace it. `feedforward.source` is always `learned model` (the values `room model (air and walls)`, `room model (static part)` and `room model (simple)` no longer exist); `feedforward.wall_power_percent` is removed, in `live` and as the `feedforward.wall_power_percent` series of `history`. New `room_model.used_by_regulation`, always `false`. The saved state no longer holds `ff_source` and `ff_wall`; a state saved by an earlier version loads and ignores them.
 - Learning of `b`: when the response model of a mode is first published, the power the emitter still delivers is computed over the commands applied before it, instead of starting from the power applied at that moment. In the bootstrap the model is often published just after a cut: the first `b` windows counted no residual heat while the emitter still gave a fifth to a third of its power, which made `b`, and through it `a`, read low. When the response model of a mode changes, the stored `b` measurements recompute the power delivered over their window with the new model, as the stored `a` measurements already did. The applied command of the last 30.5 hours is saved and survives a bridged restart.
 - Response model: an event whose dead time plus response time constant is more than twice, or less than half, the one of the model in force (or of the values carried over from the previous version while the mode has no event) is kept aside and changes nothing (`not used: far from the model in force, waiting for a confirming event`); a later event on the same side that agrees with it within 20 % confirms it, and both replace the history of the mode. Calibration events and the first event of a mode without a model are taken as before. A single regulation event at night in an occupied bedroom had read the slow mode of the room, replaced the carried-over values and stretched the anticipation horizon from about 5 minutes to almost 3 hours, which drove a limit cycle. A model saved by an earlier version is repaired at its load: the carried-over values come back as the reference when they can be computed again from the saved state, and the saved events are read again through the rule. New diagnostic `analysis.learning.response_model.pending_outliers`.
 - Emitter lag (`T_ar`) learning removed: the response model already gives the dead time and the response time constant of the emitter. The room model's emitter search splits each tried emitter lag with the response time constant of the heating response model instead of the learned one; without a response model it searches a first order from the heating dead time after a start. The `tar_learning` diagnostics block is removed: the quiet periods (`reason`, `count`, `last`), the data quality (`data_invalid_reason`) and the length of the recorded history (`history_h`) are shown under `room_model`. The recorded history and the quiet periods saved by an earlier version are kept; its learned values are ignored.
@@ -125,10 +126,9 @@ All notable changes to this project will be documented in this file.
   with its air, walls and emitter, follows its state and publishes temperature
   forecasts and their errors in `room_model`. A daily heat balance measures the
   power needed per degree of indoor-outdoor difference and the steady free
-  gains. The model is published only once a qualified heat balance confirms it;
-  it then gives the feed-forward holding power, including the extra power of
-  cold walls after a night setback. With short setbacks and heavy walls it
-  usually stays unpublished and changes nothing.
+  gains. The model is published only once a qualified heat balance confirms it.
+  It is observation only: it never changes the command, and the holding power
+  stays the learned one.
 - Restarts: a restart of up to 10 minutes in the same mode, with SmartPI in
   control before and after, is bridged: measurements and learning resume and
   nothing is excluded from the learning data. `control.last_restart` shows the
@@ -144,9 +144,9 @@ All notable changes to this project will be documented in this file.
   keeps the command of before the stop instead of cutting the heating, up to
   10 minutes after the stop. Past that the command goes to 0 until the
   temperature comes, and the restart is not bridged.
-- Diagnostics: the recorded history also keeps the feed-forward source and its
-  wall part, the room model's `a`, `b_eq` and 1 h / 12 h forecast errors, and
-  the dead time in force.
+- Diagnostics: the recorded history also keeps the feed-forward source, the
+  room model's `a`, `b_eq` and 1 h / 12 h forecast errors, and the dead time in
+  force.
 - Requirements: `numpy` and `scipy` are installed with the integration. If they
   cannot be loaded, nothing is learned and the bootstrap value stays in use.
 - Documentation and cards: two names only, dead time (the time before the room

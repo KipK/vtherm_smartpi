@@ -53,7 +53,6 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
         },
         "feedforward": {
             "source": feedforward.get("source"),
-            "wall_power_percent": feedforward.get("wall_power_percent"),
         },
         "room_model": {
             "a": room.get("a"),

@@ -89,7 +89,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `calibration.py`: `Calibration`, held by `LearningStart`: the calibration on request (requests and refusals, pulse limits, end rules, 48 h limit, dead times measured, correction rule and its switches, persistence, plain summary). No automatic calibration.
 
 **Feed-forward**
-- `feedforward.py`: FF1 holding power (learned b / a, or the published room model) and its warm-up factor.
+- `feedforward.py`: FF1 holding power (the learned b / a), its warm-up factor and the transfer of a calibration step into the integral (`LearnedStepTransfer`).
 - `ff_ab_confidence.py`: reliability policy of a, b (OK / degraded / bad).
 
 **Restart bridge**
@@ -105,7 +105,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `timestamp_utils.py`: monotonic <-> wall-clock conversion for persistence.
 - `job_abort.py`: stop signal for executor jobs.
 
-**`room_model/`** (air-wall-emitter model: forecasts, FF holding power)
+**`room_model/`** (air-wall-emitter model: forecasts and diagnostics, observation only)
 - `manager.py` orchestration (event loop), `jobs.py` executor jobs (numpy/scipy), `identification.py` output-error fit, `energy_balance.py` daily static model, `gates.py` publication rules, `periods.py` fit periods, `observer.py` Kalman observer, `model.py` discretisation, `linalg.py` small matrices, `emitter.py` applied-command timeline, `feedforward.py` holding power, `scoring.py` forecast errors, `public.py` user-facing values, `const.py` rule constants.
 
 **`room_history/`** (recorded signals and quiet-period catalogue for the room model; always enabled: `SmartPI(room_model=True)` creates the history and the model; numpy/scipy lazily imported)
@@ -150,7 +150,7 @@ Support files:
 | Change a gain rule | `smartpi/gains.py` (and constants in `smartpi/const.py`); tests `test_smartpi_gain_transfer.py` |
 | Change learning acceptance / governance | `smartpi/learning_window.py`, `smartpi/governance.py` (matrix in `smartpi/const.py`) |
 | Change a/b estimation | `smartpi/ab_estimator.py`, `ab_window_balance.py`, `ab_aggregator.py` |
-| Change feed-forward | `smartpi/feedforward.py`, `ff_ab_confidence.py`, `room_model/feedforward.py` |
+| Change feed-forward | `smartpi/feedforward.py`, `ff_ab_confidence.py` |
 | Add a persisted state field | `save_state`/`load_state` of the owning component (new key optional with a neutral default on load); wire it in `algo.py::save_state`/`load_state` only if the component is new; tests `test_algo_persistence.py` / `test_handler_persistence.py`; storage keys live in `state_store.py` |
 | Add a persisted store (separate file) | new class in `state_store.py`, load/save wiring in `handler.py` (see `_history_store`) |
 | Add a service | name in `const.py`; registration in `__init__.py::_register_services`; method `service_*` in `handler.py`; `services.yaml`; `translations/{en,fr}.json` `services`; `test_services.py`; docs |

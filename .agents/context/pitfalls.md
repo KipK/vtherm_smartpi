@@ -54,7 +54,7 @@ unless they start with `tests/`. Format: symptom/trap -> why -> what to do.
 
 - No outdoor temperature = FF1 off (`smartpi/feedforward.py`, `ff_no_ext_temp`). `analysis.feedforward.u_ff_final` and `u_ff_effective` are published equal to `u_ff1`: no other term is added to the holding power.
 - FF1 warmup scale = `learn_ok_count/ff_warmup_ok_count` x cycle ramp. A state with fewer than `ff_warmup_ok_count` accepted learnings (30) and no further learning keeps a reduced FF forever; seeded test/bench states must set the counts.
-- In HEAT with PWM heaters a published room model replaces b/a in FF1 (`smartpi/room_model/feedforward.py`); not in COOL or valve mode. The unmeasured `d` is never used; the energy balance alone, without a published model, is never used. Discrete changes of the holding power (source change, new publication) are moved into the integral (`I <- I - dU/Ki`, `HoldingTransfer`) to keep the command continuous.
+- The room model never changes FF1 or any other regulation input: FF1 is the learned b / a only. The one discrete change of FF1, a calibration correction of `a` or `b`, is moved into the integral (`I <- I - dU/Ki`, `LearnedStepTransfer`) to keep the command continuous. Indirect link left in place: the restart bridge reads the last tick of the room model store (`SmartPI._restart_stores`) when it decides whether a stop is bridged.
 - Restart bumpless contract: `load_state` restores the integral, so every FF factor (`cycles_since_reset`, learn scale, `ff_source`/`ff_wall`) must also come back; an FF restarting from zero against a restored integral gives a dip then an overshoot.
 
 ## Persistence and restart

@@ -1,8 +1,7 @@
 """Orchestration of the room model (event loop side, pure Python).
 
-Once published, the room model gives the regulation its feed-forward holding
-power in heating (feedforward.py). The manager feeds the observer at each
-regulation tick and with each applied command, schedules the computations
+The room model is observation only: it never changes the command. The manager
+feeds the observer at each regulation tick and with each applied command, schedules the computations
 (jobs.py, run in an executor on the history of room_history/),
 publishes the qualified parameters, and holds the persistence and the
 diagnostics.
@@ -20,9 +19,8 @@ Energy balance: once a local day is over, a job computes the static model of
 the whole days before it (energy_balance.py): the slope b_eq / a and the
 constant free gain, whatever the quiet periods. A qualified model comes into
 force; a refused day keeps the model in force and records why. The model in
-force gives the static part of the feed-forward once a room model is
-published, and its slope is the reference that the fits must agree with to be
-published: nothing is published before a first qualified balance, and the
+force is shown in the diagnostics, and its slope is the reference that the fits must agree with to
+be published: nothing is published before a first qualified balance, and the
 published value is checked again against the slope in force when it is
 published. A model published by an earlier version stays in force.
 
@@ -469,6 +467,7 @@ class RoomModelManager:
         score = obs.score.summary()
         full = p is not None and p.full
         return {
+            "used_by_regulation": False,
             "status": public.status(p.struct if p else None, last_why, bool(self.records)),
             "tracking": public.tracking(health),
             "walls": public.walls(p.struct if p else None, self.wall_code),

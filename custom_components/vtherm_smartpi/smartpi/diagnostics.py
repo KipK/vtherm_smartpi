@@ -20,6 +20,7 @@ from .const import (
     clamp,
 )
 
+from .feedforward import FF_SOURCE_PLAIN
 from .guards import GUARD_CUT_I_MODE, GUARD_CUT_STATE
 from .learning_start import LEARNING_PULSES_CONFIDENCE, LEARNING_PULSES_PHASE, LEARNING_PULSES_STAGE, learning_by_pulses
 
@@ -248,12 +249,9 @@ def _build_governance(algo: SmartPI) -> Dict[str, Any]:
 
 
 def _build_feedforward(algo: SmartPI) -> Dict[str, Any]:
-    """Return the holding power source and the deadband power path."""
-    holding = algo._ff_holding
-    wall = holding.wall_shown
+    """Return the holding power source (always the learned model) and the deadband power path."""
     return {
-        "source": holding.source.plain,
-        "wall_power_percent": round(100.0 * wall, 1) if wall is not None else None,
+        "source": FF_SOURCE_PLAIN,
         "deadband_power_source": algo.ctl.deadband_power_source,
         "deadband_p_mode": algo.ctl.deadband_p_mode,
     }
@@ -398,7 +396,7 @@ def _build_valve_diagnostics(algo: SmartPI) -> Dict[str, Any] | None:
 
 
 def _build_room_model(algo: SmartPI) -> Dict[str, Any]:
-    """Return the room model state (its holding power is shown under feedforward)."""
+    """Return the room model state (observation only: it never changes the command)."""
     return algo.room_model.diagnostics()
 
 

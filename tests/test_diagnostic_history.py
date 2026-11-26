@@ -40,7 +40,7 @@ def test_history_contains_only_equinox_time_series() -> None:
             "ff_percent": 15.0,
         },
         "model": {"a": 0.05, "b": 0.001, "effective_dead_time_s": None},
-        "feedforward": {"source": None, "wall_power_percent": None},
+        "feedforward": {"source": None},
         "room_model": {
             "a": None,
             "b_eq": None,
@@ -53,7 +53,7 @@ def test_history_contains_only_equinox_time_series() -> None:
 def test_history_carries_the_feedforward_and_room_model_series() -> None:
     """The room model and its feed-forward are charted."""
     live = _live_diagnostics()
-    live["feedforward"] = {"source": "room model (air and walls)", "wall_power_percent": 4.2, "deadband_power_source": "x"}
+    live["feedforward"] = {"source": "learned model", "deadband_power_source": "x"}
     live["room_model"] = {
         "status": "identified",
         "a": 0.031,
@@ -63,7 +63,7 @@ def test_history_carries_the_feedforward_and_room_model_series() -> None:
     }
     history = build_history_diagnostics(live)
 
-    assert history["feedforward"] == {"source": "room model (air and walls)", "wall_power_percent": 4.2}
+    assert history["feedforward"] == {"source": "learned model"}
     assert history["room_model"] == {
         "a": 0.031,
         "b_eq": 0.0012,

@@ -445,16 +445,3 @@ def qualify(pts: list[dict], a_per_min: float | None) -> dict[str, Any]:
         return rec
     rec.update(slope=s0, gain=0.0, form=FORM_SLOPE, reason=REASON_SCATTER)
     return rec
-    s0 = f["slope_only"]
-    if not gain_seen and s0 is not None and f["slope_only_half_width"] <= EB_MAX_REL_HALF_WIDTH:
-        if not 0.0 < s0 <= EB_MAX_SLOPE:
-            reason = REASON_RANGE
-        else:
-            reason = REASON_DRIFT if _drifts(used, False) else None
-        rec.update(slope=s0, gain=0.0, form=FORM_SLOPE, reason=reason)
-        return rec
-    if gain_seen:
-        rec.update(slope=s, gain=g, form=FORM_GAIN, reason=REASON_GAIN)
-    else:
-        rec.update(slope=s0, gain=0.0, form=FORM_SLOPE, reason=REASON_SCATTER)
-    return rec

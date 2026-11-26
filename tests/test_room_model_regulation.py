@@ -1,7 +1,7 @@
 """Room model and the regulation.
 
-Until the room model publishes, running it leaves the regulation bit-identical
-to the reference; once published, it gives the feed-forward holding power.
+Running the room model leaves the regulation bit-identical to the reference, before and
+after it publishes: it is observation only.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import room_model_sim as rsim
 import regulation_sim as sim
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
@@ -50,7 +49,7 @@ def _running(holder: dict, publish: bool = True):
             algo.room_model.published_day = rsim.day_of(sim.WALL0) - 1
             algo.room_model.q = 0.1
             algo.room_model.observer.configure(params, 0.1)
-            # Energy-balance ratio in force, 3 % above the fitted b_eq / a: the static part uses it
+            # Energy-balance ratio in force, 3 % above the fitted b_eq / a: the regulation ignores it
             algo.room_model.eb_slope = EB_RATIO
             algo.room_model.eb_day = rsim.day_of(sim.WALL0) - 1
             # ... and the balance of the finished days is already computed today
@@ -60,18 +59,16 @@ def _running(holder: dict, publish: bool = True):
     return prepare
 
 
-def test_published_room_model_gives_the_holding_power() -> None:
-    """A published simple model replaces the learned holding power (full weight) with the
-    energy-balance ratio in force as static gain, never its own b_eq / a.
+def test_published_room_model_leaves_the_regulation_unchanged() -> None:
+    """A published simple model with an energy-balance ratio in force changes nothing in the command: the run is
+    bit-identical to the reference, the holding power stays the learned one.
 
-    The run differs from the reference from the first cycle on: the learned holding power
-    ramps up over its warmup cycles, the room model's does not. Observer, forecasts, scoring,
-    daily identification and diagnostics keep running.
+    Observer, forecasts, scoring, daily identification and diagnostics keep running.
     """
     holder: dict = {}
     rows = sim.run(REFERENCE["hours"], room_model=True, prepare=_running(holder))
     assert len(rows) == REFERENCE["rows"]
-    assert _sha(rows) != REFERENCE["sha256"]
+    assert _sha(rows) == REFERENCE["sha256"]
     algo = holder["algo"]
     room = algo.room_model
     # The module really ran: the windows of the closed quiet periods were identified, the observer tracked the
@@ -82,16 +79,12 @@ def test_published_room_model_gives_the_holding_power() -> None:
     diag = published["room_model"]
     assert diag["status"] == "simple model"
     assert diag["tracking"] == "ok"
+    assert diag["used_by_regulation"] is False
     assert diag["forecast_c"] is not None
     assert diag["forecast_checks"]["1h"] > 0
     assert diag["wall_extra_power_percent"] is None
-    assert published["feedforward"]["source"] == "room model (simple)"
-    assert published["feedforward"]["wall_power_percent"] is None
-    # Holding power at full weight from the first cycle: EB ratio (T_sp - T_ext)
-    gain = EB_RATIO
-    for row in rows[:60]:
-        t = sim.WALL0 + row[0]
-        assert row[7] == pytest.approx(gain * (sim._setpoint(t) - sim.T_EXT), abs=1e-12)
+    assert published["feedforward"]["source"] == "learned model"
+    assert "wall_power_percent" not in published["feedforward"]
     assert algo.dt_est.deadtime_heat_s == 480.0
     assert "room_model" not in algo.save_state()
 

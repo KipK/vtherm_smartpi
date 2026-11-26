@@ -11,7 +11,7 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 |---|---|---|
 | Room history (recorded signals, quiet-period catalogue, daily sun scan) | `smartpi/room_history/` | No: it serves the room model |
 | Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the room model |
-| Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1). Forecasts, forecast errors, `a`/`b_eq` display: no |
+| Room model (identify, observer, energy balance) | `smartpi/room_model/` | No: observation only (forecasts, forecast errors, `a`/`b_eq`, wall extra power and energy balance shown). Only link: its last tick enters the restart bridge decision (`SmartPI._restart_stores`) |
 | Response model (theta, tau_e) | `smartpi/response_model.py` | Yes: a/b learning (learning-stage gate, delivered power, settling waits, `smartpi/power_steps.py`), anticipation horizon, HEAT near band, calibration limits, direct-start pulses wanted; not the gains nor the holds |
 | Restart bridge | `smartpi/restart_bridge.py` | Yes: decides resume vs conservative restart for every component |
 | Resume hold | `smartpi/resume_hold.py` | Yes: temporary I-hold after window / power-shedding resume; `recovery_error_floor_c` (residual error under which a recovery counts as closed) |
@@ -119,12 +119,12 @@ Silent / declining states and the field that says why:
 ## 4. Room model (`smartpi/room_model/`)
 
 Purpose: identify a model of the room (air, walls, emitter), track its state, forecast the temperature, and
-provide the feed-forward holding power with the wall part.
+show the wall extra power and the daily energy balance. It is observation only: it never changes the command.
 
 Modules: `model.py` (parameters `a, alpha, beta, c = gamma/beta, b_eq = alpha - c`, exact discretisation;
 state Ta, w, d), `observer.py` (3-state Kalman observer, never learns parameters), `identification.py` (output-error
 fit, variable projection, residual checks, precision from the Jacobian), `gates.py` (publication rules),
-`energy_balance.py` (daily static model), `feedforward.py` (holding power source and transfers), `periods.py`
+`energy_balance.py` (daily static model), `periods.py`
 (adapter to the quiet-period catalogue), `scoring.py` (forecast errors), `emitter.py` (command timeline through
 dead time L and first order `tau_e`), `public.py` (plain-wording translation), `manager.py` (orchestration, persistence).
 
@@ -170,29 +170,18 @@ qualified energy balance nothing is published (`WHY_NO_EB`). Published value = m
 (walls) needs a precise sensor (`RM_PRECISE_Q` = 0.015 C quantum), wall share >= `RM_WALL_SHARE_MIN = 0.1`, tau_wall >= 3 h and
 beating the reduced model on held-out data; otherwise the simple (reduced) model.
 
-What it influences (REGULATION):
-- `room_model/feedforward.py::select_source` / `static_model`, `algo.py::_select_holding_power`: replaces the
-  learned FF1 `b/a` only in HEAT, PWM (not valve), when a model is published AND a qualified energy balance is
-  in force AND published `b_eq/a` agrees with `s_EB` within 5 %. Static part `s_EB (SP - Text) - g_EB`, clamped
-  to [0, 1] (`FF_GAIN_MAX = 3` on the slope).
+What it influences: nothing in the command (owner decision, 26 November 2026). The holding power is always the learned
+`b / a` (`smartpi/feedforward.py::compute_ff`); the model published, the energy balance in force and the observer's
+wall extra power are never read by `algo.py`, the gains, the anticipation, the setpoint manager or the guards. The
+former selection (`select_source`, static part `s_EB (SP - Text) - g_EB`, wall extra power `delta_wall / a`,
+bumpless transfer and wall blend, `ff_source` / `ff_wall` in the saved state) is removed; an old saved state with those
+keys loads and ignores them. `feedforward.source` is always `learned model`; `room_model.used_by_regulation` is
+`false`. The energy balance stays as the reference that the fits are checked against (`gates.py::eb_agrees`) and as a
+published diagnostic.
 
-  | Source (`feedforward.source`) | Holding power |
-  |---|---|
-  | `room model (air and walls)` | static + wall extra power `delta_wall / a` (observer health `ok`) |
-  | `room model (static part)` | static only (walls identified, tracking not `ok`) |
-  | `room model (simple)` | static only |
-  | `learned model` | unchanged learned `b/a` (nothing published, no energy balance, disagreement, COOL, valve) |
-  The fitted `b_eq/a` itself is never the static loss; the observer's disturbance `d` is not used.
-- Static-part discrete changes are moved bumplessly into the integral (`HoldingTransfer.update`); the wall part
-  is never moved into the integral, it blends over `RM_WALL_FADE_S = 30 min`.
-- `algo.py` also passes `static_model` (slope, free gain) to the setpoint manager as equilibrium of the braking
-  prediction (`SmartPISetpointManager.filter_setpoint`).
-- Source in force and applied wall part persist with the PI state (`ff_source`, `ff_wall`).
-
-Observation only (read by nothing in the regulation): `forecast_c`, `forecast_error_c`, `forecast_checks`,
-`unchanged_temperature_error_c`, `a`, `b_eq`, `b_air`, `b_wall`, `wall_extra_power_percent` as display (the live
-wall term inside the observer does feed the holding power), `identified_day`, `last_identification_day`,
-`sensor_resolution_c`. The recorded history series also keep the feed-forward source and wall part, `a`, `b_eq`
+Published, read by nothing in the regulation: `used_by_regulation`, `forecast_c`, `forecast_error_c`, `forecast_checks`,
+`unchanged_temperature_error_c`, `a`, `b_eq`, `b_air`, `b_wall`, `wall_extra_power_percent`, `energy_balance_*`, `identified_day`, `last_identification_day`,
+`sensor_resolution_c`. The recorded history series also keep the feed-forward source, `a`, `b_eq`
 and the 1 h / 12 h forecast errors (`smartpi/diagnostic_history.py`).
 
 Persistence: own store (`SmartPIRoomModelStore`, key suffix `.room_model`), `STATE_VERSION = 2` (published params
@@ -212,10 +201,9 @@ Silent / declining states:
 | no qualified energy balance yet or day refused | `energy_balance_refusal_reason` (null when it gave one); loss/gain fields stay null |
 | window waits for a second series | `last_refusal_reason = waiting for a second series of quiet periods to confirm` |
 | model with walls not usable | `walls` (`not identified: temperature sensor too coarse / no thermal mass detected / not confirmed yet / no better than the simple model`) |
-| tracking not `ok` | `tracking` (`waiting for an identified model`, `paused (...)`, `settling after a restart`, `measurements drift away from the model`, ...); `wall_extra_power_percent = null`; source drops to `static part` |
-| model published but not in force | `feedforward.source = learned model` while `energy_balance_loss_per_c` is null or differs > 5 % from `b_eq/a` |
+| tracking not `ok` | `tracking` (`waiting for an identified model`, `paused (...)`, `settling after a restart`, `measurements drift away from the model`, ...); `wall_extra_power_percent = null` |
 | computation failed | `last_error` |
-Typical outcome with short setbacks and heavy walls: model stays unpublished and changes nothing.
+Typical outcome with short setbacks and heavy walls: the model stays unpublished.
 
 ## 5. Power steps of the a/b learning (`smartpi/power_steps.py`, class `PowerSteps`)
 

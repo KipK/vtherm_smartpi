@@ -140,7 +140,7 @@ Pipeline inside `calculate`, in execution order:
    `ctl.calculate_hysteresis` bang-bang, committed at once, then one `dt_est.update` with the committed power, return.
 10. `_update_control_context` (error filter, deadband, near-band), `resume_hold.update`.
 11. Governance: `gov.determine_regime`, `decide_update` for gains and thermal.
-12. `_apply_gains_and_ff` (gain scheduler, FF1 incl. `_select_holding_power`), then integral-hold decisions
+12. `_apply_gains_and_ff` (gain scheduler, FF1 and the calibration step transfer), then integral-hold decisions
     (deadtime, deadband shell, no outdoor value, `vt_safety`).
 13. `ctl.compute_pwm` (PI + FF, anti-windup, `u_max` = `max_on_percent` in linear space), `track_output_limit`.
 14. `_apply_soft_constraints`: rate limit (`MAX_STEP_PER_MINUTE`, boost rate), clamp to `[0, max_on]`.
@@ -174,7 +174,7 @@ Pipeline inside `calculate`, in execution order:
   `vtherm_smartpi.{}.room_model` (state v2).
 - Persisted: learning flag, last active wall time, model a/b, dead time, governance, controller (integral,
   u_prev), setpoint manager, learning window, deadband, gain scheduler, guards, FF
-  holding source, tint filter, hysteresis output, the measurement record and readings with the kept starting values (`measure_events`, `event_reading`, `measure_pulse`, `est_state.starting_values`; older states load without them), the calibration (`calibration`: in progress, pulses, mode, start, last request, values in force, corrections, corrected lag by mode; corrected starting values carry `corrected` in `est_state.starting_values` and load without `handed`; the former `cal_state`/`ac_state` blocks are ignored at load, so a calibration saved in progress by them is not resumed) and the start the learning began with (`learning_start`, saved for the direct start only; a state with learning but without the key began with the bootstrap and keeps it, whatever the option says; a blank state and a learning reset take the configured start), and the restart context (last tick, mode, cycle config,
+  tint filter, hysteresis output, the measurement record and readings with the kept starting values (`measure_events`, `event_reading`, `measure_pulse`, `est_state.starting_values`; older states load without them), the calibration (`calibration`: in progress, pulses, mode, start, last request, values in force, corrections, corrected lag by mode; corrected starting values carry `corrected` in `est_state.starting_values` and load without `handed`; the former `cal_state`/`ac_state` blocks are ignored at load, so a calibration saved in progress by them is not resumed) and the start the learning began with (`learning_start`, saved for the direct start only; a state with learning but without the key began with the bootstrap and keeps it, whatever the option says; a blank state and a learning reset take the configured start), and the restart context (last tick, mode, cycle config,
   exclusion, temperature, committed command, wall times).
 - Transient, empty after load (`load_state`): committed power (0 unless bridged), integral hold, learning resume timestamp, cycle
   state. Without a bridge, the first tick freezes learning for one cycle (`_startup_grace_period`).
@@ -191,7 +191,7 @@ Pipeline inside `calculate`, in execution order:
   (room history, room model) go on only when bridged in HEAT. Otherwise conservative handling. Published as
   `restart.public()`.
 - Long OFF: after more than 5760 min (96 h, `PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN`) without activity the
-  controller and holding source are reset; the learned model stays. A resume from OFF/window/shedding pauses
+  controller and pending calibration step are reset; the learned model stays. A resume from OFF/window/shedding pauses
   learning for `LEARNING_PAUSE_RESUME_MIN` (20 min).
 - Migrations in code: legacy key copy; HVAC signed-model migration (`est.ensure_hvac_mode`); emitter lag store v1/v2 and room
   model v1 readers; an unknown later version is ignored; `load_state` ignores a payload without `est_state`.

@@ -608,7 +608,7 @@ def test_the_command_stays_continuous_at_a_correction(clock):
     _agree(algo, clock, room, a=0.08)
     ff_after = algo._last_ff_result.u_ff1
     assert abs(ff_after - ff_before) > 0.02       # the learned holding power stepped ...
-    assert algo._ff_holding.last_delta == pytest.approx(ff_after - ff_before, abs=2e-3)   # ... into the integral
+    assert algo._ff_step.last_delta == pytest.approx(ff_after - ff_before, abs=2e-3)   # ... into the integral
     assert abs(algo.on_percent - before) <= 0.02  # the command moves by 2 points at most
 
 

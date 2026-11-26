@@ -4,13 +4,12 @@ Feed-Forward Orchestrator for Smart-PI Algorithm.
 Computes the FF1 holding power, the structural feed-forward of the command:
   u_ff1 + u_pi -> u_cmd -> u_limited -> u_applied -> e_eff
 
-u_ff1 comes from the learned b / a (compute_ff), or from the published room
-model in heating with PWM heaters (compute_room_ff, see
-room_model/feedforward.py).
+u_ff1 always comes from the learned b / a (compute_ff). The room model never
+enters the command: it observes the room and publishes its diagnostics only.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL
@@ -18,7 +17,10 @@ from .const import AB_MIN_SAMPLES_A, AB_MIN_SAMPLES_B, clamp
 
 if TYPE_CHECKING:
     from .ab_estimator import ABEstimator
-    from .room_model.feedforward import HoldingSource
+
+
+# Plain value of the diagnostics: the holding power always comes from the learned b / a
+FF_SOURCE_PLAIN = "learned model"
 
 
 @dataclass(frozen=True)
@@ -92,30 +94,31 @@ def compute_ff(
     return FFResult(u_ff1=u_ff1, ff_reason=ff_reason, warmup_scale=float(warmup_scale))
 
 
-def compute_room_ff(
-    *,
-    source: HoldingSource,
-    target_temp_ff: float,
-    ext_temp: float | None,
-    wall: float | None = None,
-) -> FFResult:
-    """FF1 from a published room model, at full weight.
+class LearnedStepTransfer:
+    """Bumpless transfer of a calibration step of the learned holding power into the integral."""
 
-    The holding power of the source (static part, plus the wall part applied
-    at this cycle: wall, or the source's live wall term when None) replaces
-    the learned b / a branch.
-    """
-    if ext_temp is not None:
-        u_ff1 = source.power(target_temp_ff, ext_temp, wall)
-        ff_reason = "ff_none"
-    else:
-        u_ff1 = 0.0
-        ff_reason = "ff_no_ext_temp"
-    return FFResult(u_ff1=u_ff1, ff_reason=ff_reason, warmup_scale=1.0)
+    def __init__(self) -> None:
+        self._gain_before: float | None = None
+        self.last_delta = 0.0
 
+    def note(self, gain_before: float) -> None:
+        """A calibration corrected the learned model: the next update returns the step of the learned holding power
+        from ``gain_before`` (the learned gain b / a before the correction)."""
+        self._gain_before = float(gain_before)
 
-def add_wall_part(result: FFResult, wall: float, ext_temp: float | None) -> FFResult:
-    """Learned FF1 with a room model wall part still fading out on top (unchanged without one)."""
-    if wall == 0.0 or ext_temp is None:
-        return result
-    return replace(result, u_ff1=clamp(result.u_ff1 + wall, 0.0, 1.0))
+    def reset(self) -> None:
+        """Forget a step not yet transferred (PI memory reset)."""
+        self._gain_before = None
+        self.last_delta = 0.0
+
+    def update(self, *, learned: FFResult, target_temp: float, ext_temp: float | None) -> float:
+        """Step dU of the learned holding power since the correction, 0 without a pending one; evaluated at the
+        current setpoint and outdoor temperature with the warmup factor of this cycle."""
+        if self._gain_before is None:
+            self.last_delta = 0.0
+            return 0.0
+        before = compute_ff(k_ff=self._gain_before, target_temp_ff=target_temp, ext_temp=ext_temp,
+                            warmup_scale=learned.warmup_scale).u_ff1
+        self._gain_before = None
+        self.last_delta = learned.u_ff1 - before
+        return self.last_delta

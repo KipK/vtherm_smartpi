@@ -313,7 +313,7 @@ Quand le modèle thermique devient fiable, SmartPI bascule dans son mode normal 
 À ce moment-là, SmartPI :
 
 - calcule automatiquement ses gains PI à partir du modèle appris,
-- ajoute une part anticipative de maintien basée sur la pièce et la température extérieure (issue du modèle appris, ou du [modèle de pièce](#modèle-de-pièce) une fois publié),
+- ajoute une part anticipative de maintien basée sur la pièce et la température extérieure (issue du modèle appris),
 - adapte son comportement près de la consigne avec une deadband et des protections supplémentaires.
 
 Près de la température cible, SmartPI cherche à éviter les micro-corrections permanentes. Le résultat attendu est une régulation plus stable, avec moins de corrections inutiles qu'un TPI fixe.
@@ -361,7 +361,7 @@ La calibration est résumée dans `live.calibration` (voir [Diagnostics](diagnos
 
 ### Modèle de pièce
 
-SmartPI tient aussi à jour un modèle de pièce. Le modèle décrit la pièce avec son air, ses murs et son émetteur. SmartPI s'en sert pour prévoir la température de la pièce et confronte ces prévisions à la température mesurée. Une fois publié, il donne la puissance de maintien de la régulation en chauffage (voir **Ce qu'il change** ci-dessous).
+SmartPI tient aussi à jour un modèle de pièce. Le modèle décrit la pièce avec son air, ses murs et son émetteur. SmartPI s'en sert pour prévoir la température de la pièce et confronte ces prévisions à la température mesurée. Le modèle de pièce est en observation seule : il ne change jamais la commande (voir **Ce qu'il change** ci-dessous).
 
 **Données**
 
@@ -386,7 +386,7 @@ Un ajustement d'identification n'utilise que les tranches de 10 minutes entière
 **Ce qu'il calcule**
 
 - **Identification, sur les périodes calmes.** Le modèle est ajusté sur les périodes calmes (voir **Données** plus haut : pas de soleil, consigne constante, données valides), à partir des signaux qu'il conserve ; aucune heure n'est fixée. À chaque fin de période, SmartPI ajuste le modèle en arrière-plan sur les 3 dernières périodes, chacune avec la réponse à la hausse de consigne qui la termine, pendant 2 heures au plus tant qu'il fait encore nuit. Une série de périodes n'est calculée qu'une fois, au plus une par heure ; après un long arrêt, les séries non encore calculées se suivent, de la plus ancienne à la plus récente. Le modèle porte la réponse de chauffe `a` à travers l'émetteur, la perte de l'air vers l'extérieur et vers les murs, ainsi que la réponse lente des murs. L'état des murs au début de chaque période est estimé, jamais supposé stabilisé, et deux périodes ne sont jamais jointes.
-- **Bilan thermique, une fois par jour.** Vers 20 minutes après minuit, quelles que soient les périodes calmes, SmartPI calcule le bilan thermique de chaque journée entière conservée dans son stockage (jusqu'à 7) : la puissance de chauffe moyenne, la variation de la température intérieure retirée, rapportée à l'écart moyen intérieur-extérieur. Une droite passant par ces points journaliers donne le modèle statique de la pièce. Sa pente est la puissance nécessaire par °C d'écart intérieur-extérieur, dans les unités de `model.b / model.a`. Son ordonnée à l'origine est un apport gratuit de chaleur constant, en % de la pleine puissance : chaleur d'une pièce plus chaude voisine ou d'occupants présents de façon stable, ou perte vers une pièce plus froide lorsqu'il est négatif. Une fois un modèle publié, la perte statique utilisée par SmartPI est la pente × (consigne − température extérieure) − l'apport gratuit. Sans cet apport, l'intégrale devrait le porter pour toujours. Le bilan thermique ne dépend pas du temps de réponse de l'émetteur.
+- **Bilan thermique, une fois par jour.** Vers 20 minutes après minuit, quelles que soient les périodes calmes, SmartPI calcule le bilan thermique de chaque journée entière conservée dans son stockage (jusqu'à 7) : la puissance de chauffe moyenne, la variation de la température intérieure retirée, rapportée à l'écart moyen intérieur-extérieur. Une droite passant par ces points journaliers donne le modèle statique de la pièce. Sa pente est la puissance nécessaire par °C d'écart intérieur-extérieur, dans les unités de `model.b / model.a`. Son ordonnée à l'origine est un apport gratuit de chaleur constant, en % de la pleine puissance : chaleur d'une pièce plus chaude voisine ou d'occupants présents de façon stable, ou perte vers une pièce plus froide lorsqu'il est négatif. La perte de chaleur propre du modèle est vérifiée par rapport à ce modèle statique. Le bilan thermique ne dépend pas du temps de réponse de l'émetteur.
   - Un jour compte lorsque au plus 20 % de ses données sont manquantes ou invalides et qu'il comporte du chauffage (2 % de la pleine puissance en moyenne) : un jour sans chauffage ne dit rien des pertes.
   - Le modèle demande au moins 4 jours de ce type, un chauffage moyen d'au moins 5 % de la pleine puissance et un écart moyen intérieur-extérieur d'au moins 6 °C.
   - La pente doit être connue à ±5 % près (confiance de 95 %, d'après la dispersion des jours autour de la droite et la variation de la pente lorsqu'un jour quelconque est retiré), puisque la perte propre du modèle est vérifiée à 5 % près par rapport à elle.
@@ -400,21 +400,11 @@ Un ajustement d'identification n'utilise que les tranches de 10 minutes entière
 - **Perturbations.** Une fois un modèle publié, le suivi (ci-dessous) mesure les apports ou les pertes de chaleur que le modèle n'explique pas. Une période calme dont la moyenne sur sa partie ajustée s'écarte de plus de 0,08 °C/h de la médiane des périodes récentes (au moins 4 heures suivies) est exclue de l'identification. Un apport présent à chaque période (dormeurs à chaque nuit, par exemple) n'est pas détecté.
 - **Suivi.** Une fois un modèle publié, SmartPI suit l'état de la pièce (air, murs et apports non expliqués) à chaque calcul de la régulation, avec la puissance réellement appliquée et la température extérieure. Il corrige cet état à chaque nouvelle valeur de température ; une valeur répétée par la sonde n'est pas une nouvelle mesure. Avec une sonde par pas de 0,1 °C, un changement est lu comme le franchissement du point médian entre les deux valeurs. Le suivi est suspendu hors chauffage et lorsque SmartPI n'a pas la main sur la commande (mode sécurité, commande remplacée). Après une pause ou un redémarrage de 3 heures au plus, l'état est repris ; au-delà, il repart avec les murs en équilibre avec l'air et se stabilise pendant environ 3 heures. Un redémarrage ponté (voir [Redémarrages](#redémarrages)) n'est pas une pause : le suivi se poursuit comme si rien ne s'était passé.
   - **Délestage.** Le délestage ne suspend pas le suivi : le chauffage est coupé à une puissance connue, donc l'état continue d'être corrigé sans chauffage dès le début du délestage (le reste du cycle interrompu n'est pas compté) jusqu'à ce que la commande de SmartPI reprenne.
-  - **Fenêtre ouverte.** La fenêtre modifie l'air, pas les échanges entre l'air et les murs. Pendant qu'elle est ouverte, l'air du modèle suit la température mesurée et les murs suivent cet air. À la fermeture, le suivi reprend à partir de la température mesurée et est de nouveau `ok` aussitôt ; la puissance de maintien réintroduit la puissance supplémentaire des murs en 30 minutes. Une fenêtre ouverte pendant plus de 3 heures relance le suivi comme ci-dessus.
+  - **Fenêtre ouverte.** La fenêtre modifie l'air, pas les échanges entre l'air et les murs. Pendant qu'elle est ouverte, l'air du modèle suit la température mesurée et les murs suivent cet air. À la fermeture, le suivi reprend à partir de la température mesurée et est de nouveau `ok` aussitôt. Une fenêtre ouverte pendant plus de 3 heures relance le suivi comme ci-dessus.
 
 **Ce qu'il change**
 
-La puissance de maintien est la part de la commande qui compense les pertes pour la consigne et la température extérieure (le feed-forward). Sans modèle de pièce publié, elle vient du modèle A/B appris. En chauffage, avec des chauffages pilotés par cycles PWM, un modèle de pièce publié la fournit à la place, une fois un bilan thermique en vigueur. Sa perte statique est la pente du bilan thermique multipliée par l'écart entre la consigne et la température extérieure, moins l'apport gratuit, jamais le `b_eq / a` du modèle ; le modèle fournit la part des murs :
-
-- **Murs identifiés et suivi `ok` :** la perte statique pour la consigne et la température extérieure, plus la puissance supplémentaire que les murs absorbent à cet instant (ou moins la chaleur qu'ils restituent). Après un abaissement nocturne de consigne, les murs sont froids : la montée du matin reçoit plus de puissance et la pièce atteint la consigne sans long palier. Pendant la journée, lorsque les murs restituent de la chaleur, la puissance est réduite.
-- **Murs identifiés, suivi non `ok`** (en pause, en stabilisation après un redémarrage, mesures qui s'écartent du modèle) : la perte statique seule.
-- **Modèle simple :** la perte statique seule.
-- **Modèle publié mais aucun bilan thermique en vigueur, ou un bilan entré en vigueur ensuite dont la pente s'écarte de plus de 5 % du `b_eq / a` du modèle :** la puissance de maintien du modèle A/B, inchangée, sans la puissance supplémentaire des murs.
-- **Rien de publié, refroidissement ou vannes :** la puissance de maintien du modèle A/B, inchangée. Le bilan thermique seul n'est pas utilisé : sans la puissance supplémentaire des murs, il donnerait une mauvaise puissance de maintien dans une pièce à murs épais.
-
-La puissance de maintien du modèle de pièce s'applique tout de suite, à plein poids. Un changement de la perte statique (bascule entre le modèle A/B et le modèle de pièce, entre le modèle simple et le modèle avec murs, ou nouvelle valeur de bilan thermique) est absorbé par l'intégrale, afin que la commande ne fasse pas de saut ; l'intégrale rend ensuite sa part au rythme de la régulation. La puissance supplémentaire des murs n'est jamais absorbée par l'intégrale : lorsqu'elle démarre, s'arrête (suivi non `ok`, après une fenêtre ouverte par exemple) ou change avec une nouvelle publication, elle passe progressivement sur 30 minutes de sa dernière valeur à la nouvelle. Après une fenêtre ouverte, la montée du matin retrouve donc sa puissance des murs en 30 minutes dès que le suivi est de nouveau `ok`. La source en vigueur et la puissance des murs appliquée sont conservées lors des redémarrages.
-
-Le prix à payer est un léger dépassement, d'environ 0,1 °C, en fin de montée du matin dans une pièce à murs épais.
+Rien dans la commande. La puissance de maintien (le feed-forward) est la part de la commande qui compense les pertes pour la consigne et la température extérieure ; elle vient toujours du modèle A/B appris, quoi que le modèle de pièce ait publié, en chauffage comme en refroidissement, avec des radiateurs pilotés par cycles PWM comme avec des vannes. Les gains, l'anticipation, la consigne et les protections ne lisent pas non plus le modèle de pièce. `live.room_model.used_by_regulation` vaut `false` pour le dire.
 
 **Ce qu'il affiche**
 
@@ -427,12 +417,12 @@ Le prix à payer est un léger dépassement, d'environ 0,1 °C, en fin de monté
 
 - Chauffages pilotés par cycles PWM ; les vannes ne sont pas encore prises en charge.
 - La position de la maison, telle que définie dans Home Assistant : sans elle, il n'y a aucune période calme et rien n'est identifié (le bilan thermique continue de tourner).
-- Une première publication demande 6 périodes calmes avec du chauffage qui déterminent le modèle (environ 6 jours avec un abaissement de nuit), ainsi qu'un bilan thermique en vigueur : la perte statique du modèle est contrôlée par rapport à ce bilan, à 5 % près, lors de la publication, et rien n'est publié avant un premier bilan thermique (il demande 4 journées entières exploitables de signaux enregistrés). Une maison aux nuits seulement courtes (été aux latitudes élevées) peut n'en donner aucune. Un modèle de pièce publié par une version antérieure reste en vigueur ; il ne donne aucune puissance de maintien tant qu'aucun bilan thermique n'est en vigueur ou qu'il ne concorde pas avec celui-ci.
+- Une première publication demande 6 périodes calmes avec du chauffage qui déterminent le modèle (environ 6 jours avec un abaissement de nuit), ainsi qu'un bilan thermique en vigueur : la perte statique du modèle est contrôlée par rapport à ce bilan, à 5 % près, lors de la publication, et rien n'est publié avant un premier bilan thermique (il demande 4 journées entières exploitables de signaux enregistrés). Une maison aux nuits seulement courtes (été aux latitudes élevées) peut n'en donner aucune. Un modèle de pièce publié par une version antérieure reste en vigueur.
 - Il utilise les paquets `numpy` et `scipy`, installés avec l'intégration et chargés seulement par les calculs en arrière-plan ; ils tournent jusqu'à environ une minute par identification et par thermostat, et le balayage solaire quotidien de l'historique prend quelques secondes. S'ils ne peuvent pas être chargés, rien n'est enregistré et les diagnostics affichent `numerical libraries unavailable`.
 - Chauffage uniquement : rien n'est enregistré en refroidissement. En mode vanne, rien n'est enregistré et les diagnostics affichent `valve heaters are not supported yet`.
 - Ses paramètres et son état sont conservés dans leur propre fichier de stockage et survivent aux redémarrages. Le service `reset_smartpi_learning` les efface.
 
-Le bloc `live.room_model` des [diagnostics](./diagnostics.md#modèle-de-pièce) affiche l'état du modèle, ses valeurs, le bilan thermique en vigueur, les prévisions et leurs erreurs. `live.feedforward.source` indique quel modèle fournit la puissance de maintien, et `live.feedforward.wall_power_percent` la part des murs dans celle-ci.
+Le bloc `live.room_model` des [diagnostics](./diagnostics.md#modèle-de-pièce) affiche l'état du modèle, ses valeurs, le bilan thermique en vigueur, les prévisions et leurs erreurs. `live.feedforward.source` vaut toujours `learned model` : la puissance de maintien vient du modèle A/B.
 
 ### Redémarrages
 
@@ -560,7 +550,7 @@ Pour le schéma des diagnostics et les profils Recorder, consultez le [Guide des
 
 Le capteur de diagnostic SmartPI publie une enveloppe versionnée. Les dashboards
 et cartes Markdown lisent les diagnostics complets dans `attributes.live` ; les
-graphiques historiques lisent le contrat stable de dix-neuf séries dans
+graphiques historiques lisent le contrat stable de dix-sept séries dans
 `attributes.history`.
 
 C'est l'endroit principal à consulter pour savoir :
@@ -588,7 +578,7 @@ Autres blocs utiles sous `live` :
 - `power` : informations de commande du cycle courant et du suivant,
 - `temperature` : température mesurée, erreur, état de l'intégrale,
 - `model` : `a`, `b`, niveau de confiance et temps mort après un démarrage appris,
-- `feedforward` : source de la puissance de maintien et part des murs,
+- `feedforward` : source de la puissance de maintien,
 - `setpoint` : état du boost de consigne,
 - `calibration` : la calibration en cours ou la dernière : son état, ses impulsions, son résultat, la dernière demande, son temps mort, sa lecture, les valeurs auxquelles elle a été comparée et ce qu'elle a corrigé.
 

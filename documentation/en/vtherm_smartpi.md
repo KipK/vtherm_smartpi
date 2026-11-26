@@ -322,7 +322,7 @@ When the thermal model becomes reliable, SmartPI switches to its normal regulati
 At that point, SmartPI:
 
 - computes PI gains automatically from the learned model,
-- adds an anticipative holding term based on the room and outdoor conditions (from the learned model, or from the [room model](#room-model) once published),
+- adds an anticipative holding term based on the room and outdoor conditions (from the learned model),
 - adapts behavior near the setpoint with a deadband and additional protections.
 
 Near the target temperature, SmartPI tries to avoid constant micro-corrections. The result should be steadier regulation with fewer unnecessary corrections than a fixed TPI.
@@ -370,7 +370,7 @@ The calibration is summarised in `live.calibration` (see [Diagnostics](diagnosti
 
 ### Room model
 
-SmartPI also maintains a room model. The model describes the room with its air, its walls and its emitter. SmartPI uses it to forecast the room temperature and checks these forecasts against the measured temperature. Once published, it gives the holding power of the regulation in heating (see **What it changes** below).
+SmartPI also maintains a room model. The model describes the room with its air, its walls and its emitter. SmartPI uses it to forecast the room temperature and checks these forecasts against the measured temperature. The room model is observation only: it never changes the command (see **What it changes** below).
 
 **Data**
 
@@ -395,7 +395,7 @@ An identification fit uses only the 10-minute bins wholly inside its periods and
 **What it computes**
 
 - **Identification, on the quiet periods.** The model is fitted on the quiet periods (see **Data** above: no sun, constant setpoint, valid data), from the signals it keeps; no hour is fixed. Each time a period ends, SmartPI fits the model in the background on the last 3 periods, each with the response to the setpoint rise that ends it for up to 2 hours while it is still dark. A series of periods is computed once, at most one per hour; after a long stop the series not computed yet follow one another, oldest first. The model holds the heating response `a` through the emitter, the loss of the air to the outside and to the walls, and the slow response of the walls. The state of the walls at the start of each period is estimated, never assumed settled, and two periods are never joined.
-- **Heat balance, once a day.** About 20 minutes after midnight, whatever the quiet periods, SmartPI computes the heat balance of each whole day kept in its storage (up to 7): the mean heating power, with the change of the indoor temperature removed, against the mean indoor-outdoor difference. A straight line through these daily points gives the static model of the room. Its slope is the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. Its offset is a constant free heat gain, in % of full power: heat from a warmer room next door or from steady occupants, or a loss to a colder room when negative. Once a model is published, the static loss SmartPI uses is slope × (setpoint − outdoor temperature) − free gain. Without the gain, the integral would have to carry it for good. The heat balance does not depend on the emitter response time.
+- **Heat balance, once a day.** About 20 minutes after midnight, whatever the quiet periods, SmartPI computes the heat balance of each whole day kept in its storage (up to 7): the mean heating power, with the change of the indoor temperature removed, against the mean indoor-outdoor difference. A straight line through these daily points gives the static model of the room. Its slope is the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. Its offset is a constant free heat gain, in % of full power: heat from a warmer room next door or from steady occupants, or a loss to a colder room when negative. The model's own heat loss is checked against this static model. The heat balance does not depend on the emitter response time.
   - A day counts when at most 20 % of its data are missing or invalid and it has some heating (2 % of full power on average): a day without heating says nothing about the losses.
   - The model needs at least 4 such days, a mean heating of at least 5 % of full power and a mean indoor-outdoor difference of at least 6 °C.
   - The slope must be known within ±5 % (95 % confidence, from the scatter of the days around the line and from how much it moves when any one day is left out), since the model's own heat loss is checked against it within 5 %.
@@ -409,21 +409,11 @@ An identification fit uses only the 10-minute bins wholly inside its periods and
 - **Disturbances.** Once a model is published, the tracking (below) measures the heat gains or losses that the model does not explain. A quiet period whose mean over its fitted part differs by more than 0.08 °C/h from the median of the recent periods (at least 4 hours tracked) is left out of the identification. A gain present in every period (sleepers every night, for example) is not detected.
 - **Tracking.** Once a model is published, SmartPI follows the state of the room (air, walls and unexplained gains) at each regulation tick, with the power actually applied and the outdoor temperature. It corrects that state at each new temperature value; a value repeated by the sensor is not a new measurement. With a sensor in steps of 0.1 °C, a change is read as the crossing of the midpoint between the two values. Tracking pauses outside heating and when SmartPI is not in control (safety mode, command overridden). After a pause or a restart of up to 3 hours the state is resumed; after a longer one it restarts with the walls in balance with the air, and settles for about 3 hours. A bridged restart (see [Restarts](#restarts)) is not a pause: the tracking goes on as if nothing had happened.
   - **Power shedding** does not pause the tracking: the heater is known to be off, so the state goes on being corrected with zero heating from the start of the shedding (the rest of the interrupted cycle is not counted) until SmartPI's command resumes.
-  - **Open window.** The window changes the air, not the exchange between the air and the walls. While it is open, the air of the model follows the measured temperature and the walls follow that air. When it closes, the tracking resumes from the measured temperature and is `ok` again at once; the holding power brings the wall extra power back in over 30 minutes. A window open for more than 3 hours restarts the tracking as above.
+  - **Open window.** The window changes the air, not the exchange between the air and the walls. While it is open, the air of the model follows the measured temperature and the walls follow that air. When it closes, the tracking resumes from the measured temperature and is `ok` again at once. A window open for more than 3 hours restarts the tracking as above.
 
 **What it changes**
 
-The holding power is the part of the command that compensates the losses for the setpoint and the outdoor temperature (the feed-forward). Without a published room model it comes from the learned A/B model. In heating, with heaters driven by PWM cycles, a published room model gives it instead, once a heat balance is in force. Its static loss is the heat balance slope times the difference between the setpoint and the outdoor temperature, minus the free gain, never the `b_eq / a` of the model; the model gives the wall part.
-
-- **Walls identified and tracking `ok`:** the static loss, plus the extra power the walls currently absorb (or minus the heat they give back). After a night setback the walls are cold: the morning rise gets more power and the room reaches the setpoint without a long plateau. During the day, when the walls give heat back, the power is reduced.
-- **Walls identified, tracking not `ok`** (paused, settling after a restart, measurements drifting away from the model): the static loss only.
-- **Simple model:** the static loss only.
-- **Model published but no heat balance in force yet, or a heat balance that came into force later and whose slope differs from the model's `b_eq / a` by more than 5 %:** the holding power of the A/B model, unchanged, without the wall extra power.
-- **Nothing published, cooling or valves:** the holding power of the A/B model, unchanged. The heat balance alone is not used: without the wall extra power it would give the wrong holding power in a room with heavy walls.
-
-The room model holding power applies at once at full weight. A change of the static loss (switch between the A/B model and the room model, between the simple model and the model with walls, or a new heat balance value) is absorbed by the integral, so the command does not jump; the integral then gives its share back at the pace of the regulation. The wall extra power is never absorbed by the integral: when it starts, stops (tracking no longer `ok`, after an open window for example) or changes with a new publication, it moves gradually over 30 minutes from its last value to the new one. After a window, the morning rise therefore gets its wall power back within 30 minutes once the tracking is `ok` again. The source in force and the wall power being applied are kept across restarts.
-
-The cost is a slight overshoot, around 0.1 °C, at the end of a morning rise in a room with heavy walls.
+Nothing in the command. The holding power (the feed-forward) is the part of the command that compensates the losses for the setpoint and the outdoor temperature; it always comes from the learned A/B model, whatever the room model has published, in heating and in cooling, with heaters driven by PWM cycles and with valves. The gains, the anticipation, the setpoint and the guards do not read the room model either. `live.room_model.used_by_regulation` is `false` to say so.
 
 **What it shows**
 
@@ -436,12 +426,12 @@ The cost is a slight overshoot, around 0.1 °C, at the end of a morning rise in 
 
 - Heaters driven by PWM cycles; valves are not supported yet.
 - The position of the home set in Home Assistant: without it there is no quiet period and nothing is identified (the heat balance still runs).
-- A first publication needs 6 quiet periods with some heating that determine the model (about 6 days with a night setback), and a heat balance in force: the model's heat loss is checked against it within 5 % when it is published, and nothing is published before a first heat balance (it needs 4 usable whole days of recorded signals). A home with only short nights (summer at high latitudes) may give none. A model published by an earlier version stays in force; it gives no holding power while no heat balance is in force or while it disagrees with it.
+- A first publication needs 6 quiet periods with some heating that determine the model (about 6 days with a night setback), and a heat balance in force: the model's heat loss is checked against it within 5 % when it is published, and nothing is published before a first heat balance (it needs 4 usable whole days of recorded signals). A home with only short nights (summer at high latitudes) may give none. A model published by an earlier version stays in force.
 - It uses the `numpy` and `scipy` packages, installed with the integration and loaded only by the background computations; they run up to about a minute per identification and per thermostat, and the daily sun scan of the history takes a few seconds. If they cannot be loaded, nothing is recorded and the diagnostics show `numerical libraries unavailable`.
 - Heating only: nothing is recorded in cooling. In valve mode nothing is recorded and the diagnostics show `valve heaters are not supported yet`.
 - Its parameters and state are kept in their own storage file and survive restarts. The `reset_smartpi_learning` service clears them.
 
-The `live.room_model` block of the [diagnostics](./diagnostics.md#room-model) shows the model status, its values, the heat balance in force, the forecasts and their errors. `live.feedforward.source` shows which model gives the holding power, and `live.feedforward.wall_power_percent` the wall part of it.
+The `live.room_model` block of the [diagnostics](./diagnostics.md#room-model) shows the model status, its values, the heat balance in force, the forecasts and their errors. `live.feedforward.source` is always `learned model`: the holding power comes from the A/B model.
 
 ### Restarts
 
@@ -569,7 +559,7 @@ For the diagnostic schema and Recorder profiles, see the [SmartPI Diagnostics Gu
 
 The SmartPI diagnostic sensor publishes a versioned envelope. Dashboards and
 Markdown cards read complete diagnostics from `attributes.live`; historical
-graphs read the stable nineteen-series contract from `attributes.history`.
+graphs read the stable seventeen-series contract from `attributes.history`.
 
 This is the main place to check:
 
@@ -596,7 +586,7 @@ Other useful blocks under `live`:
 - `power`: current and next cycle command information,
 - `temperature`: measured temperature, error, integral state,
 - `model`: learned `a`, `b`, confidence, and the dead time after a start,
-- `feedforward`: holding power source and wall part,
+- `feedforward`: holding power source,
 - `setpoint`: setpoint boost state,
 - `calibration`: the calibration in progress or the last one: its state, pulses, result, last request, dead time, reading, the values it was compared with and what it corrected.
 

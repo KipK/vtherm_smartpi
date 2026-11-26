@@ -35,12 +35,12 @@ Sources of truth: `smartpi/diagnostics.py::build_published_diagnostics` (one
   publish if inputs and committed power are unchanged. A flat attribute history
   is not proof that SmartPI stopped.
 
-### 1.2 The `history` block (18 series, `history.<group>.<field>`)
+### 1.2 The `history` block (17 series, `history.<group>.<field>`)
 
 `control.kp`, `control.ki`, `temperature.indoor`, `temperature.anticipated`, `temperature.integral_error`,
 `power.applied_percent`, `power.command_percent`,
 `power.pi_percent`, `power.ff_percent`, `model.a`, `model.b`,
-`feedforward.source`, `feedforward.wall_power_percent`, `room_model.a`,
+`model.effective_dead_time_s`, `feedforward.source`, `room_model.a`,
 `room_model.b_eq`, `room_model.forecast_error_1h_c`,
 `room_model.forecast_error_12h_c`.
 The feed-forward, room model and dead-time series are always present, null when
@@ -126,7 +126,7 @@ never "zero". `tau_min` is the sentinel `9999.0` when tau is unreliable.
 | `model` | Learned room model | `a`, `b`, `tau_min`, `tau_reliable`, `confidence` (ab_bootstrap, or ab_learning with the direct start before the first model/ab_ok/ab_degraded/ab_bad), `deadtime_heat_s` + `deadtime_heat_reliable` (HEAT) or `deadtime_cool_s` + `deadtime_cool_reliable` (COOL): the dead time after a start only, `a_stability_ratio`, `b_stability_ratio` (MAD/median) |
 | `learning` | Why learning does/doesn't progress | `stage` (bootstrap, or measurement pulses with the direct start before the first model/learning/monitoring/degraded), `bootstrap_progress_percent`, `bootstrap_status`, `accepted_updates_a/b` (target `history_target` 31), `last_reason`, `a_drift_state`/`b_drift_state` (NORMAL/DRIFT_SUSPECTED/RECENTERING), `learn_b_converged`, `enabled` |
 | `governance` | May a/b and gains adapt now | `regime`, `thermal_update_decision`, `thermal_update_reason` |
-| `feedforward` | Holding power | `source`, `wall_power_percent`, `deadband_power_source`, `deadband_p_mode` |
+| `feedforward` | Holding power | `source` (always `learned model`), `deadband_power_source`, `deadband_p_mode` |
 | `setpoint` | Setpoint boost | `boost_active` |
 | `calibration` | The calibration on request (pulses) | `state`, `pulses_done` (max 3), `result`, `last_request`, `last_time`, `deadtime_start_s`, `reading_a`, `reading_b`, `reading_lag_s`, `in_force_a`, `in_force_b`, `in_force_lag_s` (horizon in use, shown only), `corrected` (`heating rate`, `loss coefficient`; the lag is corrected by the response model's own rule) |
 | `analysis.control` | Error terms, anticipation, band geometry, timing | `cycle_min`, `error_p`, `anticipation_c` (degC added to the measured temperature for P and I, 0 when off), `anticipation_horizon_s`, `anticipation_horizon_source` (`response model`, `measurement pulses`, `dead times`, `none`), `forced_by_timing`, `near_band_below_deg`, `near_band_above_deg`, `near_band_source`, `aw_du`, `in_core_deadband`, `temperature_slope_h` |
@@ -194,7 +194,7 @@ Other enums:
 | `*_reason` (freeze) | `none`, `regime_transition`, `sensor_invalid`, `dead_band`, `near_band`, `warmup`, `hold`, `perturbed`, `saturation`, `system_inefficient` |
 | `analysis.governance.kp_source` | `safe`, `measurement_pulses` (direct start, before the first model), `imc_simc`, `imc_simc_valve`, suffix `_nearband`, `_softfreeze`, or `frozen` |
 | `analysis.control.anticipation_horizon_source` | `response model`, `measurement pulses`, `dead time`, `none` |
-| `feedforward.source` | `learned model`, `room model (air and walls)`, `room model (static part)`, `room model (simple)` |
+| `feedforward.source` | `learned model` (the only value: the room model never enters the holding power; `room_model.used_by_regulation` is `false`) |
 | `calibration.state` | `idle`, `waiting` (between pulses, PI regulates), `rest`, `full power`, `stop`; `calibration.result`: `in progress`, `readings agree`, `pulses done`, `time limit`, `cancelled`; `calibration.last_request`: `started`, `refused: learning stage|learning paused|thermostat off|too soon`, `ignored: in progress`; `calibration.corrected`: list of `heating rate`, `loss coefficient`, `emitter lag` |
 | `analysis.deadtime.state` | `WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`; outcomes `detected`, `timeout`, `aborted`, `rejected`, `ignored` |
 | `analysis.control.anticipation_horizon_source` | `response model` (emitter lag theta + tau_e of the mode), without a model `measurement pulses` (direct-start kept lag), `dead time` (active dead time after a start), `none` (no reliable horizon: no anticipation) |

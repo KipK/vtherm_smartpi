@@ -380,7 +380,7 @@ class LearningStart:
             est.correct_a(mode, float(reading["a_per_min"]))
             done.append("a")
         est.start.latch(ramp)
-        owner._ff_holding.note_learned_step(k_ff)
+        owner._ff_step.note(k_ff)
         cal.corrected = [q for q in ("a", "b") if q in done]
 
     def interrupt(self, now: float, reason: str) -> None:

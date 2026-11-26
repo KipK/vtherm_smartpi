@@ -74,14 +74,6 @@ RM_NIGHTS_KEEP = 14
 RM_STEPS_KEEP_S = 36.0 * H
 
 # ---------------------------------------------------------------------------
-# Feed-forward
-# ---------------------------------------------------------------------------
-# A change of the wall term in force (switched on, switched off, new wall
-# parameters) is blended linearly over this time from the wall part applied
-# last; it is never moved into the integral.
-RM_WALL_FADE_S = 0.5 * H
-
-# ---------------------------------------------------------------------------
 # Identification
 # ---------------------------------------------------------------------------
 # A window holds this many consecutive quiet periods; it is compared with the

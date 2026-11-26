@@ -28,8 +28,7 @@ after each sub-step, the wall state follows its own equation driven by that
 air, and the disturbance is held; nothing is corrected. When it closes the air
 is set to the measurement, its correlations with the wall and the disturbance
 are dropped, its uncertainty reopened and the innovation checks start over.
-The wall state is reported again at once; the feed-forward blends its wall
-part back in (feedforward.py).
+The wall state is reported again at once.
 
 Health checks are separate from the estimation: mean and spread of the
 normalised innovations, air uncertainty, a disturbance held at its bound, an
@@ -315,8 +314,7 @@ class RoomObserver:
         model's, so the real walls cool more than the tracked ones: the tracked walls tend to be warmer than
         the real ones and the wall term errs low, towards less power. A sensor placed near the window can
         bias it the other way (air read colder than the room, walls driven too cold); the bound on the wall
-        term and the innovation checks cover that case. The feed-forward brings the wall part back in
-        progressively (feedforward.py).
+        term and the innovation checks cover that case.
         """
         self.x = [y, self.x[1], self.x[2]]
         P = self.P

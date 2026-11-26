@@ -26,7 +26,7 @@ DAYS = 9
 D0 = rsim.day_of(rsim.T0)
 
 DIAG_KEYS = {
-    "status", "tracking", "walls", "a", "b_eq", "b_air", "b_wall", "forecast_c", "forecast_error_c",
+    "used_by_regulation", "status", "tracking", "walls", "a", "b_eq", "b_air", "b_wall", "forecast_c", "forecast_error_c",
     "forecast_checks", "unchanged_temperature_error_c", "wall_extra_power_percent", "identified_day",
     "last_identification_day", "last_refusal_reason", "sensor_resolution_c", "last_error",
     "energy_balance_loss_per_c", "energy_balance_free_gain_percent", "energy_balance_days", "energy_balance_day",

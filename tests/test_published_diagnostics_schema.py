@@ -60,7 +60,6 @@ def test_published_diagnostics_key_paths_match_fixture() -> None:
     # The feed-forward trim, the short-horizon feed-forward and the thermal twin are not published.
     assert set(published["feedforward"]) == {
         "source",
-        "wall_power_percent",
         "deadband_power_source",
         "deadband_p_mode",
     }
@@ -74,6 +73,9 @@ def test_published_diagnostics_key_paths_match_fixture() -> None:
     # The emitter lag learning is not published; the room model shows its quiet periods and data quality.
     assert "tar_learning" not in published
     assert set(published["room_model"]["quiet_periods"]) == {"reason", "count", "last"}
+    # The room model is observation only, and the holding power always comes from the learned model.
+    assert published["room_model"]["used_by_regulation"] is False
+    assert published["feedforward"]["source"] == "learned model"
 
     if os.environ.get("SMARTPI_UPDATE_DIAG_PATHS") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)

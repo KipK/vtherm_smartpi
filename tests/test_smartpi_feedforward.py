@@ -6,7 +6,7 @@ import pytest
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi.feedforward import (
     FFResult,
-    add_wall_part,
+    LearnedStepTransfer,
     compute_ff,
 )
 from custom_components.vtherm_smartpi.smartpi.const import (
@@ -139,15 +139,27 @@ class TestFFResult:
         assert result.ff_reason == "ff_none"
         assert result.warmup_scale == pytest.approx(1.0)
 
-    def test_wall_part_is_added_and_clamped(self):
-        result = _call(k_ff=0.05, target_temp_ff=21.0, ext_temp=15.0)
-        assert add_wall_part(result, 0.1, 15.0).u_ff1 == pytest.approx(0.4)
-        assert add_wall_part(result, 0.9, 15.0).u_ff1 == pytest.approx(1.0)
 
-    def test_wall_part_is_ignored_without_outdoor_temperature_or_wall(self):
-        result = _call(k_ff=0.05, target_temp_ff=21.0, ext_temp=15.0)
-        assert add_wall_part(result, 0.0, 15.0) is result
-        assert add_wall_part(result, 0.1, None) is result
+class TestLearnedStepTransfer:
+    """A calibration step of the learned holding power is handed to the integral once."""
+
+    def test_the_step_of_a_corrected_learned_gain_is_transferred_once(self):
+        tr = LearnedStepTransfer()
+        kw = dict(target_temp=20.0, ext_temp=5.0)
+        old = compute_ff(k_ff=0.006, target_temp_ff=20.0, ext_temp=5.0, warmup_scale=0.5)
+        new = compute_ff(k_ff=0.012, target_temp_ff=20.0, ext_temp=5.0, warmup_scale=0.5)
+        assert tr.update(learned=old, **kw) == 0.0
+        tr.note(0.006)
+        assert tr.update(learned=new, **kw) == pytest.approx(new.u_ff1 - old.u_ff1)
+        assert tr.last_delta == pytest.approx(0.045)
+        assert tr.update(learned=new, **kw) == 0.0 and tr.last_delta == 0.0
+
+    def test_a_reset_forgets_a_pending_step(self):
+        tr = LearnedStepTransfer()
+        new = compute_ff(k_ff=0.012, target_temp_ff=20.0, ext_temp=5.0, warmup_scale=0.5)
+        tr.note(0.006)
+        tr.reset()
+        assert tr.update(learned=new, target_temp=20.0, ext_temp=5.0) == 0.0
 
 
 # ================================================================

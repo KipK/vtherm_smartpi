@@ -38,7 +38,7 @@ Le mode debug enregistre `live` et `history`. Le contenu n'est pas dupliqué
 dans `history` : le contrat historique reste identique dans les deux modes. Le
 mode debug change donc la conservation, pas la publication.
 
-Le bloc `history` contient ces dix-neuf séries :
+Le bloc `history` contient ces dix-sept séries :
 
 | Chemin sous `history` | Signification |
 |---|---|
@@ -54,8 +54,7 @@ Le bloc `history` contient ces dix-neuf séries :
 | `model.a` | Gain de chauffe appris |
 | `model.b` | Coefficient de déperdition appris |
 | `model.effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (`model.dead_time_s` plus la moitié de `model.response_time_constant_s`) ; les maintiens de l'intégrale, la bande proche au-dessus de la consigne et les impulsions de calibration le lisent |
-| `feedforward.source` | Source de la puissance de maintien en vigueur, comme dans `live.feedforward.source` |
-| `feedforward.wall_power_percent` | Part des murs du feed-forward appliquée, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur) ; `null` lorsqu'aucune part des murs n'est appliquée |
+| `feedforward.source` | Source de la puissance de maintien, comme dans `live.feedforward.source` (toujours `learned model`) |
 | `room_model.a` | Réponse de chauffe du modèle de pièce, dans les unités de `model.a` ; `null` avant une publication |
 | `room_model.b_eq` | Déperdition statique du modèle de pièce, dans les unités de `model.b` ; `null` avant une publication |
 | `room_model.forecast_error_1h_c` | Racine de l'erreur quadratique moyenne des prévisions à 1 h sur les 7 derniers jours (°C) |
@@ -77,7 +76,7 @@ Le bloc `live` est organisé par responsabilité :
 | `model` | Modèle A/B, confiance, constante de temps, temps mort après un démarrage et modèle de réponse |
 | `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées, dérive et démarrage de l'apprentissage (`start`) |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
-| `feedforward` | Source de la puissance de maintien, part des murs de la puissance de maintien et source de bande morte |
+| `feedforward` | Source de la puissance de maintien et source de bande morte |
 | `setpoint` | État du boost de consigne |
 | `calibration` | La calibration en cours ou la dernière : état, impulsions, résultat, dernière demande, temps mort mesuré, lecture, valeurs en usage et corrections |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
@@ -242,15 +241,16 @@ temps mort après un démarrage, pas ce modèle.
 
 ### Modèle de pièce
 
-`room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Une fois publié, et une fois un bilan thermique en vigueur, il donne la puissance de maintien du feed-forward en chauffage, affichée sous `feedforward`.
+`room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Il ne sert qu'à l'observation : il ne modifie jamais la commande (`used_by_regulation` vaut `false`), et la puissance de maintien provient toujours du modèle appris.
 
 | Champ | Signification |
 |---|---|
+| `used_by_regulation` | Toujours `false` : le modèle de pièce identifie, suit et prévoit, et la régulation ne le lit pas |
 | `status` | `learning`, `identified` (modèle avec murs), `simple model` (modèle sans murs), ou `not identified: ` suivi de la raison, en anglais (par exemple `not identified: too little heating during the quiet periods`) |
 | `tracking` | État du suivi de la pièce : `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` ou `wall state implausible` |
 | `walls` | `identified`, ou la raison pour laquelle les murs ne sont pas dans le modèle : `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model` ; `null` avant tout résultat |
 | `a` | Réponse de chauffe à pleine puissance, dans les unités de `model.a` (°C par minute) |
-| `b_eq` | Déperdition statique du modèle, dans les unités de `model.b` (par minute). La puissance de maintien ne l'utilise pas : sa partie statique vient du bilan thermique (`energy_balance_loss_per_c` et `energy_balance_free_gain_percent`), et `b_eq / a` doit correspondre à `energy_balance_loss_per_c` à 5 % près pour qu'il y ait une publication (rien n'est publié avant un premier bilan thermique) |
+| `b_eq` | Déperdition statique du modèle, dans les unités de `model.b` (par minute). La régulation ne l'utilise pas. `b_eq / a` doit correspondre à `energy_balance_loss_per_c` à 5 % près pour qu'il y ait une publication (rien n'est publié avant un premier bilan thermique) |
 | `b_air` | Taux de perte totale de l'air, vers l'extérieur et vers les murs (par minute) ; `null` pour le modèle simple |
 | `b_wall` | Part en régime établi de cette perte qui passe par les murs (par minute), avec `b_eq` = `b_air` − `b_wall` ; `null` pour le modèle simple |
 | `forecast_c` | Température prévue de la pièce à `1h`, `2h`, `6h` et `12h` si la puissance de chauffe actuelle était maintenue (°C) ; `null` tant que le suivi ne tourne pas |
@@ -261,7 +261,7 @@ temps mort après un démarrage, pas ce modèle.
 | `identified_day` | Jour des valeurs en usage (le jour où leur dernière période calme s'est terminée), `null` avant une publication |
 | `last_identification_day` | Jour de la dernière identification (le jour où sa dernière période calme s'est terminée) |
 | `last_refusal_reason` | Raison pour laquelle la dernière identification n'a rien publié (par exemple `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `heating response delay not known yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation`, `the model's heat loss disagrees with the measured heat balance` ou `waiting for a qualified heat balance to check the model's heat loss`), `null` lorsqu'elle a publié |
-| `energy_balance_loss_per_c` | Déperdition du bilan thermique en vigueur : la puissance nécessaire par °C d'écart intérieur-extérieur, dans les unités de `model.b / model.a`. C'est la pente d'une droite passant par les bilans thermiques quotidiens des journées entières conservées (jusqu'à 7), calculée une fois par jour. Une fois le modèle publié, la partie statique de la puissance de maintien est `energy_balance_loss_per_c` × (consigne − température extérieure) − l'apport gratuit. Un jour dont le bilan thermique est refusé garde les valeurs précédentes ; `null` avant une première valeur acceptée |
+| `energy_balance_loss_per_c` | Déperdition du bilan thermique en vigueur : la puissance nécessaire par °C d'écart intérieur-extérieur, dans les unités de `model.b / model.a`. C'est la pente d'une droite passant par les bilans thermiques quotidiens des journées entières conservées (jusqu'à 7), calculée une fois par jour. La régulation ne l'utilise pas : c'est la référence à laquelle le `b_eq / a` du modèle est comparé. Un jour dont le bilan thermique est refusé garde les valeurs précédentes ; `null` avant une première valeur acceptée |
 | `energy_balance_free_gain_percent` | Apport gratuit constant du bilan thermique en vigueur, en % de la pleine puissance : chaleur d'une pièce plus chaude voisine ou d'occupants présents de façon stable, négatif pour une perte vers une pièce plus froide. `0` tant que l'écart intérieur-extérieur n'a pas assez varié entre les jours pour distinguer un apport des pertes (et que les jours n'en montrent aucun) ; `null` avant une première valeur acceptée |
 | `energy_balance_days` | Nombre de jours utilisés par le bilan thermique en vigueur, `null` avant une première valeur acceptée |
 | `energy_balance_day` | Jour où les valeurs en vigueur ont été calculées, `null` avant une première valeur acceptée |
@@ -279,8 +279,7 @@ feed-forward structurel) :
 
 | Champ | Signification |
 |---|---|
-| `source` | `learned model` (le modèle A/B, `model.b / model.a`), `room model (air and walls)` (modèle publié avec murs, suivi `ok` : partie statique plus la puissance supplémentaire des murs), `room model (static part)` (modèle publié avec murs alors que le suivi n'est pas `ok` : partie statique seule) ou `room model (simple)` (modèle publié sans murs). La partie statique d'une source de modèle de pièce vaut `room_model.energy_balance_loss_per_c` × (consigne − température extérieure) − `room_model.energy_balance_free_gain_percent` / 100 ; tant qu'aucun bilan thermique n'est en vigueur, ou tant que son `energy_balance_loss_per_c` s'écarte de plus de 5 % du `b_eq / a` publié, la source reste `learned model` |
-| `wall_power_percent` | Puissance supplémentaire des murs appliquée dans la puissance de maintien, en % de la pleine puissance (négative lorsque les murs restituent de la chaleur). Lorsque le terme des murs démarre, s'arrête ou change avec une nouvelle publication, la valeur appliquée passe en 30 minutes de sa dernière valeur à la nouvelle ; elle peut donc différer de `room_model.wall_extra_power_percent` et rester non nulle pendant 30 minutes après que `source` a quitté `room model (air and walls)` ; `null` lorsqu'aucune part des murs n'est appliquée |
+| `source` | Toujours `learned model` : le modèle A/B, `model.b / model.a`. Le modèle de pièce n'entre jamais dans la puissance de maintien (`room_model.used_by_regulation` vaut `false`) |
 
 `analysis.feedforward` publie `u_ff1`, la puissance de maintien injectée dans la commande, et sa `reason` ; `u_ff_final` et `u_ff_effective` portent la même valeur.
 

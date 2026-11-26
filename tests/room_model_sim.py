@@ -254,7 +254,7 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
     ue = 0.0
     ubuf = [0.0] * (lag + 1)
     clock = {"t": t0}
-    out = {"t": [], "sp": [], "ta": [], "u": [], "u_ff": [], "i_power": [], "source": []}
+    out = {"t": [], "sp": [], "ta": [], "u": [], "u_ff": [], "i_power": []}
     loop = asyncio.new_event_loop()
     cycle_s = cycle_min * 60.0
     with patch("time.time", lambda: clock["t"]), patch("time.monotonic", lambda: clock["t"] - 1.7e9):
@@ -311,7 +311,6 @@ def run_smartpi(p: dict, days: float, *, q: float = 0.01, cycle_min: float = 10.
                 out["u"].append(algo.ctl.u_cmd)
                 out["u_ff"].append(algo.ctl.u_ff)
                 out["i_power"].append(algo.Ki * algo.integral)
-                out["source"].append(algo._ff_holding.source.kind)
                 for s in range(6):
                     tt = clock["t"]
                     u_now = 1.0 if (kk * 60 + s * 10) < on_percent * cycle_s else 0.0

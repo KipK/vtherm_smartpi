@@ -10,13 +10,6 @@ import pytest
 import room_model_sim as rsim
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT, VThermHvacMode_OFF
 from custom_components.vtherm_smartpi.smartpi.room_model import observer as observer_mod
-from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_WALL_FADE_S
-from custom_components.vtherm_smartpi.smartpi.room_model.feedforward import (
-    SOURCE_STATIC,
-    SOURCE_WALLS,
-    HoldingTransfer,
-    select_source,
-)
 from custom_components.vtherm_smartpi.smartpi.room_model.manager import RoomModelManager
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 
@@ -107,33 +100,6 @@ def test_wall_state_survives_an_open_window(window_data) -> None:
     n_resume = [n for t, *_, n in log if W1 <= t < W1 + 120.0]
     assert min(n_before) > 20 and min(n_resume) <= 1
     assert m.observer.restarts == 1
-
-
-def test_wall_part_fades_back_in_over_30_minutes_after_a_window(window_data) -> None:
-    """The holding power drops its wall part while the window is open and blends it back in over
-    RM_WALL_FADE_S from the resume, following the live wall term of the tracking."""
-    tr = HoldingTransfer()
-    seen = []
-
-    def on_tick(m, t, mode):
-        m.eb_slope = (HEAVY["alpha"] - HEAVY["c"]) / HEAVY["a"]
-        src = select_source(m, VThermHvacMode_HEAT, False)
-        tr.update(src, now=t, learned_power=0.3, target_temp=20.0, ext_temp=rsim.outdoor(t), heat=True)
-        seen.append((t, src.kind, src.wall, tr.wall_applied))
-
-    _run_window(window_data, "window open", W0 - 6 * H, W1, W1 + 2 * H, on_tick=on_tick)
-    # Open: static part only, the wall part fades out over RM_WALL_FADE_S and stays at zero
-    assert {k for t, k, *_ in seen if W0 + 60.0 <= t < W1} == {SOURCE_STATIC}
-    assert all(w == 0.0 for t, *_, w in seen if W0 + RM_WALL_FADE_S + 60.0 <= t < W1)
-    # Resumed: the walls at once, their part from 0 to the live wall term over RM_WALL_FADE_S
-    after = [(t, k, live, w) for t, k, live, w in seen if t >= W1]
-    assert {k for _, k, *_ in after} == {SOURCE_WALLS}
-    t_res = after[0][0]
-    assert t_res < W1 + 120.0 and after[0][3] == 0.0
-    for t, _, live, w in after:
-        frac = min((t - t_res) / RM_WALL_FADE_S, 1.0)
-        assert w == pytest.approx(frac * live, abs=1e-12)
-    assert after[-1][3] == after[-1][2] and abs(after[-1][2]) > 0.01
 
 
 def test_a_plain_pause_lets_the_window_leak_into_the_walls(window_data) -> None:

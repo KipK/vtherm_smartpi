@@ -38,7 +38,7 @@ Debug mode records both `live` and `history`. The content is not duplicated
 inside `history`: the historical contract remains identical in both modes.
 Debug mode therefore changes retention, not publication.
 
-The `history` block contains these nineteen series:
+The `history` block contains these seventeen series:
 
 | Path under `history` | Meaning |
 |---|---|
@@ -54,8 +54,7 @@ The `history` block contains these nineteen series:
 | `model.a` | Learned heating gain |
 | `model.b` | Learned heat-loss coefficient |
 | `model.effective_dead_time_s` | Effective dead time of the response model in seconds (`model.dead_time_s` plus half of `model.response_time_constant_s`); the integral holds, the near band above the setpoint and the calibration pulses read it |
-| `feedforward.source` | Holding power source in force, as in `live.feedforward.source` |
-| `feedforward.wall_power_percent` | Wall part of the feed-forward applied, in % of full power (negative when the walls give heat back); `null` when no wall part is applied |
+| `feedforward.source` | Holding power source, as in `live.feedforward.source` (always `learned model`) |
 | `room_model.a` | Heating response of the room model, in the units of `model.a`; `null` before a publication |
 | `room_model.b_eq` | Static loss of the room model, in the units of `model.b`; `null` before a publication |
 | `room_model.forecast_error_1h_c` | Root mean square error of the 1 h forecasts over the last 7 days (°C) |
@@ -77,7 +76,7 @@ The `live` block is organized by responsibility:
 | `model` | A/B model, confidence, time constant, dead time after a start and the response model |
 | `learning` | Learning stage, bootstrap progress, accepted updates, drift state and the start of the learning (`start`) |
 | `governance` | Thermal regime and model-update decision |
-| `feedforward` | Holding power source, wall part of the holding power and dead-band source |
+| `feedforward` | Holding power source and dead-band source |
 | `setpoint` | Setpoint boost state |
 | `calibration` | The calibration in progress or the last one: state, pulses, result, last request, dead time measured, reading, values in use and corrections |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
@@ -238,15 +237,16 @@ gains read the dead time after a start, not this model.
 
 ### Room model
 
-`room_model` describes the room model (see [Room model](./vtherm_smartpi.md#room-model)). Once published, and once a heat balance is in force, it gives the holding power of the feed-forward in heating, shown under `feedforward`.
+`room_model` describes the room model (see [Room model](./vtherm_smartpi.md#room-model)). It is observation only: it never changes the command (`used_by_regulation` is `false`), and the holding power always comes from the learned model.
 
 | Field | Meaning |
 |---|---|
+| `used_by_regulation` | Always `false`: the room model identifies, tracks and forecasts, and the regulation does not read it |
 | `status` | `learning`, `identified` (model with walls), `simple model` (model without walls), or `not identified: ` followed by the reason (for example `not identified: too little heating during the quiet periods`) |
 | `tracking` | State of the room tracking: `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` or `wall state implausible` |
 | `walls` | `identified`, or why the walls are not in the model: `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model`; `null` before any result |
 | `a` | Heating response at full power, in the units of `model.a` (°C per minute) |
-| `b_eq` | Static loss of the model, in the units of `model.b` (per minute). The holding power does not use it: its static part comes from the heat balance (`energy_balance_loss_per_c` and `energy_balance_free_gain_percent`), and `b_eq / a` must agree with `energy_balance_loss_per_c` within 5 % for a publication (nothing is published before a first heat balance) |
+| `b_eq` | Static loss of the model, in the units of `model.b` (per minute). The regulation does not use it. `b_eq / a` must agree with `energy_balance_loss_per_c` within 5 % for a publication (nothing is published before a first heat balance) |
 | `b_air` | Total loss rate of the air, to the outside and to the walls (per minute); `null` for the simple model |
 | `b_wall` | Steady share of that loss that goes through the walls (per minute), with `b_eq` = `b_air` − `b_wall`; `null` for the simple model |
 | `forecast_c` | Forecast room temperature in `1h`, `2h`, `6h` and `12h` if the current heating power were kept (°C); `null` while the tracking is not running |
@@ -257,7 +257,7 @@ gains read the dead time after a start, not this model.
 | `identified_day` | Day of the values in use (the day their last quiet period ended), `null` before a publication |
 | `last_identification_day` | Day of the last identification (the day its last quiet period ended) |
 | `last_refusal_reason` | Why the last identification published nothing (for example `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `heating response delay not known yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation`, `the model's heat loss disagrees with the measured heat balance` or `waiting for a qualified heat balance to check the model's heat loss`), `null` when it published |
-| `energy_balance_loss_per_c` | Heat loss of the heat balance in force: the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. It is the slope of a straight line through the daily heat balances of the whole days kept (up to 7), computed once a day. Once a model is published, the static part of the holding power is `energy_balance_loss_per_c` × (setpoint − outdoor temperature) − the free gain. A day whose heat balance is refused keeps the previous values; `null` before a first accepted value |
+| `energy_balance_loss_per_c` | Heat loss of the heat balance in force: the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. It is the slope of a straight line through the daily heat balances of the whole days kept (up to 7), computed once a day. The regulation does not use it: it is the reference that the model's `b_eq / a` is checked against. A day whose heat balance is refused keeps the previous values; `null` before a first accepted value |
 | `energy_balance_free_gain_percent` | Constant free heat gain of the heat balance in force, in % of full power: heat from a warmer room next door or from steady occupants, negative for a loss to a colder room. `0` while the indoor-outdoor difference has not varied enough between the days to tell a gain apart from the losses (and the days show none); `null` before a first accepted value |
 | `energy_balance_days` | Number of days used by the heat balance in force, `null` before a first accepted value |
 | `energy_balance_day` | Day the values in force were computed, `null` before a first accepted value |
@@ -275,8 +275,7 @@ feed-forward):
 
 | Field | Meaning |
 |---|---|
-| `source` | `learned model` (the A/B model, `model.b / model.a`), `room model (air and walls)` (published model with walls, tracking `ok`: static part plus the wall extra power), `room model (static part)` (published model with walls while the tracking is not `ok`: static part only) or `room model (simple)` (published model without walls). The static part of a room model source is `room_model.energy_balance_loss_per_c` × (setpoint − outdoor temperature) − `room_model.energy_balance_free_gain_percent` / 100; while no heat balance is in force, or while its `energy_balance_loss_per_c` differs from the published `b_eq / a` by more than 5 %, the source stays `learned model` |
-| `wall_power_percent` | Wall extra power applied in the holding power, in % of full power (negative when the walls give heat back). When the wall term starts, stops or changes with a new publication, the applied value moves over 30 minutes from its last value to the new one, so it can differ from `room_model.wall_extra_power_percent` and stay non-zero for 30 minutes after `source` leaves `room model (air and walls)`; `null` when no wall part is applied |
+| `source` | Always `learned model`: the A/B model, `model.b / model.a`. The room model never enters the holding power (`room_model.used_by_regulation` is `false`) |
 
 `analysis.feedforward` publishes `u_ff1`, the holding power injected into the command, and its `reason`; `u_ff_final` and `u_ff_effective` carry the same value.
 

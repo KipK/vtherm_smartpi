@@ -1,1 +1,1 @@
-"""Room model (air, walls and emitter): forecasts, and the feed-forward holding power once published."""
+"""Room model (air, walls and emitter): observation only, forecasts and diagnostics; it never changes the command."""

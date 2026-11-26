@@ -53,7 +53,7 @@ $$ u = u_{FF} + u_{PI} $$
 
 with:
 
-- `u_ff1`: structural feed-forward (holding power), derived from $b/a$ or from the published room model,
+- `u_ff1`: structural feed-forward (holding power), derived from $b/a$ (the room model never enters the command),
 - `u_pi`: discrete PI term.
 
 The value injected into the controller is `u_ff1 + u_pi`, then it goes through:
@@ -531,7 +531,7 @@ corrected while its drift buffer is empty and its last
 `CALIBRATION_OWN_RECENT = 3` measures are within the threshold of the value in
 force. A correction latches the feed-forward credit at the ramp count before it
 (`StartingValues.latch`) and notes the learned gain `b / a` before it in the
-holding transfer (`HoldingTransfer.note_learned_step`): at the next feed-forward
+step transfer (`LearnedStepTransfer.note`): at the next feed-forward
 the step of the learned holding power, evaluated at the same setpoint, outdoor
 temperature and warmup, is moved into the integral. A change of `Kp` that follows
 a correction is not moved into the integral: the proportional term acts on the error as
@@ -840,34 +840,22 @@ outdoor sensor reports no value, FF1, the setpoint model and the near band keep
 using that last value, without age limit. Until a first outdoor temperature has
 been received, $u_{ff1}$ is zero (`ff_reason` `ff_no_ext_temp`).
 
-#### Holding power from the room model
+#### The room model does not enter the holding power
 
-In HEAT with heaters driven by PWM cycles, a published room model replaces
-$k_{ff} = b/a$ (`smartpi/room_model/feedforward.py`) once a static model of
-the energy balance is in force: the slope $s_{EB}$
-(`room_model.energy_balance_loss_per_c`) and the constant free gain $g_{EB}$
-(`room_model.energy_balance_free_gain_percent` / 100), with the static part
-$u_s = s_{EB}(SP - T_{ext}) - g_{EB}$. With $\delta_{wall}/a$ the wall extra
-power of the tracking (`room_model.wall_extra_power_percent`, both signs):
+The holding power is always the learned law above, in HEAT and in COOL, with
+PWM heaters and with valves. The room model (below) is observation only: it
+identifies, tracks and forecasts, and publishes `live.room_model`
+(`used_by_regulation` is `false`); it never changes the command, the gains,
+the anticipation, the setpoint or the guards. `feedforward.source` is always
+`learned model`. A bumpless transfer remains for the learned law only: the
+step of a correction by the calibration (3.7) is moved into the integral.
 
-| Room model | Source (`feedforward.source`) | $u_{ff1}$ |
-|---|---|---|
-| walls identified, tracking `ok` | `room model (air and walls)` | $clamp(u_s + \frac{\delta_{wall}}{a}, 0, 1)$ |
-| walls identified, tracking not `ok` (paused, settling, drift, ...) | `room model (static part)` | $clamp(u_s, 0, 1)$ |
-| simple model | `room model (simple)` | $clamp(u_s, 0, 1)$ |
-| published, no static model in force yet, or one whose $s_{EB}$ differs from the published $b_{eq}/a$ by more than 5 % | `learned model` | the learned law above, unchanged, no wall part |
-| nothing published, COOL, valve mode | `learned model` | the learned law above, unchanged |
-
-The static part comes from the energy balance, never from the fitted
-$b_{eq}/a$. With heavy walls the fitted $b_{eq} = b_{air} - b_{wall}$ is a
+The static model of the energy balance (below, `room_model.energy_balance_*`)
+is the reference that the fits of the room model are checked against, not a
+holding power. With heavy walls the fitted $b_{eq} = b_{air} - b_{wall}$ is a
 small difference of two larger terms, and it moves with the emitter response
 time used by the fit (by a fraction of a percent per second of emitter time);
-the multi-day energy balance does not depend on it. The fit gives the wall
-dynamics, $\delta_{wall}/a$. The static model alone, without a published
-model, is never used: without the wall part it gives the wrong holding power
-in heavy rooms, low after a setback and high when the walls give heat back.
-The free gain is part of the static part: without it the integral would carry
-$g_{EB}$ for good.
+the multi-day energy balance does not depend on it.
 
 **Energy balance.** A job of its own computes, once per local day 20 minutes
 after its midnight and whatever the quiet periods, the balance of each whole
@@ -954,7 +942,7 @@ coordinates a fit contributes follow by the delta method: $\ln a$ and
 $\ln(b_{eq}/a)$ for the simple model; $\ln a$, $\ln \alpha$ and $\ln c$
 ($c = \gamma / \beta$) for the model with walls, whose $b_{eq}/a = (\alpha - c)/a$
 is never the static loss and is checked against $s_{EB}$ within 5 % before a
-publication and before any use. A fit is refused
+publication. A fit is refused
 (`the quiet periods do not determine the model precisely enough yet`) when
 $1.96 \, \sigma$ of one of them exceeds the tolerance with which the agreement
 of two windows compares it: $\ln 1.15$ for $a$, $\ln 1.25$ for $b_{eq}/a$ and
@@ -981,8 +969,7 @@ from the fits: without a qualified model in force nothing is published
 with the status `learning`). The published value, the median of the last
 candidates, is checked again against the model in force when it is published;
 on a disagreement the publication in force is kept. A room model published by
-an earlier version stays in force; the holding power still requires the
-agreement with the heat balance in force (4.2).
+an earlier version stays in force.
 
 **Emitter search.** The emitter in force is the HEAT response model (pure
 delay its dead time $\theta$, first order its response time constant $\tau_e$,
@@ -1015,73 +1002,19 @@ at least 10; the other checks (bias, spread, autocorrelation at 1 h,
 correlation with the emitter output, the setpoint and the outdoor temperature)
 are unchanged.
 
-$s_{EB}$ is bounded to 3, like $k_{ff}$. A room model source applies at full
-weight (`warmup_scale = 1`) and does not use the unmeasured disturbance $d$ of
-the tracking. The static part follows the setpoint; the wall part follows the
-tracked air. With the air at the setpoint, $u_{ff1} = (b_{air}(SP - T_{ext}) - w)/a$,
-with $b_{air}$ the total loss rate of the air and $w$ the wall state.
-
-**Bumpless transfer of the static part.** A discrete change of the static
-part moves into the integral, so that $u_{ff} + K_i \cdot I$ does not jump:
-
-$$ I \leftarrow clamp\left(I - \frac{\Delta u_{ff}}{K_i}, -\frac{2}{K_i}, \frac{2}{K_i}\right) $$
-
-The discrete changes of the static part are a change between the learned
-source and a room model source (including the change of weight from the
-learned warmup to full weight), a change of model structure (simple model and
-model with walls), a new daily publication of the parameters and a new
-static model ($s_{EB}$ or $g_{EB}$) in force. $\Delta u_{ff}$
-is the new static part minus the outgoing one (the learned FF1 for the
-learned source), both at the current setpoint and outdoor temperature and both
-with the wall part applied at this calculation, inside the $[0, 1]$ clamp.
-The switch between `room model (air and walls)` and `room model (static part)`
-does not change the static part: nothing is transferred. The continuous
-evolution of the setpoint and of the outdoor temperature is not transferred:
-it is the action of the feed-forward. The learned source's own evolution
-(warmup ramp, new `a`/`b`) is never transferred either. The transfer is
-applied in the calculation, before the PI, and may cross zero; it is cut only
-by the integral limits. Saturation and anti-windup are unchanged: they act on
-the total command.
-
-**Wall part blend.** The wall part is never moved into the integral. When the
-wall term in force changes discretely (switched on when the tracking becomes
-`ok`, switched off when it is not `ok` any more or when the learned source takes
-over, a publication that changes the wall parameters; a new static model
-alone does not start a blend), the applied wall part
-goes linearly over `RM_WALL_FADE_S` = 30 min from the value applied last to its
-target. The target is the live $\delta_{wall}/a$ of a tracking `ok`, or 0 when
-the wall term is off; a fade-out never reads the tracking again. A new
-discontinuity during a blend starts a new one from the value applied at that
-moment, so a tracking that flaps between `ok` and not `ok` neither moves the
-integral nor makes the command jump. When the learned source takes over in
-heating, a fade-out goes on over the learned holding power; outside heating the
-wall part is dropped. Out of a blend the applied wall part follows the live
-$\delta_{wall}/a$. The holding power stays clamped to $[0, 1]$, and
-`feedforward.wall_power_percent` shows the applied wall part.
+**Wall extra power.** With the walls identified and the tracking `ok`, the
+room model shows the wall extra power $\delta_{wall}/a$ of the tracking
+(`room_model.wall_extra_power_percent`, both signs, in % of full power). It is
+a display: the command does not read it.
 
 **Open window.** There is no hold after a window. While it is open the tracking
-pins the air to the measurement and drives the walls with it; the source is
-`room model (static part)` and the wall part fades out. At the resume the air
-is set to the measurement, its correlations with the walls and the disturbance
-are dropped and the innovation statistics restart; the tracking is `ok` again
-at once and the wall part blends back in over `RM_WALL_FADE_S`. An open window
-raises the real air-wall exchange above the model's, so the tracked walls tend
-to be warmer than the real ones and the wall part errs low. A sensor near the
-window can bias it the other way; the bound on the wall term and the
-innovation checks cover that case.
-
-**Restart.** The source in force is saved with the integral (`ff_source`),
-and the wall part blend with it (`ff_wall`: the applied wall part, the value a
-blend starts from and its start time on the wall clock). At the first
-calculation after a restart, a different source (room model store lost,
-tracking restarting) is transferred like any change of source and starts a
-wall blend from the restored applied value; the same source resumes without
-transfer, and a blend in progress goes on where the wall clock puts it. A state
-saved without `ff_source` is taken as the learned source; a state without a
-valid `ff_wall` applies the wall term of its saved source in full. A reset of
-the PI memory (HEAT/COOL change, prolonged pause, learning reset) forgets the
-source and the applied wall part: the next source starts without transfer and
-its wall part blends in from 0.
+pins the air to the measurement and drives the walls with it. At the resume the
+air is set to the measurement, its correlations with the walls and the
+disturbance are dropped and the innovation statistics restart; the tracking is
+`ok` again at once. An open window raises the real air-wall exchange above the
+model's, so the tracked walls tend to be warmer than the real ones and the
+wall extra power shown errs low. A sensor near the window can bias it the other
+way; the bound on the wall term and the innovation checks cover that case.
 
 ### 4.3 Setpoint management
 
@@ -1282,8 +1215,7 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | `setpoint.py`          | control setpoint and setpoint boost state                   |
 | `anticipation.py`      | horizon and correction of the anticipation of the measured temperature (heating and cooling) |
 | `resume_hold.py`       | I:HOLD during the effective dead time after a heater start (`control.in_deadtime_window`) and after a window, power-shedding or heating-unavailable resume, residual error floor |
-| `feedforward.py`       | `u_ff1` computation, signed FF gain `b/a` and warmup scale, room model FF1 |
-| `room_model/feedforward.py` | holding power source from the published room model and the static model of the energy balance in force, bumpless transfer of the discrete changes of its static part, blend of its wall part, static gain for the braking prediction |
+| `feedforward.py`       | `u_ff1` computation, signed FF gain `b/a` and warmup scale, transfer of a calibration step into the integral |
 | `ff_ab_confidence.py`  | confidence policy for `a/b`                                 |
 | `governance.py`        | freeze decisions                                            |
 | `calibration.py`       | calibration on request: requests, pulse limits, end, correction rule, published summary |
@@ -1313,7 +1245,7 @@ self.resume_hold = ResumeDeadtimeHold()
 self.dt_est = DeadTimeEstimator()
 self.guards = SmartPIGuards()
 self._ab_confidence = ABConfidence()
-self._ff_holding = HoldingTransfer()
+self._ff_step = LearnedStepTransfer()
 ```
 
 ### 5.4 Current persistence
@@ -1334,8 +1266,6 @@ The current payload from `SmartPI.save_state()` notably contains:
     "db_state": {...},
     "gs_state": {...},
     "guards_state": {...},
-    "ff_source": {...},  # holding power source the integral complements
-    "ff_wall": {...},  # applied wall part and its blend
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap only
     "measure_events": {...},  # record of the power and temperatures (3.7)
@@ -1474,7 +1404,7 @@ opening commits nothing.
 - `build_published_diagnostics()`: the function that builds that payload.
 
 `diagnostic_history.py` wraps this payload in `schema_version`, `live` and the
-stable nineteen-series `history` block. Normal sensor entities exclude `live` from
+stable seventeen-series `history` block. Normal sensor entities exclude `live` from
 Recorder; the debug sensor subclass records it directly. The debug option only selects the sensor class that is recorded; it does not
 add a second diagnostic block.
 
