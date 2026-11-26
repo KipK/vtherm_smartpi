@@ -49,7 +49,6 @@ import math
 import statistics
 from typing import Any
 
-from ..tar_learning.const import ID_PRECISE_Q
 from . import model as rm
 from .const import (
     H,
@@ -63,6 +62,7 @@ from .const import (
     RM_NIGHT_D_DEV_C_H,
     RM_NIGHT_MIN_TRACK_S,
     RM_NIGHTS_KEEP,
+    RM_PRECISE_Q,
     RM_R_PRECISE,
     RM_RESUME_MAX_S,
     RM_SETTLE_S,
@@ -91,7 +91,7 @@ _FORECAST_STEP_S = 600.0
 
 def is_precise(q: float | None) -> bool:
     """Sensor step small enough for the wall (SmartPI's precise-sensor rule)."""
-    return q is not None and q <= ID_PRECISE_Q
+    return q is not None and q <= RM_PRECISE_Q
 
 
 class RoomObserver:

@@ -85,27 +85,27 @@ def test_the_entities_never_change_the_saved_pause(clock):
 # -- leaks of the pause ----------------------------------------------------------------------------------------
 def test_the_pause_gives_the_t_ar_learning_and_the_room_model_an_exclusion_reason(clock):
     algo = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0,
-                   name="Block", tar_learning=True, room_model=True)
+                   name="Block", room_model=True)
     force_smartpi_stable_mode(algo)
     algo.calculate(target_temp=TARGET, current_temp=19.5, ext_current_temp=T_EXT, hvac_mode=VThermHvacMode_HEAT)
-    algo.tar_learning.observe = MagicMock()
+    algo.room_history.observe = MagicMock()
     algo.room_model.observe = MagicMock()
     algo.set_learning_enabled(False)
-    algo.observe_tar_learning(TARGET, 19.5, T_EXT, VThermHvacMode_HEAT)
+    algo.observe_room_history(TARGET, 19.5, T_EXT, VThermHvacMode_HEAT)
     algo.observe_room_model(19.5, T_EXT, VThermHvacMode_HEAT, excluded="power shedding")
-    assert algo.tar_learning.observe.call_args.kwargs["excluded"] == "learning paused"
+    assert algo.room_history.observe.call_args.kwargs["excluded"] == "learning paused"
     assert algo.room_model.observe.call_args.kwargs["excluded"] == "learning paused"
     algo.observe_room_model(19.5, T_EXT, VThermHvacMode_HEAT, excluded="window open")   # the room model follows it
     assert algo.room_model.observe.call_args.kwargs["excluded"] == "window open"
     algo.set_learning_enabled(True)
-    algo.observe_tar_learning(TARGET, 19.5, T_EXT, VThermHvacMode_HEAT)
-    assert algo.tar_learning.observe.call_args.kwargs["excluded"] is None
+    algo.observe_room_history(TARGET, 19.5, T_EXT, VThermHvacMode_HEAT)
+    assert algo.room_history.observe.call_args.kwargs["excluded"] is None
 
 
 def test_no_learning_computation_starts_while_the_learning_is_blocked():
     algo = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0,
-                   name="Block", tar_learning=True)
-    algo.tar_learning = MagicMock(active=True, dirty=False)
+                   name="Block", room_model=True)
+    algo.room_history = MagicMock(active=True, dirty=False)
     handler = SmartPIHandler(MagicMock())
     handler._thermostat.hass.async_create_background_task = MagicMock(side_effect=lambda coro, _name: coro.close())
     algo.set_learning_enabled(False)

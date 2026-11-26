@@ -1,4 +1,4 @@
-"""Deterministic closed-loop run of SmartPI on a simulated room (T_ar learning tests).
+"""Deterministic closed-loop run of SmartPI on a simulated room (regulation reference pin, room model tests).
 
 The room is one thermal capacity with a first-order emitter; the sensor
 publishes 0.1 C steps. The clock is simulated (time.time and time.monotonic),
@@ -56,20 +56,17 @@ class _SyncHass:
         return func(*args)
 
 
-def run(hours: float = 30.0, *, tar_learning: bool | None = None, room_model: bool | None = None,
-        prepare=None) -> list[list]:
+def run(hours: float = 30.0, *, room_model: bool | None = None, prepare=None) -> list[list]:
     """Run the closed loop; return one row of regulation outputs per calculation.
 
-    room_model: the room model observes every tick, runs its daily identification and builds its
-    diagnostics once per cycle.
+    room_model: the room history records and the room model observes every tick; the room model runs its
+    identification and builds its diagnostics once per cycle.
     """
     clock = {"t": WALL0}
     loop = asyncio.new_event_loop()
     rows: list[list] = []
     with patch("time.time", lambda: clock["t"]), patch("time.monotonic", lambda: clock["t"] - MONO_OFFSET):
-        kwargs = {} if tar_learning is None else {"tar_learning": tar_learning}
-        if room_model is not None:
-            kwargs["room_model"] = room_model
+        kwargs = {} if room_model is None else {"room_model": room_model}
         hass = _SyncHass()
         pub_time = None
         last_published = None
@@ -78,7 +75,7 @@ def run(hours: float = 30.0, *, tar_learning: bool | None = None, room_model: bo
             cycle_min=CYCLE_MIN,
             minimal_activation_delay=0,
             minimal_deactivation_delay=0,
-            name="TarSim",
+            name="RegulationSim",
             **kwargs,
         )
         seed_stable(algo)
@@ -100,9 +97,8 @@ def run(hours: float = 30.0, *, tar_learning: bool | None = None, room_model: bo
                     hvac_mode=VThermHvacMode_HEAT,
                     cycle_boundary=(k == 0),
                 )
-                if tar_learning:
-                    algo.observe_tar_learning(sp, published, T_EXT, VThermHvacMode_HEAT)
                 if room_model:
+                    algo.observe_room_history(sp, published, T_EXT, VThermHvacMode_HEAT)
                     if published != last_published:
                         pub_time, last_published = clock["t"], published
                     algo.observe_room_model(published, T_EXT, VThermHvacMode_HEAT, measure_id=pub_time)

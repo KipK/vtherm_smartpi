@@ -217,7 +217,7 @@ def test_the_room_model_reads_theta_and_tau_e_of_the_heat_model():
 
 def test_smartpi_gives_the_room_model_the_heat_model():
     pi = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0,
-                 name="RoomInput", tar_learning=True, room_model=True)
+                 name="RoomInput", room_model=True)
     pi._start.model.seed(MODE_HEAT, 300.0, 900.0)
     pi._start.model.seed(MODE_COOL, 60.0, 120.0)
     pi.room_model.observe = MagicMock()

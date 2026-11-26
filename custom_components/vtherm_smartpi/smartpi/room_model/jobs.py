@@ -20,10 +20,13 @@ takes the constant free gain in force of the energy balance as a known input
 per effective independent residual (const.py):
 - significant, optimum at an end of the grid: the emitter lies outside it,
   the window is refused;
-- not significant: the window does not determine the emitter; the emitter in
-  force is used when the T_ar learning has published a refined value, else
-  the grid optimum. The static loss of such a fit is then judged by its
+- not significant: the window does not determine the emitter; the grid
+  optimum is used. The static loss of such a fit is then judged by its
   agreement with the energy balance.
+Each candidate first moment (grid point or Brent evaluation) is fitted in two shapes when the response model in
+force gives a delay share above zero: a pure first order, and the split by that share (delay L = share x first
+moment, the rest first order); the lower full-fit cost is kept, and so is its share downstream. Without a share
+only the pure first order is tried.
 
 Information: each fit carries the precision of its identifiable coordinates
 (identification.precision), the emitter included when the window estimated
@@ -39,8 +42,8 @@ from typing import Any
 import numpy as np
 from scipy.optimize import minimize_scalar
 
-from ..tar_learning.clock import LocalClock
-from ..tar_learning.identification import q_obs
+from ..room_history.clock import LocalClock
+from ..room_history.signals import q_obs
 from . import energy_balance, gates, identification
 from .const import (
     RM_EMITTER_CHI2,
@@ -62,30 +65,49 @@ _EM_DLOG = 0.02
 
 
 def _te_pub(snap: dict, tau_e: float, L: float) -> float | None:
-    """Refined first-order part of the emitter in force (a delay is only there under a refined value)."""
+    """First-order part of the emitter in force for a snapshot without a delay share, or None (pure first order). The
+    manager passes None and a delay share: a split by the response model's time constant, biased low on fast
+    emitters, broke the wall fits, whereas its delay share splits each candidate first moment."""
     if "te_pub" in snap:
         return None if snap["te_pub"] is None else float(snap["te_pub"])
     return tau_e if L > 0.0 else None
 
 
-def _full_fit(snap: dict, periods: list, first_moment: float, te_pub: float | None, gain: float) -> tuple:
-    te, lag = split_first_moment(first_moment, te_pub)
+def _full_fit(snap: dict, periods: list, first_moment: float, te_pub: float | None, gain: float,
+              delay_share: float | None = None) -> tuple:
+    te, lag = split_first_moment(first_moment, te_pub, delay_share)
     d = identification.WindowData(snap, periods, te, lag)
     f = identification.fit(identification.Problem(d, True, gain)) if d.segments else None
     return te, lag, d, f
+
+
+def _best_shape(snap: dict, periods: list, first_moment: float, te_pub: float | None, gain: float) -> tuple:
+    """(tau_e, L, data, fit, share) of the shape with the lower full-fit cost for one first moment.
+
+    With a response-model delay share above zero: a pure first order (share 0) against the split by that share.
+    Otherwise the single fit of the snapshot's split; share is the delay share used (None: split by te_pub)."""
+    share = snap.get("delay_share")
+    if share is None or float(share) <= 0.0:
+        return (*_full_fit(snap, periods, first_moment, te_pub, gain, share), share)
+    a = _full_fit(snap, periods, first_moment, te_pub, gain, 0.0)
+    b = _full_fit(snap, periods, first_moment, te_pub, gain, share)
+    if b[3] is not None and (a[3] is None or float(b[3]["cost"]) < float(a[3]["cost"])):
+        return (*b, share)
+    return (*a, 0.0)
 
 
 def refine_emitter(snap: dict, periods: list, data: identification.WindowData, tau_e: float,
                    L: float, gain: float = 0.0) -> dict:
     """Emitter chosen by the full fit cost over the fixed grid of first moments.
 
-    Returns {"tau_e", "L", "first_moment", "costs", "significance", "n_eff", "edge", "flat", "source", "data"}:
-    data is the window on the chosen emitter; edge is True when the day must be refused.
+    Returns {"tau_e", "L", "first_moment", "costs", "significance", "n_eff", "edge", "flat", "source", "data",
+    "share"}: data is the window on the chosen emitter and share the delay share of the shape kept (None: split by
+    te_pub, or the emitter in force); edge is True when the day must be refused.
     """
     out = {"tau_e": tau_e, "L": L, "first_moment": tau_e + L, "costs": None, "significance": None,
-           "n_eff": None, "edge": False, "flat": None, "source": "in force", "data": data}
+           "n_eff": None, "edge": False, "flat": None, "source": "in force", "data": data, "share": None}
     te_pub = _te_pub(snap, tau_e, L)
-    fits = [_full_fit(snap, periods, fm, te_pub, gain) for fm in RM_EMITTER_GRID_S]
+    fits = [_best_shape(snap, periods, fm, te_pub, gain) for fm in RM_EMITTER_GRID_S]
     costs = [None if f[3] is None else float(f[3]["cost"]) for f in fits]
     out["costs"] = [None if c is None else round(c, 6) for c in costs]
     ok = [i for i, c in enumerate(costs) if c is not None and math.isfinite(c)]
@@ -103,21 +125,21 @@ def refine_emitter(snap: dict, periods: list, data: identification.WindowData, t
         return out
     if not marked and te_pub is not None:
         return out
-    fm, (te, lag, d, f) = RM_EMITTER_GRID_S[i], fits[i]
+    fm, (te, lag, d, f, share) = RM_EMITTER_GRID_S[i], fits[i]
     if not edge and costs[i - 1] is not None and costs[i + 1] is not None:
         # Brent search in log time between the neighbours of the grid minimum
         tried: dict[float, tuple] = {}
 
         def cost(x: float) -> float:
-            tried[x] = _full_fit(snap, periods, math.exp(x), te_pub, gain)
+            tried[x] = _best_shape(snap, periods, math.exp(x), te_pub, gain)
             return math.inf if tried[x][3] is None else float(tried[x][3]["cost"])
 
         minimize_scalar(cost, bounds=(math.log(RM_EMITTER_GRID_S[i - 1]), math.log(RM_EMITTER_GRID_S[i + 1])),
                         method="bounded", options={"xatol": RM_EMITTER_XATOL, "maxiter": RM_EMITTER_REFINE_MAX})
         best = min(tried.items(), key=lambda kv: math.inf if kv[1][3] is None else kv[1][3]["cost"], default=None)
         if best is not None and best[1][3] is not None and best[1][3]["cost"] < costs[i]:
-            fm, (te, lag, d, f) = math.exp(best[0]), best[1]
-    out.update(tau_e=te, L=lag, first_moment=fm, data=d, source="grid")
+            fm, (te, lag, d, f, share) = math.exp(best[0]), best[1]
+    out.update(tau_e=te, L=lag, first_moment=fm, data=d, source="grid", share=share)
     return out
 
 
@@ -128,23 +150,23 @@ def balance_job(snap: dict[str, Any]) -> dict[str, Any]:
 
 
 def _emitter_problems(data: identification.WindowData, em: dict, te_pub: float | None,
-                      gain: float, full: bool) -> tuple | None:
+                      gain: float, full: bool, delay_share: float | None = None) -> tuple | None:
     """Problems at the emitter first moment x exp(-+_EM_DLOG) when the window estimated it, else None."""
     if em.get("source") != "grid":
         return None
     fm = float(em["first_moment"])
-    lo = data.with_emitter(*split_first_moment(fm * math.exp(-_EM_DLOG), te_pub))
-    hi = data.with_emitter(*split_first_moment(fm * math.exp(_EM_DLOG), te_pub))
+    lo = data.with_emitter(*split_first_moment(fm * math.exp(-_EM_DLOG), te_pub, delay_share))
+    hi = data.with_emitter(*split_first_moment(fm * math.exp(_EM_DLOG), te_pub, delay_share))
     return identification.Problem(lo, full, gain), identification.Problem(hi, full, gain), _EM_DLOG
 
 
 def _fit(data: identification.WindowData, full: bool, gain: float, em: dict, te_pub: float | None,
-         warm: dict | None = None) -> dict | None:
+         warm: dict | None = None, delay_share: float | None = None) -> dict | None:
     """Fit of one structure with the precision of its identifiable coordinates."""
     pb = identification.Problem(data, full, gain)
     f = identification.fit(pb, warm=warm) if full else identification.fit(pb)
     if f is not None:
-        f["info"] = identification.precision(pb, f, _emitter_problems(data, em, te_pub, gain, full))
+        f["info"] = identification.precision(pb, f, _emitter_problems(data, em, te_pub, gain, full, delay_share))
     return f
 
 
@@ -197,19 +219,20 @@ def identify_job(snap: dict[str, Any]) -> dict[str, Any]:
     rec["emitter"] = {"tau_e": round(em["tau_e"], 1), "L": round(em["L"], 1),
                       "first_moment": round(em["first_moment"], 1), "costs": em["costs"],
                       "significance": em["significance"], "n_eff": em["n_eff"], "flat": em["flat"],
-                      "source": em["source"]}
+                      "source": em["source"], "share": None if em["share"] is None else round(em["share"], 3)}
     if em["edge"]:
         rec["why"] = gates.WHY_EMITTER_EDGE
         return _done(rec, snap)
     te_pub = _te_pub(snap, float(tau_e), float(L))
+    share = em["share"]
     tau_e, L, data = em["tau_e"], em["L"], em["data"]
     sensor = "precise" if precise else "coarse"
-    red = _fit(data, False, gain, em, te_pub)
+    red = _fit(data, False, gain, em, te_pub, delay_share=share)
     rec["reduced"] = gates.fit_record(red, STRUCT_REDUCED, sensor, float(tau_e), float(L), q)
     prev = snap.get("prev")
     if precise:
         warm = ((prev or {}).get("full") or {}).get("params")
-        full = _fit(data, True, gain, em, te_pub, warm=warm)
+        full = _fit(data, True, gain, em, te_pub, warm=warm, delay_share=share)
         rec["full"] = gates.fit_record(full, STRUCT_FULL, sensor, float(tau_e), float(L), q)
     held: dict[str, Any] = {}
     for struct in ("full", "reduced"):

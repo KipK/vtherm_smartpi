@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 import room_model_sim as rsim
-import tar_learning_sim as sim
+import regulation_sim as sim
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 
-REFERENCE = json.loads((Path(__file__).parent / "fixtures" / "tar_learning" / "regulation_reference.json").read_text())
+REFERENCE = json.loads((Path(__file__).parent / "fixtures" / "regulation_reference.json").read_text())
 REPO = Path(__file__).resolve().parent.parent
 EB_RATIO = 1.03 * sim.B_TRUE / sim.A_TRUE
 
@@ -40,10 +40,10 @@ def _prefill(history, days: float = 5.0) -> None:
 
 def _running(holder: dict, publish: bool = True):
     def prepare(algo) -> None:
-        algo.tar_learning.set_dependencies(True)
+        algo.room_history.set_dependencies(True)
         # The home position of the synthetic room: its setback nights are quiet periods
-        algo.tar_learning.set_position(rsim.LAT, rsim.LON)
-        _prefill(algo.tar_learning.history)
+        algo.room_history.set_position(rsim.LAT, rsim.LON)
+        _prefill(algo.room_history.history)
         if publish:
             params = RoomParams.reduced(sim.A_TRUE, sim.B_TRUE, sim.TAU_EMITTER, 0.0)
             algo.room_model.params = params
@@ -69,7 +69,7 @@ def test_published_room_model_gives_the_holding_power() -> None:
     daily identification and diagnostics keep running.
     """
     holder: dict = {}
-    rows = sim.run(REFERENCE["hours"], tar_learning=True, room_model=True, prepare=_running(holder))
+    rows = sim.run(REFERENCE["hours"], room_model=True, prepare=_running(holder))
     assert len(rows) == REFERENCE["rows"]
     assert _sha(rows) != REFERENCE["sha256"]
     algo = holder["algo"]
@@ -100,7 +100,7 @@ def test_room_model_learning_is_identical_to_the_reference() -> None:
     """Nothing published (observer waiting, identification of the closed quiet periods running): the
     regulation is bit-identical."""
     holder: dict = {}
-    rows = sim.run(REFERENCE["hours"], tar_learning=True, room_model=True, prepare=_running(holder, publish=False))
+    rows = sim.run(REFERENCE["hours"], room_model=True, prepare=_running(holder, publish=False))
     assert _sha(rows) == REFERENCE["sha256"]
     assert holder["algo"].room_model.params is None
     assert len(holder["algo"].room_model.records) == 3
@@ -118,9 +118,9 @@ def test_room_model_off_has_no_block() -> None:
     def prepare(algo) -> None:
         holder["algo"] = algo
 
-    rows = sim.run(REFERENCE["hours"], tar_learning=True, prepare=prepare)
+    rows = sim.run(REFERENCE["hours"], prepare=prepare)
     assert _sha(rows) == REFERENCE["sha256"]
-    assert holder["algo"].room_model is None
+    assert holder["algo"].room_model is None and holder["algo"].room_history is None
     assert "room_model" not in holder["algo"].get_published_diagnostics()
 
 
@@ -133,7 +133,7 @@ def test_scipy_is_not_imported_by_the_room_model_on_the_event_loop() -> None:
         "from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT\n"
         "from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams\n"
         "a = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0,\n"
-        "            minimal_deactivation_delay=0, name='x', tar_learning=True, room_model=True)\n"
+        "            minimal_deactivation_delay=0, name='x', room_model=True)\n"
         "p = RoomParams('full', 0.001, 1e-4, 4e-6, 6e-5, 600.0, 60.0)\n"
         "a.room_model.params = p\n"
         "a.room_model.observer.configure(p, 0.01)\n"

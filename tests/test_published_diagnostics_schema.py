@@ -41,6 +41,7 @@ def _representative_smartpi() -> SmartPI:
         minimal_activation_delay=0,
         minimal_deactivation_delay=0,
         name="Published diagnostics schema",
+        room_model=True,
     )
     # Valve mode adds the valve subtree.
     algo.valve_config_diag = {
@@ -70,6 +71,9 @@ def test_published_diagnostics_key_paths_match_fixture() -> None:
         "u_ff_effective",
     }
     assert "twin" not in published["analysis"]
+    # The emitter lag learning is not published; the room model shows its quiet periods and data quality.
+    assert "tar_learning" not in published
+    assert set(published["room_model"]["quiet_periods"]) == {"reason", "count", "last"}
 
     if os.environ.get("SMARTPI_UPDATE_DIAG_PATHS") == "1":
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)

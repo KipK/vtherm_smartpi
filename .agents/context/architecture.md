@@ -10,7 +10,7 @@ symbols, not line numbers (`path::symbol`).
 ```
 custom_components/vtherm_smartpi/   integration (root modules + smartpi/ package)
   smartpi/                          algorithm modules (pure Python, no HA import unless noted)
-    room_model/  tar_learning/  quiet_periods/
+    room_model/  room_history/  quiet_periods/
   translations/{en,fr}.json  services.yaml  manifest.json  brand/
 tests/                              pytest suite (+ fakes/, fixtures/)
 documentation/{en,fr}/              diagnostics.md, technical_doc.md, vtherm_smartpi.md
@@ -33,7 +33,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 | `handler.py` | `SmartPIHandler`: VT runtime bridge. Merges config (`_resolve_effective_config`), builds `SmartPI` (`init_algorithm`), loads/saves state, drives `control_heating`, scheduler hooks (`on_scheduler_ready`, receipts), learning-job exclusions, diagnostics publication, `service_*` methods |
 | `algo.py` | `SmartPI`: orchestrator that owns all `smartpi/` components; `calculate`, `update_learning`, cycle callbacks, `save_state`/`load_state`, `get_published_diagnostics` |
 | `sensor.py` | Diagnostic sensor platform: `SmartPIDiagnosticSensor` and `SmartPIRecordedDiagnosticSensor` (debug profile); attributes via `smartpi/diagnostic_history.py` |
-| `state_store.py` | HA `Store` wrappers: `SmartPIStateStore` (main + legacy key migration), `SmartPITarStore`, `SmartPIRoomModelStore` (delayed saves) |
+| `state_store.py` | HA `Store` wrappers: `SmartPIStateStore` (main + legacy key migration), `SmartPIRoomHistoryStore` (key suffix `.tar_learning`), `SmartPIRoomModelStore` (delayed saves) |
 | `valve_config_check.py` | Read-only inspection of VT valve filters; HA Repairs issues and valve diagnostics |
 | `hvac_mode.py` | `VThermHvacMode` helpers and `VThermHvacMode_*` constants |
 | `commons.py` | `write_event_log` helper |
@@ -108,8 +108,8 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 **`room_model/`** (air-wall-emitter model: forecasts, FF holding power)
 - `manager.py` orchestration (event loop), `jobs.py` executor jobs (numpy/scipy), `identification.py` output-error fit, `energy_balance.py` daily static model, `gates.py` publication rules, `periods.py` fit periods, `observer.py` Kalman observer, `model.py` discretisation, `linalg.py` small matrices, `emitter.py` applied-command timeline, `feedforward.py` holding power, `scoring.py` forecast errors, `public.py` user-facing values, `const.py` rule constants.
 
-**`tar_learning/`** (emitter lag T_ar; always enabled by the handler, which builds `SmartPI(tar_learning=True, room_model=True)`; the constructor flag defaults to False and tests use it; numpy/scipy lazily imported)
-- `manager.py` orchestration, `jobs.py` executor jobs, `history.py` bounded signal history, `signals.py` signal primitives, `identification.py` multi-day night fit, `morning.py` comfort-step estimator, `response.py` step-response fit, `room_mass.py` room-mass indicator, `gates.py` acceptance gates, `policy.py` which value regulation uses, `clock.py` local days/hours, `deps.py` lazy numerical deps, `public.py` user-facing values, `const.py` rule constants.
+**`room_history/`** (recorded signals and quiet-period catalogue for the room model; always enabled: `SmartPI(room_model=True)` creates the history and the model; numpy/scipy lazily imported)
+- `manager.py` `RoomHistoryManager` (status, recording, catalogue, daily sun scan job, persistence), `history.py` `RoomHistory` bounded signal history, `signals.py` binned signals for the fits, `clock.py` `LocalClock`, `deps.py` lazy numerical deps, `const.py` `HISTORY_*` constants.
 
 **`quiet_periods/`** (stretches without sun, constant setpoint, valid data; pure Python + astral)
 - `selection.py` period selection, `solar.py` sun position / darkness intervals, `const.py` constants.
@@ -130,20 +130,21 @@ Find a test by module name: `tests/test_<module>.py` or `tests/test_smartpi_<top
 | Restart | `test_restart_bridge*`, `test_smartpi_restart_*` |
 | Persistence / diagnostics | `test_algo_persistence`, `test_handler_persistence`, `test_diagnostic_history`, `test_published_diagnostics_schema` |
 | Room model | `test_room_model_*` (helper `room_model_sim.py`) |
-| Emitter lag learning | `test_tar_learning_*`, `test_quiet_periods` (helper `tar_learning_sim.py`) |
+| Room history, quiet periods | `test_room_history`, `test_quiet_periods` |
+| Regulation reference | `test_regulation_reference` (helper `regulation_sim.py`) |
 
 Support files:
 - `conftest.py`: adds repo, `tests/`, sibling `vtherm_api/src` and `versatile_thermostat` to `sys.path`; loads `pytest_homeassistant_custom_component`; fixtures `fake_runtime`, `fake_handler_runtime`; autouse custom-integration enabling.
 - `fakes/fake_thermostat_runtime.py` (`FakeThermostatRuntime`), `fakes/fake_cycle_scheduler.py`.
 - `helpers.py`: e.g. `force_smartpi_stable_mode(algo)`.
 - `fixtures/published_diagnostics_paths.json`: expected key paths of the published live tree, checked by `test_published_diagnostics_schema.py`. After an intentional tree change regenerate with `SMARTPI_UPDATE_DIAG_PATHS=1 python -m pytest tests/test_published_diagnostics_schema.py`.
-- `fixtures/tar_learning/`: recorded histories (`*.json`, `*.npz`) and `regulation_reference.json`.
+- `fixtures/regulation_reference.json`: pin of a closed-loop regulation run (`test_regulation_reference.py`).
 
 ## 5. Where do I change X?
 
 | Task | Files |
 |---|---|
-| Add a published diagnostic field | builder in `smartpi/diagnostics.py` (`_build_*`); regenerate `tests/fixtures/published_diagnostics_paths.json`; document in `documentation/{en,fr}/diagnostics.md` and `cards/` if shown; keep user-facing values plain (see `room_model/public.py`, `tar_learning/public.py`) |
+| Add a published diagnostic field | builder in `smartpi/diagnostics.py` (`_build_*`); regenerate `tests/fixtures/published_diagnostics_paths.json`; document in `documentation/{en,fr}/diagnostics.md` and `cards/` if shown; keep user-facing values plain (see `room_model/public.py`) |
 | Change what the sensor attributes contain | `smartpi/diagnostic_history.py`, `sensor.py`, `test_diagnostic_history.py`, `test_sensor.py` |
 | Add a config option | key and default in `const.py`; form field in `config_flow.py`; read in `handler.py::_resolve_effective_config` / `init_algorithm`, pass to `SmartPI`; labels in `translations/en.json` and `fr.json`; docs `documentation/{en,fr}/vtherm_smartpi.md`; tests `test_config_flow.py`, `test_handler_effective_config.py` |
 | Change a gain rule | `smartpi/gains.py` (and constants in `smartpi/const.py`); tests `test_smartpi_gain_transfer.py` |
@@ -151,7 +152,7 @@ Support files:
 | Change a/b estimation | `smartpi/ab_estimator.py`, `ab_window_balance.py`, `ab_aggregator.py` |
 | Change feed-forward | `smartpi/feedforward.py`, `ff_ab_confidence.py`, `room_model/feedforward.py` |
 | Add a persisted state field | `save_state`/`load_state` of the owning component (new key optional with a neutral default on load); wire it in `algo.py::save_state`/`load_state` only if the component is new; tests `test_algo_persistence.py` / `test_handler_persistence.py`; storage keys live in `state_store.py` |
-| Add a persisted store (separate file) | new class in `state_store.py`, load/save wiring in `handler.py` (see `_tar_store`) |
+| Add a persisted store (separate file) | new class in `state_store.py`, load/save wiring in `handler.py` (see `_history_store`) |
 | Add a service | name in `const.py`; registration in `__init__.py::_register_services`; method `service_*` in `handler.py`; `services.yaml`; `translations/{en,fr}.json` `services`; `test_services.py`; docs |
 | Add a Repairs issue | `valve_config_check.py` or `smartpi/compatibility.py`; `translations` `issues`; tests |
 | Change the landing on the setpoint (anticipation) / boost | `smartpi/anticipation.py` (rule), `algo.py::SmartPI.calculate` (wiring), `smartpi/setpoint.py` (boost) |

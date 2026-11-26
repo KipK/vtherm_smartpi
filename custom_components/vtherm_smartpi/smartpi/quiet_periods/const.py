@@ -51,23 +51,16 @@ DARK_BLOCK_S = 24.0 * H
 SP_EPS = 1e-6
 # A quiet component shorter than this is not a night.
 PERIOD_MIN_S = 1.0 * H
-# Prior stability of the baseline of a setpoint rise: the low setpoint known and
-# constant, in the dark and with valid data, over the 2 hours before the rise.
-BASELINE_HOLD_S = 2.0 * H
 # A heater start counts as the room regulating at the low setpoint when the
-# indoor temperature is within this of that setpoint (same tolerance as the
-# regulated-night rule).
+# indoor temperature is within this of that setpoint.
 REGULATED_ECO_TOL_C = 0.3
-# Minimum regulated part for the confirmation gate and the regulated-night rule:
-# eight half hours, instead of a conclusion drawn from one isolated heater start.
-REGULATED_MIN_S = 4.0 * H
 # A heater start within this delay after a restart is the cycle restored at the
 # start, not a proof that the room regulates.
 RESTART_START_GUARD_S = 60.0
 
 # Identification also keeps the response to the setpoint rise that ends a
 # period, while it is still dark and the new setpoint constant, for at most
-# this long (the response horizon of the comfort-step fit): that response is
+# this long: that response is
 # the main excitation of the emitter, and without it the emitter time constant
 # of a regulated room is poorly determined.
 IDENT_TAIL_S = 2.0 * H

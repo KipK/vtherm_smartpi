@@ -13,11 +13,8 @@ from custom_components.vtherm_smartpi.smartpi.quiet_periods import solar
 from custom_components.vtherm_smartpi.smartpi.quiet_periods.const import (
     DARK_ELEVATION_DEG,
     DARK_TIME_MARGIN_S,
-    REGULATED_MIN_S,
     SUN_STANDARD_HORIZON_DEG,
 )
-from custom_components.vtherm_smartpi.smartpi.tar_learning import gates
-from custom_components.vtherm_smartpi.smartpi.tar_learning.const import GATE_REGULATED_MIN_S
 
 H = 3600.0
 PARIS = qp.Position(48.85, 2.35)
@@ -167,7 +164,6 @@ def test_step_after_sunrise_ends_the_period_at_sunrise() -> None:
     for e in [e for e in _episodes(hist) if e["closed"]]:
         assert e["rise_t"] is None and e["end"] == e["dark_end"]
         assert dt.datetime.fromtimestamp(e["end"], TZ).hour == 7
-        assert qp.episode_of_rise([e], e["end"]) is None
 
 
 def test_early_riser_in_summer_at_high_latitude() -> None:
@@ -227,12 +223,11 @@ def test_data_gaps_cut_a_period_and_are_never_filled() -> None:
     assert len(e["comps"]) == 2
     assert e["quiet"] == [round(t_gap + 1800.0, 1), e["end"]]  # the longest piece, 03:30 to 07:30
     assert not any(c[0] < t_gap + 1800.0 and c[1] > t_gap for c in e["comps"])
-    # the regulated-night span needs the selected piece to reach the step: here it does
-    # a gap that leaves the earlier piece the longest cuts the regulated night
+    # a gap that leaves the earlier piece the longest: the selected piece stops at the gap
     t_gap2 = _local(2026, 11, 3, 6.0)
     hist2 = _history(3, _eco(0.0), gaps=[(t_gap2, t_gap2 + 600.0)])
     e2 = next(e for e in _episodes(hist2) if e["start"] <= t_gap2 < e["end"])
-    assert qp.regulated_span(e2)[2] == qp.WHY_GAP
+    assert e2["comps"][e2["sel"]][1] == round(t_gap2, 1) < e2["end"]
 
 
 def test_a_bridged_restart_does_not_cut_a_period() -> None:
@@ -301,7 +296,7 @@ def test_a_rise_that_calls_for_no_heat_does_not_end_the_setback() -> None:
         assert dt.datetime.fromtimestamp(e["rise_t"], TZ).strftime("%H:%M") == "07:10"
         assert len(e["pieces"]) == 2 and e["sp"] == 17.0  # the longest plateau is kept
         assert dt.datetime.fromtimestamp(e["quiet"][0], TZ).strftime("%H:%M") == "00:45"
-        assert qp.step_component(e, e["rise_t"]) is not None
+        assert any(abs(c[1] - e["rise_t"]) <= 1.0 and c[0] <= e["rise_t"] - 2.0 * H for c in e["comps"])
 
 
 def test_a_rise_that_calls_for_heat_ends_the_setback() -> None:
@@ -312,7 +307,7 @@ def test_a_rise_that_calls_for_heat_ends_the_setback() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Regulated start, G1 and the regulated night on whole episodes
+# Regulated start on whole episodes
 # ---------------------------------------------------------------------------
 def _room(regulates: bool, reach_h: float):
     """Room cooling from 18 to 16 C after a midnight setback, regulating at 16 C from reach_h (or never)."""
@@ -335,46 +330,23 @@ def _room(regulates: bool, reach_h: float):
     return temp, starts
 
 
-def _decide(regulates: bool, reach_h: float):
+def _selected(regulates: bool, reach_h: float):
+    """First closed episode of the room and its selected quiet component."""
     temp, starts = _room(regulates, reach_h)
     hist = _history(3, _eco(0.0), temp_fn=temp, starts_fn=starts)
     e = [e for e in _episodes(hist) if e["closed"] and e["complete"]][0]
-    c = qp.step_component(e, e["rise_t"])
-    obs = gates.gate_observables(hist["on"], e["rise_t"], None, c[4])
-    a, b, why = qp.regulated_span(e)
-    rn = None
-    if why is None:
-        tt, tv = hist["temps"]
-        rn = gates.regulated_span(a, b, e["sp"], hist["on"], [x + 300.0 for x in hist["on"]], tt, tv, 600.0)
-    return e, c, obs, why, rn
+    return e, e["comps"][e["sel"]]
 
 
-def test_eco_at_midnight_without_sleepers_is_confirmed_and_regulated() -> None:
-    e, c, obs, why, rn = _decide(True, 1.5)
-    assert dt.datetime.fromtimestamp(c[4], TZ).strftime("%H:%M") == "01:30"
-    assert gates.unconfirmed("G1", obs, 400.0, None) is None
-    assert why is None and rn["ok"], rn
+@pytest.mark.parametrize("reach_h, expected", [(1.5, "01:30"), (5.0, "05:00"), (6.6, "06:40")])
+def test_the_regulated_start_is_the_first_heater_start_at_the_low_setpoint(reach_h: float, expected: str) -> None:
+    _e, c = _selected(True, reach_h)
+    assert dt.datetime.fromtimestamp(c[4], TZ).strftime("%H:%M") == expected
 
 
-def test_room_that_never_reaches_eco_stays_unconfirmed() -> None:
-    e, c, obs, why, rn = _decide(False, 1.5)
-    assert c[4] is None and why == qp.WHY_NO_REGULATED_START
-    assert gates.unconfirmed("G1", obs, 400.0, None) == "no regulated start"
-
-
-def test_late_regulation_confirms_the_morning_but_is_no_regulated_night() -> None:
-    """About 2.5 h of regulation: enough to see an idle hour, too short to fit the trend of a regulated night."""
-    e, c, obs, why, rn = _decide(True, 5.0)
-    assert GATE_REGULATED_MIN_S <= (e["end"] - c[4]) < REGULATED_MIN_S
-    assert why == qp.WHY_REGULATED_SHORT
-    assert gates.unconfirmed("G1", obs, 400.0, None) is None
-
-
-def test_very_late_regulation_is_too_short() -> None:
-    e, c, obs, why, rn = _decide(True, 6.6)
-    assert (e["end"] - c[4]) < GATE_REGULATED_MIN_S
-    assert why == qp.WHY_REGULATED_SHORT
-    assert gates.unconfirmed("G1", obs, 400.0, None) == "regulated part too short"
+def test_room_that_never_reaches_eco_has_no_regulated_start() -> None:
+    _e, c = _selected(False, 1.5)
+    assert c[4] is None
 
 
 def test_room_already_at_eco_when_the_darkness_starts() -> None:

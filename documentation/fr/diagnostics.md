@@ -82,7 +82,6 @@ Le bloc `live` est organisé par responsabilité :
 | `calibration` | La calibration en cours ou la dernière : état, impulsions, résultat, dernière demande, temps mort mesuré, lecture, valeurs en usage et corrections |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
-| `tar_learning` | Apprentissage du retard de l'émetteur |
 | `room_model` | Modèle de pièce |
 
 `control.mode` vaut `smartpi` lorsque le PI régule, `hysteresis` pendant le
@@ -241,35 +240,6 @@ temps mort après un démarrage, pas ce modèle.
 | `prediction_rms_c` | Médiane des 7 dernières valeurs `last.prediction_rms_c` du mode (°C) : la qualité de prédiction des nouveaux événements par le modèle ; montrée seulement, `null` avant la première |
 | `peak_samples` | Constantes de temps de réponse en secondes lues aux derniers pics de température confirmés après une coupure (au plus 7), à partir du temps mort, de la pente de la pièce avant la coupure et de ses pertes ; montrées seulement |
 
-### Apprentissage du retard de l'émetteur
-
-`tar_learning` décrit l'apprentissage du retard de l'émetteur (voir [Apprentissage du retard de l'émetteur](./vtherm_smartpi.md#apprentissage-du-retard-de-lémetteur)) ; la régulation ne lit pas ses valeurs :
-
-| Champ | Signification |
-|---|---|
-| `status` | `active`, `checking_dependencies` (jusqu'au démarrage du thermostat), `dependencies_unavailable` (numpy/scipy ne peuvent pas être chargés : rien n'est appris) ou `valve_mode_not_supported` |
-| `bootstrap_s` | Temps mort de chauffe du bootstrap/calibration (`model.deadtime_heat_s`) ; son double est un plancher du retard de l'émetteur ajusté sur une montée de confort |
-| `fast.value_s` | Retard de l'émetteur rapide publié (montées de confort confirmées), `null` avant 3 montées confirmées |
-| `fast.confirmed_mornings` | Nombre de montées de confort acceptées et confirmées, une par période calme au plus |
-| `fast.lower_bound_s` | Borne inférieure du retard de l'émetteur en vigueur : médiane des 5 dernières montées de confort confirmées coupées par le lever trop tôt pour donner une valeur, `null` sans aucune |
-| `fast.lower_bound_mornings` | Nombre de montées de confort confirmées coupées par le lever qui ont donné une borne inférieure, une par période calme au plus |
-| `fast.last_value_s` | Retard de l'émetteur de la dernière montée de confort acceptée |
-| `fast.last_status` | `confirmed`, `unconfirmed` ou `none` pour la dernière montée de confort acceptée |
-| `fast.last_unconfirmed_reason` | Raison pour laquelle la dernière montée de confort acceptée n'est pas confirmée (par exemple `the room did not reach its low setpoint before the comfort step`, ou au moins 1 heure sans chauffe alors que la pièce était régulée à sa consigne basse), en anglais |
-| `fast.last_morning` | Dernière montée de confort évaluée, à toute heure : `day` (date locale, AAAA-MM-JJ), `accepted`, `reason` (`accepted`, ou la raison, en anglais, pour laquelle la montée n'a pas donné de valeur, par exemple `temperature rise too small`, `comfort step in daylight` ou `sunrise too soon after the comfort step`, `comfort step cut by sunrise before its response could be measured` ou `comfort step cut by sunrise: gives only a lower bound of the delay, not a value`), `room_class`, `confirmed` (`true` ou `false` pour une montée qui a donné une valeur ou une borne basse, `null` sinon) et `unconfirmed_reason` (la raison, en anglais, pour laquelle cette montée n'est pas confirmée, comme `last_unconfirmed_reason`) |
-| `refined.tau_e_s` | Retard de l'émetteur affiné publié `τe`, `null` avant une publication |
-| `refined.class` | Type de pièce en vigueur issu de l'identification : `thermal_mass` (pièce à masse thermique), `no_thermal_mass` ou `undetermined` |
-| `refined.k_per_s`, `refined.tau_w_h` | Couplage air-murs et constante de temps des murs en vigueur (pièce `thermal_mass`) |
-| `refined.last_evaluation` | Dernière évaluation, faite à la fin d'une période calme : `day` (date locale de cette fin, AAAA-MM-JJ), `regulated_nights` (les six périodes de ses deux ajustements sont régulées), `class` et `tau_e_s` avant la règle des nuits régulées, ainsi que les `a` et `b` identifiés, dans les unités de `model.a` et `model.b` (pour information, jamais appliqués ; pour une pièce `thermal_mass`, `b` est la perte de l'air vers l'extérieur, les murs étant modélisés à part, il diffère donc du `model.b` effectif) |
-| `night_room_class` | Type de pièce d'après les périodes calmes sans chauffage : `thermal_mass`, `no_thermal_mass` ou `undetermined` |
-| `quiet_periods.reason` | Raison pour laquelle aucune période calme ne peut être trouvée (`home position unknown: the absence of sun cannot be checked`), `null` sinon |
-| `quiet_periods.count` | Nombre de périodes calmes conservées comme preuves (une par nuit au plus) |
-| `quiet_periods.last` | Dernière période calme fermée : `start` et `end` (heure locale), `regulated_from` (début de sa partie régulée, `null` lorsque la pièce n'a jamais régulé à sa consigne basse) |
-| `pending_steps` | Montées de confort en attente de leur réponse de 2 h |
-| `data_invalid_reason` | Raison pour laquelle les données actuelles sont exclues (par exemple `window open`, `temperature jump`, `hvac not heating`), `null` lorsqu'elles sont valides |
-| `history_h` | Heures de signaux conservées |
-| `last_error` | Raison de l'échec du dernier calcul (`the calculation failed, see the log` ; le détail est dans le journal), `null` lorsqu'il n'y en a pas |
-
 ### Modèle de pièce
 
 `room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Une fois publié, et une fois un bilan thermique en vigueur, il donne la puissance de maintien du feed-forward en chauffage, affichée sous `feedforward`.
@@ -290,13 +260,16 @@ temps mort après un démarrage, pas ce modèle.
 | `wall_extra_power_percent` | Puissance supplémentaire que les murs absorbent actuellement au-delà de leur part en régime établi, en % de la pleine puissance (négative lorsqu'ils restituent de la chaleur) ; `null` sans murs identifiés, sans sonde précise ou tant que le suivi n'est pas `ok` |
 | `identified_day` | Jour des valeurs en usage (le jour où leur dernière période calme s'est terminée), `null` avant une publication |
 | `last_identification_day` | Jour de la dernière identification (le jour où sa dernière période calme s'est terminée) |
-| `last_refusal_reason` | Raison pour laquelle la dernière identification n'a rien publié (par exemple `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation`, `the model's heat loss disagrees with the measured heat balance` ou `waiting for a qualified heat balance to check the model's heat loss`), `null` lorsqu'elle a publié |
+| `last_refusal_reason` | Raison pour laquelle la dernière identification n'a rien publié (par exemple `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `heating response delay not known yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation`, `the model's heat loss disagrees with the measured heat balance` ou `waiting for a qualified heat balance to check the model's heat loss`), `null` lorsqu'elle a publié |
 | `energy_balance_loss_per_c` | Déperdition du bilan thermique en vigueur : la puissance nécessaire par °C d'écart intérieur-extérieur, dans les unités de `model.b / model.a`. C'est la pente d'une droite passant par les bilans thermiques quotidiens des journées entières conservées (jusqu'à 7), calculée une fois par jour. Une fois le modèle publié, la partie statique de la puissance de maintien est `energy_balance_loss_per_c` × (consigne − température extérieure) − l'apport gratuit. Un jour dont le bilan thermique est refusé garde les valeurs précédentes ; `null` avant une première valeur acceptée |
 | `energy_balance_free_gain_percent` | Apport gratuit constant du bilan thermique en vigueur, en % de la pleine puissance : chaleur d'une pièce plus chaude voisine ou d'occupants présents de façon stable, négatif pour une perte vers une pièce plus froide. `0` tant que l'écart intérieur-extérieur n'a pas assez varié entre les jours pour distinguer un apport des pertes (et que les jours n'en montrent aucun) ; `null` avant une première valeur acceptée |
 | `energy_balance_days` | Nombre de jours utilisés par le bilan thermique en vigueur, `null` avant une première valeur acceptée |
 | `energy_balance_day` | Jour où les valeurs en vigueur ont été calculées, `null` avant une première valeur acceptée |
 | `energy_balance_refusal_reason` | Raison pour laquelle le dernier bilan thermique quotidien n'a donné aucune nouvelle valeur (`not enough recorded days yet`, `heating response not known yet`, `too few usable days (missing data or no heating)`, `indoor-outdoor temperature difference too small`, `too little heating`, `free heat gains detected; the outdoor temperature has not varied enough yet to separate them from the losses`, `the heating need varies too much from one day to the next`, `the heating need is still drifting from day to day (walls storing or releasing heat)`, `value out of the plausible range` ou `computation failed`), `null` lorsqu'il en a donné une |
 | `sensor_resolution_c` | Plus petit pas de la sonde de température observé dans l'historique enregistré (°C) |
+| `quiet_periods` | `reason` : raison pour laquelle aucune période calme ne peut être trouvée (`home position unknown: the absence of sun cannot be checked`), `null` sinon ; `count` : nombre de périodes calmes du catalogue ; `last` : `start`, `end` et `regulated_from` (heures locales) de la dernière période calme fermée, `regulated_from` étant le début de sa partie régulée, `null` lorsque la pièce n'a jamais régulé à sa consigne basse ; `last` vaut `null` sans période |
+| `data_invalid_reason` | Raison pour laquelle les données actuellement enregistrées sont exclues (par exemple `window open`), `null` lorsqu'elles sont valides |
+| `history_h` | Heures d'historique enregistré |
 | `last_error` | Raison de l'échec du dernier calcul (`the calculation failed, see the log` ; le détail est dans le journal), `null` lorsqu'il n'y en a pas |
 
 ### Feed-forward

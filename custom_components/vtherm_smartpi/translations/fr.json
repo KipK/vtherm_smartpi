@@ -111,7 +111,7 @@
       "fields": {
         "learning_enabled": {
           "name": "Apprentissage activé",
-          "description": "Indique si SmartPI peut apprendre : modèle thermique, temps morts, retard de l'émetteur, modèle de réponse, apprentissage T_ar et modèle de pièce. La régulation continue sans changement pendant la pause."
+          "description": "Indique si SmartPI peut apprendre : modèle thermique, temps morts, retard de l'émetteur, modèle de réponse et modèle de pièce. La régulation continue sans changement pendant la pause."
         }
       }
     },

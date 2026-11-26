@@ -225,7 +225,7 @@ def _restored_without_temperature(run: _Run) -> SmartPI:
     """Restored algorithm that calculated once with no indoor temperature, components not yet fed."""
     algo = _smartpi(run.saved)
     algo.room_model = MagicMock(**{"restart_context.return_value": None})
-    algo.tar_learning = MagicMock(**{"restart_context.return_value": None})
+    algo.room_history = MagicMock(**{"restart_context.return_value": None})
     algo.calculate(target_temp=run.setpoint, current_temp=None, ext_current_temp=T_EXT, slope=0,
                    hvac_mode=VThermHvacMode_HEAT)
     assert algo.resolve_restart(VThermHvacMode_HEAT, None) is None
@@ -243,11 +243,11 @@ def test_restart_waits_for_the_indoor_temperature_and_is_bridged_within_the_dela
         # No component is fed, and none settles its restart, while the decision waits.
         algo._commit_applied_command(0.0, VThermHvacMode_HEAT, cycle_start=True)
         algo.observe_room_model(None, T_EXT, VThermHvacMode_HEAT)
-        algo.observe_tar_learning(run.setpoint, None, T_EXT, VThermHvacMode_HEAT)
+        algo.observe_room_history(run.setpoint, None, T_EXT, VThermHvacMode_HEAT)
         algo.room_model.on_applied.assert_not_called()
         algo.room_model.observe.assert_not_called()
-        algo.tar_learning.on_applied.assert_not_called()
-        algo.tar_learning.observe.assert_not_called()
+        algo.room_history.on_applied.assert_not_called()
+        algo.room_history.observe.assert_not_called()
         assert algo.restart.save() == run.saved["restart"]
 
         run.clock.t += 5.0
@@ -255,7 +255,7 @@ def test_restart_waits_for_the_indoor_temperature_and_is_bridged_within_the_dela
         assert decision.bridged
         assert decision.downtime_s == pytest.approx(TICK_S + 5.0, abs=1.0)
         algo.room_model.on_restart.assert_called_once()
-        algo.tar_learning.on_restart.assert_called_once()
+        algo.room_history.on_restart.assert_called_once()
         assert algo.committed_on_percent == pytest.approx(committed)
         algo.observe_room_model(run.room.reading, T_EXT, VThermHvacMode_HEAT)
         algo.room_model.observe.assert_called_once()

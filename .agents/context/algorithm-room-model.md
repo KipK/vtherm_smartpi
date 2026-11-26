@@ -9,50 +9,52 @@ and `CHANGELOG.md` ([Unreleased]). References are `path::symbol`, without line n
 
 | Subsystem | Code | Regulation reads it? |
 |---|---|---|
-| Emitter lag learning (fast and refined values) | `smartpi/tar_learning/` | No: its history, quiet periods and refined `tau_e` serve the room model |
-| Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the two learnings above and below |
+| Room history (recorded signals, quiet-period catalogue, daily sun scan) | `smartpi/room_history/` | No: it serves the room model |
+| Quiet periods | `smartpi/quiet_periods/` | Indirectly: selects the data of the room model |
 | Room model (identify, observer, energy balance) | `smartpi/room_model/` | Partly: holding power (FF1). Forecasts, forecast errors, `a`/`b_eq` display: no |
 | Response model (theta, tau_e) | `smartpi/response_model.py` | Yes: a/b learning (learning-stage gate, delivered power, settling waits, `smartpi/power_steps.py`), anticipation horizon, HEAT near band, calibration limits, direct-start pulses wanted; not the gains nor the holds |
 | Restart bridge | `smartpi/restart_bridge.py` | Yes: decides resume vs conservative restart for every component |
 | Resume hold | `smartpi/resume_hold.py` | Yes: temporary I-hold after window / power-shedding resume; `recovery_error_floor_c` (residual error under which a recovery counts as closed) |
 | Job abort | `smartpi/job_abort.py` | Plumbing for executor jobs |
-| Lazy numpy/scipy | `smartpi/tar_learning/deps.py` | Gate: without them nothing is learned |
+| Lazy numpy/scipy | `smartpi/room_history/deps.py` | Gate: without them nothing is learned |
 
-Wiring: `algo.py::SmartPI` owns `tar_learning: TarLearningManager` and `room_model: RoomModelManager` (the
-room model needs the tar manager: it reads its history, catalogue, status). `handler.py` creates both,
-loads their stores, injects the home position (`TarLearningManager.set_position`) and the dependency check
-(`set_dependencies`), runs the due jobs of the three managers (emitter lag, room model, reading fit) in one background loop, one after the other (`SmartPIHandler._process_learning`, `_run_learning`, `_learning_jobs`), and schedules
-the saves of the two that have a store. Observers are called from the regulation tick (`SmartPI.observe_tar_learning`, `observe_room_model`),
-wrapped in try/except: a learning failure must never disturb the regulation.
+Wiring: `SmartPI(..., room_model=True)` (built so by the handler) creates `algo.py::SmartPI.room_history:
+RoomHistoryManager` and `room_model: RoomModelManager(name, tz, history)` (the room model reads the history, the
+catalogue and the status of the first). `handler.py` loads their stores, injects the home position
+(`RoomHistoryManager.set_position`) and the dependency check (`set_dependencies`), runs the due jobs of the room history (sun
+scan), the room model and the reading fit in one background loop, one after the other (`SmartPIHandler._process_learning`,
+`_run_learning`, `_learning_jobs`), and schedules the saves of the two that have a store. Observers are called from the
+regulation tick (`SmartPI.observe_room_history`, `observe_room_model`), wrapped in try/except: a learning failure must never
+disturb the regulation.
 
-Both managers are HEAT-only. PWM heaters only: in valve mode `TAR_VALVE_MODE_SUPPORTED = False`
-(`tar_learning/const.py`), tar status becomes `valve_mode_not_supported` and the room model is blocked
-(`room_model/manager.py::RoomModelManager._blocked_reason`). COOL is never learned nor applied.
+PWM heaters only: in valve mode `HISTORY_VALVE_MODE_SUPPORTED = False` (`room_history/const.py`), the history stops recording
+(`supported` false) and the room model is blocked (`room_model/manager.py::RoomModelManager._blocked_reason`). The room
+model is HEAT-only. COOL is never learned nor applied.
 
 ## 1. Executor jobs, abort, lazy dependencies
 
-- `tar_learning/jobs.py` and `room_model/jobs.py` take a snapshot of plain Python data and return plain data;
-  they never touch event-loop state. `async_run` runs one job at a time via `hass.async_add_executor_job`.
-  The fit of the measurement readings (`smartpi/event_fit.py`, `event_reading.py::EventReader`) is a third such job.
+- `room_model/jobs.py` takes a snapshot of plain Python data and returns plain data; it never touches event-loop state.
+  `async_run` runs one job at a time via `hass.async_add_executor_job`. The daily sun scan of the room history and the fit
+  of the measurement readings (`smartpi/event_fit.py`, `event_reading.py::EventReader`) are two other such jobs.
 - `numpy`/`scipy` (manifest: `numpy`, `scipy>=1.14`) are imported only inside those jobs and the numeric modules
-  they call (`tar_learning/morning.py`, `response.py`, `room_mass.py`, `identification.py`, `signals.py`,
-  `room_model/identification.py`). Event-loop code is pure Python (`room_model/linalg.py` is hand-written for
-  the 3-state observer). `tar_learning/deps.py::dependencies_importable` only uses `importlib.util.find_spec`.
+  they call (`room_history/signals.py`, `room_model/identification.py`). Event-loop code is pure Python
+  (`room_model/linalg.py` is hand-written for the 3-state observer). `room_history/deps.py::dependencies_importable`
+  only uses `importlib.util.find_spec`.
 - The solar position uses `astral` (shipped with Home Assistant): `quiet_periods/solar.py::astral_available`.
-- `job_abort.py`: a started job cannot be cancelled. Objective functions call `job_abort.check()`; the manager's
+- `job_abort.py`: a started job cannot be cancelled. Objective functions call `job_abort.check()`; the room model's
   `stop()` sets a `threading.Event` attached to the executing thread (`run`), so several thermostats never
-  interfere. `JobAborted` ends the job silently (no state change).
+  interfere. `JobAborted` ends the job silently (no state change). `RoomHistoryManager.stop()` does nothing.
 - Failure handling in `async_run`: `ImportError` -> `set_dependencies(False)` (status `dependencies_unavailable`);
   any other exception -> `last_error` ("the calculation failed, see the log"), the item is marked failed; a
   result whose `_generation` changed (reset, new home position) while running is discarded.
 
 ## 2. Quiet periods (`smartpi/quiet_periods/`)
 
-Purpose: select stretches without sun, at constant setpoint, with valid data, shared by the emitter lag learning and
-the room model. Pure Python, no Home Assistant import. Times are epoch seconds, half-open `[start, end)`.
+Purpose: select stretches without sun, at constant setpoint, with valid data, for the room model. Pure Python, no
+Home Assistant import. Times are epoch seconds, half-open `[start, end)`.
 
 - Inputs: home latitude/longitude (HA config, validated by `solar.py::validate_position`), setpoint timeline,
-  valid spans of the emitter lag history (`TarHistory.valid_spans`), heater starts, indoor temperatures.
+  valid spans of the room history (`RoomHistory.valid_spans`), heater starts, indoor temperatures.
 - Darkness (`solar.py::dark_intervals`): sun centre below `DARK_ELEVATION_DEG = -0.833 - 0.5` degrees, sampled
   every `SUN_SAMPLE_S = 600`, boundaries refined to 1 s, moved inward by `DARK_TIME_MARGIN_S = 120`. Polar night
   is cut into `DARK_BLOCK_S = 24 h` blocks; polar day has no darkness. No margin is taken after sunrise.
@@ -62,88 +64,57 @@ the room model. Pure Python, no Home Assistant import. Times are epoch seconds, 
 - Selected component: longest valid plateau piece, at least `PERIOD_MIN_S = 1 h`.
 - Regulated start (`selection.py::regulated_start`): first heater start in the component with the room within
   `REGULATED_ECO_TOL_C = 0.3` of the setpoint; starts within `RESTART_START_GUARD_S = 60` after a restart do
-  not count. None means the room never regulated.
+  not count. None means the room never regulated; the room model windows read it (shown as `regulated_from`).
 - Identification interval: the component continued after the ending rise, while dark and valid, for at most
   `IDENT_TAIL_S = 2 h`.
 - Key: `q<SELECTION_VERSION>:<origin>:<component start>`, 0.1 s resolution (`night_id`). The catalogue is rebuilt
-  at most every `_CATALOGUE_EVERY_S = 600` (`TarLearningManager._refresh`) and only grows forward (60 episodes
-  max), so a key never changes when the history is pruned. Every piece of evidence is keyed by its period: a
+  at most every `_CATALOGUE_EVERY_S = 600` (`RoomHistoryManager._refresh`) and only grows forward (`HISTORY_MAX_PERIODS = 60`
+  episodes max), so a key never changes when the history is pruned. Every piece of evidence is keyed by its period: a
   period counts once. States: closed (end <= last observation), settled (identification interval known), complete
   (history covers it from its start).
-- Outputs: catalogue consumed by tar learning (`TarLearningManager.quiet_periods`) and by the room model through
-  `room_model/periods.py`.
-- Silent states: no valid home position, or `astral` missing -> no darkness, no period, both learnings silent;
-  diagnostic `tar_learning.quiet_periods.reason` ("home position unknown: the absence of sun cannot be checked").
-  A changed home position forgets the evidence of all periods (`TarLearningManager._check_position`).
+- Outputs: catalogue read through `RoomHistoryManager.quiet_periods` by the room model (`room_model/periods.py`).
+- Silent states: no valid home position, or `astral` missing -> no darkness, no period, the identification is silent;
+  diagnostic `room_model.quiet_periods.reason` ("home position unknown: the absence of sun cannot be checked").
+  A changed home position forgets the evidence of all periods (`RoomHistoryManager._check_position`).
   The daily energy balance (room model) does NOT need quiet periods.
 - Not a regulation input.
 
-## 3. Emitter lag learning (`smartpi/tar_learning/`)
+## 3. Room history (`smartpi/room_history/`)
 
-Purpose: learn the HEAT emitter lag `T_ar` (first moment of the emitter response; about twice the apparent
-dead time the bootstrap measures) during normal regulation. The regulation does not read it (gains and holds
-read the response model, `algorithm-core.md` section 3); the room model reads its history, quiet periods and
-refined `tau_e`. `bootstrap_s` (a dead time) is the last reliable bootstrap HEAT value, kept by
-`TarLearningManager.note_bootstrap` (fed by `observe(dth=...)` and the diagnostics); twice it floors the morning fits.
+Purpose: record the signals the room model fits and keep the quiet-period catalogue. It computes nothing about the
+emitter: the emitter of the room model is the response model (section 4). Modules: `history.py` (`RoomHistory`),
+`manager.py` (`RoomHistoryManager`), `signals.py` (`Anchors`, `duty_bins`, `level_bins`, `q_obs`: signals binned for the
+fits), `clock.py` (`LocalClock`), `deps.py`, `const.py` (`HISTORY_*`).
 
-Inputs recorded each tick (`history.py::TarHistory.record`, `applied_cycle`): indoor/outdoor temperature,
-setpoint, SmartPI phase, published `b`, reliable cool dead time, emitter lag on constant-power phases, heater edges (PWM cycles
-rebuilt from applied cycles), invalid intervals (`TAR_GAP_S = 1200` s without observation, unavailable sensor,
-unknown command, non-bridged restart downtime, spikes `TAR_SPIKE_MIN_C = 0.5` C at more than
-`TAR_SPIKE_RATE_C_PER_H = 20`, and any tick where SmartPI is not in control: window open, shedding, safety,
-HVAC not heating, command overridden). Retention `TAR_HISTORY_RETENTION_S = 7 d`. Invalid intervals are never
-filled in. (This data exclusion is about learning data quality only; see Design stance for sensor health.)
+Inputs recorded each tick (`history.py::RoomHistory.record`, `applied_cycle`, `applied_level`): indoor/outdoor temperature,
+setpoint, heater edges (PWM cycles rebuilt from applied cycles) or valve levels, invalid intervals (`HISTORY_GAP_S = 1200` s
+without observation, unavailable sensor, unknown command, non-bridged restart downtime, spikes `HISTORY_SPIKE_MIN_C = 0.5` C
+at more than `HISTORY_SPIKE_RATE_C_PER_H = 20`, and any tick where SmartPI is not in control: window open, shedding, safety,
+HVAC not heating, command overridden). Retention `HISTORY_RETENTION_S = 7 d`. Invalid intervals are never filled in.
+(This data exclusion is about learning data quality only; see Design stance for sensor health.)
 
-Two methods, one policy:
+Manager: status `checking_dependencies` before the thermostat starts, `active`, `dependencies_unavailable` (numpy/scipy
+missing, history not recorded); `set_position`, `observe`, `on_applied`, restart context (`restart_context`, `on_restart`),
+`signals_snapshot` (plain data for executor jobs), `quiet_periods(now)`. `async_run` does one job: the sun scan of the
+history in the executor, once per day and position (a polar night search stays out of the event loop).
 
-| Method | Module | What it does |
-|---|---|---|
-| Fast value ("morning" / comfort step) | `morning.py`, `response.py`, `gates.py` | A comfort step is a setpoint rise >= `STEP_MIN_RISE_C = 1` C after a low setpoint held 2 h in the dark, that ends a quiet period. Evaluated `MORNING_EVAL_DELAY_S` after the rise; step-response fit of T with a baseline chosen by room class (`room_mass.py`) and night type (passive / regulated). Fit window ends at the end of darkness; a window cut by sunrise gives an estimate only if >= `TAR_CUT_ESTIMATE_WINDOW_T = 3` x the larger of fitted T and the floor, else a lower bound `TAR_CUT_BOUND_FACTOR = 0.6` x T |
-| Multi-day identification ("refined") | `identification.py`, `room_mass.py` | Air-wall model fitted on a window of `ID_WIN_PERIODS = 3` settled periods, compared with the 3 periods before (disjoint). Class `mass` (dBIC >= `ID_DBIC_MASS`), `one` or undetermined. Yields emitter time constant `tau_e`, `k`, `tau_w` |
+Persistence: own store (`state_store.py::SmartPIRoomHistoryStore`; the storage key keeps the suffix `.tar_learning` of
+existing installs), `STATE_VERSION = 3`: `{version, position, history, episodes}`. An old v2 or v3 state with learned emitter
+lag fields loads history, episodes and position and ignores every learned field; v1 keeps the history only; later versions
+ignored. Debounce `HISTORY_SAVE_DELAY_S = 1800`. A home position change forgets period evidence. `reset()` (learning reset
+service) clears everything.
 
-Gates (`gates.py`, `const.py`):
-- Confirmation of a fast value (default `TAR_FAST_GATE = G1`): at least `GATE_IDLE_MIN_H = 1` h without heater
-  start in the regulated part before the step; regulated part unknown or under `GATE_REGULATED_MIN_S = 1.5 h`
-  leaves the step unconfirmed (unknown is never taken as favourable). GT4 variant also reads `T`, the fitted
-  baseline `b` and a heater start in the 2 h before.
-- Regulated night (hand-over of the refined value): regulated part >= `REGULATED_MIN_S = 4 h`, constant setpoint,
-  a heater start in each 30 min quarter, mean temperature within `RN_ECO_TOL_C = 0.3`, power slope
-  `RN_U_SLOPE_MAX_H = 0.05`/h and residual `RN_U_RESID_MAX = 0.10`, no gap. Refined value is published only
-  when the six periods of its two windows are regulated; otherwise it is a diagnostic.
-- Morning excitation/quality rules in `const.py::RULES` / `RULES_R` (baseline rms, fit rms, window, energy, rise,
-  sensor period).
-
-Policy (`policy.py`):
-- Fast value: >= `PUB_MIN_ACCEPTED = 3` accepted and confirmed mornings, median of last `PUB_LAST = 5`,
-  MAD/median <= `PUB_MAD_REL = 0.25`.
-- Lower bound: median of last 5 confirmed cut steps; never enters the fast value.
-
-Observation only: `refined.last_evaluation.a` and `.b` ("information only, never applied"), `refined.k_per_s`,
-`refined.tau_w_h` (the room-model identification does not read them; room class is used inside tar morning
-fits), `night_room_class`, `pending_steps`, `history_h`, `fast.last_morning`.
-
-Persistence: own store (`state_store.py::SmartPITarStore`, key suffix `.tar_learning`), `STATE_VERSION = 3`
-(history, pending steps, catalogue, night entries, regulated decisions, windows, evaluations, confirmed values,
-bounds, publications, home position; a stored `reference_heat_s` of an earlier apply rule is ignored). v2 read whole; v1 keeps only history and pending rises
-(evidence recomputed); later versions ignored. Debounce `TAR_SAVE_DELAY_S = 1800`. Home position change forgets
-period evidence. `reset()` (learning reset service) clears everything.
-
-Published at `live.tar_learning` (built by `smartpi/diagnostics.py::_build_tar_learning` ->
-`TarLearningManager.diagnostics`). Translation of internal codes to plain text is `tar_learning/public.py`
-(room class, morning reasons, unconfirmed reasons); user-facing fields never carry internal codes.
+Published inside `live.room_model` (`room_model.quiet_periods.{reason,count,last.{start,end,regulated_from}}`,
+`data_invalid_reason`, `history_h`; built by `RoomHistoryManager.diagnostics`, called from the room model's diagnostics).
 
 Silent / declining states and the field that says why:
 | Situation | Field |
 |---|---|
-| numpy/scipy missing | `status = dependencies_unavailable` (history dropped) |
-| before thermostat start | `status = checking_dependencies` |
-| valve mode | `status = valve_mode_not_supported` |
-| no home position / no astral | `quiet_periods.reason` |
-| step gave no value | `fast.last_morning.reason` (plain wording), `accepted = false` |
-| accepted step not confirmed | `fast.last_status = unconfirmed`, `fast.last_unconfirmed_reason` |
-| refined value not handed over (nights not regulated) | `refined.last_evaluation.regulated_nights = false`; `refined.tau_e_s` stays null |
-| computation failed | `last_error` |
-| data currently excluded | `data_invalid_reason` |
+| numpy/scipy missing | `room_model` blocked (dependencies wording), history dropped |
+| valve mode | `room_model` blocked (valve wording) |
+| no home position / no astral | `room_model.quiet_periods.reason` |
+| data currently excluded | `room_model.data_invalid_reason` |
+
 
 ## 4. Room model (`smartpi/room_model/`)
 
@@ -158,22 +129,31 @@ fit, variable projection, residual checks, precision from the Jacobian), `gates.
 dead time L and first order `tau_e`), `public.py` (plain-wording translation), `manager.py` (orchestration, persistence).
 
 Inputs: regulation tick (indoor temperature with measurement identity, outdoor temperature, `a` online, emitter
-= HEAT response model (delay theta, first order tau_e) when published, else the HEAT dead time of `dt_est` as first
-moment split by the refined T_ar `tau_e`), applied commands (`on_applied`), emitter lag history and quiet-period catalogue.
+in force = HEAT response model (delay theta, first order tau_e) when published, else a first order whose time constant
+is the HEAT dead time of `dt_est` after a start without delay, else no window: `heating response delay not known yet`),
+applied commands (`on_applied`), room history and quiet-period catalogue.
 Observer runs only while SmartPI is in control in heating; power shedding keeps it running with zero heat; open
 window pins the air to the measurement; other exclusions pause it. A downtime up to `RM_RESUME_MAX_S = 3 h` keeps
 the state; longer restarts it at wall equilibrium and it settles for `RM_SETTLE_S = 3 h`.
 
 Three computations:
-1. Identification job (`jobs.py::identify_job`, `manager.py::_identify_job`): one per window of 3 closed quiet periods,
+1. Identification job (`jobs.py::identify_job`, `manager.py::_identify_job`): one per window of `RM_WINDOW_PERIODS = 3` closed quiet periods,
    keyed by its last period, compared with the 3 periods before, at most one job per `_JOB_MIN_GAP_S` (1 h) of elapsed
    time, oldest first. Periods whose mean observer disturbance deviates more than `RM_NIGHT_D_DEV_C_H = 0.08`
    C/h from the recent median (>= `RM_NIGHT_MIN_TRACK_S = 4 h` tracked) are excluded from the windows.
    Emitter search on a fixed grid `RM_EMITTER_GRID_S` (13 values, 60 s to 3600 s) refined by Brent; significance
-   `RM_EMITTER_CHI2 = 3.841`. Optimum at a grid end with significant profile: refused. Not significant: the
-   refined emitter lag is used if published, else the grid optimum.
+   `RM_EMITTER_CHI2 = 3.841`; each tried first moment (grid point or Brent evaluation) is fitted in two shapes (`jobs.py::_best_shape`):
+   a pure first order, and the split by the delay share theta / (theta + tau_e) of the response model in force
+   (`snap["delay_share"]`: L = share x first moment, the rest first order) when that share is > 0; the lower full-fit
+   cost is kept and its share (`refine_emitter` out["share"], `rec["emitter"]["share"]`, not published) reaches
+   `out["tau_e"]`, `out["L"]`, the window data, the +-2 % neighbours of the precision and the reduced and full fits.
+   Without a response model or with a zero share only the pure first order is tried. `snap["te_pub"]` is None: a split
+   capped by the response model's tau_e is biased low on fast emitters and breaks the wall fits; the share alone on every
+   candidate adds a delay a fast room does not have (measured theta > 0 against a true 0) and the pure first order alone
+   loses the real delay of the emitter. Optimum at a grid end with significant profile:
+   refused. Not significant: the grid optimum.
 2. Energy balance (`energy_balance.py`, `manager.py::_balance_job`): once per local day, `_EB_DELAY_S` (20 min)
-   after midnight, whatever the quiet periods; whole local days of the emitter lag history (`EB_MAX_DAYS = 7`).
+   after midnight, whatever the quiet periods; whole local days of the room history (`EB_MAX_DAYS = 7`).
    Day usable with <= 20 % invalid (`EB_MIN_DAY_VALID`), duty >= `EB_MIN_DAY_DUTY = 0.02`, D > 0. Qualification:
    `EB_MIN_DAYS = 4`, mean duty >= `EB_MIN_DUTY = 0.05`, mean D >= `EB_MIN_DELTA_C = 6`, spread
    `EB_MIN_SPREAD_C = 1` to fit the free gain, slope half-width <= 5 %, slope in (0, `EB_MAX_SLOPE`], drift
@@ -187,7 +167,7 @@ Publication (`gates.py`, `manager.py::_apply`): a window candidate needs: plausi
 window, and `b_eq / a` within `RM_EB_AGREE_TOL = ln 1.05` of the energy-balance slope in force. Without a
 qualified energy balance nothing is published (`WHY_NO_EB`). Published value = median of the last
 `RM_PUB_LAST = 3` candidates of the same structure, re-checked against the slope at publication. Full structure
-(walls) needs a precise sensor (quantum <= 0.015 C), wall share >= `RM_WALL_SHARE_MIN = 0.1`, tau_wall >= 3 h and
+(walls) needs a precise sensor (`RM_PRECISE_Q` = 0.015 C quantum), wall share >= `RM_WALL_SHARE_MIN = 0.1`, tau_wall >= 3 h and
 beating the reduced model on held-out data; otherwise the simple (reduced) model.
 
 What it influences (REGULATION):
@@ -250,16 +230,16 @@ and episodes), restart context with the delivered power and temperatures at the 
 Restart bridge (`smartpi/restart_bridge.py::decide`, `RestartBridge`, `command_holdable`): one decision, taken at the
 first calculation of a ready thermostat, whether a stop is bridged. All must hold: downtime (wall clock, from the
 oldest last tick of the three stores) <= `RESTART_BRIDGE_MAX_GAP_S = 600 s`; same HVAC mode (HEAT or COOL) and
-cycle configuration; actuator state saved (committed power; in HEAT also heater state of the tar history and last
+cycle configuration; actuator state saved (committed power; in HEAT also heater state of the room history and last
 tick of the room model); SmartPI in control before and after (no window, shedding, safety, override); first
-indoor temperature passes the jump rule of the tar history; no clock jump. Learning histories (tar, room model)
+indoor temperature passes the jump rule of the room history; no clock jump. Learning histories (room history, room model)
 bridge only in HEAT (`RestartDecision.heat_bridged`).
 - Hold of the last command while indoor temperature is missing: `SmartPI._restart_held_command` keeps the
   committed command of before the stop while the restart is pending, as long as `command_holdable` stays true
   (stop plus wait <= 600 s). Past that the output goes to 0 until the temperature comes and the restart is
   not bridged (`indoor temperature unknown`). The heater cut during the wait is the reason it cannot be bridged.
 - Consumers (`SmartPI._apply_restart_decision`): dead-time detection, learning window (with the event detector),
-  power steps, bootstrap hysteresis output, tar history, room model resume (bridged) or take the
+  power steps, bootstrap hysteresis output, room history, room model resume (bridged) or take the
   conservative path (other restart). Component behaviour table: technical_doc.md section 5.4 "Restarts".
 - Persistence: context of the last tick and committed power in the algorithm store (`restart`), plus last ticks of
   the two learning stores.
@@ -291,9 +271,9 @@ source is reported as `control.integral_hold_source` / `integral_hold_mode`.
 
 ## Pointers
 
-- User docs: `documentation/en/vtherm_smartpi.md` ("Emitter lag learning", "Room model", "Restarts").
-- Diagnostics reference: `documentation/en/diagnostics.md` (`tar_learning`, `room_model`, `feedforward`,
+- User docs: `documentation/en/vtherm_smartpi.md` ("Dead time and emitter lag", "Room model", "Restarts").
+- Diagnostics reference: `documentation/en/diagnostics.md` (`room_model`, `feedforward`,
   `control.last_restart`, `analysis.learning.*`).
 - Constants: `smartpi/const.py` (emitter lag, measurement events `EVENT_*`, anticipation, restart bridge),
-  `tar_learning/const.py`, `room_model/const.py`, `quiet_periods/const.py`. These are method parameters, not
+  `room_history/const.py`, `room_model/const.py`, `quiet_periods/const.py`. These are method parameters, not
   configuration knobs.

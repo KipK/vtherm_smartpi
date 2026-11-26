@@ -17,7 +17,7 @@ after a restart included. The entities never change the saved pause.
 While the learning is blocked: the a/b windows, the emitter lag, the measurement events and
 their readings (start values and response model) are not fed, and no fit runs; the dead-time detection is suspended
 but the temperature history that the anticipation and the pulses read is fed as usual; the records of the
-measurement events are fed so that they stay continuous; the T_ar learning and the room model record each tick with
+measurement events are fed so that they stay continuous; the room history and the room model record each tick with
 the block as exclusion reason; no measurement pulse starts and no starting value is handed to the estimator; a
 calibration request is refused. When the learning becomes blocked, a calibration in progress is cancelled, the pulse
 in progress ends and the readings in progress end without result. At each change of the block the learning window
@@ -43,7 +43,7 @@ BLOCK_HEATING_UNAVAILABLE = "heating unavailable"
 # Integral hold source while the heating is unavailable (live.temperature.integral_hold_source).
 INTEGRAL_HOLD_SOURCE_HEATING_UNAVAILABLE = "heating_unavailable"
 
-# Exclusion reason given to the learning components (T_ar, room model, readings) for each block reason.
+# Exclusion reason given to the learning components (room history, room model, readings) for each block reason.
 _EXCLUSION = {
     BLOCK_PAUSED: "learning paused",
     BLOCK_DISTURBANCE: "disturbance",
@@ -101,7 +101,7 @@ class LearningBlock:
         return None if reason is None else _EXCLUSION[reason]
 
     def exclusion_for(self, excluded: str | None, safety: bool) -> str | None:
-        """Why the T_ar learning or the room model must not learn from this tick: the block, except an open window
+        """Why the room history or the room model must not learn from this tick: the block, except an open window
         (the room model follows the air through it), else the reason given, else the safety mode."""
         if self.blocked and excluded != RM_EXCLUDED_WINDOW:
             return self.exclusion

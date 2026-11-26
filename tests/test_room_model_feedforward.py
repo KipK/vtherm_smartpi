@@ -45,7 +45,7 @@ def _eb(params: RoomParams) -> float:
 
 def _algo() -> SmartPI:
     algo = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0,
-                   name="ff", tar_learning=True, room_model=True)
+                   name="ff", room_model=True)
     est = algo.est
     for _ in range(40):
         est.a_meas_hist.append(0.072)

@@ -136,7 +136,7 @@ def check_live_paths(md: Path) -> None:
         for tok in re.findall(r"`live\.([a-z0-9_.]+)`", line):
             tok = tok.rstrip(".")
             if tok.split(".")[0] not in roots:
-                continue  # block not pinned by the schema test (tar_learning, room_model)
+                continue  # block not pinned by the schema test
             if tok not in _pinned:
                 errors.append(f"{md.relative_to(ROOT)}:{n}: `live.{tok}` is not in the pinned schema fixture")
 

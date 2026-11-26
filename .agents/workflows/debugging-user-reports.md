@@ -16,7 +16,7 @@ For an agent launched by a user (or a developer) to find why SmartPI behaves bad
 3. **Data quality.** Sensor resolution and publication cadence, gaps, restarts, VT off periods, setpoint changes, sun/occupancy influence.
 4. **Model sanity.** `a`, `b`, `tau = 1/b`, hold power `b*dT/a`, dead times (heat/cool), learning state and window outcomes. Implausible values (tau of a few hours, a near zero, a/b far from 1000-2000 C scale) point to learning or data problems.
 5. **Controller state.** Gains vs floors/caps, integral mode and hold source, deadband/near band, boost flag, anticipation (`analysis.control.anticipation_c`, horizon and its source), anti-windup output limit, holding power (`feedforward.source`, `analysis.feedforward.u_ff1`), valve curve.
-6. **Subsystem.** Bootstrap/calibration status, emitter lag learning/room model/quiet periods publication reasons, restart bridge decision.
+6. **Subsystem.** Bootstrap/calibration status, room model/quiet periods publication reasons, restart bridge decision.
 7. **Timeline.** Align the history series (indoor, integral error, commands, PI/FF split, a/b, kp/ki) with the events; locate the first instant the behaviour departs from the model.
 8. **Conclude.** Root cause or ranked hypotheses; classify: configuration, data/sensor, VT behaviour, SmartPI bug, SmartPI design limit (known; see `../context/decisions.md`). For a bug: minimal reproduction (a test sketch with the fake runtime) and the module concerned.
 9. **Escalate** a design flaw to `smartpi-architect`/`smartpi-control-researcher`; a code fix to `smartpi-developer` with a precise description.

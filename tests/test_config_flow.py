@@ -384,9 +384,11 @@ async def test_options_flow_shows_valve_linearization_from_dedicated_target_conf
 
 
 @pytest.mark.asyncio
-async def test_thermostat_and_options_flows_do_not_offer_a_tar_learning_option(hass) -> None:
-    """The T_ar learning is always on: neither form offers a switch for it."""
-    entry = MockConfigEntry(domain=DOMAIN, title="SmartPI defaults", unique_id=DOMAIN, data=dict(DEFAULT_OPTIONS))
+async def test_thermostat_and_options_flows_do_not_offer_an_emitter_lag_learning_option(hass) -> None:
+    """No form offers a switch for the emitter lag learning of earlier versions; an entry that still holds its
+    value opens without error."""
+    entry = MockConfigEntry(domain=DOMAIN, title="SmartPI defaults", unique_id=DOMAIN,
+                            data=dict(DEFAULT_OPTIONS, smart_pi_tar_learning=True))
     entry.add_to_hass(hass)
     registry = er.async_get(hass)
     climate_entry = registry.async_get_or_create("climate", VT_DOMAIN, "tar-target", suggested_object_id="tar_target")

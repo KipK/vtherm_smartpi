@@ -1,6 +1,6 @@
 # SmartPI regulation core and classic learning loops
 
-Scope: the regulation law and the model learning of `custom_components/vtherm_smartpi` (`SmartPI` in `algo.py`, parts in `smartpi/`). Out of scope: `smartpi/room_model/` and `smartpi/tar_learning/` (always enabled by the handler). Paths below: `smartpi/` = `custom_components/vtherm_smartpi/smartpi/`. Constants live in `smartpi/const.py`. "live" = the `live` attribute of the diagnostic sensor (`smartpi/diagnostics.py::build_published_diagnostics`).
+Scope: the regulation law and the model learning of `custom_components/vtherm_smartpi` (`SmartPI` in `algo.py`, parts in `smartpi/`). Out of scope: `smartpi/room_model/` and `smartpi/room_history/` (always enabled by the handler). Paths below: `smartpi/` = `custom_components/vtherm_smartpi/smartpi/`. Constants live in `smartpi/const.py`. "live" = the `live` attribute of the diagnostic sensor (`smartpi/diagnostics.py::build_published_diagnostics`).
 
 There is no integral-guard module and no reference governor. Anti-windup is conditional integration plus back-calculation (section 2).
 
@@ -126,7 +126,7 @@ One mechanism: the holding power `u_ff1`, clamped to [0,1]; runtime FF = `u_ff1`
 - Back-calculation moves the integral toward zero only and never across it (FF absorption, `absorb_feedforward_step`, is the one explicit exception).
 - Anti-windup excludes rate limit and min-activation timing; HEAT and COOL runs mirror each other exactly (tested trace equality).
 - Bumpless: Ki change rescales `I`; FF step is absorbed into `I`; setpoint change never resets the integral; OFF keeps the integral (only > 96 h inactivity purges it).
-- Optional features are bit-identical to the reference while silent (no published room model, no learned emitter lag, option off): same commands, same learning; additions must not perturb `u_cmd` until they publish.
+- Optional features are bit-identical to the reference while silent (no published room model, option off): same commands, same learning; additions must not perturb `u_cmd` until they publish.
 - Learning uses raw temperatures for slopes, the committed (not requested) power, and never publishes on a window contaminated by setpoint transients, guard cut, dead-time overlap or governance freeze.
 - Integral time is bounded `Ti <= 4*(lambda + L)` and `Ti <= tau`; deadband entry freezes without a bumpless jump.
 - Diagnostics are read-only snapshots (`build_published_diagnostics`); the `live` schema is pinned by a schema test, extend it deliberately.

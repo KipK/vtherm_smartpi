@@ -82,7 +82,6 @@ The `live` block is organized by responsibility:
 | `calibration` | The calibration in progress or the last one: state, pulses, result, last request, dead time measured, reading, values in use and corrections |
 | `analysis` | Advanced fields used by the supplied diagnostic cards |
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
-| `tar_learning` | Emitter lag learning |
 | `room_model` | Room model |
 
 `control.mode` is `smartpi` while the PI regulates, `hysteresis` during the
@@ -237,35 +236,6 @@ gains read the dead time after a start, not this model.
 | `prediction_rms_c` | Median of the last 7 `last.prediction_rms_c` values of the mode (°C): how well the model predicts new events; shown only, `null` before one |
 | `peak_samples` | Response time constants in seconds read on the last confirmed temperature peaks after a cut (at most 7), from the dead time, the slope of the room before the cut and its losses; shown only |
 
-### Emitter lag learning
-
-`tar_learning` describes the emitter lag learning (see [Emitter lag learning](./vtherm_smartpi.md#emitter-lag-learning)); the regulation does not read its values:
-
-| Field | Meaning |
-|---|---|
-| `status` | `active`, `checking_dependencies` (until the thermostat has started), `dependencies_unavailable` (numpy/scipy cannot be loaded: nothing is learned) or `valve_mode_not_supported` |
-| `bootstrap_s` | Bootstrap/calibration heating dead time (`model.deadtime_heat_s`); twice it is a floor of the emitter lag fitted on a comfort step |
-| `fast.value_s` | Published fast emitter lag (confirmed comfort steps), `null` before 3 confirmed steps |
-| `fast.confirmed_mornings` | Number of accepted and confirmed comfort steps, one per quiet period at most |
-| `fast.lower_bound_s` | Lower bound of the emitter lag in force: median of the last 5 confirmed comfort steps cut by sunrise too early for a value, `null` without any |
-| `fast.lower_bound_mornings` | Number of confirmed comfort steps cut by sunrise that gave a lower bound, one per quiet period at most |
-| `fast.last_value_s` | Emitter lag of the last accepted comfort step |
-| `fast.last_status` | `confirmed`, `unconfirmed` or `none` for the last accepted comfort step |
-| `fast.last_unconfirmed_reason` | Why the last accepted comfort step is unconfirmed (for example `the room did not reach its low setpoint before the comfort step`, or at least 1 hour without heating while the room was regulated at its low setpoint) |
-| `fast.last_morning` | Last evaluated comfort step, at any hour: `day` (local date, YYYY-MM-DD), `accepted`, `reason` (`accepted`, or why the step gave no value, for example `temperature rise too small`, `comfort step in daylight`, `sunrise too soon after the comfort step`, `comfort step cut by sunrise before its response could be measured` or `comfort step cut by sunrise: gives only a lower bound of the delay, not a value`), `room_class`, `confirmed` (`true` or `false` for a step that gave a value or a lower bound, `null` otherwise) and `unconfirmed_reason` (why such a step is not confirmed, as in `last_unconfirmed_reason`) |
-| `refined.tau_e_s` | Published refined emitter lag `τe`, `null` before a publication |
-| `refined.class` | Type of room in force from the identification: `thermal_mass`, `no_thermal_mass` or `undetermined` |
-| `refined.k_per_s`, `refined.tau_w_h` | Air-wall coupling and wall time constant in force (room with `thermal_mass`) |
-| `refined.last_evaluation` | Last evaluation, made when a quiet period ends: `day` (local date of that end, YYYY-MM-DD), `regulated_nights` (the six periods of its two fits are regulated), `class` and `tau_e_s` before the regulated-night rule, and the identified `a` and `b` in the units of `model.a` and `model.b` (information only, never applied; for a room with `thermal_mass`, `b` is the loss of the air to the outside, the walls being modelled apart, so it differs from the effective `model.b`) |
-| `night_room_class` | Type of room from the quiet periods without heating: `thermal_mass`, `no_thermal_mass` or `undetermined` |
-| `quiet_periods.reason` | Why no quiet period can be found (`home position unknown: the absence of sun cannot be checked`), `null` otherwise |
-| `quiet_periods.count` | Number of quiet periods kept as evidence (one per night at most) |
-| `quiet_periods.last` | Last closed quiet period: `start` and `end` (local time), `regulated_from` (start of its regulated part, `null` when the room never regulated at its low setpoint) |
-| `pending_steps` | Comfort steps waiting for their 2 h response |
-| `data_invalid_reason` | Why the current data are excluded (for example `window open`, `temperature jump`, `hvac not heating`), `null` when they are valid |
-| `history_h` | Hours of signals kept |
-| `last_error` | Why the last computation failed (`the calculation failed, see the log`; the details are in the log), `null` when none |
-
 ### Room model
 
 `room_model` describes the room model (see [Room model](./vtherm_smartpi.md#room-model)). Once published, and once a heat balance is in force, it gives the holding power of the feed-forward in heating, shown under `feedforward`.
@@ -286,13 +256,16 @@ gains read the dead time after a start, not this model.
 | `wall_extra_power_percent` | Extra power the walls currently absorb beyond their steady share, in % of full power (negative when they give heat back); `null` without identified walls, without a precise sensor or while the tracking is not `ok` |
 | `identified_day` | Day of the values in use (the day their last quiet period ended), `null` before a publication |
 | `last_identification_day` | Day of the last identification (the day its last quiet period ended) |
-| `last_refusal_reason` | Why the last identification published nothing (for example `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation`, `the model's heat loss disagrees with the measured heat balance` or `waiting for a qualified heat balance to check the model's heat loss`), `null` when it published |
+| `last_refusal_reason` | Why the last identification published nothing (for example `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `heating response delay not known yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation`, `the model's heat loss disagrees with the measured heat balance` or `waiting for a qualified heat balance to check the model's heat loss`), `null` when it published |
 | `energy_balance_loss_per_c` | Heat loss of the heat balance in force: the power needed per °C of indoor-outdoor difference, in the units of `model.b / model.a`. It is the slope of a straight line through the daily heat balances of the whole days kept (up to 7), computed once a day. Once a model is published, the static part of the holding power is `energy_balance_loss_per_c` × (setpoint − outdoor temperature) − the free gain. A day whose heat balance is refused keeps the previous values; `null` before a first accepted value |
 | `energy_balance_free_gain_percent` | Constant free heat gain of the heat balance in force, in % of full power: heat from a warmer room next door or from steady occupants, negative for a loss to a colder room. `0` while the indoor-outdoor difference has not varied enough between the days to tell a gain apart from the losses (and the days show none); `null` before a first accepted value |
 | `energy_balance_days` | Number of days used by the heat balance in force, `null` before a first accepted value |
 | `energy_balance_day` | Day the values in force were computed, `null` before a first accepted value |
 | `energy_balance_refusal_reason` | Why the last daily heat balance gave no new value (`not enough recorded days yet`, `heating response not known yet`, `too few usable days (missing data or no heating)`, `indoor-outdoor temperature difference too small`, `too little heating`, `free heat gains detected; the outdoor temperature has not varied enough yet to separate them from the losses`, `the heating need varies too much from one day to the next`, `the heating need is still drifting from day to day (walls storing or releasing heat)`, `value out of the plausible range` or `computation failed`), `null` when it gave one |
 | `sensor_resolution_c` | Smallest step of the temperature sensor seen in the recorded history (°C) |
+| `quiet_periods` | `reason`: why no quiet period can be found (`home position unknown: the absence of sun cannot be checked`), `null` otherwise; `count`: number of quiet periods in the catalogue; `last`: `start`, `end` and `regulated_from` (local times) of the last closed quiet period, `regulated_from` being the start of its regulated part, `null` when the room never regulated at its low setpoint; `last` is `null` without a period |
+| `data_invalid_reason` | Why the data currently recorded are excluded (for example `window open`), `null` when they are valid |
+| `history_h` | Hours of recorded history |
 | `last_error` | Why the last computation failed (`the calculation failed, see the log`; the details are in the log), `null` when none |
 
 ### Feed-forward

@@ -12,7 +12,7 @@ from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
 from custom_components.vtherm_smartpi.smartpi.restart_bridge import REASON_MODE_CHANGED, RestartDecision
-from custom_components.vtherm_smartpi.smartpi.tar_learning.history import TarHistory
+from custom_components.vtherm_smartpi.smartpi.room_history.history import RoomHistory
 
 A_PER_S = 0.025 / 60.0  # full-power cooling rate (C/s)
 B_PER_S = 1.0e-3 / 60.0  # gain coefficient (1/s)
@@ -169,13 +169,13 @@ def test_heat_to_cool_change_is_not_bridged() -> None:
 
 def test_learning_histories_keep_their_non_heating_handling_in_cool() -> None:
     algo = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0,
-                   name="cool", tar_learning=True, room_model=True)
-    h = TarHistory()
-    h.record(0.0, temp=24.0, ext=30.0, setpoint=24.0, phase="HYSTERESIS", b=None, dtc=None, lag=None)
-    algo.tar_learning.history = TarHistory.from_dict(json.loads(json.dumps(h.to_dict(10.0))))
+                   name="cool", room_model=True)
+    h = RoomHistory()
+    h.record(0.0, temp=24.0, ext=30.0, setpoint=24.0)
+    algo.room_history.history = RoomHistory.from_dict(json.loads(json.dumps(h.to_dict(10.0))))
     cool = RestartDecision(True, 0.0, 60.0, 60.0, None, "cool")
     algo._apply_restart_decision(cool, None)
-    assert algo.tar_learning.history._restart_bridged is False
+    assert algo.room_history.history._restart_bridged is False
     heat = RestartDecision(True, 0.0, 60.0, 60.0, None, "heat")
     assert heat.heat_bridged and not cool.heat_bridged
 

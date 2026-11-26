@@ -102,7 +102,7 @@ from .smartpi.ff_ab_confidence import ABConfidence
 from .smartpi.tint_filter import AdaptiveTintFilter
 from .smartpi.resume_hold import ResumeDeadtimeHold, ResumeHoldSource, deadtime_window_active
 from .smartpi.valve_curve import ValveCurveParams, build_valve_curve
-from .smartpi.tar_learning.manager import TarLearningManager
+from .smartpi.room_history.manager import RoomHistoryManager
 from .smartpi.room_model.feedforward import HoldingTransfer, select_source
 from .smartpi.room_model.manager import RoomModelManager
 from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING
@@ -164,7 +164,6 @@ class SmartPI:
         deadband_allow_p: bool = False,
         enable_valve_linearization: bool = False,
         valve_curve_params: ValveCurveParams | None = None,
-        tar_learning: bool = False,
         room_model: bool = False,
         learning_start: str = "bootstrap",
     ) -> None:
@@ -273,20 +272,15 @@ class SmartPI:
         self._start = LearningStart(learning_start, self, getattr(hass, "config", None))
         self.dt_est = DeadTimeEstimator(
             self._start.direct, self._start.measures_start, self.learn_win.temperatures, self._start.model.emitter_lag_s)
-        # T_ar learning: history and quiet periods of the room model (None when the algorithm runs without it)
-        self.tar_learning: TarLearningManager | None = None
-        if tar_learning:
-            time_zone = getattr(getattr(hass, "config", None), "time_zone", None)
-            self.tar_learning = TarLearningManager(
-                name, time_zone if isinstance(time_zone, str) else None
-            )
-        # Room model, on the history of the T_ar learning (None when off); once
+        # Room model on its recorded history and quiet periods (None when off); once
         # published it gives the feed-forward holding power in heating.
+        self.room_history: RoomHistoryManager | None = None
         self.room_model: RoomModelManager | None = None
-        if room_model and self.tar_learning is not None:
-            self.room_model = RoomModelManager(
-                name, time_zone if isinstance(time_zone, str) else None, self.tar_learning
-            )
+        if room_model:
+            time_zone = getattr(getattr(hass, "config", None), "time_zone", None)
+            time_zone = time_zone if isinstance(time_zone, str) else None
+            self.room_history = RoomHistoryManager(name, time_zone)
+            self.room_model = RoomModelManager(name, time_zone, self.room_history)
         self._t_heat_episode_start: float | None = None
         self._t_cool_episode_start: float | None = None
 
@@ -374,8 +368,8 @@ class SmartPI:
 
         # Reset Dead Time Estimator
         self.dt_est.reset()
-        if self.tar_learning is not None:
-            self.tar_learning.reset()
+        if self.room_history is not None:
+            self.room_history.reset()
         if self.room_model is not None:
             self.room_model.reset()
         self._t_heat_episode_start = None
@@ -667,10 +661,10 @@ class SmartPI:
         linear_power = self._set_committed_actuator_output(actuator_power)
         self._update_deadtime_episode_status(linear_power, hvac_mode, now)
         # The learning components resume their histories once the restart is decided.
-        if self.tar_learning is not None and not self.restart.pending:
+        if self.room_history is not None and not self.restart.pending:
             # linear_power is the heat-equivalent power of the applied command
             # (valve curve inverted), the input unit of the model a and b.
-            self.tar_learning.on_applied(
+            self.room_history.on_applied(
                 time.time(), linear_power, cycle_start, self._cycle_min, hvac_mode,
                 valve=self._valve_mode_enabled,
             )
@@ -990,7 +984,7 @@ class SmartPI:
         delay = effective_dead_time(self.learn_win.model(hvac_mode), self.dt_est, hvac_mode)
         return None if delay is None else delay.seconds
 
-    def observe_tar_learning(
+    def observe_room_history(
         self,
         target_temp: float | None,
         current_temp: float | None,
@@ -998,30 +992,20 @@ class SmartPI:
         hvac_mode: VThermHvacMode | None,
         excluded: str | None = None,
     ) -> None:
-        """Record the signals of the T_ar learning (no-op when the learning is disabled).
+        """Record the signals of the room history (no-op when the room model is off).
 
         excluded: why the applied power is not SmartPI's command (None when it is).
         """
-        if self.tar_learning is None or self.restart.pending:
+        if self.room_history is None or self.restart.pending:
             return
         excluded = self.learning_block.exclusion_for(excluded, self.vt_safety_override)
         try:
-            self.tar_learning.observe(
-                time.time(),
-                hvac_mode=hvac_mode,
-                temp=current_temp,
-                ext=ext_current_temp,
-                setpoint=target_temp,
-                phase=str(self.phase.value) if isinstance(self.phase, SmartPIPhase) else str(self.phase),
-                b=self.est.b,
-                dth=self.dt_est.deadtime_heat_s if self.dt_est.deadtime_heat_reliable else None,
-                lag=self._start.model.emitter_lag_s(hvac_mode),
-                cycle_min=self._cycle_min,
-                valve=self._valve_mode_enabled,
-                excluded=excluded,
+            self.room_history.observe(
+                time.time(), hvac_mode=hvac_mode, temp=current_temp, ext=ext_current_temp, setpoint=target_temp,
+                valve=self._valve_mode_enabled, excluded=excluded,
             )
         except Exception:  # noqa: BLE001 - the learning must never disturb the regulation
-            _LOGGER.exception("%s - T_ar learning: observation failed", self._name)
+            _LOGGER.exception("%s - room history: observation failed", self._name)
 
     def observe_room_model(
         self,
@@ -1210,7 +1194,7 @@ class SmartPI:
     def _restart_stores(self) -> list:
         """Last tick and heater state of the learning stores that hold data."""
         stores = []
-        for manager in (self.tar_learning, self.room_model):
+        for manager in (self.room_history, self.room_model):
             context = manager.restart_context() if manager is not None else None
             if context is not None:
                 stores.append(context)
@@ -1269,8 +1253,8 @@ class SmartPI:
         self.dt_est.resume_after_restart(bridged)
         self.learn_win.resume_after_restart(bridged)
         # The learning histories are HEAT-only: in COOL they keep their handling outside heating.
-        if self.tar_learning is not None:
-            self.tar_learning.on_restart(decision.heat_bridged, decision.t_resume)
+        if self.room_history is not None:
+            self.room_history.on_restart(decision.heat_bridged, decision.t_resume)
         if self.room_model is not None:
             self.room_model.on_restart(decision.heat_bridged, decision.t_resume)
         if not bridged or saved is None:

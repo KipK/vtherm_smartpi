@@ -11,11 +11,11 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from datetime import timedelta
 
 from .algo import SmartPI
-from .state_store import SmartPIRoomModelStore, SmartPIStateStore, SmartPITarStore
+from .state_store import SmartPIRoomHistoryStore, SmartPIRoomModelStore, SmartPIStateStore
 from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING, RM_EXCLUDED_WINDOW, RM_SAVE_DELAY_S
 from .smartpi.learning_start import command_is_on_off
-from .smartpi.tar_learning.const import TAR_SAVE_DELAY_S
-from .smartpi.tar_learning.deps import dependencies_importable
+from .smartpi.room_history.const import HISTORY_SAVE_DELAY_S
+from .smartpi.room_history.deps import dependencies_importable
 from .smartpi.const import (
     SMARTPI_RECALC_INTERVAL_SEC,
     SmartPIPhase,
@@ -56,7 +56,7 @@ class SmartPIHandler:
         """Initialize handler with parent thermostat reference."""
         self._thermostat = thermostat
         self._store: SmartPIStateStore | None = None
-        self._tar_store: SmartPITarStore | None = None
+        self._history_store: SmartPIRoomHistoryStore | None = None
         self._room_store: SmartPIRoomModelStore | None = None
         self._learning_task = None
         self._recalc_timer_remove = None
@@ -84,7 +84,7 @@ class SmartPIHandler:
         # Initialize storage with slugified name to allow retrieval if re-created
         safe_name = slugify(t.name)
         self._store = SmartPIStateStore(t.hass, safe_name)
-        self._tar_store = SmartPITarStore(t.hass, safe_name, TAR_SAVE_DELAY_S)
+        self._history_store = SmartPIRoomHistoryStore(t.hass, safe_name, HISTORY_SAVE_DELAY_S)
         self._room_store = SmartPIRoomModelStore(t.hass, safe_name, RM_SAVE_DELAY_S)
 
         # Use the thermostat's cycle_min property directly for consistency
@@ -141,7 +141,6 @@ class SmartPIHandler:
             deadband_allow_p=deadband_allow_p,
             enable_valve_linearization=valve_linearization_enabled,
             valve_curve_params=self._valve_curve_params,
-            tar_learning=True,
             room_model=True,
             learning_start=entry[CONF_SMART_PI_LEARNING_START],
         )
@@ -194,16 +193,16 @@ class SmartPIHandler:
             except Exception as e:
                 _LOGGER.error("%s - Failed to load SmartPI state: %s", t, e)
         algo = t.prop_algorithm
-        if self._tar_store and isinstance(algo, SmartPI) and getattr(algo, "tar_learning", None) is not None:
+        if self._history_store and isinstance(algo, SmartPI) and getattr(algo, "room_history", None) is not None:
             try:
-                algo.tar_learning.load_state(await self._tar_store.async_load())
+                algo.room_history.load_state(await self._history_store.async_load())
             except Exception as e:
-                _LOGGER.error("%s - Failed to load SmartPI T_ar learning data: %s", t, e)
+                _LOGGER.error("%s - Failed to load SmartPI room history: %s", t, e)
             # The quiet periods need the home position to rule out the sun (validated by the manager)
             config = getattr(t.hass, "config", None)
-            algo.tar_learning.set_position(getattr(config, "latitude", None), getattr(config, "longitude", None))
+            algo.room_history.set_position(getattr(config, "latitude", None), getattr(config, "longitude", None))
             available = dependencies_importable()
-            algo.tar_learning.set_dependencies(available)
+            algo.room_history.set_dependencies(available)
         if self._room_store and isinstance(algo, SmartPI) and getattr(algo, "room_model", None) is not None:
             try:
                 algo.room_model.load_state(await self._room_store.async_load())
@@ -219,7 +218,7 @@ class SmartPIHandler:
         )
 
     @staticmethod
-    def _tar_exclusion(t, algo) -> str | None:
+    def _history_exclusion(t, algo) -> str | None:
         """Why the heater is not under SmartPI's command at this tick (None when it is)."""
         if t.vtherm_hvac_mode != VThermHvacMode_HEAT:
             return "hvac not heating"
@@ -258,19 +257,19 @@ class SmartPIHandler:
 
     @staticmethod
     def _room_model_exclusion(t, algo) -> str | None:
-        """_tar_exclusion, except that an open window wins over the HVAC mode it forces.
+        """_history_exclusion, except that an open window wins over the HVAC mode it forces.
 
         VT turns the heater off (or to fan only) while a window is open: the room
         model follows the air through the window instead of pausing.
         """
         if SmartPIHandler._window_open(t) and getattr(t, "requested_hvac_mode", None) == VThermHvacMode_HEAT:
             return RM_EXCLUDED_WINDOW
-        return SmartPIHandler._tar_exclusion(t, algo)
+        return SmartPIHandler._history_exclusion(t, algo)
 
     def _learning_jobs(self, algo) -> list:
-        """The (manager, store) pairs whose computations run in the executor: T_ar, room model, fits of the readings."""
+        """The (manager, store) pairs whose computations run in the executor: room history, room model, readings."""
         start = getattr(algo, "_start", None)
-        pairs = ((getattr(algo, "tar_learning", None), self._tar_store), (getattr(algo, "room_model", None), self._room_store),
+        pairs = ((getattr(algo, "room_history", None), self._history_store), (getattr(algo, "room_model", None), self._room_store),
                  (getattr(start, "reading", None), None), (getattr(start, "model_reading", None), None))
         return [(manager, store) for manager, store in pairs if manager is not None]
 
@@ -316,9 +315,9 @@ class SmartPIHandler:
             try:
                 # Snapshot now; the write itself cannot be awaited from this sync method.
                 t.hass.async_create_task(self._store.save_now(t.prop_algorithm))
-                tar = getattr(t.prop_algorithm, "tar_learning", None)
-                if self._tar_store is not None and tar is not None:
-                    t.hass.async_create_task(self._tar_store.save_now(tar))
+                history = getattr(t.prop_algorithm, "room_history", None)
+                if self._history_store is not None and history is not None:
+                    t.hass.async_create_task(self._history_store.save_now(history))
                 room = getattr(t.prop_algorithm, "room_model", None)
                 if self._room_store is not None and room is not None:
                     t.hass.async_create_task(self._room_store.save_now(room))
@@ -525,13 +524,13 @@ class SmartPIHandler:
             if isinstance(algo, SmartPI):
                 # The restart decision checks the HVAC mode itself (HEAT or COOL).
                 algo.note_control_exclusion(self._control_exclusion(t, algo))
-            if isinstance(algo, SmartPI) and getattr(algo, "tar_learning", None) is not None:
-                algo.observe_tar_learning(
+            if isinstance(algo, SmartPI) and getattr(algo, "room_history", None) is not None:
+                algo.observe_room_history(
                     t.target_temperature,
                     t.current_temperature,
                     t.current_outdoor_temperature,
                     t.vtherm_hvac_mode,
-                    excluded=self._tar_exclusion(t, algo),
+                    excluded=self._history_exclusion(t, algo),
                 )
             if isinstance(algo, SmartPI) and getattr(algo, "room_model", None) is not None:
                 algo.observe_room_model(

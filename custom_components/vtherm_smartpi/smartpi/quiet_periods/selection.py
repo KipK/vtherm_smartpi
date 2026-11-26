@@ -47,12 +47,10 @@ import math
 from typing import Any
 
 from .const import (
-    BASELINE_HOLD_S,
     IDENT_TAIL_S,
     KEY_DIGITS,
     PERIOD_MIN_S,
     REGULATED_ECO_TOL_C,
-    REGULATED_MIN_S,
     RESTART_START_GUARD_S,
     SELECTION_VERSION,
     SP_EPS,
@@ -61,14 +59,8 @@ from .solar import Position, dark_intervals
 
 INF = math.inf
 
-# Why a darkness gives no episode, or why a period does not serve a rule (codes;
-# the diagnostics translate them)
-WHY_NO_POSITION = "home position unknown"
+# Why a darkness gives no episode (code)
 WHY_SHORT = "period too short"
-WHY_NO_REGULATED_START = "room never regulated at the low setpoint"
-WHY_REGULATED_SHORT = "regulated part too short"
-WHY_GAP = "data gap"
-WHY_SETPOINT = "setpoint change in the regulated part"
 
 
 def _r(t: float) -> float:
@@ -252,7 +244,7 @@ def build_episodes(pos: Position | None, setpoints: list, valid: list, first_t: 
                    last_t: float | None, on: list, temps, restarts: list) -> list[dict]:
     """Episodes of the history, oldest first (see the module docstring); [] without a position.
 
-    valid: the spans of valid data of the history (TarHistory.valid_spans); on: the heater starts;
+    valid: the spans of valid data of the history (RoomHistory.valid_spans); on: the heater starts;
     temps: (times, values) of the indoor temperature; restarts: the restart markers of the history.
     """
     if pos is None or first_t is None or last_t is None or last_t <= first_t:
@@ -300,46 +292,6 @@ def build_episodes(pos: Position | None, setpoints: list, valid: list, first_t: 
         best["complete"] = best["start"] >= float(first_t)
         out.append(best)
     return out
-
-
-# ---------------------------------------------------------------------------
-# Uses of an episode
-# ---------------------------------------------------------------------------
-def episode_of_rise(episodes: list[dict], t_sp: float) -> dict | None:
-    """The episode that a setpoint rise at t_sp ends."""
-    for e in episodes:
-        if e.get("rise_t") is not None and abs(e["rise_t"] - t_sp) <= 1.0:
-            return e
-    return None
-
-
-def step_component(ep: dict, t_sp: float) -> list | None:
-    """Quiet component that ends at the rise and holds the 2 h baseline, None otherwise."""
-    for c in ep["comps"]:
-        if abs(c[1] - t_sp) <= 1.0 and c[0] <= t_sp - BASELINE_HOLD_S + 1e-6:
-            return c
-    return None
-
-
-def quiet_intervals(ep: dict) -> list[tuple[float, float]]:
-    """All quiet components of an episode, as intervals."""
-    return [(c[0], c[1]) for c in ep["comps"]]
-
-
-def regulated_span(ep: dict) -> tuple[float | None, float | None, str | None]:
-    """[regulated start, end of the episode) of the regulated-night rule, or the reason it has none."""
-    s = ep["comps"][ep["sel"]]
-    reg = s[4]
-    end = ep["end"]
-    if s[1] < end - 0.05:
-        if any(abs(p[1] - s[1]) <= 0.05 for p in ep["pieces"]):
-            return None, None, WHY_SETPOINT
-        return None, None, WHY_GAP
-    if reg is None:
-        return None, None, WHY_NO_REGULATED_START
-    if end - reg < REGULATED_MIN_S:
-        return reg, end, WHY_REGULATED_SHORT
-    return reg, end, None
 
 
 def local_iso(t: float | None, tz) -> str | None:

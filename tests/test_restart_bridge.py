@@ -1,4 +1,4 @@
-"""Restart bridge: the decision, the T_ar history and the room model across a restart."""
+"""Restart bridge: the decision, the room history and the room model across a restart."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from custom_components.vtherm_smartpi.smartpi.const import RESTART_BRIDGE_MAX_GA
 from custom_components.vtherm_smartpi.smartpi.room_model.manager import RoomModelManager
 from custom_components.vtherm_smartpi.smartpi.room_model.model import RoomParams
 from custom_components.vtherm_smartpi.smartpi.room_model.observer import RoomObserver
-from custom_components.vtherm_smartpi.smartpi.tar_learning.history import TarHistory
+from custom_components.vtherm_smartpi.smartpi.room_history.history import RoomHistory
 
 CYCLE = (10.0, 0, 0, False)
 T_STOP = 1_000_000.0
@@ -145,15 +145,15 @@ def test_bridge_keeps_the_saved_context_until_the_decision() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T_ar history
+# Room history
 # ---------------------------------------------------------------------------
-def _obs(h: TarHistory, t: float, temp: float = 20.0) -> None:
-    h.record(t, temp=temp, ext=5.0, setpoint=20.0, phase="STABLE", b=0.002, dtc=None, lag=None)
+def _obs(h: RoomHistory, t: float, temp: float = 20.0) -> None:
+    h.record(t, temp=temp, ext=5.0, setpoint=20.0)
 
 
-def _pwm_history() -> TarHistory:
+def _pwm_history() -> RoomHistory:
     """A PWM heater observed each minute; its last cycle (40 %) started at 3000 s, on until 3240 s."""
-    h = TarHistory()
+    h = RoomHistory()
     for i in range(0, 61):
         t = 60.0 * i
         if i % 10 == 0:
@@ -162,8 +162,8 @@ def _pwm_history() -> TarHistory:
     return h
 
 
-def _restore(h: TarHistory, saved_t: float) -> TarHistory:
-    return TarHistory.from_dict(json.loads(json.dumps(h.to_dict(saved_t))))
+def _restore(h: RoomHistory, saved_t: float) -> RoomHistory:
+    return RoomHistory.from_dict(json.loads(json.dumps(h.to_dict(saved_t))))
 
 
 def test_bridged_restart_adds_no_invalid_interval_and_no_heater_edge() -> None:
@@ -210,8 +210,6 @@ def test_restart_markers_are_persisted() -> None:
     _obs(back, 3660.0, 20.06)
     again = _restore(back, 3700.0)
     assert again.restarts == [(3600.0, 3660.0, True)]
-    assert again.restarts_between(3500.0, 3610.0) == [(3600.0, 3660.0, True)]
-    assert again.restarts_between(3700.0, 4000.0) == []
 
 
 def test_not_bridged_restart_excludes_only_the_downtime() -> None:
@@ -223,7 +221,7 @@ def test_not_bridged_restart_excludes_only_the_downtime() -> None:
     assert back.off[-1] == 3600.0 and len(back.on) == len(back.off)
     _obs(back, 3672.0, 20.061)
     assert back.gaps == [(3600.0, 3672.0)]
-    assert not back.gap_overlaps(3000.0, 3600.0) and not back.gap_overlaps(3672.0, 4200.0)
+    assert back.invalid_intervals() == [(3600.0, 3672.0)]
     assert back.restarts == [(3600.0, 3672.0, False)]
 
 
@@ -231,7 +229,7 @@ def test_a_store_without_heater_state_is_not_bridged() -> None:
     h = _pwm_history()
     data = h.to_dict(3620.0)
     del data["heater"]
-    back = TarHistory.from_dict(data)
+    back = RoomHistory.from_dict(data)
     assert back.restart_pending and not back.heater_saved
     back.resolve_restart(True, 3672.0)
     _obs(back, 3672.0, 20.061)
@@ -239,7 +237,7 @@ def test_a_store_without_heater_state_is_not_bridged() -> None:
 
 
 def test_valve_level_is_held_over_a_bridged_restart() -> None:
-    h = TarHistory(valve=True)
+    h = RoomHistory(valve=True)
     _obs(h, 0.0)
     h.applied_level(0.0, 0.4, True)
     _obs(h, 600.0, 20.1)

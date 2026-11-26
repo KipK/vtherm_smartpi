@@ -3,7 +3,7 @@
 This module is the single place that decides which recorded periods the
 identification fits. The periods come from the shared catalogue of quiet
 periods (quiet_periods: no sun, constant setpoint, valid data), kept by the
-T_ar learning: an identification window holds three closed periods, and each
+room history (room_history): an identification window holds three closed periods, and each
 period is fitted on its identification interval (its quiet part, continued by
 the response to the setpoint rise that ends it while it is still dark). The
 periods in which the observer detected heat gains or losses are left out, and
@@ -13,8 +13,7 @@ never joined.
 """
 from __future__ import annotations
 
-from ..tar_learning.const import ID_WIN_PERIODS
-from .const import RM_MIN_SEGMENT_S
+from .const import RM_MIN_SEGMENT_S, RM_WINDOW_PERIODS
 
 
 def _subtract(a: float, b: float, invalid: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -42,10 +41,10 @@ def interval(period: dict) -> tuple[float, float]:
 
 def windows(periods: list[dict]) -> list[dict]:
     """Identification windows of the closed periods (oldest first): one per period that closes a run of
-    ID_WIN_PERIODS (the same windows as the T_ar learning), keyed by that period, with the key of the window
+    RM_WINDOW_PERIODS, keyed by that period, with the key of the window
     of the periods just before it (disjoint), None for the first ones."""
     out = []
-    n = ID_WIN_PERIODS
+    n = RM_WINDOW_PERIODS
     for k in range(n - 1, len(periods)):
         three = periods[k - n + 1: k + 1]
         out.append({"id": periods[k]["id"], "nights": [p["id"] for p in three],

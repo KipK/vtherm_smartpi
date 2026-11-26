@@ -399,8 +399,8 @@ and filtered by a first-order lag $\tau$, and the room follows
 $dT/dt = a\,q - b\,(T - T_{out})$. It finds $D$, $\tau$ and $b$ by search and
 $a$ by least squares; the emitter lag of the reading is $D + \tau$. The fit
 runs in the background, outside the regulation: it is one of the jobs of the
-single background loop that also runs the emitter lag learning and the room
-model, one job at a time, and the next calculation applies its result. After
+single background loop that also runs the room history (its daily sun scan), the
+room model and the reading fits, one job at a time, and the next calculation applies its result. After
 each fit the window is extended to six lags of the result, up to 8 fits, and the
 reading is complete when the window covers 90 % of that. numpy and scipy are
 loaded when the first fit runs.
@@ -658,9 +658,9 @@ it back as its reference, and its saved events are read again in order through
 the rule; those it would not feed become pending. A mode whose seed cannot be
 computed keeps its saved events.
 
-### 3.8 Quiet periods of the emitter lag learning
+### 3.8 Quiet periods of the room model
 
-The emitter lag learning (`smartpi/tar_learning/`) and the room model select their data with
+The room model selects its data, kept by the room history (`smartpi/room_history/`), with
 `smartpi/quiet_periods/`, a pure Python module shared by the methods that need
 a room free of solar gains. No local hour enters the selection; times are epoch
 seconds and half-open intervals `[start, end)`.
@@ -682,7 +682,7 @@ ends a few minutes before sunrise and starts a few minutes after sunset, never
 later than sunrise. A darkness longer than 24 h (polar night) is cut into blocks
 of 24 h anchored on its true start; a polar day has no darkness. Without a valid
 position (or without `astral`) there is no darkness and no period: the methods
-stay silent and `quiet_periods.reason` says why.
+stay silent and `room_model.quiet_periods.reason` says why.
 
 **Periods.** A plateau is a maximal interval of constant setpoint. A setback
 run goes from a setpoint drop to the next rise (further drops stay in the run).
@@ -693,12 +693,12 @@ A darkness holds at most one episode: the longest part of a setback run inside
 it, or the whole darkness when the setpoint does not change inside it (held
 setpoint). The episode ends at the rise that ends the run, or at the end of the
 darkness. Its quiet components are its plateau pieces intersected with the
-valid spans of the history (`TarHistory.valid_spans`: everything but the
+valid spans of the history (`RoomHistory.valid_spans`: everything but the
 invalid intervals); a bridged restart leaves no invalid interval and does not
 cut them. The selected component is the longest one (at least 1 h, the earliest
 on a tie).
 
-**Regulated start.** For a component, the first heater start at or after the
+**Regulated start** (`regulated_from` in the diagnostics). For a component, the first heater start at or after the
 start of its plateau with the indoor temperature within 0.3 °C of the setpoint;
 when it lies before the component, the component start if the data between them
 are valid. A heater start within 60 s after a restart does not count. None when
@@ -706,10 +706,9 @@ the room never regulates there.
 
 **Identification interval.** The selected component, continued after the rise
 that ends the episode while it is still dark, the new setpoint constant and the
-data valid, for at most 2 h (the response horizon of the comfort-step fit). The
-response to the rise is the main excitation of the emitter: without it the
-emitter time constant of a regulated room is poorly determined. The regulated
-night and the comfort step still end at the rise.
+data valid, for at most 2 h. The response to the rise is the main excitation of the
+emitter response: without it the heating response of a regulated room is poorly
+determined.
 
 **Keys.** An episode is closed once its end is at or before the last
 observation, settled once its identification interval is known too, and
@@ -724,18 +723,8 @@ when the history is pruned, and a period found again gets the same key.
 
 | Rule | Data |
 |---|---|
-| Comfort step | a rise of at least 1 °C after a low setpoint held 2 h (in the history), to a setpoint not below the last indoor temperature, not within 300 s after a restart; evaluated when it ends an episode and the component that ends at the rise covers the 2 h before it |
-| Fit window of a step | every response window ends at the end of the darkness; the excitation rules (`exc_window_T`, energy, rise, sensor period) judge the truncated window; less than 600 s left gives no fit. A window `Wsp` cut by the darkness is a censored observation: it gives an estimate only when it lasts at least `TAR_CUT_ESTIMATE_WINDOW_T = 3` times the largest of the fitted value $T$ and the floor (the refined value in force, the published fast value, the lower bound in force and twice the bootstrap dead time: the first moment of a first-order emitter is about twice the apparent dead time the bootstrap measures). Otherwise, once the other rules pass, it gives the lower bound `TAR_CUT_BOUND_FACTOR` $\cdot T = 0.6\,T$ (the margin covers the noise of a short fit), confirmed by the same gate as a value; a cut window that fails another rule is refused as cut |
-| Night indicator | passive spans intersected with the quiet components of the episode of the step, on the 600 s grid of the segment |
-| G1 / GT4 | longest span without a heater start in `[regulated start, t_ref)`; no regulated start, or a regulated part under 1.5 h, is an unknown observable and leaves the step unconfirmed |
-| Regulated night | `[regulated start, end of the episode)` of the selected component, at least 4 h, valid to its end; then the existing quarter, temperature, power-slope and residual rules |
 | Identification window | the identification intervals of three consecutive settled episodes (bins wholly inside them), the wall state starting 10 h before the first; compared with the window of the three episodes before, never overlapping |
-| Room class, fast value | one night entry and one confirmed value per key, replaced before the room class or the publication is computed |
 | Room model | the same windows of three settled episodes and their identification intervals, minus the periods the tracking found disturbed (§4.2); the disturbance of the tracking is summed per key |
-
-Evaluations carry their decision time (end of their last episode); the class,
-wall parameters and `τe` in force at a step are those decided before the step.
-The local date of the diagnostics (`day`) is for display only.
 
 ---
 
@@ -786,8 +775,7 @@ calibrated on it.
 The pre-model gains of the direct start (heating rate kept from the pulses,
 before the first a/b model) read the same $L$. `analysis.control` publishes
 `gain_delay_s`, `gain_delay_source` and the closed-loop time
-`gain_closed_loop_time_s` ($\lambda$). The emitter lag learning
-(`tar_learning`) is not read by the gains.
+`gain_closed_loop_time_s` ($\lambda$).
 
 Important:
 
@@ -863,7 +851,7 @@ $g_{EB}$ for good.
 
 **Energy balance.** A job of its own computes, once per local day 20 minutes
 after its midnight and whatever the quiet periods, the balance of each whole
-local day of the emitter lag history before the day (at most 7; 10 min bins, invalid
+local day of the room history before the day (at most 7; 10 min bins, invalid
 intervals excluded). Midnight is only the boundary of these civil days (23 h
 and 25 h days at the clock changes); it selects no period:
 
@@ -909,7 +897,7 @@ A refused day keeps the previous qualified model
 its day and its number of days are saved with the room model.
 
 **Identification windows.** The room model reads the catalogue of quiet
-periods of the emitter lag learning (§3.8) through `TarLearningManager.quiet_periods`;
+periods of the room history (§3.8) through `RoomHistoryManager.quiet_periods`;
 `room_model/periods.py` is its adapter. A window is three consecutive closed
 periods of the catalogue, each fitted on its identification interval (the
 quiet component, continued by the response to the rise for at most 2 h in the
@@ -934,7 +922,7 @@ out of the windows that hold it.
 covariance of all its parameters from the Jacobian $J$ of its weighted model
 outputs at the optimum: the nonlinear parameters, $a$, the initial air and
 wall states of every piece and, when the window estimated the emitter (grid
-search, not the refined value in force), the log of the emitter first moment
+search, not the emitter in force), the log of the emitter first moment
 (central difference at ±2 %):
 
 $$ C = \tau_{int} \, s^2 (J^\top J)^{-1}, \qquad s^2 = \frac{\sum w r^2}{\sum w - p} $$
@@ -976,11 +964,20 @@ on a disagreement the publication in force is kept. A room model published by
 an earlier version stays in force; the holding power still requires the
 agreement with the heat balance in force (4.2).
 
-**Emitter search.** The emitter lag (first moment) of the fits is searched on a
+**Emitter search.** The emitter in force is the HEAT response model (pure
+delay its dead time $\theta$, first order its response time constant $\tau_e$,
+3.7); without it, a first order whose time constant is the HEAT dead time after
+a start; without either, a window is refused (`heating response delay not known
+yet`). The emitter lag (first moment) of the fits is searched on a
 fixed grid, independent of the dead time in force: 13 values log-spaced from
 60 s (the fit step) to 3600 s (a third of the shortest wall time $1/\beta$ of
-3 h, so that the emitter and the walls stay separable), each split into a
-first-order part (the refined $\tau_e$ when known, capped by the value) and a pure dead time, the rest. The lowest cost
+3 h, so that the emitter and the walls stay separable). Each first moment
+tried (grid point or Brent evaluation) is fitted in two shapes: a pure first
+order, and a split into a pure delay and a first order by the delay share of the
+response model in force, $\theta / (\theta + \tau_e)$ (the delay is that share
+of the first moment), when that share is positive; the shape with the lower
+cost $J$ is kept, with its share for the rest of the computation; without a
+response model or with a zero share, only the pure first order is tried. The lowest cost
 $J$ is refined by a bounded Brent search in $\log \tau$ between its two grid
 neighbours (to 1 %, at most 10 more fits). The profile is significant when
 $\max (J - J_{min}) / J_{min} \cdot N_{eff} > \chi^2_{1, 0.95} = 3.84$, with
@@ -989,8 +986,7 @@ autocorrelation time ($1 + 2\sum \rho_k$ up to the first non-positive
 $\rho_k$). An optimum at either end of the grid with a significant profile
 is refused (`the heating response delay does not match the measured
 temperature`). A profile that is not significant does not determine the
-emitter: the fits use the emitter in force when the emitter lag learning has
-published a refined value, else the grid optimum, and the agreement with the
+emitter: the fits use the grid optimum, and the agreement with the
 energy balance judges the static loss.
 
 **Residual checks.** The runs test of the fit residuals (10 min grid inside
@@ -1178,7 +1174,7 @@ state `on` counts (`off`, `unavailable`, `unknown` and an absent entity count as
 off). While blocked: `update_learning` only feeds the records of the measurement
 events (so they stay continuous) and skips the windows, the emitter lag and the
 event detector; the dead-time detection is suspended but the
-temperature history is fed (anticipation, pulses); the T_ar learning and the room
+temperature history is fed (anticipation, pulses); the room history and the room
 model receive the block as exclusion reason (an open window keeps its own reason)
 and the handler starts none of their computations; no measurement pulse is advanced
 and no kept value is handed over; a calibration request is refused. When the
@@ -1274,6 +1270,7 @@ The following are not treated as saturation: Versatile Thermostat quantization a
 | `guards.py`            | `guard_cut` and `guard_kick`                                |
 | `restart_bridge.py`    | the one decision on whether a restart is bridged, consulted by every component, and the context of the last tick |
 | `quiet_periods/`       | darkness from the home position (`astral`), plateaus, setback runs, episodes, keys and regulated start of the quiet periods |
+| `room_history/`        | `RoomHistoryManager`: the 7-day signals the room model needs (indoor and outdoor temperature, setpoint, heater edges, invalid intervals), the catalogue of quiet periods, its own store and the daily sun scan |
 | `diagnostics.py`       | canonical live diagnostic payload                           |
 | `diagnostic_history.py` | versioned envelope and stable Recorder series               |
 | `tint_filter.py`       | adaptive indoor-temperature filtering                       |
@@ -1332,18 +1329,16 @@ The control loop schedules at most one delayed write of this payload per five-mi
 
 Past event timestamps (temperature histories, start of a calibration, passive period and episode of the emitter lag on constant-power heating phases) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the 48-hour limit of a calibration keeps running after a restart.
 
-The emitter lag learning keeps its own store (state version 3): history,
-pending comfort steps, catalogue of quiet periods with their keys, night
-entries, regulated-period decisions, windows, evaluations, confirmed values
-and lower bounds keyed by period, publications, the reference bootstrap dead
-time frozen at the start of the learning and the home position the evidence
-was found with. A version 2 store is read whole; its reference starts from the
-last reliable bootstrap dead time it recorded, and it has no lower bound. A
-version 1 store keeps only its history and its pending rises: its
-nights, windows, evaluations, confirmations and published values were selected
-by local hours without a solar check and are dropped, then found again from the
-history. A change of the home position forgets the evidence of the periods. A
-later version is ignored.
+The room history keeps its own store (state version 3): the history, the
+catalogue of quiet periods with their keys and the home position the catalogue
+was found with. A change of the home position forgets the catalogue. A state
+saved by an earlier version keeps its history and its quiet periods; the values
+it learned are ignored. A version 1 store keeps only its history. A later
+version is ignored. It needs numpy and scipy (without them nothing is recorded
+and the room model shows `numerical libraries unavailable`), records nothing in
+valve mode (the room model shows `valve heaters are not supported yet`), and has
+no quiet period without a home position. Only the room model reads it; the
+regulation reads neither the history nor the catalogue.
 
 The room model keeps its own store (state version 2): published parameters
 and their candidates, windows and records keyed by their last quiet period,
@@ -1371,21 +1366,21 @@ not prevent it, and the downtime is measured up to the calculation that decides.
 All of these must hold:
 
 - the downtime, on the wall clock from the oldest last tick of the three stores
-  (algorithm, emitter lag learning, room model) to the first tick, is at most
+  (algorithm, room history, room model) to the first tick, is at most
   `RESTART_BRIDGE_MAX_GAP_S = 600 s`; a store written long before the stop (a
   debounced write lost in a crash) makes the downtime long;
 - the HVAC mode is the same at the last tick and at the first tick, HEAT or
   COOL, and the cycle configuration (cycle length, minimum on and off delays,
   valve mode) is the same;
 - the actuator state was saved: the committed power in the algorithm store and,
-  in HEAT, also the heater cycle state in the emitter lag history and the last tick of
+  in HEAT, also the heater cycle state in the room history and the last tick of
   the room model, for the stores that hold data (a store of an older format has
   none);
 - SmartPI was in control at the last tick and is at the first tick: no window
   open, power shedding, safety mode, command overridden or unknown (after the
   restart, the window, shedding and safety state of the thermostat is read
   before any command);
-- the first indoor temperature passes the jump rule of the emitter lag history (more
+- the first indoor temperature passes the jump rule of the room history (more
   than `0.5 °C` at more than `20 °C/h` is not physical) against the last one,
   dated from its last change;
 - the wall clock did not jump (no negative downtime, no store tick in the future).
@@ -1415,7 +1410,7 @@ until the decision.
 | Measurement readings | the record, the readings in progress and the rest or phase of the detector (heating) resume (3.7) | the readings in progress end, the record is dropped, the kept values stay |
 | Response model readings | the record and the readings in progress resume (3.7) | the readings in progress end, the record is dropped, the model stays |
 | Bootstrap on/off output | resumed inside the band (3.1) | starts at 0 |
-| Emitter lag history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |
+| Room history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |
 | Room model (HEAT only; in COOL as another restart) | the command applied at the stop is held over the downtime; the state is propagated through it and the forecasts in progress go on | the heater is taken as stopped from the saved state, the uncertainty is reopened and the forecasts in progress are dropped |
 
 The heater state at the stop is the one of the store write: a reload writes the
@@ -1423,11 +1418,11 @@ stores at the unload, and Home Assistant writes the pending stores at its stop.
 An on time planned to end before the stop has ended; a heater on at the stop
 stays on until the first command after the restart.
 
-A restart that is not bridged excludes only its downtime from the emitter lag history
+A restart that is not bridged excludes only its downtime from the room history
 (last tick to first tick), not a margin around it: the actuator state over the
 downtime is unknown, but the observations before and after it are valid.
 
-The emitter lag history keeps a marker of every restart (last tick, first tick,
+The room history keeps a marker of every restart (last tick, first tick,
 bridged) in `restarts`, so that later rules can still see a restart that left no
 invalid interval. The room model has its resume limit of 3 hours.
 
@@ -1438,7 +1433,7 @@ they start empty at each startup. The observations of the `a` and `b`
 measurements are persisted with the estimator state; a state that does not
 contain them loads with measurements that cannot be recomputed.
 
-The applied power that feeds the dead time, the emitter lag learning and the
+The applied power that feeds the dead time, the room history and the
 room model comes from the applied-command receipts of the Versatile Thermostat
 cycle scheduler (`vtherm_api` `AppliedCommandReceipt`): one receipt for each
 command it really applies, a `cycle_start` receipt at each master-cycle start

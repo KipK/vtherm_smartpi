@@ -19,7 +19,7 @@ from custom_components.vtherm_smartpi.smartpi.room_model import manager as manag
 from custom_components.vtherm_smartpi.smartpi.room_model import observer as observer_mod
 from custom_components.vtherm_smartpi.smartpi.room_model.const import RM_SAVE_DELAY_S
 from custom_components.vtherm_smartpi.smartpi.room_model.manager import RoomModelManager
-from custom_components.vtherm_smartpi.smartpi.tar_learning.manager import TarLearningManager
+from custom_components.vtherm_smartpi.smartpi.room_history.manager import RoomHistoryManager
 from custom_components.vtherm_smartpi.state_store import SmartPIRoomModelStore
 
 DAYS = 9
@@ -30,7 +30,7 @@ DIAG_KEYS = {
     "forecast_checks", "unchanged_temperature_error_c", "wall_extra_power_percent", "identified_day",
     "last_identification_day", "last_refusal_reason", "sensor_resolution_c", "last_error",
     "energy_balance_loss_per_c", "energy_balance_free_gain_percent", "energy_balance_days", "energy_balance_day",
-    "energy_balance_refusal_reason",
+    "energy_balance_refusal_reason", "quiet_periods", "data_invalid_reason", "history_h",
 }
 
 
@@ -41,18 +41,18 @@ class _SyncHass:
         return func(*args)
 
 
-def _tar(data: dict, position: bool = True) -> TarLearningManager:
-    tar = TarLearningManager("room", "UTC")
-    tar.set_dependencies(True)
+def _history(data: dict, position: bool = True) -> RoomHistoryManager:
+    history = RoomHistoryManager("room", "UTC")
+    history.set_dependencies(True)
     if position:
-        tar.set_position(rsim.LAT, rsim.LON)
-    h = tar.history
+        history.set_position(rsim.LAT, rsim.LON)
+    h = history.history
     h.temp_t, h.temp_v = list(data["pub_t"]), list(data["pub_v"])
     h.ext_t, h.ext_v = list(data["ext_t"]), list(data["ext_v"])
     h.on, h.off = list(data["on"]), list(data["off"])
     h.setpoints = [tuple(x) for x in data["sp"]]
     h.first_t, h.last_t = data["first_t"], data["last_t"]
-    return tar
+    return history
 
 
 def _drive(m: RoomModelManager, data: dict, plant: dict, t_from: float, t_to: float) -> None:
@@ -67,7 +67,8 @@ def _drive(m: RoomModelManager, data: dict, plant: dict, t_from: float, t_to: fl
             return
         y, yt, te = pl
         m.observe(t, hvac_mode=VThermHvacMode_HEAT, temp=y, measure_id=yt, ext=te, excluded=None,
-                  a_per_min=plant["a"] * 60.0, first_moment_s=plant["tau_e"] + plant["L"])
+                  a_per_min=plant["a"] * 60.0, first_moment_s=plant["tau_e"] + plant["L"],
+                  response={"theta_s": plant["L"], "tau_e_s": plant["tau_e"]})
         n[0] += 1
         if n[0] % 60 == 0:
             loop.run_until_complete(m.async_run(hass, now=t))
@@ -79,11 +80,10 @@ def _drive(m: RoomModelManager, data: dict, plant: dict, t_from: float, t_to: fl
 @pytest.fixture(scope="module")
 def mass_manager():
     data = rsim.simulate(rsim.MASS, DAYS)
-    tar = _tar(data)
-    # The refined first-order part of the emitter is known (600 s of the 720 s first moment): the fitted
-    # static gain is sensitive to the emitter shape and must agree with the energy balance within 5 %.
-    tar.te_pub = {"value": rsim.MASS["tau_e"]}
-    m = RoomModelManager("room", "UTC", tar)
+    history = _history(data)
+    # The HEAT response model gives the emitter (delay 120 s, time constant 600 s): the fitted static gain is
+    # sensitive to the emitter shape and must agree with the energy balance within 5 %.
+    m = RoomModelManager("room", "UTC", history)
     # A qualified heat balance is in force from the start (the true static gain): nothing is published without one
     m.apply_energy_balance(D0 - 1, {"value": _true_beq_a(rsim.MASS), "gain": 0.0, "days": 4})
     _drive(m, data, rsim.MASS, rsim.T0 + 600.0, rsim.T0 + DAYS * 86400.0)
@@ -183,7 +183,7 @@ def test_no_publication_without_a_qualified_energy_balance(mass_manager) -> None
 
     # At publication time: a candidate decided against a balance that is no longer the one in force
     def fresh(eb):
-        x = RoomModelManager("room", "UTC", m._tar)
+        x = RoomModelManager("room", "UTC", m._history)
         x.eb_slope = eb
         return x
 
@@ -253,7 +253,7 @@ def test_energy_balance_in_force_keeps_the_last_qualified_value() -> None:
 def test_persistence_round_trip(mass_manager) -> None:
     m, data = mass_manager
     state = json.loads(json.dumps(m.save_state()))
-    m2 = RoomModelManager("room", "UTC", m._tar)
+    m2 = RoomModelManager("room", "UTC", m._history)
     m2.load_state(state)
     assert m2.params == m.params
     assert m2.observer.x == m.observer.x
@@ -271,7 +271,7 @@ def test_persistence_round_trip(mass_manager) -> None:
     _drive(m2, data, rsim.MASS, t_back, min(t_back + 600.0, t_end))
     assert m2.observer.restarts == restarts
     # Unknown or corrupt states are ignored
-    m3 = RoomModelManager("room", "UTC", m._tar)
+    m3 = RoomModelManager("room", "UTC", m._history)
     m3.load_state({"version": 99, "params": state["params"]})
     assert m3.params is None
     m3.load_state(dict(state, params={"struct": "full", "a": -1}))
@@ -282,7 +282,7 @@ async def test_store_round_trip(hass, mass_manager) -> None:
     m, _ = mass_manager
     store = SmartPIRoomModelStore(hass, "room_store_test", RM_SAVE_DELAY_S)
     await store.save_now(m)
-    loaded = RoomModelManager("room", "UTC", m._tar)
+    loaded = RoomModelManager("room", "UTC", m._history)
     loaded.load_state(await store.async_load())
     assert loaded.params == m.params
     assert loaded.observer.t == m.observer.t
@@ -290,23 +290,22 @@ async def test_store_round_trip(hass, mass_manager) -> None:
 
 def test_inactive_learning_and_reset(mass_manager) -> None:
     m, _ = mass_manager
-    tar = TarLearningManager("x", "UTC")
-    tar.set_dependencies(False)
-    off = RoomModelManager("x", "UTC", tar)
+    history = RoomHistoryManager("x", "UTC")
+    history.set_dependencies(False)
+    off = RoomModelManager("x", "UTC", history)
     assert not off.active
     assert off.diagnostics()["status"] == "not identified: numerical libraries unavailable"
-    tar2 = TarLearningManager("x", "UTC")
-    tar2.set_dependencies(True)
-    tar2.observe(0.0, hvac_mode=VThermHvacMode_HEAT, temp=19.0, ext=5.0, setpoint=20.0, phase="stable", b=0.001,
-                 lag=None, cycle_min=10.0, valve=True)
-    valve = RoomModelManager("x", "UTC", tar2)
+    history2 = RoomHistoryManager("x", "UTC")
+    history2.set_dependencies(True)
+    history2.observe(0.0, hvac_mode=VThermHvacMode_HEAT, temp=19.0, ext=5.0, setpoint=20.0, valve=True)
+    valve = RoomModelManager("x", "UTC", history2)
     assert valve.diagnostics()["status"] == "not identified: valve heaters are not supported yet"
-    fresh = RoomModelManager("x", "UTC", _tar(rsim.simulate(rsim.NO_MASS, 0.5)))
+    fresh = RoomModelManager("x", "UTC", _history(rsim.simulate(rsim.NO_MASS, 0.5)))
     diag = fresh.diagnostics()
     assert diag["status"] == "learning" and diag["tracking"] == "waiting for an identified model"
     assert diag["forecast_c"] is None and diag["a"] is None
     state = m.save_state()
-    copy = RoomModelManager("room", "UTC", m._tar)
+    copy = RoomModelManager("room", "UTC", m._history)
     copy.load_state(state)
     copy.reset()
     assert copy.params is None and copy.records == [] and copy.dirty
@@ -314,7 +313,7 @@ def test_inactive_learning_and_reset(mass_manager) -> None:
 
 def test_other_hvac_modes_pause_the_observer(mass_manager) -> None:
     m, _ = mass_manager
-    copy = RoomModelManager("room", "UTC", m._tar)
+    copy = RoomModelManager("room", "UTC", m._history)
     copy.load_state(json.loads(json.dumps(m.save_state())))
     t = copy.observer.t + 60.0
     copy.on_applied(t, 0.5, True, 10.0, VThermHvacMode_COOL)
@@ -330,8 +329,8 @@ def test_other_hvac_modes_pause_the_observer(mass_manager) -> None:
 
 async def test_failed_computation_and_missing_packages(monkeypatch) -> None:
     data = rsim.simulate(rsim.NO_MASS, 5.0)
-    tar = _tar(data)
-    m = RoomModelManager("room", "UTC", tar)
+    history = _history(data)
+    m = RoomModelManager("room", "UTC", history)
     m._emitter = (600.0, 120.0)
     now = rsim.T0 + 4 * 86400.0 + 9 * 3600.0
 
@@ -357,7 +356,7 @@ async def test_failed_computation_and_missing_packages(monkeypatch) -> None:
 
     monkeypatch.setattr(manager_mod, "_run_job", no_numpy)
     await m.async_run(_SyncHass(), now=now + 86400.0)
-    assert not tar.active and not m.active
+    assert not history.active and not m.active
     assert m.diagnostics()["status"] == "not identified: numerical libraries unavailable"
 
 
@@ -382,7 +381,7 @@ async def test_identification_starts_when_a_window_of_periods_closes(monkeypatch
     """A window of three closed quiet periods starts one identification, oldest first, at most one per hour of
     elapsed time; each window once, compared with the window of the three periods before it."""
     data = rsim.simulate(rsim.NO_MASS, 8.0)
-    m = RoomModelManager("room", "UTC", _tar(data))
+    m = RoomModelManager("room", "UTC", _history(data))
     m._emitter = (600.0, 120.0)
     calls = _fake_jobs(monkeypatch)
     pers = rsim.quiet_periods(data)
@@ -404,7 +403,7 @@ async def test_identification_starts_when_a_window_of_periods_closes(monkeypatch
     assert all(s["prev"] is None for s in ident[:3])
     # Never twice on the same periods, even after a reload
     n = len(ident)
-    back = RoomModelManager("room", "UTC", m._tar)
+    back = RoomModelManager("room", "UTC", m._history)
     back.load_state(json.loads(json.dumps(m.save_state())))
     await back.async_run(_SyncHass(), now=ends[5] + 6 * 3600.0)
     await m.async_run(_SyncHass(), now=ends[5] + 6 * 3600.0)
@@ -419,7 +418,7 @@ async def test_energy_balance_of_each_finished_day_without_any_quiet_period(monk
     local day still runs, once, from 20 minutes after its end."""
     p = rsim.NO_MASS
     data = rsim.simulate(p, 6.5)
-    m = RoomModelManager("room", "UTC", _tar(data, position=False))
+    m = RoomModelManager("room", "UTC", _history(data, position=False))
     m._a_per_min = p["a"] * 60.0
     m._emitter = (600.0, 120.0)
     kinds = []
@@ -440,17 +439,17 @@ async def test_energy_balance_of_each_finished_day_without_any_quiet_period(monk
 
 async def test_energy_balance_follows_the_local_days_across_clock_changes(monkeypatch) -> None:
     """Days of 23 h and 25 h: one balance per local day, each after its local midnight."""
-    from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
+    from custom_components.vtherm_smartpi.smartpi.room_history.clock import LocalClock
 
     tz = "Europe/Paris"
     clock = LocalClock(tz)
     for first in (dt.date(2026, 3, 27), dt.date(2026, 10, 23)):
-        tar = TarLearningManager("room", tz)
-        tar.set_dependencies(True)
+        history = RoomHistoryManager("room", tz)
+        history.set_dependencies(True)
         t0 = clock.at(first.toordinal(), 0.0)
-        tar.history.temp_t, tar.history.temp_v = [t0], [19.0]
-        tar.history.first_t, tar.history.last_t = t0, t0 + 5 * 86400.0
-        m = RoomModelManager("room", tz, tar)
+        history.history.temp_t, history.history.temp_v = [t0], [19.0]
+        history.history.first_t, history.history.last_t = t0, t0 + 5 * 86400.0
+        m = RoomModelManager("room", tz, history)
         calls = _fake_jobs(monkeypatch)
         t = t0 + 600.0
         while t < clock.at(first.toordinal() + 5, 0.0):
@@ -473,7 +472,7 @@ def test_earlier_state_keeps_the_model_and_drops_the_day_keyed_evidence(mass_man
     obs = {k: v for k, v in state["observer"].items() if k not in ("steps", "attached_t")}
     old["observer"] = dict(obs, nights={str(D0 + 6): [0.001, 50000.0], str(D0 + 7): [0.002, 50400.0]})
     old["energy_balance"] = {k: v for k, v in state["energy_balance"].items() if k != "run_day"}
-    back = RoomModelManager("room", "UTC", m._tar)
+    back = RoomModelManager("room", "UTC", m._history)
     back.load_state(old)
     assert back.params == m.params and back.q == m.q and back.published_day == m.published_day
     assert back.observer.x == m.observer.x and back.observer.P == m.observer.P and back.observer.t == m.observer.t
@@ -487,26 +486,32 @@ def test_earlier_state_keeps_the_model_and_drops_the_day_keyed_evidence(mass_man
     # Saved again, it is the current format; loading it twice changes nothing
     again = json.loads(json.dumps(back.save_state()))
     assert again["version"] == manager_mod.STATE_VERSION
-    twice = RoomModelManager("room", "UTC", m._tar)
+    twice = RoomModelManager("room", "UTC", m._history)
     twice.load_state(again)
     twice.load_state(again)
     assert twice.windows == {} and twice.candidates == [] and twice.params == m.params
     # A later format is ignored; a malformed one too
-    later = RoomModelManager("room", "UTC", m._tar)
+    later = RoomModelManager("room", "UTC", m._history)
     later.load_state(dict(state, version=manager_mod.STATE_VERSION + 1))
     assert later.params is None
     later.load_state(dict(state, observer=dict(state["observer"], nights={"q1:1:1": ["x"]})))
     assert later.params == m.params and later.observer.nights == {}
 
 
-def test_emitter_split_uses_the_refined_tau_e() -> None:
-    tar = TarLearningManager("x", "UTC")
-    m = RoomModelManager("x", "UTC", tar)
-    assert m._emitter_split(None) is None
-    assert m._emitter_split(900.0) == (900.0, 0.0)
-    tar.te_pub = {"value": 600.0}
-    assert m._emitter_split(900.0) == (600.0, 300.0)
-    assert m._emitter_split(400.0) == (400.0, 0.0)
+def test_emitter_is_the_response_model_else_the_dead_time() -> None:
+    """The HEAT response model gives (tau_e, delay); without it the dead time after a start is a first order
+    without delay; without either, no emitter."""
+    m = RoomModelManager("x", "UTC", RoomHistoryManager("x", "UTC"))
+
+    def emitter(first_moment_s, response=None):
+        m.observe(1000.0, hvac_mode=VThermHvacMode_HEAT, temp=19.0, measure_id=None, ext=5.0, excluded=None,
+                  a_per_min=0.06, first_moment_s=first_moment_s, response=response)
+        return m._emitter
+
+    assert emitter(None) is None
+    assert emitter(900.0) == (900.0, 0.0)
+    assert emitter(900.0, {"theta_s": 300.0, "tau_e_s": 600.0}) == (600.0, 300.0)
+    assert emitter(None, {"theta_s": 0.0, "tau_e_s": 400.0}) == (400.0, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -525,10 +530,10 @@ def _handler():
     thermostat.hass.async_create_task = MagicMock()
     thermostat.hass.async_create_background_task = MagicMock()
     thermostat.prop_algorithm = SmartPI(hass=MagicMock(), cycle_min=5, minimal_activation_delay=0,
-                                        minimal_deactivation_delay=0, name="room", tar_learning=True,
+                                        minimal_deactivation_delay=0, name="room",
                                         room_model=True)
     handler = SmartPIHandler(thermostat)
-    for attr in ("_store", "_tar_store", "_room_store"):
+    for attr in ("_store", "_history_store", "_room_store"):
         store = MagicMock()
         store.save_now = MagicMock(side_effect=lambda _x: AsyncMock()())
         store.async_load = AsyncMock(return_value=None)
@@ -567,8 +572,8 @@ def test_room_model_exclusion_names_the_window_that_turns_the_heater_off() -> No
             "hvac_off_reason": HVAC_OFF_REASON_WINDOW_DETECTION, "is_overpowering_detected": False,
             "on_percent": 0.0}
     t = SimpleNamespace(**base)
-    # The T_ar learning keeps its reason; the room model is told it is the window
-    assert SmartPIHandler._tar_exclusion(t, algo) == "hvac not heating"
+    # The room history keeps its reason; the room model is told it is the window
+    assert SmartPIHandler._history_exclusion(t, algo) == "hvac not heating"
     assert SmartPIHandler._room_model_exclusion(t, algo) == "window open"
     # A heater turned off by the user, window open or not, is not a window period
     t = SimpleNamespace(**dict(base, requested_hvac_mode=VThermHvacMode_OFF, hvac_off_reason="manual"))
@@ -593,7 +598,7 @@ class _ResetDuringJob:
 
 async def test_results_arriving_after_a_reset_are_dropped(monkeypatch) -> None:
     data = rsim.simulate(rsim.NO_MASS, 5.0)
-    m = RoomModelManager("room", "UTC", _tar(data))
+    m = RoomModelManager("room", "UTC", _history(data))
     m._emitter = (600.0, 120.0)
     calls = _fake_jobs(monkeypatch)
     await m.async_run(_ResetDuringJob(m), now=rsim.T0 + 4 * 86400.0 + 9 * 3600.0)
@@ -603,7 +608,7 @@ async def test_results_arriving_after_a_reset_are_dropped(monkeypatch) -> None:
 
 async def test_failure_after_a_reset_publishes_nothing(monkeypatch) -> None:
     data = rsim.simulate(rsim.NO_MASS, 5.0)
-    m = RoomModelManager("room", "UTC", _tar(data))
+    m = RoomModelManager("room", "UTC", _history(data))
     m._emitter = (600.0, 120.0)
 
     def boom(kind, snap):
@@ -617,7 +622,7 @@ async def test_failure_after_a_reset_publishes_nothing(monkeypatch) -> None:
 
 async def test_a_stopped_manager_starts_no_computation(monkeypatch) -> None:
     data = rsim.simulate(rsim.NO_MASS, 5.0)
-    m = RoomModelManager("room", "UTC", _tar(data))
+    m = RoomModelManager("room", "UTC", _history(data))
     m._emitter = (600.0, 120.0)
     calls = _fake_jobs(monkeypatch)
     m.stop()
@@ -627,7 +632,7 @@ async def test_a_stopped_manager_starts_no_computation(monkeypatch) -> None:
 
 async def test_a_stop_ends_the_running_computation_without_an_error(monkeypatch) -> None:
     data = rsim.simulate(rsim.NO_MASS, 5.0)
-    m = RoomModelManager("room", "UTC", _tar(data))
+    m = RoomModelManager("room", "UTC", _history(data))
     m._emitter = (600.0, 120.0)
 
     def job(kind, snap):

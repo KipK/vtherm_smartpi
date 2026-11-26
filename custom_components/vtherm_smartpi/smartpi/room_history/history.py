@@ -1,15 +1,14 @@
-"""Bounded history of the signals the T_ar learning needs (pure Python).
+"""Bounded history of the signals the room model needs (pure Python).
 
 Times are epoch seconds. The history keeps, over the last
-TAR_HISTORY_RETENTION_S:
+HISTORY_RETENTION_S:
 - the indoor temperature at each change of value;
 - the heater on/off edges. A PWM heater's edges are rebuilt from the applied
   cycles (on from the cycle start for power x cycle). A valve's applied power
   is recorded as a level held until its next change (pw_t, pw_v); its heater
   starts are the cycle starts with a positive level and the rises of the
   level, its heater cuts the falls of the level to zero;
-- the outdoor temperature, the setpoint, the SmartPI phase and the published
-  parameters (b, reliable cool dead time, response lag) at each change;
+- the outdoor temperature and the setpoint at each change;
 - the invalid intervals.
 Every list is capped; the zero-order-hold timelines keep their last sample
 before the retention cutoff.
@@ -17,16 +16,16 @@ before the retention cutoff.
 Data quality: samples enter only through record(), applied_cycle() and
 applied_level(), where
 explicit deterministic rules mark intervals invalid (``gaps``):
-- no observation for more than TAR_GAP_S (data gap, downtime);
+- no observation for more than HISTORY_GAP_S (data gap, downtime);
 - an unavailable indoor or outdoor temperature, or a command that is not known;
 - the downtime of a restart that is not bridged (see restart_bridge.py), from
   the last observation before it to the first one after it;
 - a physically impossible jump of the temperature (the sample is dropped; a new
-  level confirmed by TAR_SPIKE_CONFIRM samples is kept, with the jump invalid);
+  level confirmed by HISTORY_SPIKE_CONFIRM samples is kept, with the jump invalid);
 - the periods when SmartPI is not in control (reason given by the caller:
   window open, power shedding, safety mode, HVAC not heating, command overridden).
-Invalid intervals are never filled in: they break nights, identification bins
-and morning steps like a data gap.
+Invalid intervals are never filled in: they break quiet periods and
+identification bins like a data gap.
 
 Restarts: the heater state at the stop is saved with the history. Over a
 bridged restart it is held until the first command after it (the actuator
@@ -41,16 +40,16 @@ from typing import Any
 
 from ..quiet_periods import valid_spans as _valid_spans
 from .const import (
-    TAR_GAP_S,
-    TAR_SPIKE_CONFIRM,
-    TAR_SPIKE_MIN_C,
-    TAR_SPIKE_RATE_C_PER_H,
-    TAR_HISTORY_MAX_EDGES,
-    TAR_HISTORY_MAX_EVENTS,
-    TAR_HISTORY_MAX_LEVELS,
-    TAR_HISTORY_MAX_OUTDOOR,
-    TAR_HISTORY_MAX_TEMPERATURES,
-    TAR_HISTORY_RETENTION_S,
+    HISTORY_GAP_S,
+    HISTORY_MAX_EDGES,
+    HISTORY_MAX_EVENTS,
+    HISTORY_MAX_LEVELS,
+    HISTORY_MAX_OUTDOOR,
+    HISTORY_MAX_TEMPERATURES,
+    HISTORY_RETENTION_S,
+    HISTORY_SPIKE_CONFIRM,
+    HISTORY_SPIKE_MIN_C,
+    HISTORY_SPIKE_RATE_C_PER_H,
 )
 
 _TEMP_DIGITS = 3
@@ -66,10 +65,10 @@ def _cap(lst: list, n: int) -> None:
 def is_temperature_jump(dv: float, dt: float) -> bool:
     """A change of dv (C) within dt (s) that is not physical for a room temperature."""
     dt = max(dt, 1.0)
-    return dv > TAR_SPIKE_MIN_C and dv / dt * 3600.0 > TAR_SPIKE_RATE_C_PER_H
+    return dv > HISTORY_SPIKE_MIN_C and dv / dt * 3600.0 > HISTORY_SPIKE_RATE_C_PER_H
 
 
-class TarHistory:
+class RoomHistory:
     """Signals of one room over the retention window."""
 
     def __init__(self, valve: bool = False) -> None:
@@ -84,8 +83,6 @@ class TarHistory:
         self.on: list[float] = []
         self.off: list[float] = []
         self.setpoints: list[tuple[float, float]] = []
-        self.phases: list[tuple[float, str]] = []
-        self.params: list[tuple[float, float | None, float | None, float | None]] = []
         self.gaps: list[tuple[float, float]] = []
         self.first_t: float | None = None
         self.last_t: float | None = None
@@ -113,7 +110,7 @@ class TarHistory:
     def _invalid(self, a: float, b: float) -> None:
         if b > a:
             self.gaps.append((round(a, _TIME_DIGITS), round(b, _TIME_DIGITS)))
-            _cap(self.gaps, TAR_HISTORY_MAX_EVENTS)
+            _cap(self.gaps, HISTORY_MAX_EVENTS)
 
     def _touch(self, t: float) -> None:
         bridged = None
@@ -126,13 +123,13 @@ class TarHistory:
             self._saved_t = None
             if self.last_t is not None:
                 self.restarts.append((round(self.last_t, _TIME_DIGITS), round(t, _TIME_DIGITS), bridged))
-                _cap(self.restarts, TAR_HISTORY_MAX_EVENTS)
+                _cap(self.restarts, HISTORY_MAX_EVENTS)
         if bridged is False and self.last_t is not None:
             # A restart that is not bridged: only the downtime itself is invalid.
             # The actuator state over it is unknown, but a margin around it would
             # mark valid observations invalid without adding any information.
             self._invalid(self.last_t, t)
-        elif self.last_t is not None and t - self.last_t > TAR_GAP_S:
+        elif self.last_t is not None and t - self.last_t > HISTORY_GAP_S:
             self._invalid(self.last_t, t)
         if self.first_t is None:
             self.first_t = t
@@ -146,10 +143,6 @@ class TarHistory:
         temp: float | None,
         ext: float | None,
         setpoint: float | None,
-        phase: str | None,
-        b: float | None,
-        dtc: float | None,
-        lag: float | None,
         excluded: str | None = None,
     ) -> float | None:
         """Record one observation; returns the previous setpoint when the setpoint changed.
@@ -182,22 +175,15 @@ class TarHistory:
             if not self.ext_v or self.ext_v[-1] != v:
                 self.ext_t.append(round(t, _TIME_DIGITS))
                 self.ext_v.append(v)
-                _cap(self.ext_t, TAR_HISTORY_MAX_OUTDOOR)
-                _cap(self.ext_v, TAR_HISTORY_MAX_OUTDOOR)
+                _cap(self.ext_t, HISTORY_MAX_OUTDOOR)
+                _cap(self.ext_v, HISTORY_MAX_OUTDOOR)
         prev_sp = None
         if setpoint is not None:
             sp = round(float(setpoint), _TEMP_DIGITS)
             if not self.setpoints or self.setpoints[-1][1] != sp:
                 prev_sp = self.setpoints[-1][1] if self.setpoints else None
                 self.setpoints.append((round(t, _TIME_DIGITS), sp))
-                _cap(self.setpoints, TAR_HISTORY_MAX_EVENTS)
-        if phase is not None and (not self.phases or self.phases[-1][1] != phase):
-            self.phases.append((round(t, _TIME_DIGITS), phase))
-            _cap(self.phases, TAR_HISTORY_MAX_EVENTS)
-        p = (b, dtc, lag)
-        if not self.params or self.params[-1][1:] != p:
-            self.params.append((round(t, _TIME_DIGITS), *p))
-            _cap(self.params, TAR_HISTORY_MAX_EVENTS)
+                _cap(self.setpoints, HISTORY_MAX_EVENTS)
         return prev_sp
 
     def _rewind(self, t: float) -> None:
@@ -216,8 +202,7 @@ class TarHistory:
         n = keep(self.pw_t)
         del self.pw_t[n:], self.pw_v[n:]
         del self.on[keep(self.on):], self.off[keep(self.off):]
-        for lst in (self.setpoints, self.phases, self.params):
-            del lst[bisect.bisect_right([x[0] for x in lst], t):]
+        del self.setpoints[bisect.bisect_right([x[0] for x in self.setpoints], t):]
         self.gaps = [(a, min(b, t)) for a, b in self.gaps if a < t]
         self.restarts = [r for r in self.restarts if r[1] <= t]
         if self.invalid_since is not None and self.invalid_since > t:
@@ -240,7 +225,7 @@ class TarHistory:
             self.first_t = None
         elif self.first_t is not None:
             self.first_t = min(self.first_t, self.last_t)
-        if self.last_t is not None and t - self.last_t <= TAR_GAP_S:
+        if self.last_t is not None and t - self.last_t <= HISTORY_GAP_S:
             self._invalid(self.last_t, t)  # a longer one is marked by the next observation
 
     def _record_temperature(self, t: float, temp: float) -> bool:
@@ -251,10 +236,10 @@ class TarHistory:
             jump = is_temperature_jump(abs(v - self.temp_v[-1]), t - self.temp_t[-1])
         if jump:
             # Not physical: dropped, unless a new level is confirmed by consecutive samples.
-            if self._spike and abs(self._spike[-1][1] - v) > TAR_SPIKE_MIN_C:
+            if self._spike and abs(self._spike[-1][1] - v) > HISTORY_SPIKE_MIN_C:
                 self._spike = []
             self._spike.append((t, v))
-            if len(self._spike) < TAR_SPIKE_CONFIRM:
+            if len(self._spike) < HISTORY_SPIKE_CONFIRM:
                 return False
         if self._spike:
             # the jump ends (spike) or its new level is confirmed: the jump stays invalid
@@ -263,8 +248,8 @@ class TarHistory:
         if not self.temp_v or self.temp_v[-1] != v:
             self.temp_t.append(round(t, _TIME_DIGITS))
             self.temp_v.append(v)
-            _cap(self.temp_t, TAR_HISTORY_MAX_TEMPERATURES)
-            _cap(self.temp_v, TAR_HISTORY_MAX_TEMPERATURES)
+            _cap(self.temp_t, HISTORY_MAX_TEMPERATURES)
+            _cap(self.temp_v, HISTORY_MAX_TEMPERATURES)
         return True
 
     def invalid_intervals(self, now: float | None = None) -> list[tuple[float, float]]:
@@ -283,7 +268,7 @@ class TarHistory:
         t = round(t, _TIME_DIGITS)
         lst = self.on if on else self.off
         lst.append(t)
-        _cap(lst, TAR_HISTORY_MAX_EDGES)
+        _cap(lst, HISTORY_MAX_EDGES)
         self._heater_on = on
 
     def _advance(self, now: float) -> None:
@@ -321,15 +306,15 @@ class TarHistory:
         tr = round(t, _TIME_DIGITS)
         if level > 0.0 and (cycle_start or level > self._level):
             self.on.append(tr)
-            _cap(self.on, TAR_HISTORY_MAX_EDGES)
+            _cap(self.on, HISTORY_MAX_EDGES)
         elif level <= 0.0 < self._level:
             self.off.append(tr)
-            _cap(self.off, TAR_HISTORY_MAX_EDGES)
+            _cap(self.off, HISTORY_MAX_EDGES)
         if not self.pw_v or self.pw_v[-1] != level:
             self.pw_t.append(tr)
             self.pw_v.append(level)
-            _cap(self.pw_t, TAR_HISTORY_MAX_LEVELS)
-            _cap(self.pw_v, TAR_HISTORY_MAX_LEVELS)
+            _cap(self.pw_t, HISTORY_MAX_LEVELS)
+            _cap(self.pw_v, HISTORY_MAX_LEVELS)
         self._level = level
 
     def power_levels(self) -> tuple[list[float], list[float]] | None:
@@ -394,23 +379,11 @@ class TarHistory:
         if self._restart_pending and self._restart_bridged is None:
             self.resolve_restart(False, t)
 
-    def restarts_between(self, a: float, b: float) -> list[tuple[float, float, bool]]:
-        """Restart markers whose stop or resume lies in [a, b), or that span it."""
-        return [r for r in self.restarts if r[0] < b and r[1] >= a]
-
-    def mark_interrupted(self, t: float) -> None:
-        """Close the heater state when the observation stops (restart, HVAC off)."""
-        self._advance(t)
-        if self._heater_on:
-            self._edge(min(t, self._off_due or t), False)
-        self._off_due = None
-        self._cycle_start = None
-
     # ------------------------------------------------------------------
     # Pruning and queries
     # ------------------------------------------------------------------
     def prune(self, now: float) -> None:
-        cutoff = now - TAR_HISTORY_RETENTION_S
+        cutoff = now - HISTORY_RETENTION_S
         i = bisect.bisect_left(self.temp_t, cutoff)
         del self.temp_t[:i]
         del self.temp_v[:i]
@@ -422,28 +395,12 @@ class TarHistory:
         i = max(0, bisect.bisect_left(self.pw_t, cutoff) - 1)
         del self.pw_t[:i]
         del self.pw_v[:i]
-        for lst in (self.setpoints, self.phases, self.params):
-            i = max(0, bisect.bisect_left([x[0] for x in lst], cutoff) - 1)
-            del lst[:i]
+        i = max(0, bisect.bisect_left([x[0] for x in self.setpoints], cutoff) - 1)
+        del self.setpoints[:i]
         self.gaps = [g for g in self.gaps if g[1] >= cutoff]
         self.restarts = [r for r in self.restarts if r[1] >= cutoff]
         if self.first_t is not None and self.first_t < cutoff:
             self.first_t = cutoff
-
-    def gap_overlaps(self, a: float, b: float) -> bool:
-        """True when [a, b) holds an invalid interval or lies outside the recorded span."""
-        if self.first_t is None or self.last_t is None or a < self.first_t or b > self.last_t + TAR_GAP_S:
-            return True
-        return any(g0 < b and g1 > a for g0, g1 in self.invalid_intervals())
-
-    def setpoint_at(self, t: float) -> float | None:
-        v = None
-        for ts, sp in self.setpoints:
-            if ts <= t:
-                v = sp
-            else:
-                break
-        return v
 
     def is_empty(self) -> bool:
         return not self.temp_t
@@ -467,8 +424,6 @@ class TarHistory:
             "pw_t": self.pw_t,
             "pw_v": self.pw_v,
             "setpoints": [list(x) for x in self.setpoints],
-            "phases": [list(x) for x in self.phases],
-            "params": [list(x) for x in self.params],
             "gaps": [list(x) for x in self.gaps],
             "first_t": self.first_t,
             "last_t": self.last_t,
@@ -485,7 +440,7 @@ class TarHistory:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "TarHistory":
+    def from_dict(cls, data: dict[str, Any] | None) -> "RoomHistory":
         h = cls()
         if not isinstance(data, dict):
             return h
@@ -500,8 +455,6 @@ class TarHistory:
             h.pw_t = [float(x) for x in data.get("pw_t", [])]
             h.pw_v = [float(x) for x in data.get("pw_v", [])]
             h.setpoints = [(float(a), float(b)) for a, b in data.get("setpoints", [])]
-            h.phases = [(float(a), str(b)) for a, b in data.get("phases", [])]
-            h.params = [(float(x[0]), x[1], x[2], x[3]) for x in data.get("params", [])]
             h.gaps = [(float(a), float(b)) for a, b in data.get("gaps", [])]
             h.first_t = data.get("first_t")
             h.last_t = data.get("last_t")

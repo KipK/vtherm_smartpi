@@ -225,7 +225,7 @@ def test_remove_stops_the_learning_computations_and_cancels_their_tasks():
     """The executor jobs are told to stop and the background tasks are cancelled."""
     handler, thermostat, store = _build_handler()
     algo = thermostat.prop_algorithm
-    algo.tar_learning = MagicMock()
+    algo.room_history = MagicMock()
     algo.room_model = MagicMock()
     task = MagicMock()
     task.done.return_value = False
@@ -233,7 +233,7 @@ def test_remove_stops_the_learning_computations_and_cancels_their_tasks():
 
     handler.remove()
 
-    algo.tar_learning.stop.assert_called_once_with()
+    algo.room_history.stop.assert_called_once_with()
     algo.room_model.stop.assert_called_once_with()
     assert algo._start.reading._abort.is_set()
     task.cancel.assert_called_once_with()
@@ -252,11 +252,11 @@ def _managers(*active: bool):
 
 
 def test_one_background_loop_serves_the_three_executor_jobs():
-    """T_ar, room model and the fit of the readings are started by one task, once while it runs."""
+    """Room history, room model and the fit of the readings are started by one task, once while it runs."""
     handler, thermostat, _store = _build_handler()
     algo = thermostat.prop_algorithm
     tar, room, reading = _managers(True, True, True)
-    algo.tar_learning, algo.room_model, algo._start.reading = tar, room, reading
+    algo.room_history, algo.room_model, algo._start.reading = tar, room, reading
     thermostat.hass.async_create_background_task = MagicMock(side_effect=lambda coro, name: coro.close() or MagicMock(done=lambda: False))
 
     handler._process_learning(algo)
@@ -269,7 +269,7 @@ def test_one_background_loop_serves_the_three_executor_jobs():
 def test_no_loop_starts_without_a_due_job():
     handler, thermostat, _store = _build_handler()
     algo = thermostat.prop_algorithm
-    algo.tar_learning, algo.room_model, algo._start.reading = _managers(False, False, False)
+    algo.room_history, algo.room_model, algo._start.reading = _managers(False, False, False)
     thermostat.hass.async_create_background_task = MagicMock()
 
     handler._process_learning(algo)

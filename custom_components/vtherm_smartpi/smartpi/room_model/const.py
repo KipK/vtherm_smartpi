@@ -37,6 +37,8 @@ RM_D_MAX_REL = 0.3
 # a coarse sensor uses q^2 / 12 with each change read at the midpoint of its
 # two levels (the crossing of the quantisation boundary).
 RM_R_PRECISE = 0.04 ** 2 / 12.0 + 0.01 ** 2 / 12.0
+# A sensor whose step is at most this is precise (the wall structure needs it).
+RM_PRECISE_Q = 0.015
 # A downtime up to this long resumes the saved state; a longer one restarts the
 # observer at the wall equilibrium.
 RM_RESUME_MAX_S = 3.0 * H
@@ -82,6 +84,9 @@ RM_WALL_FADE_S = 0.5 * H
 # ---------------------------------------------------------------------------
 # Identification
 # ---------------------------------------------------------------------------
+# A window holds this many consecutive quiet periods; it is compared with the
+# window of the periods before it.
+RM_WINDOW_PERIODS = 3
 RM_FIT_STEP_S = 60.0
 RM_MIN_SEGMENT_S = 1.0 * H
 RM_MIN_EVENTS = 40
@@ -114,8 +119,8 @@ RM_EMITTER_REFINE_MAX = 10
 # quantile of a chi-square with one degree of freedom: (J - J_min) / J_min x
 # N_eff > RM_EMITTER_CHI2. An optimum at an end of the grid with a
 # significant profile is refused (the emitter lies outside); a profile that
-# is not significant leaves the emitter undetermined, and the refined T_ar
-# value is used when published.
+# is not significant leaves the emitter undetermined, and the grid optimum is
+# used.
 RM_EMITTER_CHI2 = 3.841
 # A structure whose heating response a lies beyond this factor of the online
 # estimate (either way) is refused: it lumps the walls into the air.

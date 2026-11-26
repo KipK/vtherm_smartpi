@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 - Response model: an event whose dead time plus response time constant is more than twice, or less than half, the one of the model in force (or of the values carried over from the previous version while the mode has no event) is kept aside and changes nothing (`not used: far from the model in force, waiting for a confirming event`); a later event on the same side that agrees with it within 20 % confirms it, and both replace the history of the mode. Calibration events and the first event of a mode without a model are taken as before. A single regulation event at night in an occupied bedroom had read the slow mode of the room, replaced the carried-over values and stretched the anticipation horizon from about 5 minutes to almost 3 hours, which drove a limit cycle. A model saved by an earlier version is repaired at its load: the carried-over values come back as the reference when they can be computed again from the saved state, and the saved events are read again through the rule. New diagnostic `analysis.learning.response_model.pending_outliers`.
+- Emitter lag (`T_ar`) learning removed: the response model already gives the dead time and the response time constant of the emitter. The room model's emitter search splits each tried emitter lag with the response time constant of the heating response model instead of the learned one; without a response model it searches a first order from the heating dead time after a start. The `tar_learning` diagnostics block is removed: the quiet periods (`reason`, `count`, `last`), the data quality (`data_invalid_reason`) and the length of the recorded history (`history_h`) are shown under `room_model`. The recorded history and the quiet periods saved by an earlier version are kept; its learned values are ignored.
 - Dead time after a stop removed: SmartPI measures only the dead time after a start (the gains read it), what follows a stop is read by the response model. In heating `model.deadtime_cool_s` and `model.deadtime_cool_reliable` are no longer published (in cooling `model.deadtime_heat_s` and `model.deadtime_heat_reliable`), nor `analysis.deadtime.cool_last_outcome` in heating (`heat_last_outcome` in cooling) and `calibration.deadtime_stop_s`; `analysis.deadtime.state` no longer waits after a stop. Without a response model the anticipation horizon falls back to the dead time after a start (source `dead time`, was `dead times`). The free-running trend before a start is read from one emitter lag of the model after the last stop (the dead time after a start without a model). The stop step of the measurement pulses ends when the measurement event of the pulse is closed, for the pulses of the direct start as for those of a calibration; the early confirmation of the peak after a stop goes with the dead time after a stop. The emitter lag learning starts the fit of a night three emitter lags after the cut (no longer at least 1.5 dead times after a stop). A state saved by an earlier version loads: its dead times after a stop are ignored, the ones after a start are kept and seed the response model as before.
 - Response model: a fit is rejected (`temperature rise too small`) when the rise of the room is under 0.10 °C, besides the floor of three sensor steps; on a 0.01 °C sensor a rise of a few steps fitted a wrong dead time and response time constant, and being in darkness replaced the good event in daylight.
 - Integral holds read the response model: the holds after a heater start, after a window or power-shedding resume and after a heating unavailable period last the effective dead time of the model of the mode (dead time plus half the response time constant; three quarters of the emitter lag when the dead time is assumed); without a published model they last the dead time as before. The gains, and the pre-model gains of the direct start, read the dead time after a start of the mode. The emitter lag learning no longer changes the gains or the holds: its diagnostics `tar_learning.applied_s`, `gains_s`, `source`, `reference_s`, `in_force_s`, `in_force_source`, `out_of_bound` and `limit_reason`, and the history series `deadtime.applied_s`, are removed. New diagnostics `analysis.control.gain_delay_s` (the dead time read by the gain rule), `gain_delay_source` (`dead time`) and `gain_closed_loop_time_s`. The room model takes its emitter from the heating response model when published.
@@ -26,7 +27,7 @@ All notable changes to this project will be documented in this file.
   bootstrap ends, until the continuous learning has its own. The regulation
   during the bootstrap is unchanged.
 - The curve fits of these readings run in the background, one at a time with
-  the emitter lag learning and the room model, and never delay the regulation.
+  the room history and the room model, and never delay the regulation.
 - Feed-forward: the holding power is the only feed-forward. The "Use FF3"
   option, the slow feed-forward trim, the thermal twin and its time-to-setpoint
   estimate are removed. The diagnostics groups `feedforward.fftrim`,
@@ -115,10 +116,10 @@ All notable changes to this project will be documented in this file.
   long the heater takes to warm the room, from the morning comfort steps and
   from a multi-day model of the room, for the room model. Shown in
   `tar_learning`.
-- Quiet periods: these learnings use only stretches without sun (computed from
+- Quiet periods: the room model uses only stretches without sun (computed from
   the home position set in Home Assistant), at a constant setpoint, with valid
   data. No hour is fixed and nothing has to be declared. Without a home
-  position, nothing is learned and the diagnostics say why.
+  position, no quiet period is found and the diagnostics say why.
 - Room model (heating, PWM heaters): SmartPI identifies a model of the room
   with its air, walls and emitter, follows its state and publishes temperature
   forecasts and their errors in `room_model`. A daily heat balance measures the
@@ -132,8 +133,7 @@ All notable changes to this project will be documented in this file.
   nothing is excluded from the learning data. `control.last_restart` shows the
   last decision.
 - Quiet periods: a night setpoint raised while the room is still above the new
-  value calls for no heat and no longer ends the night; such a rise is not a
-  comfort step either.
+  value calls for no heat and no longer ends the night.
 - Regulation: after a setpoint rise, a room that stays just short of the
   setpoint (cold walls) no longer keeps the slow feed-forward correction and
   FF3 blocked for hours.

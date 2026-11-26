@@ -4,7 +4,7 @@
 
 SmartPI is a Home Assistant custom integration (`custom_components/vtherm_smartpi`, domain `vtherm_smartpi`) that registers a **proportional algorithm plugin** for **Versatile Thermostat (VT)**. VT owns the thermostat entity, the sensors, the PWM/valve cycle and the safety logic; SmartPI computes the normalized power command in [0, 1] each tick. SmartPI talks to VT only through the `vtherm_api` package (handler factory registration, applied-command receipts).
 
-SmartPI is a discrete **PI regulator on a 1R1C thermal model** with adaptive gains, feed-forward, dead-time estimation, learning governance, calibration and valve-curve linearization. The 0.7 line adds emitter lag learning, a room model, quiet-period selection and a heating balance. Theory basis: Astrom & Hagglund, *PID Controllers* (2nd ed.) (see `theory.md`).
+SmartPI is a discrete **PI regulator on a 1R1C thermal model** with adaptive gains, feed-forward, dead-time estimation, learning governance, calibration and valve-curve linearization. The 0.7 line adds a room history, a room model and quiet-period selection. Theory basis: Astrom & Hagglund, *PID Controllers* (2nd ed.) (see `theory.md`).
 
 Users install it through HACS (zip release) or by copying the integration folder into Home Assistant. Minimum HA 2025.8 (`hacs.json`), Python >= 3.13, VT >= 10.6.2 (enforced at setup by `smartpi/compatibility.py`), `vtherm_api >= 0.7.0` (see `manifest.json` for the exact requirements).
 
@@ -33,7 +33,7 @@ A sibling folder may be absent in another environment; the SmartPI repo is self-
 - `master`: released line (0.6.x). Releases are tags `X.Y.Z` on master; a workflow builds the zip and a draft release.
 - `dev-0.7`: development line with the 0.7 features; its user-visible changes are in `CHANGELOG.md` under `[Unreleased]`.
 - Other short-lived branches exist for experiments; they are not part of the shared knowledge.
-- Dev install: the maintainer copies `custom_components/vtherm_smartpi` into Home Assistant and restarts it; HACS keeps showing the last released version. To know what runs, look for a diagnostics field introduced by the expected commit (for example `analysis.learning.heating_balance`), not the HACS version. After copying from a version without restart context (0.6.x), the first restart shows `last_restart: no saved state of the last tick`, which is expected.
+- Dev install: the maintainer copies `custom_components/vtherm_smartpi` into Home Assistant and restarts it; HACS keeps showing the last released version. To know what runs, look for a diagnostics field introduced by the expected commit (for example `analysis.learning.response_model`), not the HACS version. After copying from a version without restart context (0.6.x), the first restart shows `last_restart: no saved state of the last tick`, which is expected.
 
 ## Manifest requirement trap
 

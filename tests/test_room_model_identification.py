@@ -23,7 +23,7 @@ from custom_components.vtherm_smartpi.smartpi.room_model.const import (
 )
 from custom_components.vtherm_smartpi.smartpi.room_model.energy_balance import heater_timeline
 from custom_components.vtherm_smartpi.smartpi.room_model.periods import fit_periods, windows
-from custom_components.vtherm_smartpi.smartpi.tar_learning.clock import LocalClock
+from custom_components.vtherm_smartpi.smartpi.room_history.clock import LocalClock
 
 D0 = rsim.day_of(rsim.T0)
 H = 3600.0
@@ -582,6 +582,56 @@ def test_emitter_grid_does_not_depend_on_the_dead_time_in_force(lag_data) -> Non
     assert a["costs"] == b["costs"] and a["first_moment"] == b["first_moment"]
 
 
+def test_emitter_shape_without_delay_wins_over_the_model_share(lag_data) -> None:
+    """A room with a pure first-order emitter: the share of the response model (a delay that does not exist) loses
+    against the pure first order for every first moment tried, and the chosen share reaches the record."""
+    rec = _job(lag_data, LAG_ONLY, 150.0, delay_share=0.3, te_pub=None)
+    em = rec["emitter"]
+    assert em["source"] == "grid" and em["share"] == 0.0 and em["L"] == 0.0
+    assert em["first_moment"] == pytest.approx(600.0, rel=0.1)
+    assert rec["full"]["ok"]
+    # Same cost profile as without a share: the pure first order is the shape kept on the whole grid
+    assert em["costs"] == _job(lag_data, LAG_ONLY, 150.0, delay_share=None, te_pub=None)["emitter"]["costs"]
+
+
+def test_emitter_shape_with_the_model_share_wins_for_a_real_delay() -> None:
+    plant = dict(rsim.NO_MASS, tau_e=420.0, L=180.0)
+    data = rsim.simulate(plant, 4.5)
+    rec = _job(data, plant, 600.0, delay_share=0.3, te_pub=None)
+    em = rec["emitter"]
+    assert em["source"] == "grid" and em["share"] == 0.3
+    assert em["L"] == pytest.approx(0.3 * em["first_moment"], abs=0.2)
+    assert em["first_moment"] == pytest.approx(600.0, rel=0.1)
+    only_first_order = _job(data, plant, 600.0, delay_share=None, te_pub=None)["emitter"]
+    assert em["significance"] is not None and min(em["costs"]) < min(only_first_order["costs"])
+
+
+def test_emitter_shapes_are_both_tried_and_the_lower_cost_kept(monkeypatch) -> None:
+    """Each first moment (grid and Brent) is fitted with share 0 and with the model share; None cost loses."""
+    seen = []
+
+    def fake(snap, periods, fm, te_pub, gain, delay_share=None):
+        seen.append((round(fm, 3), delay_share))
+        shape = 0.0 if not delay_share else 1.0
+        base = 1.0 + 0.5 * math.log(fm / 400.0) ** 2
+        cost = base * (1.0 + shape * 0.1) if fm < 1000.0 else None if shape == 0.0 else base
+        return fm * (1.0 - (delay_share or 0.0)), fm * (delay_share or 0.0), f"data@{shape}", {
+            "cost": cost, "check": {"n_eff": 50.0}} if cost is not None else None
+
+    monkeypatch.setattr(jobs, "_full_fit", fake)
+    em = jobs.refine_emitter({"delay_share": 0.25}, [], "in force", 300.0, 0.0)
+    assert em["share"] == 0.0 and em["L"] == 0.0 and em["data"] == "data@0.0"
+    assert {s for _, s in seen} == {0.0, 0.25}
+    assert all(sum(1 for fm, s in seen if fm == f and s == 0.0) == 1 for f, _ in seen)
+    # Past 1000 s the pure first order has no fit: the share is the shape kept there
+    assert jobs._best_shape({"delay_share": 0.25}, [], 2000.0, None, 0.0)[4] == 0.25
+    # Zero or no share: one fit per first moment, split as the snapshot says
+    seen.clear()
+    jobs._best_shape({"delay_share": 0.0}, [], 500.0, None, 0.0)
+    jobs._best_shape({}, [], 500.0, None, 0.0)
+    assert seen == [(500.0, 0.0), (500.0, None)]
+
+
 def test_emitter_optimum_at_the_edge_with_a_marked_profile_is_refused() -> None:
     plant = dict(rsim.NO_MASS, tau_e=9000.0, L=0.0)
     data = rsim.simulate(plant, 4.5)
@@ -597,7 +647,7 @@ def _fake_profile(monkeypatch, costs, n_eff: float) -> list:
     """jobs._full_fit replaced by a cost profile (a function of the first moment)."""
     calls = []
 
-    def fake(snap, periods, fm, te_pub, gain):
+    def fake(snap, periods, fm, te_pub, gain, delay_share=None):
         calls.append(fm)
         return fm, 0.0, f"data@{fm:.1f}", {"cost": costs(fm), "check": {"n_eff": n_eff}}
 
@@ -610,7 +660,7 @@ def test_emitter_profile_significance_against_the_residual_variance(monkeypatch)
     residual (chi-square, one degree of freedom, 95 %)."""
     grid = RM_EMITTER_GRID_S
     # Optimum at the low edge, 4 % rise at the far end: with 40 effective residuals 1.6 < 3.84, not significant.
-    # Not refused; without a refined T_ar value the grid optimum is used, with one the emitter in force.
+    # Not refused; without a response time constant the grid optimum is used, with one the emitter in force.
     calls = _fake_profile(monkeypatch, lambda fm: 1.0 + 0.04 * (fm - 60.0) / 3540.0, 40.0)
     em = jobs.refine_emitter({}, [], "in force", 300.0, 0.0)
     assert em["edge"] is False and em["flat"] is True and em["significance"] == pytest.approx(1.6)
@@ -768,3 +818,13 @@ def test_a_stop_ends_the_fit_at_its_next_evaluation(mass_data) -> None:
 
     with pytest.raises(job_abort.JobAborted):
         job_abort.run(stop, fit_after_stop)
+
+
+def test_emitter_split_by_delay_share() -> None:
+    from custom_components.vtherm_smartpi.smartpi.room_model.emitter import split_first_moment
+
+    assert split_first_moment(1000.0, None, 0.2) == pytest.approx((800.0, 200.0))
+    # The share wins over the cap
+    assert split_first_moment(1000.0, 300.0, 0.2) == pytest.approx((800.0, 200.0))
+    assert split_first_moment(1000.0, 600.0) == (600.0, 400.0)
+    assert split_first_moment(1000.0, None) == (1000.0, 0.0)

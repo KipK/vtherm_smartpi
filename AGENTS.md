@@ -4,7 +4,7 @@ Instructions for any AI coding or debugging agent (Claude Code, Codex, others) w
 
 ## What this is
 
-SmartPI is a Home Assistant custom integration (`custom_components/vtherm_smartpi`) that plugs into **Versatile Thermostat (VT)** as a proportional algorithm through the `vtherm_api` package. It is a **discrete PI regulator on a 1R1C thermal model** (adaptive gains, feed-forward, dead-time estimation, learning governance, calibration, valve linearization; 0.7 line: emitter-delay learning, room model, quiet periods, heating balance). It follows Astrom & Hagglund, *PID Controllers* (2nd ed.). VT owns the entity, sensors, PWM/valve cycle and safety; SmartPI computes a normalized power in [0, 1]. Branches: `master` = released 0.6.x, `dev-0.7` = development.
+SmartPI is a Home Assistant custom integration (`custom_components/vtherm_smartpi`) that plugs into **Versatile Thermostat (VT)** as a proportional algorithm through the `vtherm_api` package. It is a **discrete PI regulator on a 1R1C thermal model** (adaptive gains, feed-forward, dead-time estimation, learning governance, calibration, valve linearization; 0.7 line: response model (dead time and response time constant), room model, quiet periods). It follows Astrom & Hagglund, *PID Controllers* (2nd ed.). VT owns the entity, sensors, PWM/valve cycle and safety; SmartPI computes a normalized power in [0, 1]. Branches: `master` = released 0.6.x, `dev-0.7` = development.
 
 ## Start of a session: what to read
 
@@ -51,7 +51,7 @@ Python >= 3.13, virtualenv `.venv`. Tests import `versatile_thermostat` and `vth
 
 ## Repository map (short)
 
-- `custom_components/vtherm_smartpi/` - integration: `__init__.py` (setup, services), `handler.py` (VT bridge), `algo.py` (`SmartPI` orchestrator), `config_flow.py`, `sensor.py` (diagnostics sensor), `state_store.py`, `smartpi/` (all domain logic: controller, gains, setpoint, learning, feed-forward, diagnostics, `room_model/`, `tar_learning/`, `quiet_periods/`), `translations/`.
+- `custom_components/vtherm_smartpi/` - integration: `__init__.py` (setup, services), `handler.py` (VT bridge), `algo.py` (`SmartPI` orchestrator), `config_flow.py`, `sensor.py` (diagnostics sensor), `state_store.py`, `smartpi/` (all domain logic: controller, gains, setpoint, learning, feed-forward, diagnostics, `room_model/`, `room_history/`, `quiet_periods/`), `translations/`.
 - `tests/` - pytest suite with fakes; `documentation/{en,fr}/`, `cards/`, `README*.md`, `CHANGELOG.md`.
 - `plans/`, `dev_tests/`, `tools/` are gitignored local folders of the maintainer (plans, reference notes, bench drivers): they may not exist for you; nothing in `.agents/` depends on them.
 - Full map: `.agents/context/architecture.md`.

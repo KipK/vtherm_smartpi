@@ -116,8 +116,17 @@ class CommandTimeline:
         return tl
 
 
-def split_first_moment(first_moment_s: float, te_pub: float | None) -> tuple[float, float]:
-    """(tau_e, L) of an emitter first moment: the refined first-order part when known, capped, the delay the rest."""
+def split_first_moment(first_moment_s: float, te_pub: float | None,
+                       delay_share: float | None = None) -> tuple[float, float]:
+    """(tau_e, L) of an emitter first moment.
+
+    With delay_share (delay over delay plus time constant of the response model in force): the delay is that share of
+    the first moment, the first-order part the rest. Otherwise with te_pub: the first-order part is te_pub, capped at
+    the first moment, the delay the rest. Otherwise a pure first order.
+    """
+    if delay_share is not None:
+        lag = first_moment_s * min(max(float(delay_share), 0.0), 1.0)
+        return first_moment_s - lag, lag
     tau = first_moment_s if te_pub is None else min(float(te_pub), first_moment_s)
     return tau, first_moment_s - tau
 

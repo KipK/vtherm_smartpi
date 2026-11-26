@@ -397,12 +397,6 @@ def _build_valve_diagnostics(algo: SmartPI) -> Dict[str, Any] | None:
     return {**config, "quantization_step_linear_percent": step}
 
 
-def _build_tar_learning(algo: SmartPI) -> Dict[str, Any]:
-    """Return the T_ar learning state (fast and refined values)."""
-    dt_est = algo.dt_est
-    return algo.tar_learning.diagnostics(dt_est.deadtime_heat_s, dt_est.deadtime_heat_reliable)
-
-
 def _build_room_model(algo: SmartPI) -> Dict[str, Any]:
     """Return the room model state (its holding power is shown under feedforward)."""
     return algo.room_model.diagnostics()
@@ -424,8 +418,6 @@ def build_published_diagnostics(algo: SmartPI) -> Dict[str, Any]:
         "analysis": _build_analysis(algo),
         "valve": _build_valve_diagnostics(algo),
     }
-    if getattr(algo, "tar_learning", None) is not None:
-        tree["tar_learning"] = _build_tar_learning(algo)
     if getattr(algo, "room_model", None) is not None:
         tree["room_model"] = _build_room_model(algo)
     return tree

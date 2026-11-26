@@ -25,7 +25,7 @@ is seen at the first tick after it (``RestartAfter``) and returns one
 - the wall clock did not jump (no negative downtime, no tick in the future).
 
 Versatile Thermostat behaves the same way at a stop and at a start in HEAT and
-in COOL. The learning histories (T_ar, room model) are HEAT-only: they apply the
+in COOL. The learning histories (room history, room model) are HEAT-only: they apply the
 bridge only to a restart in HEAT (``RestartDecision.heat_bridged``).
 
 Every component consults the decision; none decides on its own. Otherwise the
@@ -48,7 +48,7 @@ from typing import Any
 
 from ..hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from .const import RESTART_BRIDGE_MAX_GAP_S
-from .tar_learning.history import is_temperature_jump
+from .room_history.history import is_temperature_jump
 
 _HEAT = str(VThermHvacMode_HEAT)
 _ACTIVE_MODES = (_HEAT, str(VThermHvacMode_COOL))

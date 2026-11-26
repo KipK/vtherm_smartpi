@@ -49,8 +49,8 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
 `versatile_thermostat/thermostat_prop.py`.
 
 - `init_algorithm` (entity creation): resolves config; builds the stores from the slugified thermostat name
-  (`state_store.py::SmartPIStateStore`, `SmartPITarStore`, `SmartPIRoomModelStore`); writes the min delays on the
-  thermostat and scheduler; builds `algo.py::SmartPI` (`tar_learning=True`, `room_model=True`,
+  (`state_store.py::SmartPIStateStore`, `SmartPIRoomHistoryStore`, `SmartPIRoomModelStore`); writes the min delays on the
+  thermostat and scheduler; builds `algo.py::SmartPI` (`room_model=True`,
   `learning_start` = option `smart_pi_learning_start`, `bootstrap` when the entry has no such key) as
   `thermostat.prop_algorithm`; configures the valve curve (active only if configured and the scheduler
   `is_valve_mode`; invalid parameters disable it); sets `restart_exclusion_probe`; sends
@@ -75,7 +75,7 @@ VT calls the `InterfacePropAlgorithmHandler` methods (contract in `vtherm_api/in
   request tag and only consumes VT's `AppliedCommandReceipt` (`kind` CYCLE_START or UPDATE) through
   `SmartPI.on_command_receipt`.
   - `SmartPI._commit_applied_command` commits the applied power (valve curve inverted to linear) and feeds the
-    dead-time episode status, the emitter lag learning and the room model; on a cycle start it resets per-cycle
+    dead-time episode status, the room history and the room model; on a cycle start it resets per-cycle
     governance. The legacy path (`on_cycle_started`, `on_applied_power_updated`) commits the same way.
   - The receipt also feeds the measurement record (`LearningStart.note_receipt`): for a switch, the cycle it starts
     (start, on time, duration) becomes the real on/off edges of the record's power channel; a valve or a scheduler
@@ -98,9 +98,9 @@ Handler order (`handler.py::control_heating`):
 2. `guards.check_guard_cut` / `check_guard_kick` may set `force`.
 3. `cycle_boundary = force or no scheduler or not cycle running`; `algo.vt_safety_override`;
    `algo.resolve_restart(...)` (once per session).
-4. `prop_algorithm.calculate(...)`, then `note_control_exclusion`, `observe_tar_learning`, `observe_room_model`
+4. `prop_algorithm.calculate(...)`, then `note_control_exclusion`, `observe_room_history`, `observe_room_model`
    (`SmartPIHandler._process_learning` then starts, when a manager is due, the single background loop that runs the
-   jobs of the emitter lag learning, the room model and the fit of the measurement readings one after the other, and
+   jobs of the room history (sun scan), the room model and the fit of the measurement readings one after the other, and
    schedules the saves of the managers that have a store; the loop task is cancelled with the managers' `stop()` at unload).
 5. With `smart_pi_allow_pwm_cycle_force`: deadband / near-band transitions set `force`.
 6. Actuation: HVAC OFF turns the device off or cancels the cycle; `on_percent is None` keeps the switch state;
@@ -170,7 +170,7 @@ Pipeline inside `calculate`, in execution order:
 
 - Stores (HA `Store`, version 1; keys in `state_store.py`, `{}` = slugified thermostat name):
   `vtherm_smartpi.{}` (algorithm, `SmartPI.save_state`, `"version": 2`); legacy `versatile_thermostat.smartpi.{}`
-  (read only when the primary is empty, then copied to the primary); `vtherm_smartpi.{}.tar_learning` (state v3);
+  (read only when the primary is empty, then copied to the primary); `vtherm_smartpi.{}.tar_learning` (room history, key kept from earlier versions, state v3);
   `vtherm_smartpi.{}.room_model` (state v2).
 - Persisted: learning flag, last active wall time, model a/b, dead time, governance, controller (integral,
   u_prev), setpoint manager, learning window, deadband, gain scheduler, guards, FF
@@ -179,8 +179,8 @@ Pipeline inside `calculate`, in execution order:
 - Transient, empty after load (`load_state`): committed power (0 unless bridged), integral hold, learning resume timestamp, cycle
   state. Without a bridge, the first tick freezes learning for one cycle (`_startup_grace_period`).
 - Save throttling: `schedule_save` runs every tick but uses `Store.async_delay_save` with a 300 s window
-  (`SAVE_DELAY_SEC`), not re-armed while pending; the snapshot is taken when the write runs. emitter lag learning and room model
-  use 1800 s (`TAR_SAVE_DELAY_S`, `RM_SAVE_DELAY_S`) and only when `dirty`. `save_now` writes at once and
+  (`SAVE_DELAY_SEC`), not re-armed while pending; the snapshot is taken when the write runs. the room history and room model
+  use 1800 s (`HISTORY_SAVE_DELAY_S`, `RM_SAVE_DELAY_S`) and only when `dirty`. `save_now` writes at once and
   supersedes the pending write (services, `remove()`). `remove()` schedules the three writes
   as tasks, stops learning tasks and the timer, removes the receipt callback and valve issues.
 - Restart bridge (`smartpi/restart_bridge.py`, `SmartPI.resolve_restart`): decided once, at the first tick with an
@@ -188,7 +188,7 @@ Pipeline inside `calculate`, in execution order:
   `RESTART_BRIDGE_MAX_GAP_S` (600 s, from the oldest last tick of all stores), same HEAT/COOL mode and cycle
   config, committed/heater state saved, no exclusion before or after, no temperature jump, no clock jump. Then the
   committed command is restored and learning window and dead-time work go on; the HEAT-only histories
-  (emitter lag learning, room model) go on only when bridged in HEAT. Otherwise conservative handling. Published as
+  (room history, room model) go on only when bridged in HEAT. Otherwise conservative handling. Published as
   `restart.public()`.
 - Long OFF: after more than 5760 min (96 h, `PROLONGED_PAUSE_MEMORY_EXPIRATION_MIN`) without activity the
   controller and holding source are reset; the learned model stays. A resume from OFF/window/shedding pauses
@@ -202,7 +202,7 @@ Pipeline inside `calculate`, in execution order:
   `services.yaml`). Targets whose `proportional_function` is not `smartpi` are skipped; none matching raises
   `ServiceValidationError` (translation key `no_smartpi_target`). Each calls a handler method (entity first, then
   `_algo_handler`); all fire `vtherm_smartpi_event` with `entity_id` and a `type`:
-  - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, emitter lag learning, room model; a calibration in progress is cancelled), type
+  - `reset_smartpi_learning`: `SmartPI.reset_learning` (model, controller, FF, room history, room model; a calibration in progress is cancelled), type
     `learning_reset`, forced tick, attributes, state write, `save_now`.
   - `set_smartpi_learning` (`learning_enabled`: bool, required): `set_learning_enabled` (the pause of
     `smartpi/learning_block.py`, independent of the two entities), type `learning_enabled_changed`, attributes,
@@ -254,7 +254,6 @@ Pipeline inside `calculate`, in execution order:
 - `hacs.json`: minimum Home Assistant `2025.8.0`. Minimum VT 10.6.2 (`compatibility.py::MIN_VTHERM_VERSION`). The
   receipt contract is optional at runtime (capability check in `on_scheduler_ready`). `pyproject.toml`:
   `requires-python >= 3.13`.
-- numpy/scipy are imported lazily: only the learning executor jobs (`smartpi/tar_learning/jobs.py`,
-  `smartpi/room_model/jobs.py`, imported inside functions) load them, so the event loop never imports scipy.
-  `smartpi/tar_learning/deps.py::dependencies_importable` uses `find_spec`; without them emitter lag learning reports
+- numpy/scipy are imported lazily: only the learning executor jobs (`smartpi/room_model/jobs.py`, `smartpi/room_history/signals.py`, imported inside functions) load them, so the event loop never imports scipy.
+  `smartpi/room_history/deps.py::dependencies_importable` uses `find_spec`; without them the room history and the room model report
   unavailable and the regulation keeps the bootstrap dead time.

@@ -55,7 +55,7 @@ from scipy.optimize import minimize, minimize_scalar
 from scipy.signal import lfilter
 
 from ..job_abort import check
-from ..tar_learning.signals import Anchors, duty_bins, level_bins
+from ..room_history.signals import Anchors, duty_bins, level_bins
 from .const import (
     H,
     RM_ALPHA_MAX,

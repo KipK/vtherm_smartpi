@@ -18,7 +18,7 @@ Who writes: the agent that implemented the change updates the memory (it knows t
 | New, moved, renamed or deleted module/file; role change | `context/architecture.md` (map, "where do I change X", names that do not exist) |
 | Change of setup, config resolution, tick pipeline, persistence, services, sensor/diagnostic dispatch | `context/runtime-flow.md` |
 | Change of regulation, gains, learning gates, feed-forward, bootstrap, calibration | `context/algorithm-core.md` |
-| Change in tar_learning, room_model, quiet_periods, power steps, restart bridge | `context/algorithm-room-model.md` |
+| Change in room_history, room_model, quiet_periods, power steps, restart bridge | `context/algorithm-room-model.md` |
 | Published diagnostics field added/renamed/removed, status strings, history series | `context/diagnostics.md` (+ schema test fixture, `cards/`, docs, Equinox note) |
 | Mechanism adopted, removed or rejected (with the reason) | `context/decisions.md` |
 | Durable trap discovered (cost someone hours; will bite again) | `context/pitfalls.md` |

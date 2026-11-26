@@ -66,18 +66,19 @@ class SmartPIStateStore:
             _LOGGER.error("Failed to schedule SmartPI state save: %s", e)
 
 
-TAR_STORAGE_KEY = "vtherm_smartpi.{}.tar_learning"
+# The key of the emitter lag learning of earlier versions: its recorded signals stay in use.
+HISTORY_STORAGE_KEY = "vtherm_smartpi.{}.tar_learning"
 
 
-class SmartPITarStore:
-    """Load and save the T_ar learning data of one thermostat.
+class SmartPIRoomHistoryStore:
+    """Load and save the room history (recorded signals and quiet periods) of one thermostat.
 
-    The learning keeps several days of signals: it has its own store, written
+    The history keeps several days of signals: it has its own store, written
     with a longer debounce than the algorithm state.
     """
 
-    _KEY = TAR_STORAGE_KEY
-    _LABEL = "T_ar learning"
+    _KEY = HISTORY_STORAGE_KEY
+    _LABEL = "room history"
 
     def __init__(self, hass: HomeAssistant, safe_name: str, save_delay_s: float) -> None:
         self._store = Store(hass, STORAGE_VERSION, self._KEY.format(safe_name))
@@ -108,7 +109,7 @@ class SmartPITarStore:
 ROOM_MODEL_STORAGE_KEY = "vtherm_smartpi.{}.room_model"
 
 
-class SmartPIRoomModelStore(SmartPITarStore):
+class SmartPIRoomModelStore(SmartPIRoomHistoryStore):
     """Load and save the room model of one thermostat (parameters and observer state)."""
 
     _KEY = ROOM_MODEL_STORAGE_KEY

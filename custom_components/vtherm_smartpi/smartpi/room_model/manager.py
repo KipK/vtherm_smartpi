@@ -3,12 +3,12 @@
 Once published, the room model gives the regulation its feed-forward holding
 power in heating (feedforward.py). The manager feeds the observer at each
 regulation tick and with each applied command, schedules the computations
-(jobs.py, run in an executor on the history recorded by the T_ar learning),
+(jobs.py, run in an executor on the history of room_history/),
 publishes the qualified parameters, and holds the persistence and the
 diagnostics.
 
-Identification: the quiet periods come from the shared catalogue of the T_ar
-learning (no sun, constant setpoint, valid data). Each closed period that
+Identification: the quiet periods come from the catalogue of the room history
+(no sun, constant setpoint, valid data). Each closed period that
 completes a window of three periods starts one identification of that window
 (keyed by the period, never computed twice), compared with the window of the
 three periods before it. The jobs run at most once per _JOB_MIN_GAP_S of
@@ -28,10 +28,12 @@ published. A model published by an earlier version stays in force.
 
 Emitter: the HEAT response model (smartpi/response_model.py) when published,
 delay L = its dead time theta, first-order part its response time constant
-tau_e. Without it, the first moment of the emitter response is the HEAT dead
-time of the dead-time estimator; its first-order part tau_e is the refined T_ar
-value when published (else the whole first moment), the delay L the rest. The
-identification refines the first moment within a bounded grid.
+tau_e. Without it, the emitter is a first order whose time constant is the HEAT
+dead time after a start of the dead-time estimator, without delay; without
+either, no window is identified. The identification refines the first moment
+within a bounded grid; each candidate first moment is split into delay and
+first-order part by the delay share of the response model when published
+(delay over delay plus time constant), a pure first order otherwise (jobs.py).
 
 Restarts: the time of the last tick and of the save are kept with the state, so
 that a bridged restart (restart_bridge.py) holds the command applied at the
@@ -53,8 +55,8 @@ from typing import Any
 
 from ...hvac_mode import VThermHvacMode_HEAT
 from ..job_abort import JobAborted, run as run_abortable
-from ..tar_learning.clock import LocalClock
-from ..tar_learning.manager import STATUS_UNAVAILABLE
+from ..room_history.clock import LocalClock
+from ..room_history.manager import STATUS_UNAVAILABLE
 from . import gates, public, periods
 from .const import (
     RM_EXCLUDED_SHEDDING,
@@ -64,7 +66,6 @@ from .const import (
     RM_MAX_WINDOWS,
     RM_PUB_LAST,
 )
-from .emitter import split_first_moment
 from .model import RoomParams
 from .observer import HEALTH_NO_MODEL, HEALTH_OK, HEALTH_PAUSED, HEALTH_WAITING, RoomObserver
 
@@ -123,15 +124,19 @@ def _measure_key(meas_id: Any) -> tuple[Any, float | None]:
 class RoomModelManager:
     """Room model of one thermostat."""
 
-    def __init__(self, name: str, time_zone: str | None, tar) -> None:
+    def __init__(self, name: str, time_zone: str | None, history) -> None:
         self._name = name
         self._tz = time_zone
         self._clock = LocalClock(time_zone)
-        self._tar = tar
+        # Recorded signals and quiet periods (room_history.manager.RoomHistoryManager)
+        self._history = history
         self._running = False
         self.dirty = False
         self._a_per_min: float | None = None
         self._emitter: tuple[float, float] | None = None
+        # Response time constant and delay of the HEAT response model, None without one
+        self._tau_e: float | None = None
+        self._theta: float | None = None
         self._shedding = False
         # Last tick of this session; the saved last tick and save time of a restart to decide
         self._last_t: float | None = None
@@ -183,14 +188,14 @@ class RoomModelManager:
     @property
     def active(self) -> bool:
         """The identification can run (numerical dependencies found, heater supported)."""
-        return self._tar is not None and self._tar.active
+        return self._history is not None and self._history.active
 
     def _blocked_reason(self) -> str | None:
-        if self._tar is None:
+        if self._history is None:
             return public.REASON_DEPENDENCIES
-        if not self._tar.supported:
+        if not self._history.supported:
             return public.REASON_VALVE
-        if self._tar.status == STATUS_UNAVAILABLE:
+        if self._history.status == STATUS_UNAVAILABLE:
             return public.REASON_DEPENDENCIES
         return None
 
@@ -207,16 +212,18 @@ class RoomModelManager:
         reason pauses the observer.
         response: HEAT response model (``ResponseModel.values``: theta_s, tau_e_s), the emitter of the room
         model (delay theta, first order tau_e); None without one.
-        first_moment_s: HEAT dead time of the dead-time estimator, the first moment of the emitter response
-        when there is no response model.
+        first_moment_s: HEAT dead time after a start of the dead-time estimator, the time constant of the
+        emitter (without delay) when there is no response model.
         """
         self._settle_restart()
         self._last_t = now
         self._a_per_min = a_per_min if a_per_min and a_per_min > 0.0 else None
-        self._emitter = (
-            self._emitter_split(first_moment_s) if response is None
-            else (float(response["tau_e_s"]), float(response["theta_s"]))
-        )
+        self._tau_e = None if response is None else float(response["tau_e_s"])
+        self._theta = None if response is None else float(response["theta_s"])
+        if response is not None:
+            self._emitter = (self._tau_e, float(response["theta_s"]))
+        else:
+            self._emitter = None if first_moment_s is None or first_moment_s < 0.0 else (float(first_moment_s), 0.0)
         key, meas_t = _measure_key(measure_id)
         heating = hvac_mode == VThermHvacMode_HEAT
         shedding = heating and excluded == RM_EXCLUDED_SHEDDING
@@ -280,30 +287,19 @@ class RoomModelManager:
         if self._restart_pending:
             self.on_restart(False, 0.0)
 
-    def _te_pub(self) -> float | None:
-        te_pub = getattr(self._tar, "te_pub", None) if self._tar is not None else None
-        return float(te_pub["value"]) if te_pub and te_pub.get("value") is not None else None
-
-    def _emitter_split(self, first_moment_s: float | None) -> tuple[float, float] | None:
-        if first_moment_s is None or first_moment_s < 0.0:
-            return None
-        return split_first_moment(float(first_moment_s), self._te_pub())
-
     # ------------------------------------------------------------------
     # Scheduling
     # ------------------------------------------------------------------
     def _periods(self, now: float) -> list[dict]:
         """Closed quiet periods known at now, oldest first."""
-        tar = self._tar
-        get = getattr(tar, "quiet_periods", None)
+        get = getattr(self._history, "quiet_periods", None)
         if get is None:
             return []
         return [p for p in get(now) if periods.interval(p)[1] <= now]
 
     def _snapshot(self, now: float) -> dict:
-        tar = self._tar
-        snap = tar.signals_snapshot(now)
-        snap["sp"] = [list(x) for x in tar.history.setpoints]
+        snap = self._history.signals_snapshot(now)
+        snap["sp"] = [list(x) for x in self._history.history.setpoints]
         snap["a_per_min"] = self._a_per_min
         return snap
 
@@ -317,12 +313,18 @@ class RoomModelManager:
         snap["day"] = day
         return KIND_BALANCE, snap
 
+    def _delay_share(self) -> float | None:
+        """Delay over delay plus time constant of the response model in force, None without one."""
+        if self._tau_e is None or self._theta is None or self._theta + self._tau_e <= 0.0:
+            return None
+        return self._theta / (self._theta + self._tau_e)
+
     def _identify_job(self, now: float):
         pers = self._periods(now)
         self.observer.attach_periods([(p["id"], *periods.interval(p)) for p in pers], now)
         if self.last_job_t is not None and now - self.last_job_t < _JOB_MIN_GAP_S:
             return None
-        h = self._tar.history
+        h = self._history.history
         done_t = max((float(w.get("t_end") or 0.0) for w in self.windows.values()), default=None)
         for w in periods.windows(pers):
             if w["id"] in self.windows or (done_t is not None and w["t_end"] <= done_t):
@@ -333,7 +335,10 @@ class RoomModelManager:
             snap = self._snapshot(now)
             snap["window"] = w
             snap["tau_e"], snap["L"] = self._emitter if self._emitter else (None, None)
-            snap["te_pub"] = self._te_pub()
+            # Each grid candidate first moment is split by the delay share of the response model in force, not by
+            # its time constant (biased low on fast emitters, it broke the wall fits).
+            snap["te_pub"] = None
+            snap["delay_share"] = self._delay_share()
             snap["excluded_nights"] = self.observer.disturbed_nights()
             snap["prev"] = self.windows.get(w["prev"]) if w["prev"] else None
             snap["eb"] = self.eb_slope
@@ -342,8 +347,7 @@ class RoomModelManager:
         return None
 
     def _next_job(self, now: float):
-        tar = self._tar
-        if tar is None or tar.history.is_empty():
+        if self._history is None or self._history.history.is_empty():
             return None
         return self._balance_job(now) or self._identify_job(now)
 
@@ -353,8 +357,6 @@ class RoomModelManager:
             return
         self._running = True
         try:
-            if self._tar is not None:
-                await self._tar.warm_sun(hass, time.time() if now is None else now)
             while True:
                 t = time.time() if now is None else now
                 job = self._next_job(t)
@@ -370,7 +372,7 @@ class RoomModelManager:
                     return
                 except ImportError as err:
                     _LOGGER.warning("%s - room model: %s", self._name, err)
-                    self._tar.set_dependencies(False)
+                    self._history.set_dependencies(False)
                     return
                 except Exception:  # noqa: BLE001 - a failed fit must never stop the regulation
                     _LOGGER.exception("%s - room model: %s computation failed", self._name, kind)
@@ -490,6 +492,7 @@ class RoomModelManager:
             "energy_balance_refusal_reason": public.energy_balance_reason(self.eb_reason),
             "sensor_resolution_c": _r(self.q, 3),
             "last_error": self.last_error,
+            **(self._history.diagnostics() if self._history is not None else {}),
         }
 
     # ------------------------------------------------------------------
