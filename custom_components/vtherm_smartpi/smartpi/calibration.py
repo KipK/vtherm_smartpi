@@ -3,8 +3,9 @@
 A calibration is requested by the ``force_smartpi_calibration`` service, which never fails: a request that does not
 start a calibration is refused or ignored with a plain reason (``last_request``). It is refused during the learning
 stage (the start mode has its own measurements then), while the learning is paused (nothing would be measured), while
-the thermostat is off, and less than ``CALIBRATION_MIN_INTERVAL_S`` after the end of the last calibration that was not
-cancelled; it is ignored while one is in progress. An open window, a guard cut or a power shedding does not refuse it:
+the thermostat is off; it is ignored while one is in progress. A request has no minimum interval since the last
+calibration; the automatic calibration (smartpi/auto_calibration.py) waits ``CALIBRATION_MIN_INTERVAL_S`` after the end of
+the last one that was not cancelled. An open window, a guard cut or a power shedding does not refuse it:
 the pulses wait for the room to be ready.
 
 A calibration drives the measurement pulses of the direct start (smartpi/measure_pulse.py), in either start mode,
@@ -84,11 +85,10 @@ REQUEST_STARTED = "started"
 REQUEST_LEARNING_STAGE = "refused: learning stage"
 REQUEST_PAUSED = "refused: learning paused"
 REQUEST_OFF = "refused: thermostat off"
-REQUEST_TOO_SOON = "refused: too soon"
 REQUEST_IN_PROGRESS = "ignored: in progress"
-_REQUESTS = (REQUEST_STARTED, REQUEST_LEARNING_STAGE, REQUEST_PAUSED, REQUEST_OFF, REQUEST_TOO_SOON, REQUEST_IN_PROGRESS)
+_REQUESTS = (REQUEST_STARTED, REQUEST_LEARNING_STAGE, REQUEST_PAUSED, REQUEST_OFF, REQUEST_IN_PROGRESS)
 
-CALIBRATION_MIN_INTERVAL_S = 24.0 * 3600.0   # a request this soon after the end of the last calibration is refused
+CALIBRATION_MIN_INTERVAL_S = 24.0 * 3600.0   # the automatic calibration waits this long after the end of the last calibration
 
 # Correction of the model by an agreeing calibration reading
 CALIBRATION_CORRECT_REL = 0.30               # a quantity is corrected when the value in force is off the reading by more than this share of it
@@ -220,17 +220,26 @@ class Calibration:
         self.start_s: float | None = None
         self.mode: str | None = None
         self.deadtime_start_s: float | None = None
+        self.automatic = False                       # started by SmartPI itself (smartpi/auto_calibration.py)
+        self.interruptions: list[dict[str, Any]] = []   # pulses interrupted: {"reason": plain words, "wall": epoch s}
         self.corrected: list[str] = []
         self.in_force: dict[str, float] | None = None
         self._seen: dict[str, int] = {}   # dead-time samples the estimator had added at the last look (runtime)
+        self.report: dict[str, Any] | None = None   # end report waiting to be taken (runtime)
 
-    def begin(self) -> None:
+    def begin(self, automatic: bool = False) -> None:
         """A request accepted: a calibration starts with no pulse."""
         self.clear()
+        self.automatic = automatic
         self.in_progress = True
         self.result = RESULT_IN_PROGRESS
 
-    def request(self, learning_stage: bool, learning_enabled: bool, off: bool) -> str:
+    def too_soon(self) -> bool:
+        """True within ``CALIBRATION_MIN_INTERVAL_S`` of the end of the last calibration that was not cancelled (a
+        condition of the automatic calibration, smartpi/auto_calibration.py; a request has no such limit)."""
+        return self.last_end_wall is not None and time.time() - self.last_end_wall < CALIBRATION_MIN_INTERVAL_S
+
+    def request(self, learning_stage: bool, learning_enabled: bool, off: bool, automatic: bool = False) -> str:
         """A request: the calibration starts (``REQUEST_STARTED``) or the reason it does not."""
         if learning_stage:
             reason = REQUEST_LEARNING_STAGE
@@ -240,21 +249,35 @@ class Calibration:
             reason = REQUEST_IN_PROGRESS
         elif off:
             reason = REQUEST_OFF
-        elif self.last_end_wall is not None and time.time() - self.last_end_wall < CALIBRATION_MIN_INTERVAL_S:
-            reason = REQUEST_TOO_SOON
         else:
             reason = REQUEST_STARTED
-            self.begin()
+            self.begin(automatic)
         self.last_request = reason
         return reason
 
-    def finish(self, result: str) -> None:
-        """The calibration ends; its pulses and dead time stay published until the next one."""
+    def note_interruption(self, reason: str, wall: float) -> None:
+        """A pulse of the calibration was interrupted (``reason`` in plain words)."""
+        self.interruptions.append({"reason": reason, "wall": wall})
+
+    def finish(self, result: str, report: bool = True) -> None:
+        """The calibration ends; its pulses and dead time stay published until the next one. Its end report waits to be
+        taken (``take_report``) unless ``report`` is False (a learning reset)."""
         self.in_progress = False
         self.start_s = None
         self.result = result
+        if report:
+            self.report = {"result": result, "automatic": self.automatic, "mode": self.mode,
+                           "interruptions": self._public_interruptions()}
         if result != RESULT_CANCELLED:
             self.last_end_wall = time.time()
+
+    def take_report(self) -> dict[str, Any] | None:
+        """The report of the calibration that has just ended, once (None when there is none)."""
+        report, self.report = self.report, None
+        return report
+
+    def _public_interruptions(self) -> list[dict[str, str]]:
+        return [{"reason": i["reason"], "at": datetime.fromtimestamp(i["wall"]).isoformat()} for i in self.interruptions]
 
     def check(
         self, now: float, hvac_mode: object, learning_stage: bool, pulse_active: bool, readings_waiting: bool,
@@ -302,6 +325,7 @@ class Calibration:
             "last_end_wall": self.last_end_wall,
             "deadtime_start_s": self.deadtime_start_s,
             "last_request": self.last_request,
+            "automatic": self.automatic, "interruptions": list(self.interruptions),
         }
         if self.in_force is not None:
             saved.update(in_force=dict(self.in_force), corrected=list(self.corrected))
@@ -326,6 +350,11 @@ class Calibration:
         pulses = saved.get("pulses")
         self.pulses = pulses if isinstance(pulses, int) and not isinstance(pulses, bool) and pulses >= 0 else 0
         self.mode = saved["mode"] if isinstance(saved.get("mode"), str) else None
+        self.automatic = saved.get("automatic") is True
+        for item in saved.get("interruptions") if isinstance(saved.get("interruptions"), list) else []:
+            wall = normalize_wall_timestamp(item.get("wall")) if isinstance(item, dict) else None
+            if wall is not None and isinstance(item.get("reason"), str):
+                self.interruptions.append({"reason": item["reason"], "wall": wall})
         self.deadtime_start_s = _seconds(saved.get("deadtime_start_s"))
         in_force = saved.get("in_force")
         if isinstance(in_force, dict) and all(_seconds(in_force.get(q)) is not None for q in ("a", "b", "lag_s")):
@@ -360,4 +389,6 @@ class Calibration:
             "in_force_b": None if not in_force else round(in_force["b"], 6),
             "in_force_lag_s": None if not in_force else round(in_force["lag_s"]),
             "corrected": [_WORDS[q] for q in self.corrected],
+            "automatic": self.automatic,
+            "interruptions": self._public_interruptions(),
         }

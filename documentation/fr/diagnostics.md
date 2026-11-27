@@ -148,7 +148,7 @@ amorçage affiche `0` impulsion et aucune impulsion en cours.
 | `kept_lag_s` | Retard de l'émetteur conservé en secondes, `null` si aucun n'est conservé |
 
 `calibration` résume la calibration demandée avec le service
-`force_smartpi_calibration` (voir **Calibration** dans la
+`force_smartpi_calibration` ou lancée par SmartPI lui-même (voir **Calibration** dans la
 [documentation SmartPI](vtherm_smartpi.md)) : la calibration en cours, ou la
 dernière jusqu'à la demande suivante.
 
@@ -157,7 +157,7 @@ dernière jusqu'à la demande suivante.
 | `state` | `idle` (aucune calibration en cours), `waiting` (entre deux impulsions, la régulation fonctionne), ou l'étape de son impulsion en cours : `rest`, `full power`, `stop` |
 | `pulses_done` | Impulsions démarrées par la calibration (trois au plus ; une impulsion interrompue compte) |
 | `result` | `null` avant toute calibration, `in progress`, `readings agree` (deux impulsions concordent), `pulses done` (trois impulsions lues sans concordance), `time limit` (48 heures) ou `cancelled` (passage entre chauffage et refroidissement, retour de la phase d'apprentissage, réinitialisation de l'apprentissage, apprentissage suspendu par le service ou une entité) |
-| `last_request` | Réponse à la dernière demande, `null` avant toute demande : `started`, `refused: learning stage` (premier modèle en apprentissage), `refused: learning paused` (apprentissage suspendu par le service ou une entité), `refused: thermostat off` (thermostat éteint), `refused: too soon` (moins de 24 heures après la fin de la dernière calibration), `ignored: in progress` (calibration en cours) |
+| `last_request` | Réponse à la dernière demande, `null` avant toute demande : `started`, `refused: learning stage` (premier modèle en apprentissage), `refused: learning paused` (apprentissage suspendu par le service ou une entité), `refused: thermostat off` (thermostat éteint), `ignored: in progress` (calibration en cours) |
 | `last_time` | Heure locale de fin de la dernière calibration non annulée (ISO 8601), `null` avant |
 | `deadtime_start_s` | Dernier temps mort après un démarrage mesuré pendant une impulsion de la calibration, en secondes, `null` sans mesure |
 | `reading_a` | Vitesse de chauffe des deux impulsions concordantes en °C/min à pleine puissance (5 décimales), `null` tant que deux impulsions ne concordent pas |
@@ -167,6 +167,9 @@ dernière jusqu'à la demande suivante.
 | `in_force_b` | Coefficient de pertes en usage lorsque les impulsions ont concordé, en 1/min (6 décimales) ; `null` tant que deux impulsions ne concordent pas |
 | `in_force_lag_s` | Horizon de l'anticipation en usage lorsque les impulsions ont concordé, en secondes, affiché à côté de `reading_lag_s` ; `null` tant que deux impulsions ne concordent pas |
 | `corrected` | Ce que la calibration a corrigé : une liste parmi `heating rate` (vitesse de chauffe), `loss coefficient` (coefficient de pertes) ; vide si rien n'a été corrigé |
+| `automatic` | `true` lorsque la calibration en cours, ou la dernière, a été lancée par SmartPI lui-même (après une mise à jour), `false` lorsqu'elle a été demandée |
+| `interruptions` | Impulsions de la calibration en cours, ou de la dernière, qui ont été interrompues : une liste de `{reason, at}`, `reason` valant `setpoint change`, `thermostat stopped`, `mode change` ou `learning paused`, `at` l'heure locale (ISO 8601) ; vide s'il n'y en a pas |
+| `automatic_status` | Où en est la calibration automatique du mode courant : `not needed` (le modèle de réponse du mode a des événements mesurés, ou rien n'est repris), `waiting: 3 days after the update`, `waiting: quiet night` (toute autre condition, dont la fenêtre calme, est attendue), `in progress`, `attempts used` (trois calibrations automatiques ont été lancées), `home position unknown` |
 
 Les temps morts après un démarrage mesurés par les impulsions rejoignent les
 temps morts appris comme toute autre mesure. Une grandeur de la lecture n'est corrigée que si elle

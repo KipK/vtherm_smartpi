@@ -333,7 +333,7 @@ SmartPI anticipates the temperature, in HEAT and in COOL: the proportional and i
 
 ### Calibration
 
-A calibration runs only on request, with the [`force_smartpi_calibration`](#force_smartpi_calibration) service, once the first model is published, whatever the start of the learning was. It measures the room again with at most three measurement pulses near the setpoint and corrects the learned model when the measure shows that it is clearly off.
+A calibration runs on request, with the [`force_smartpi_calibration`](#force_smartpi_calibration) service, or by itself after an upgrade (see [Automatic calibration after an upgrade](#automatic-calibration-after-an-upgrade)), once the first model is published, whatever the start of the learning was. It measures the room again with at most three measurement pulses near the setpoint and corrects the learned model when the measure shows that it is clearly off.
 
 The pulses are sized from what SmartPI already knows of the room (its response model and the horizon of the anticipation; without a model their times count zero):
 
@@ -353,7 +353,7 @@ A value in use within 30 % of the reading is left as it is: a calibration of a w
 
 A calibration ends when two of its pulses agree, when its three pulses are done and read, or after 48 hours. When that end comes during a pulse, a pulse at rest hands back to the regulation at once, a pulse heating at full power goes to its stop step, and a pulse in its stop step goes on: the calibration ends, and applies its corrections, when that pulse ends. A pulse counts once it has started heating; one that ends during its rest (a setpoint change, for example) does not count. Switching the thermostat off (or a window, or power shedding) ends the pulse in progress; the calibration goes on with its next pulse. A change between heating and cooling, a learning reset or a pause of the learning cancels it at once, with its pulse. A restart keeps the calibration in progress and its pulse count; the pulse in progress ends.
 
-The service can be called by an automation: a request that cannot start a calibration is refused or ignored without error, and the reason is published in `live.calibration.last_request`. A request is refused while the first model is being learned, while learning is paused, while the thermostat is off, and less than 24 hours after the end of the last calibration (a cancelled one does not count); it is ignored while a calibration is running. An open window, power shedding or a cut of the heating after an overshoot does not refuse it: the pulses wait until the room can be measured. For example, a room whose setpoint rarely changes gives its learning few occasions to measure; a weekly automation can check its model:
+The service can be called by an automation: a request that cannot start a calibration is refused or ignored without error, and the reason is published in `live.calibration.last_request`. A request is refused while the first model is being learned, while learning is paused and while the thermostat is off; it is ignored while a calibration is running. A request has no minimum interval since the last calibration, and its pulses have no timing rule: they start as soon as the room is ready. An open window, power shedding or a cut of the heating after an overshoot does not refuse it: the pulses wait until the room can be measured. For example, a room whose setpoint rarely changes gives its learning few occasions to measure; a weekly automation can check its model:
 
 ```yaml
 triggers:
@@ -369,6 +369,31 @@ actions:
 ```
 
 The calibration is summarised in `live.calibration` (see [Diagnostics](diagnostics.md)).
+
+#### When a pulse starts
+
+A pulse holds the room away from its setpoint for hours, so the pulses of an automatic calibration (see below) start only in a quiet window. The pulses of the direct start's learning stage and those of a calibration you request have no timing rule. At the moment of the start of an automatic calibration pulse:
+
+- it is dark at the home position (the position of Home Assistant; the sun is computed, no sensor is needed),
+- the setpoint and the mode (heating, cooling, off) have not changed for at least 1 hour,
+- when SmartPI has watched the setpoint for at least the two previous days, the setpoint did not change in the same hours of those two days, over the time a pulse needs: six emitter lags, between 3 and 6 hours (3 hours while the lag is unknown). A scheduled change repeats from one day to the next, so this foresees it. Without two days of observation, or without a known home position, no pulse of an automatic calibration starts.
+
+SmartPI keeps the times of the setpoint and mode changes of the last 72 hours (a small log saved with its state) for this. The rule applies to every pulse of an automatic calibration.
+
+#### Automatic calibration after an upgrade
+
+A thermostat upgraded from an earlier version starts with a response model taken from its saved dead time (source `previous version`, provisional confidence, no measured event). For the current mode (heating or cooling), SmartPI asks for one calibration by itself when all of these hold:
+
+- that state has lasted at least 3 days in the mode (the time it was first seen is saved),
+- the thermostat is not in the learning stage, learning is not paused or blocked (pause, disturbance, heating unavailable), the thermostat is on, no calibration is running, and the last one ended more than 24 hours ago,
+- the moment is a quiet window with two days of observation (see above),
+- fewer than 3 automatic calibrations were started in the mode, and the last one started more than 20 hours ago.
+
+It uses the same path and the same refusals as the service. It stops for good once the mode has a measured event, and does nothing without a known home position. `live.calibration.automatic_status` tells where it stands.
+
+#### Report at the end of a calibration
+
+Every calibration, requested or automatic, records the pulses that were interrupted: a `setpoint change`, a `thermostat stopped` (off, window, power shedding), a `mode change` or a `learning paused` (pause, disturbance, heating unavailable), with the time. When the calibration ends, SmartPI fires the `vtherm_smartpi_event` bus event with `type: calibration_ended` and the `result`, `automatic` and the `interruptions` (reason and time). When the readings did not agree or at least one pulse was interrupted, it also creates one persistent notification per thermostat (replaced by the next one) that gives the result, the interruptions and this advice: a pulse lasts about the time of the quiet window above; keep the setpoint unchanged meanwhile, preferably at night, or request the calibration again later. A calibration whose readings agree without interruption dismisses that notification.
 
 ### Room model
 
@@ -648,7 +673,7 @@ This service is useful when:
 - you want to check the heating rate, the loss coefficient and the emitter lag of the room against the learned model,
 - the setpoint of the room rarely changes (a weekly call from an automation).
 
-The call never fails on a SmartPI thermostat: the request is refused while SmartPI is still learning its first model, while learning is paused, while the thermostat is off, or less than 24 hours after the end of the last calibration, and ignored while a calibration is already running (`live.calibration.last_request` gives the reason). Pausing learning cancels a calibration in progress.
+The call never fails on a SmartPI thermostat: the request is refused while SmartPI is still learning its first model, while learning is paused or while the thermostat is off, and ignored while a calibration is already running (`live.calibration.last_request` gives the reason). Pausing learning cancels a calibration in progress.
 
 ### `reset_smartpi_integral`
 

@@ -111,6 +111,8 @@
 {% set calibration_in_b = calibration.get('in_force_b') %}
 {% set calibration_in_lag = calibration.get('in_force_lag_s') %}
 {% set calibration_corrected = calibration.get('corrected') or [] %}
+{% set calibration_interruptions = calibration.get('interruptions') or [] %}
+{% set calibration_auto_status = calibration.get('automatic_status') %}
 
 {% set regime_icon = {
   'excited_stable': '🟢',
@@ -414,6 +416,9 @@
 | Corrected | {% if calibration_corrected %}{{ calibration_corrected | join(', ') }}{% else %}—{% endif %} |
 | Last request | {% if calibration_request %}`{{ calibration_request }}`{% else %}—{% endif %} |
 | Last calibration | {% if calibration_last %}`{{ calibration_last }}`{% else %}—{% endif %} |
+| Started automatically | {% if calibration.get('automatic') %}yes{% else %}no{% endif %} |
+| Interrupted pulses | {% if calibration_interruptions %}{% for i in calibration_interruptions %}{{ i.reason }} ({{ i.at }}){% if not loop.last %}, {% endif %}{% endfor %}{% else %}—{% endif %} |
+| Automatic calibration | {% if calibration_auto_status %}`{{ calibration_auto_status }}`{% else %}—{% endif %} |
 
 {% if has_analysis %}
 ---

@@ -117,7 +117,7 @@
     },
     "force_smartpi_calibration": {
       "name": "Force SmartPI calibration",
-      "description": "Start a SmartPI calibration for a thermostat: up to three measurement pulses near the setpoint, once the first model is published; the learned model is corrected where the measure differs from it by more than 30 %. Safe to call from an automation: a request is refused while learning the first model, while learning is paused, while the thermostat is off or within 24 hours of the last calibration, and ignored while one is running."
+      "description": "Start a SmartPI calibration for a thermostat: up to three measurement pulses near the setpoint, once the first model is published; the learned model is corrected where the measure differs from it by more than 30 %. Safe to call from an automation: a request is refused while learning the first model, while learning is paused or while the thermostat is off, and ignored while one is running."
     },
     "reset_smartpi_integral": {
       "name": "Reset SmartPI integral",
@@ -145,6 +145,37 @@
     "opening_remap": {
       "title": "SmartPI valve linearization conflicts with the opening settings of {name}",
       "description": "The thermostat {name} uses the SmartPI valve linearization, but its Versatile Thermostat opening settings (\"Opening threshold degree\", \"Min opening degrees\", \"Max opening degrees\" or \"Max closing degree\") remap the opening before it reaches the valve. SmartPI inverts its valve curve on a value that is no longer the physical valve opening, so its model is learned on a wrong command.\n\nTo fix it, either disable the valve linearization in the SmartPI settings of {name}, or restore the default Versatile Thermostat opening settings (threshold 0, minimum 0, maximum 100, max closing 100) only if your device allows it. With direct valve control in over_climate mode, the regulation threshold also raises the opening threshold. If your device requires a non-zero threshold, keep it and disable the SmartPI valve linearization. If the radiator only starts heating above a given opening and your device allows the default Versatile Thermostat opening settings, set that opening as \"Minimum valve opening\" in the SmartPI valve curve."
+    },
+    "calibration_report": {
+      "title": "SmartPI calibration of {name}",
+      "description": "Calibration of {name}: {result}.\n\nPulse interruptions:\n{interruptions}\n\nA pulse lasts about {duration}: keep the setpoint unchanged meanwhile, preferably at night, or request the calibration again later."
+    },
+    "calibration_result_agreed": {
+      "title": "the readings agreed"
+    },
+    "calibration_result_pulses_done": {
+      "title": "the pulses are done without two agreeing readings"
+    },
+    "calibration_result_time_limit": {
+      "title": "the time limit of 48 hours was reached"
+    },
+    "calibration_result_cancelled": {
+      "title": "the calibration was cancelled"
+    },
+    "calibration_reason_setpoint_change": {
+      "title": "setpoint change"
+    },
+    "calibration_reason_thermostat_stopped": {
+      "title": "thermostat stopped"
+    },
+    "calibration_reason_mode_change": {
+      "title": "mode change"
+    },
+    "calibration_reason_learning_paused": {
+      "title": "learning paused"
+    },
+    "calibration_none": {
+      "title": "none"
     }
   }
 }

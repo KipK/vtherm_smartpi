@@ -52,7 +52,7 @@ En cas de doute, gardez l'amorçage.
 
 La calibration (service `force_smartpi_calibration`) refait une mesure de la pièce avec au plus trois impulsions près de la consigne, et corrige le modèle s'il est nettement faux. Elle est utile :
 
-- **après une mise à jour depuis une version antérieure** de SmartPI, tant que le diagnostic affiche « previous version » comme source du modèle de réponse ;
+- **après une mise à jour depuis une version antérieure** de SmartPI, tant que le diagnostic affiche « previous version » comme source du modèle de réponse. SmartPI en lance une lui-même au bout de 3 jours, une nuit où la consigne reste fixe d'après les deux nuits précédentes (la position de la maison doit être renseignée) ; `calibration.automatic_status` dit ce qu'il attend. Vous pouvez aussi la lancer vous-même sans attendre ;
 - après un changement de radiateur, de sonde ou de gros travaux ;
 - si la pièce dépasse ou traîne de façon répétée.
 
@@ -60,7 +60,7 @@ Pour qu'elle réussisse :
 
 - choisissez un moment où **la consigne ne changera pas pendant plusieurs heures** ; la nuit, à la consigne de nuit, convient bien ;
 - **n'éteignez pas le thermostat** et ne suspendez pas l'apprentissage pendant ce temps ;
-- le résultat apparaît dans la carte de diagnostic (`calibration.result`).
+- le résultat apparaît dans la carte de diagnostic (`calibration.result`). Si une impulsion est interrompue ou si la calibration échoue, une notification Home Assistant en donne la raison ; vous pouvez relancer une calibration aussitôt.
 
 ## Quand réinitialiser l'apprentissage
 

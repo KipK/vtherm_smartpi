@@ -472,10 +472,11 @@ either start mode, with its own count (`PULSE_MAX_COUNT = 3` pulses at most);
 they do not count for the learning stage. `Calibration.request` answers every
 request without raising and publishes the answer (`last_request`): refused in
 the learning stage, with the learning paused, with the thermostat off by the user
-(the last calculation saw HVAC mode OFF without the window reason), and less than
-`CALIBRATION_MIN_INTERVAL_S = 24 h` after the end of the last calibration that
-was not cancelled; ignored while one is in progress; a window, a guard cut or a
-power shedding defers the pulses only. The pulses of a calibration have their own
+(the last calculation saw HVAC mode OFF without the window reason); ignored while
+one is in progress; a window, a guard cut or a power shedding defers the pulses
+only. A request has no minimum interval since the last calibration
+(`Calibration.too_soon`, `CALIBRATION_MIN_INTERVAL_S = 24 h`, is a condition of
+the automatic calibration only). The pulses of a calibration have their own
 limits, computed at each calculation by `pulse_limits` from the response model of
 the mode (`Le` = $\theta + \tau_e/2$ the effective dead time, `S` = $\theta + \tau_e$
 the emitter lag, both 0 without a model), the anticipation horizon in use `H` and the least-squares fall rate `s` of the last
@@ -553,6 +554,50 @@ learning cancels it (`cancelled`) and ends its pulse at once. The request, the p
 start, the last request, the values in force and the corrections are saved
 (`calibration`); corrected starting values are saved with
 `corrected` in `starting_values` and load even when nothing was handed over.
+
+**Timing of the pulses, automatic calibration, report.**
+`pulse_timing.quiet_window(wall, position, log, lag_s, require_history)` (pure) is
+true when: it is dark at the home position (`quiet_periods/solar.py`, `is_dark`);
+the setpoint and the HVAC mode have not changed for `QUIET_STABLE_S = 1 h`
+(`SetpointLog.last_change`, the start of the observation when there is no change);
+and, when the log covers at least `QUIET_DAYS = 2` days (`wall - since`), for
+$d = 1, 2$ no change lies in $[t - 24d\,\mathrm{h},\ t - 24d\,\mathrm{h} + D]$ with
+$D = \mathrm{clamp}(6S, 3\,\mathrm{h}, 6\,\mathrm{h})$ (`pulse_window_s`, $S$ the
+anticipation horizon of the mode, 3 h when unknown); without that coverage the check
+is skipped, or the window is refused when `require_history`. `SetpointLog` holds the
+wall times of the setpoint and mode changes of the last `LOG_KEEP_S = 72 h`, at
+most `LOG_MAX = 256`, and the start of the observation; it is fed once per
+calculation (`LearningStart.begin`), a gap of more than `LOG_GAP_S = 1 h` between two
+calculations counts as a change, and it is saved as `setpoint_log` (a state saved
+without it starts a new log). `LearningStart._start_allowed` gives
+`MeasurePulse.update(start_allowed=...)` its boolean: the pulses of an automatic
+calibration need the window with the two-day history (`model_reading.position`
+valid and astral importable; without it they never start); the pulses of the
+learning stage and those of a requested calibration have no rule. Nothing else of
+the pulse logic changes.
+
+`LearningStart._auto_calibrate` (rules in `auto_calibration.py`) runs at each
+calculation in HEAT or COOL. `AutoCalibration.observe` records the wall time at
+which the response model of the mode was first seen carried over (no event, source
+`previous version`) and forgets it when the mode has an event. It asks for a
+calibration (`request_calibration(automatic=True)`, the refusals of the service)
+when `due` (seen for `AUTO_CALIBRATION_WAIT_S = 3 days`, fewer than
+`AUTO_CALIBRATION_ATTEMPTS = 3` attempts in the mode, the last one at least
+`AUTO_CALIBRATION_RETRY_S = 20 h` ago), the learning stage is over, the learning is
+not blocked, the thermostat is on, no calibration is in progress, the last one
+ended more than `CALIBRATION_MIN_INTERVAL_S` ago, the home position is known and
+the quiet window with `require_history` holds; an attempt counts when the request
+starts. The state is saved as `auto_calibration` (`seen`, `attempts`, `last` per
+mode). `automatic_status` is published from it.
+
+Each calibration records the interruptions of its pulses (`MeasurePulse.interrupted`
+taken by `LearningStart._note_interruptions`; reasons `setpoint change`, `thermostat
+stopped`, `mode change`, `learning paused`), saved with the calibration with its
+`automatic` flag. `Calibration.finish` leaves a report (`take_report`, once; a
+learning reset leaves none). The handler calls `calibration_report.schedule_report`
+after its calculation; a task fires the `calibration_ended` event and creates, replaces
+or dismisses the notification `vtherm_smartpi_calibration_<unique id>` (texts from the
+`issues` translations), catching and logging every exception.
 
 The record, the readings in progress, the kept values and the pulses started are
 saved (`measure_events`, `event_reading`, `measure_pulse` and `learning_start`,
@@ -1503,7 +1548,23 @@ are specific to the current Home Assistant session.
 | `CALIBRATION_DEPTH_CAP_C`         | `0.8`     |
 | `CALIBRATION_FALL_WINDOW_S`       | `900`     |
 
-`CALIBRATION_MAX_S` is in `const.py`, the others in `calibration.py`. The pulses of a calibration otherwise use the constants of the measurement pulses (`measure_pulse.py`).
+`CALIBRATION_MAX_S` is in `const.py`, the others in `calibration.py`. The pulses of a calibration otherwise use the constants of the measurement pulses (`measure_pulse.py`). `CALIBRATION_MIN_INTERVAL_S` conditions the automatic calibration only.
+
+### 6.5 Pulse timing and automatic calibration
+
+| Constant                      | Value    | Module                |
+| ----------------------------- | -------- | --------------------- |
+| `QUIET_STABLE_S`              | `3600`   | `pulse_timing.py`     |
+| `QUIET_DAYS`                  | `2`      | `pulse_timing.py`     |
+| `WINDOW_MIN_S`                | `10800`  | `pulse_timing.py`     |
+| `WINDOW_MAX_S`                | `21600`  | `pulse_timing.py`     |
+| `WINDOW_LAG_FACTOR`           | `6`      | `pulse_timing.py`     |
+| `LOG_KEEP_S`                  | `259200` | `pulse_timing.py`     |
+| `LOG_MAX`                     | `256`    | `pulse_timing.py`     |
+| `LOG_GAP_S`                   | `3600`   | `pulse_timing.py`     |
+| `AUTO_CALIBRATION_WAIT_S`     | `259200` | `auto_calibration.py` |
+| `AUTO_CALIBRATION_ATTEMPTS`   | `3`      | `auto_calibration.py` |
+| `AUTO_CALIBRATION_RETRY_S`    | `72000`  | `auto_calibration.py` |
 
 ---
 

@@ -83,6 +83,7 @@ README.md README.fr.md CHANGELOG.md hacs.json pyproject.toml requirements_*.txt
 - `temperature_history.py`: `TemperatureHistory`, raw and filtered room temperature history; created by `SmartPI` as `learn_win.temperatures`, written by `DeadTimeEstimator.update`, read by the learning window, anticipation, pulses and calibration.
 - `starting_values.py`: `StartingValues`, `a` and `b` standing for the learning's own until it has them (`a` once per mode, `b` with the first hand-over); the warm-up credit.
 - `learning_start.py`: `LearningStart`, option `learning_start` (bootstrap or direct; the configured start and the start of the learning in progress), phase of the algorithm, source of the command, hand-over of the kept values per mode, the calibration request and its end (`request_calibration`), saved keys; `command_is_on_off`; `public()` builds `live.learning.start`, `calibration_public()` builds `live.calibration`.
+- `pulse_timing.py` (quiet window, `SetpointLog`), `auto_calibration.py` (`AutoCalibration`, automatic calibration after an upgrade), `calibration_report.py` (end-of-calibration event and notification, called by the handler): `algorithm-room-model.md` section 2b.
 - `measure_pulse.py`: `MeasurePulse`, the light measurement pulses of the direct start (three per mode) and of a calibration (own count); chosen by the user option `smart_pi_learning_start`, which `handler.py` passes as `SmartPI(learning_start=...)`.
 
 **Calibration**

@@ -1773,7 +1773,7 @@ class SmartPI:
 
         now = time.monotonic()
         self._ext_control = self._ext_control if ext_current_temp is None else ext_current_temp
-        self._start.begin(hvac_mode)
+        self._start.begin(hvac_mode, target_temp)
         self.learning_block.read(now)
 
         # --- 0. HVAC mode transition (HEAT↔COOL) → reset integral ---

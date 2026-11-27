@@ -16,10 +16,8 @@ from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING, RM_EXCLUDED_WINDOW, 
 from .smartpi.learning_start import command_is_on_off
 from .smartpi.room_history.const import HISTORY_SAVE_DELAY_S
 from .smartpi.room_history.deps import dependencies_importable
-from .smartpi.const import (
-    SMARTPI_RECALC_INTERVAL_SEC,
-    SmartPIPhase,
-)
+from .smartpi.const import SMARTPI_RECALC_INTERVAL_SEC, SmartPIPhase
+from .smartpi.calibration_report import schedule_report
 from .const import (
     CONF_TARGET_VTHERM,
     CONF_MINIMAL_ACTIVATION_DELAY,
@@ -291,6 +289,7 @@ class SmartPIHandler:
         for manager, store in jobs:
             if store is not None and manager.dirty:
                 store.schedule_save(manager)
+        schedule_report(t, algo)   # the end report of a calibration, sent from a task of its own
 
     async def async_startup(self):
         """Startup actions."""

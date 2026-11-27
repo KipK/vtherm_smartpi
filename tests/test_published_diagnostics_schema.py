@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -124,8 +125,10 @@ def test_published_calibration_summary_has_plain_values() -> None:
     assert set(cal) == {
         "state", "pulses_done", "result", "last_request", "last_time", "deadtime_start_s",
         "reading_a", "reading_b", "reading_lag_s", "in_force_a", "in_force_b", "in_force_lag_s", "corrected",
+        "automatic", "interruptions", "automatic_status",
     }
     assert cal["state"] == "idle" and cal["pulses_done"] == 0 and cal["result"] is None
+    assert cal["automatic"] is False and cal["interruptions"] == [] and cal["automatic_status"] == "not needed"
     assert cal["last_request"] is None and cal["corrected"] == [] and cal["in_force_a"] is None
     algo._start.calibration.in_force = {"a": 0.05, "b": 0.0003, "lag_s": 600.0}
     algo._start.calibration.corrected = ["a", "b"]
@@ -133,8 +136,12 @@ def test_published_calibration_summary_has_plain_values() -> None:
     assert cal["corrected"] == ["heating rate", "loss coefficient"]
     assert (cal["in_force_a"], cal["in_force_b"], cal["in_force_lag_s"]) == (0.05, 0.0003, 600)
     force_smartpi_stable_mode(algo)
+    algo._start.calibration.begin(automatic=True)
+    algo._start.calibration.note_interruption("setpoint change", 1_700_000_000.0)
+    cal = algo.get_published_diagnostics()["calibration"]
+    assert cal["state"] == "waiting" and cal["automatic"] is True
+    assert cal["interruptions"] == [{"reason": "setpoint change", "at": datetime.fromtimestamp(1_700_000_000.0).isoformat()}]
     algo._start.calibration.begin()
-    assert algo.get_published_diagnostics()["calibration"]["state"] == "waiting"
     algo._start.pulse._cur = {"calibration": True}
     for state, plain in (("rest", "rest"), ("heat", "full power"), ("stop", "stop")):
         algo._start.pulse._state = state

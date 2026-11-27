@@ -33,6 +33,7 @@ its response model to the learning window. Times are monotonic seconds, as ``Sma
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -47,11 +48,13 @@ from .calibration import (
     own_measures_agree,
     pulse_limits,
 )
+from .auto_calibration import AutoCalibration
 from .const import AB_MIN_SAMPLES_A, AB_MIN_SAMPLES_B, SmartPIPhase
 from .event_reading import EventReader, ModelReader
 from .feedforward import compute_ff_gain
 from .measure_event import MODE_COOL, SOURCE_BOOTSTRAP, SOURCE_CALIBRATION, SOURCE_PULSE, SOURCE_REGULATION, MeasureRecord
 from .measure_pulse import PULSE_MAX_COUNT, STATE_HEAT, STATE_REST, MeasurePulse
+from .pulse_timing import SetpointLog, pulse_window_s, quiet_window
 from .response_model import ResponseModel, seed_from_saved
 from .timestamp_utils import monotonic_to_wall_ts
 
@@ -100,6 +103,8 @@ class LearningStart:
         self.model_reading = ModelReader(self.model)
         self.model_reading.set_position(getattr(config, "latitude", None), getattr(config, "longitude", None))
         self.calibration = Calibration()
+        self.setpoints = SetpointLog()   # changes of the setpoint and of the mode (smartpi/pulse_timing.py)
+        self.auto = AutoCalibration()    # the calibration SmartPI asks for after an upgrade
         self._pi_stage_seen = False      # a learning stage driven by the PI has been seen
         self._integral_zeroed = False    # the integral term was set to zero for this blank start
         self.recovering = False          # after a calibration pulse, until the room reaches the setpoint
@@ -125,7 +130,8 @@ class LearningStart:
         """Blank start: the configured start, the pulses are available again, the kept values and the response model are
         dropped, a calibration in progress is cancelled."""
         self._use(self.configured)
-        self.cancel_calibration()
+        self.cancel_calibration(report=False)
+        self.auto.reset()
         self.pulse.reset()
         self.reading.reset()
         self.model_reading.reset()
@@ -227,8 +233,9 @@ class LearningStart:
                 record.note_cycle(start, float(receipt.on_time_sec), float(receipt.cycle_duration_sec))
 
     # -- per calculation ---------------------------------------------------------------------------------------
-    def begin(self, hvac_mode: object) -> None:
-        """First call of a calculation: the change of mode."""
+    def begin(self, hvac_mode: object, target: float | None = None) -> None:
+        """First call of a calculation: the change of mode and the setpoint log."""
+        self.setpoints.note(time.time(), target, hvac_mode)
         self.reading.begin(hvac_mode)
         self.model_reading.begin(hvac_mode)
         self.zero_integral()
@@ -241,6 +248,7 @@ class LearningStart:
         owner = self._owner
         learning_stage = self.learning_stage
         cal = self.calibration
+        self._auto_calibrate(hvac_mode, learning_stage)
         if cal.in_progress:
             self._follow_calibration(now, hvac_mode, learning_stage, temp)
         calibrating = cal.in_progress
@@ -257,6 +265,7 @@ class LearningStart:
                 previous_command=previous_command,
                 readings_pending=self.reading.wants_pulses(hvac_mode),
                 calibration=calibrating,
+                start_allowed=self._start_allowed(hvac_mode, learning_stage, calibrating),
                 calibration_pulses_left=cal.pulses < PULSE_MAX_COUNT,
                 event_stage=owner.learn_win.events.phase_stage(str(hvac_mode)),
                 limits=pulse_limits(
@@ -264,6 +273,7 @@ class LearningStart:
                     owner.learn_win.temperatures.raw,
                 ) if calibrating else None,
             )
+            self._note_interruptions()
             if calibrating and self.pulse.calibration_heated > heated:
                 cal.pulses += 1   # a calibration pulse counts once it heats
             if calibrating and self._calibration_pulse_seen and not self.pulse.for_calibration:
@@ -277,6 +287,52 @@ class LearningStart:
         if not self.record.enabled:
             self.record.clear()
         self.zero_integral()
+
+    # -- when a pulse may start ----------------------------------------------------------------------------------
+    def _lag_s(self, hvac_mode: object) -> float | None:
+        """Emitter lag in force in ``hvac_mode``: the anticipation horizon (0 when unknown)."""
+        return self._owner.anticipation_horizon(hvac_mode).seconds
+
+    def _start_allowed(self, hvac_mode: object, learning_stage: bool, calibrating: bool) -> bool:
+        """Whether a pulse may start now: the pulses of an automatic calibration wait for the quiet window with the
+        two-day history (smartpi/pulse_timing.py); the pulses of the learning stage and of a calibration the user
+        requested have no timing rule."""
+        cal = self.calibration
+        if self.pulse.active or not (calibrating and cal.automatic):
+            return True
+        return quiet_window(time.time(), self.model_reading.position, self.setpoints, self._lag_s(hvac_mode),
+                            require_history=True)
+
+    def _auto_calibrate(self, hvac_mode: object, learning_stage: bool) -> None:
+        """Ask for the calibration of the mode when only the values carried over by an upgrade stand (smartpi/
+        auto_calibration.py): the same request, with the same refusals, as the service; the quiet window, with the
+        two-day history, decides the moment. Nothing without a known home position."""
+        if hvac_mode not in (VThermHvacMode_HEAT, VThermHvacMode_COOL):
+            return
+        mode, wall, cal = str(hvac_mode), time.time(), self.calibration
+        self.auto.observe(wall, mode, self.model.event_count(mode) == 0 and self.model.values(mode) is not None)
+        position = self.model_reading.position
+        if (learning_stage or position is None or self._blocked() or cal.in_progress or cal.too_soon()
+                or getattr(self._owner, "_last_restart_reason", None) == "off" or not self.auto.due(wall, mode)):
+            return
+        if quiet_window(wall, position, self.setpoints, self._lag_s(hvac_mode), require_history=True) and (
+                self.request_calibration(self.phase, True, automatic=True)):
+            self.auto.started(wall, mode)
+
+    def _note_interruptions(self) -> None:
+        """Give the interruptions of calibration pulses to the calibration in progress (its end report lists them)."""
+        for reason, wall in self.pulse.take_interruptions():
+            if self.calibration.in_progress:
+                self.calibration.note_interruption(reason, wall)
+
+    def take_report(self) -> dict[str, Any] | None:
+        """End report of the calibration that has just ended, once: result, automatic, interruptions (plain words and
+        time), the calibration mode and ``duration_s``, the time a pulse keeps the setpoint busy (smartpi/
+        calibration_report.py sends it)."""
+        report = self.calibration.take_report()
+        if report is not None:
+            report["duration_s"] = pulse_window_s(self._lag_s(report["mode"] or self._owner.est.model_hvac_mode))
+        return report
 
     def _step_model(self, now: float, hvac_mode: object) -> None:
         """The readings of the response model: what tells whether SmartPI is in control, the published ``b``."""
@@ -292,31 +348,32 @@ class LearningStart:
     def _name(self) -> str:
         return str(getattr(self._owner, "_name", ""))
 
-    def cancel_calibration(self) -> None:
-        """Cancel a calibration in progress (learning reset or learning blocked)."""
+    def cancel_calibration(self, report: bool = True) -> None:
+        """Cancel a calibration in progress (learning reset or learning blocked); a reset gives no end report."""
         if self.calibration.in_progress:
-            self.calibration.finish(RESULT_CANCELLED)
+            self.calibration.finish(RESULT_CANCELLED, report)
 
     def block(self, now: float, reason: str) -> None:
-        """The learning becomes blocked (smartpi/learning_block.py): a calibration in progress is cancelled, the pulse in
-        progress ends and the readings in progress end without result."""
+        """The learning becomes blocked (smartpi/learning_block.py): the pulse in progress ends, a calibration in progress
+        is cancelled and the readings in progress end without result."""
+        self.pulse.interrupt(now, reason, "learning paused")
+        self._note_interruptions()
         self.cancel_calibration()
-        self.pulse.interrupt(now, reason)
         self.reading.block(now, reason)
         self.model_reading.block(now, reason)
 
-    def request_calibration(self, phase: SmartPIPhase, learning_enabled: bool) -> bool:
+    def request_calibration(self, phase: SmartPIPhase, learning_enabled: bool, automatic: bool = False) -> bool:
         """A calibration is requested (smartpi/calibration.py ``Calibration.request``: refused, ignored or started;
         the thermostat is off when its last calculation saw it off by the user, not by a window). True when a
         calibration starts."""
         off = getattr(self._owner, "_last_restart_reason", None) == "off"
-        reason = self.calibration.request(phase == SmartPIPhase.HYSTERESIS, learning_enabled, off)
+        reason = self.calibration.request(phase == SmartPIPhase.HYSTERESIS, learning_enabled, off, automatic)
         if reason != REQUEST_STARTED:
             _LOGGER.info("%s - Calibration request %s", self._name, reason)
             return False
         self.reading.start_calibration()
         self.model.start_calibration()
-        _LOGGER.info("%s - Calibration started", self._name)
+        _LOGGER.info("%s - Calibration started%s", self._name, " automatically" if automatic else "")
         return True
 
     def follow_calibration(self, now: float, hvac_mode: object, temp: float | None = None) -> None:
@@ -348,11 +405,13 @@ class LearningStart:
             return
         if self.pulse.for_calibration:
             if result == RESULT_CANCELLED or self.pulse.state == STATE_REST:
-                self.pulse.interrupt(now, "calibration ended")
+                changed = result == RESULT_CANCELLED and cal.mode is not None and cal.mode != str(hvac_mode)
+                self.pulse.interrupt(now, "calibration ended", "mode change" if changed else None)
             else:
                 if self.pulse.state == STATE_HEAT:
                     self.pulse.stop_heating(now, "calibration ended", temp)
                 return
+        self._note_interruptions()
         self.reading.end_calibration(now)
         if result == RESULT_AGREED:
             self._correct(self.reading.calibration_reading(cal.mode), cal.mode)
@@ -386,6 +445,7 @@ class LearningStart:
     def interrupt(self, now: float, reason: str) -> None:
         """The thermostat stops (off, window, shedding): the pulse and the readings in progress end."""
         self.pulse.interrupt(now, reason)
+        self._note_interruptions()
         self.reading.interrupt(now, reason)
         self.model_reading.interrupt(now, reason)
 
@@ -428,8 +488,10 @@ class LearningStart:
         pulses, "idle" without calibration), its pulses, result, dead time and agreeing reading."""
         cal = self.calibration
         step = _PULSE_STEPS.get(self.pulse.state, "none") if self.pulse.for_calibration else "waiting"
-        mode = cal.mode or self._owner.est.model_hvac_mode
-        return cal.public(step, self.reading.calibration_reading(mode))
+        public = cal.public(step, self.reading.calibration_reading(cal.mode or self._owner.est.model_hvac_mode))
+        public["automatic_status"] = self.auto.status(
+            time.time(), cal.in_progress and cal.automatic, self.model_reading.position is not None)
+        return public
 
     # -- persistence -------------------------------------------------------------------------------------------
     def save(self, now: float) -> dict[str, Any]:
@@ -450,6 +512,9 @@ class LearningStart:
         if record is not None:
             state["measure_events"] = record
         # always saved: a state without it is one of an earlier version, whose model is seeded at its load
+        for key, saved in (("setpoint_log", self.setpoints.save()), ("auto_calibration", self.auto.save())):
+            if saved is not None:
+                state[key] = saved
         state["response_state"] = {"model": self.model.save(), "reading": self.model_reading.save(),
                                    "record": self.model_reading.record.save()}
         return state
@@ -474,6 +539,8 @@ class LearningStart:
         self._integral_zeroed = False
         self.pulse.load(state.get("measure_pulse"))
         self.calibration.load(state.get("calibration"), state.get("cal_state"))
+        self.setpoints.load(state.get("setpoint_log"))
+        self.auto.load(state.get("auto_calibration"))
         self.reading.load(state.get("event_reading") or state.get("pulse_reading"))
         self.record.load(state.get("measure_events"))
         self._load_model(state)

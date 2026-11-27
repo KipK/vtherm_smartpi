@@ -52,7 +52,7 @@ If in doubt, keep the bootstrap.
 
 The calibration (`force_smartpi_calibration` service) runs a new measurement of the room with at most three pulses near the setpoint, and corrects the model if it is clearly wrong. It is useful:
 
-- **after an update from a previous version** of SmartPI, as long as the diagnostics show "previous version" as the source of the response model;
+- **after an update from a previous version** of SmartPI, as long as the diagnostics show "previous version" as the source of the response model. SmartPI starts one by itself after 3 days, on a night when the setpoint stays unchanged according to the two previous nights (the home location must be set); `calibration.automatic_status` tells what it is waiting for. You can also request it yourself without waiting;
 - after a change of radiator, sensor, or major work;
 - if the room repeatedly overshoots or stays too slow to reach the setpoint.
 
@@ -60,7 +60,7 @@ For it to succeed:
 
 - choose a time when **the setpoint will not change for several hours**; at night, at the night setpoint, works well;
 - **do not turn off the thermostat** and do not pause the learning during that time;
-- the result appears in the diagnostics card (`calibration.result`).
+- the result appears in the diagnostics card (`calibration.result`). If a pulse is interrupted or the calibration fails, a Home Assistant notification gives the reason; you can request a new calibration right away.
 
 ## When to reset the learning
 

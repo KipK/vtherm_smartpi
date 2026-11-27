@@ -79,6 +79,13 @@ Home Assistant import. Times are epoch seconds, half-open `[start, end)`.
   The daily energy balance (room model) does NOT need quiet periods.
 - Not a regulation input.
 
+## 2b. Pulse timing and automatic calibration (`smartpi/pulse_timing.py`, `auto_calibration.py`, `calibration_report.py`)
+
+- `quiet_window(wall, position, log, lag_s, require_history)`: dark at the home position (`solar.is_dark` via `dark_intervals`), setpoint and mode unchanged `QUIET_STABLE_S`, and, when `SetpointLog` covers `QUIET_DAYS` = 2 days, no change in `[t - d days, + D]` (d = 1, 2; D = clamp(6 H, 3-6 h), H the anticipation horizon). `SetpointLog` (wall times of changes over 72 h, at most 256, a gap over 1 h counts as a change; saved `setpoint_log`) is fed by `LearningStart.begin`.
+- `LearningStart._start_allowed` gives `MeasurePulse.update(start_allowed=)` its value: only the pulses of an automatic calibration wait for the window, always with the history (no start without a position); the learning-stage pulses of the direct start and the pulses of a requested calibration have no timing rule (the gate had delayed the first model, see decisions.md); a requested calibration also has no minimum interval (`Calibration.too_soon` only conditions the automatic one).
+- `AutoCalibration` (per mode: first-seen wall time of the carried-over response model, attempts, last start; saved `auto_calibration`; `AUTO_CALIBRATION_WAIT_S` 3 days, `_ATTEMPTS` 3, `_RETRY_S` 20 h) is driven by `LearningStart._auto_calibrate`; it asks through `request_calibration(automatic=True)`. Status published in `calibration.automatic_status`.
+- `MeasurePulse.interrupted` (setpoint change, thermostat stopped, mode change, learning paused; calibration pulses only) goes to `Calibration.interruptions`; `Calibration.take_report` is read once by `calibration_report.schedule_report` (handler), which fires the event `calibration_ended` and creates or dismisses the notification (texts: `issues` translations).
+
 ## 3. Room history (`smartpi/room_history/`)
 
 Purpose: record the signals the room model fits and keep the quiet-period catalogue. It computes nothing about the

@@ -145,7 +145,7 @@ the model is in; the bootstrap start shows `0` pulses and no pulse in progress.
 | `kept_lag_s` | Kept emitter lag in seconds, `null` when none are kept |
 
 `calibration` summarises the calibration requested with the
-`force_smartpi_calibration` service (see **Calibration** in the
+`force_smartpi_calibration` service or started by SmartPI itself (see **Calibration** in the
 [SmartPI documentation](vtherm_smartpi.md)): the calibration in progress, or the
 last one until the next request.
 
@@ -154,7 +154,7 @@ last one until the next request.
 | `state` | `idle` (no calibration in progress), `waiting` (between pulses, the regulation runs), or the step of its pulse in progress: `rest`, `full power`, `stop` |
 | `pulses_done` | Pulses started by the calibration (three at most; an interrupted pulse counts) |
 | `result` | `null` before any calibration, `in progress`, `readings agree` (two pulses agree), `pulses done` (three pulses read without agreement), `time limit` (48 hours) or `cancelled` (change between heating and cooling, return of the learning stage, learning reset, learning paused by the service or an entity) |
-| `last_request` | Answer to the last request, `null` before any: `started`, `refused: learning stage`, `refused: learning paused` (by the service or an entity), `refused: thermostat off`, `refused: too soon` (less than 24 hours after the end of the last calibration), `ignored: in progress` |
+| `last_request` | Answer to the last request, `null` before any: `started`, `refused: learning stage`, `refused: learning paused` (by the service or an entity), `refused: thermostat off`, `ignored: in progress` |
 | `last_time` | Local time at which the last calibration that was not cancelled ended (ISO 8601), `null` before |
 | `deadtime_start_s` | Last dead time after a start measured during a pulse of the calibration, in seconds, `null` when none |
 | `reading_a` | Heating rate of the two agreeing pulses in °C/min at full power (5 decimals), `null` until two pulses agree |
@@ -164,6 +164,9 @@ last one until the next request.
 | `in_force_b` | Loss coefficient in use when the pulses agreed, in 1/min (6 decimals); `null` until two pulses agree |
 | `in_force_lag_s` | Horizon of the anticipation in use when the pulses agreed, in seconds, shown beside `reading_lag_s`; `null` until two pulses agree |
 | `corrected` | What the calibration corrected: a list of `heating rate`, `loss coefficient`; empty when nothing was corrected |
+| `automatic` | `true` when the calibration in progress, or the last one, was started by SmartPI itself (after an upgrade), `false` when it was requested |
+| `interruptions` | Pulses of the calibration in progress, or of the last one, that were interrupted: a list of `{reason, at}`, `reason` being `setpoint change`, `thermostat stopped`, `mode change` or `learning paused`, `at` the local time (ISO 8601); empty when none |
+| `automatic_status` | Where the automatic calibration of the current mode stands: `not needed` (the response model of the mode has measured events, or none is carried over), `waiting: 3 days after the update`, `waiting: quiet night` (every other condition, including a quiet window, is awaited), `in progress`, `attempts used` (three automatic calibrations were started), `home position unknown` |
 
 The dead times after a start measured by the pulses join the learned ones like
 any other measurement. A quantity of the reading is corrected only when it differs from

@@ -25,7 +25,6 @@ from custom_components.vtherm_smartpi.smartpi.calibration import (
     REQUEST_OFF,
     REQUEST_PAUSED,
     REQUEST_STARTED,
-    REQUEST_TOO_SOON,
     RESULT_AGREED,
     RESULT_CANCELLED,
     RESULT_IN_PROGRESS,
@@ -147,18 +146,17 @@ def test_a_request_while_off_is_refused_but_a_window_or_a_shedding_only_defers_i
     assert algo.force_calibration() is True
 
 
-def test_a_request_within_a_day_of_the_last_calibration_is_refused_a_cancelled_one_does_not_count(clock):
+def test_a_request_is_not_refused_after_a_recent_calibration_but_the_automatic_one_waits_a_day(clock):
     algo = _learned()
     assert algo.force_calibration() is True
-    algo.set_learning_enabled(False)              # cancelled
-    algo.set_learning_enabled(True)
-    assert algo.force_calibration() is True
     algo._start.calibration.finish(RESULT_PULSES_DONE)
-    clock.advance(CALIBRATION_MIN_INTERVAL_S - 60.0)
-    assert algo.force_calibration() is False and _calibration(algo)["last_request"] == REQUEST_TOO_SOON
-    assert _calibration(algo)["result"] == RESULT_PULSES_DONE    # the result of the last calibration stays
     clock.advance(60.0)
-    assert algo.force_calibration() is True
+    assert algo._start.calibration.too_soon() is True          # the automatic calibration would wait
+    assert algo.force_calibration() is True and _calibration(algo)["last_request"] == REQUEST_STARTED
+    assert algo.force_calibration() is False and _calibration(algo)["last_request"] == REQUEST_IN_PROGRESS
+    algo._start.calibration.finish(RESULT_PULSES_DONE)
+    clock.advance(CALIBRATION_MIN_INTERVAL_S)
+    assert algo._start.calibration.too_soon() is False
 
 
 @pytest.mark.parametrize("start", ["bootstrap", "direct"])

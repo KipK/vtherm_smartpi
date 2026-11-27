@@ -117,7 +117,7 @@
     },
     "force_smartpi_calibration": {
       "name": "Forcer la calibration SmartPI",
-      "description": "Lance une calibration SmartPI pour un thermostat : jusqu'à trois impulsions de mesure près de la consigne, une fois le premier modèle publié ; le modèle appris est corrigé là où la mesure s'en écarte de plus de 30 %. Peut être appelé par une automatisation : la demande est refusée pendant l'apprentissage du premier modèle, avec l'apprentissage en pause, avec le thermostat éteint ou moins de 24 heures après la dernière calibration, et ignorée pendant une calibration en cours."
+      "description": "Lance une calibration SmartPI pour un thermostat : jusqu'à trois impulsions de mesure près de la consigne, une fois le premier modèle publié ; le modèle appris est corrigé là où la mesure s'en écarte de plus de 30 %. Peut être appelé par une automatisation : la demande est refusée pendant l'apprentissage du premier modèle, avec l'apprentissage en pause ou avec le thermostat éteint, et ignorée pendant une calibration en cours."
     },
     "reset_smartpi_integral": {
       "name": "Réinitialiser l'intégrale SmartPI",
@@ -145,6 +145,37 @@
     "opening_remap": {
       "title": "La linéarisation de vanne SmartPI entre en conflit avec les réglages d'ouverture de {name}",
       "description": "Le thermostat {name} utilise la linéarisation de vanne SmartPI, mais ses réglages d'ouverture Versatile Thermostat (« Seuil d'ouverture », « Ouvertures minimales », « Ouvertures maximales » ou « Fermetures maximale ») transforment l'ouverture avant qu'elle n'atteigne la vanne. SmartPI inverse sa courbe de vanne sur une valeur qui n'est plus l'ouverture physique de la vanne : son modèle est donc appris sur une commande erronée.\n\nPour corriger, désactivez la linéarisation de vanne dans les réglages SmartPI de {name}, ou rétablissez les réglages d'ouverture par défaut de Versatile Thermostat (seuil 0, minimum 0, maximum 100, fermeture maximale 100) uniquement si votre matériel le permet. En contrôle direct de vanne over_climate, le seuil de régulation relève aussi le seuil d'ouverture. Si votre matériel impose un seuil non nul, conservez-le et désactivez la linéarisation de vanne SmartPI. Si le radiateur ne commence à chauffer qu'au-delà d'une certaine ouverture et que votre matériel permet les réglages d'ouverture VT par défaut, réglez cette ouverture dans « Ouverture minimale de vanne » de la courbe de vanne SmartPI."
+    },
+    "calibration_report": {
+      "title": "Calibration SmartPI de {name}",
+      "description": "Calibration de {name} : {result}.\n\nInterruptions des impulsions :\n{interruptions}\n\nUne impulsion dure environ {duration} : gardez la consigne inchangée pendant ce temps, de préférence la nuit, ou redemandez la calibration plus tard."
+    },
+    "calibration_result_agreed": {
+      "title": "les lectures concordent"
+    },
+    "calibration_result_pulses_done": {
+      "title": "les impulsions sont faites sans deux lectures concordantes"
+    },
+    "calibration_result_time_limit": {
+      "title": "la limite de 48 heures est atteinte"
+    },
+    "calibration_result_cancelled": {
+      "title": "la calibration a été annulée"
+    },
+    "calibration_reason_setpoint_change": {
+      "title": "changement de consigne"
+    },
+    "calibration_reason_thermostat_stopped": {
+      "title": "thermostat arrêté"
+    },
+    "calibration_reason_mode_change": {
+      "title": "changement de mode"
+    },
+    "calibration_reason_learning_paused": {
+      "title": "apprentissage en pause"
+    },
+    "calibration_none": {
+      "title": "aucune"
     }
   }
 }

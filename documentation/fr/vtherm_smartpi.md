@@ -324,7 +324,7 @@ SmartPI anticipe la température, en HEAT comme en COOL : les branches proportio
 
 ### Calibration
 
-Une calibration ne se lance que sur demande, avec le service [`force_smartpi_calibration`](#force_smartpi_calibration), une fois le premier modèle publié, quel que soit le démarrage de l'apprentissage. Elle mesure de nouveau la pièce avec au plus trois impulsions de mesure près de la consigne et corrige le modèle appris lorsque la mesure montre qu'il est nettement faux.
+Une calibration se lance sur demande, avec le service [`force_smartpi_calibration`](#force_smartpi_calibration), ou d'elle-même après une mise à jour (voir [Calibration automatique après une mise à jour](#calibration-automatique-après-une-mise-à-jour)), une fois le premier modèle publié, quel que soit le démarrage de l'apprentissage. Elle mesure de nouveau la pièce avec au plus trois impulsions de mesure près de la consigne et corrige le modèle appris lorsque la mesure montre qu'il est nettement faux.
 
 Les impulsions sont dimensionnées à partir de ce que SmartPI sait déjà de la pièce (son modèle de réponse et l'horizon de l'anticipation ; sans modèle, leurs durées comptent zéro) :
 
@@ -344,7 +344,7 @@ Une valeur en usage à moins de 30 % de la lecture est laissée telle quelle : u
 
 Une calibration se termine lorsque deux de ses impulsions concordent, lorsque ses trois impulsions sont faites et lues, ou après 48 heures. Lorsque cette fin arrive pendant une impulsion, une impulsion au repos rend la main à la régulation aussitôt, une impulsion qui chauffe à pleine puissance passe à son étape d'arrêt, et une impulsion dans son étape d'arrêt continue : la calibration se termine, et applique ses corrections, quand cette impulsion se termine. Une impulsion compte dès qu'elle a commencé à chauffer ; celle qui s'arrête pendant son repos (un changement de consigne, par exemple) ne compte pas. Éteindre le thermostat (ou une fenêtre, ou un délestage) termine l'impulsion en cours ; la calibration continue avec son impulsion suivante. Un passage entre chauffage et refroidissement, une réinitialisation de l'apprentissage ou une mise en pause de l'apprentissage l'annule aussitôt, avec son impulsion. Un redémarrage conserve la calibration en cours et son nombre d'impulsions ; l'impulsion en cours s'arrête.
 
-Le service peut être appelé par une automatisation : une demande qui ne peut pas lancer de calibration est refusée ou ignorée sans erreur, et la raison est publiée dans `live.calibration.last_request`. Une demande est refusée tant que le premier modèle est en cours d'apprentissage, que l'apprentissage est en pause, que le thermostat est éteint, et moins de 24 heures après la fin de la dernière calibration (une calibration annulée ne compte pas) ; elle est ignorée pendant une calibration en cours. Une fenêtre ouverte, un délestage ou une coupure de la chauffe après un dépassement ne la refusent pas : les impulsions attendent que la pièce puisse être mesurée. Par exemple, une pièce dont la consigne change rarement donne peu d'occasions de mesure à son apprentissage ; une automatisation hebdomadaire peut vérifier son modèle :
+Le service peut être appelé par une automatisation : une demande qui ne peut pas lancer de calibration est refusée ou ignorée sans erreur, et la raison est publiée dans `live.calibration.last_request`. Une demande est refusée tant que le premier modèle est en cours d'apprentissage, que l'apprentissage est en pause et que le thermostat est éteint ; elle est ignorée pendant une calibration en cours. Une demande n'a pas d'intervalle minimum depuis la dernière calibration, et ses impulsions n'ont pas de règle de moment : elles démarrent dès que la pièce est prête. Une fenêtre ouverte, un délestage ou une coupure de la chauffe après un dépassement ne la refusent pas : les impulsions attendent que la pièce puisse être mesurée. Par exemple, une pièce dont la consigne change rarement donne peu d'occasions de mesure à son apprentissage ; une automatisation hebdomadaire peut vérifier son modèle :
 
 ```yaml
 triggers:
@@ -360,6 +360,31 @@ actions:
 ```
 
 La calibration est résumée dans `live.calibration` (voir [Diagnostics](diagnostics.md)).
+
+#### Quand démarre une impulsion
+
+Une impulsion écarte la pièce de sa consigne pendant des heures : les impulsions d'une calibration automatique (voir ci-dessous) ne démarrent que dans une fenêtre calme. Les impulsions de l'étape d'apprentissage du démarrage direct et celles d'une calibration demandée par l'utilisateur n'ont pas de règle de moment. Au moment du démarrage d'une impulsion de calibration automatique :
+
+- il fait nuit à la position du domicile (la position de Home Assistant ; le soleil est calculé, aucun capteur n'est nécessaire),
+- la consigne et le mode (chauffage, refroidissement, arrêt) n'ont pas changé depuis au moins 1 heure,
+- lorsque SmartPI observe la consigne depuis au moins les deux jours précédents, la consigne n'a pas changé aux mêmes heures de ces deux jours, pendant la durée dont une impulsion a besoin : six retards d'émetteur, entre 3 et 6 heures (3 heures tant que le retard est inconnu). Un changement programmé se répète d'un jour à l'autre : cette règle l'anticipe. Sans deux jours d'observation, ou sans position du domicile connue, aucune impulsion de calibration automatique ne démarre.
+
+SmartPI garde pour cela les instants des changements de consigne et de mode des 72 dernières heures (un petit journal enregistré avec son état). La règle s'applique à chaque impulsion d'une calibration automatique.
+
+#### Calibration automatique après une mise à jour
+
+Un thermostat mis à jour depuis une version antérieure démarre avec un modèle de réponse tiré de son temps mort enregistré (source `previous version`, confiance provisoire, aucun événement mesuré). Pour le mode courant (chauffage ou refroidissement), SmartPI demande lui-même une calibration lorsque toutes ces conditions sont réunies :
+
+- cet état dure depuis au moins 3 jours dans le mode (l'instant où il a été vu la première fois est enregistré),
+- le thermostat n'est pas dans l'étape d'apprentissage, l'apprentissage n'est ni en pause ni bloqué (pause, perturbation, chauffage indisponible), le thermostat est allumé, aucune calibration n'est en cours et la dernière s'est terminée il y a plus de 24 heures,
+- le moment est une fenêtre calme avec deux jours d'observation (voir ci-dessus),
+- moins de 3 calibrations automatiques ont été lancées dans le mode, et la dernière a été lancée il y a plus de 20 heures.
+
+Elle suit le même chemin et les mêmes refus que le service. Elle s'arrête définitivement dès que le mode a un événement mesuré, et ne fait rien sans position du domicile connue. `live.calibration.automatic_status` indique où elle en est.
+
+#### Rapport de fin de calibration
+
+Chaque calibration, demandée ou automatique, enregistre les impulsions interrompues : un `setpoint change`, un `thermostat stopped` (arrêt, fenêtre, délestage), un `mode change` ou un `learning paused` (pause, perturbation, chauffage indisponible), avec l'heure. À la fin de la calibration, SmartPI émet l'événement `vtherm_smartpi_event` avec `type: calibration_ended`, le `result`, `automatic` et les `interruptions` (raison et heure). Lorsque les lectures n'ont pas concordé ou qu'au moins une impulsion a été interrompue, il crée aussi une notification persistante par thermostat (remplacée par la suivante) qui donne le résultat, les interruptions et ce conseil : une impulsion dure environ la durée de la fenêtre calme ci-dessus ; gardez la consigne inchangée pendant ce temps, de préférence la nuit, ou redemandez la calibration plus tard. Une calibration dont les lectures concordent sans interruption supprime cette notification.
 
 ### Modèle de pièce
 
@@ -641,7 +666,7 @@ Ce service est utile si :
 - vous souhaitez comparer la vitesse de chauffe, le coefficient de pertes et le retard de l'émetteur de la pièce au modèle appris,
 - la consigne de la pièce change rarement (un appel hebdomadaire depuis une automatisation).
 
-L'appel n'échoue jamais sur un thermostat SmartPI : la demande est refusée tant que SmartPI apprend son premier modèle, que l'apprentissage est en pause, que le thermostat est éteint, ou moins de 24 heures après la fin de la dernière calibration, et ignorée lorsqu'une calibration est déjà en cours (`live.calibration.last_request` en donne la raison). Mettre l'apprentissage en pause annule une calibration en cours.
+L'appel n'échoue jamais sur un thermostat SmartPI : la demande est refusée tant que SmartPI apprend son premier modèle, que l'apprentissage est en pause ou que le thermostat est éteint, et ignorée lorsqu'une calibration est déjà en cours (`live.calibration.last_request` en donne la raison). Mettre l'apprentissage en pause annule une calibration en cours.
 
 ### `reset_smartpi_integral`
 

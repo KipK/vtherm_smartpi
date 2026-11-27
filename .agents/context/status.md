@@ -42,6 +42,8 @@ Shipped in 0.6.7: calibration reachability judged on the measured outdoor temper
 
 ## Small owner decisions implemented
 
+- Branch `auto_calibration`: quiet window for the pulses of the automatic calibration only (direct-start pulses not gated), automatic calibration after an upgrade, calibration report (event and notification), and no minimum interval for a requested calibration are coded and unit-tested; not yet run in the field or benched (`algorithm-room-model.md` section 2b). Equinox: new `calibration.{automatic,interruptions,automatic_status}`.
+
 
 ## Next steps (order agreed by the owner)
 

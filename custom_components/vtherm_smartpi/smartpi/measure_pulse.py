@@ -40,6 +40,7 @@ the algorithm applies it immediately and feeds the estimator after the commit. T
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from .sensor_step import sensor_step
@@ -58,6 +59,11 @@ PULSE_START_MAX_COMMAND = 0.8   # nor while the command of the previous calculat
 PULSE_HEAT_OVER_C = 0.3     # the heating step ends when the room is this far on the other side of the setpoint
 PULSE_MIN_GAP_S = 6.0 * 3600.0
 PULSE_MAX_COUNT = 3
+
+# Endings of a calibration pulse that the calibration report names (plain words); a pulse ended by the calibration
+# itself or by its own limits is not an interruption.
+INTERRUPTIONS = {"setpoint change": "setpoint change", "mode change": "mode change",
+                 "thermostat stopped": "thermostat stopped", "power shedding": "thermostat stopped"}
 
 STATE_IDLE = "idle"
 STATE_REST = "rest"
@@ -89,6 +95,7 @@ class MeasurePulse:
         self._mode_counts: dict[str, int] = {}   # pulses started by mode
         self._last_end_s: float | None = None
         self._calls = 0
+        self.interrupted: list[tuple[str, float]] = []   # (plain reason, wall time) of calibration pulses interrupted
         self.calibration_heated = 0          # calibration pulses that reached their heating step (never reset)
 
     # -- read-only view ------------------------------------------------------------------------------------------
@@ -155,6 +162,7 @@ class MeasurePulse:
         event_stage: str | None = None,
         limits: Any = None,
         history: Any = None,
+        start_allowed: bool = True,
     ) -> None:
         """Advance the pulse for this calculation (called once per calculation, before the command is chosen).
 
@@ -165,7 +173,8 @@ class MeasurePulse:
         start while ``calibration_pulses_left``. ``event_stage``: stage of the measurement event in progress
         (``MeasureEventDetector.phase_stage``), which ends the stop step. ``limits``: the limits of the calibration pulses
         (``smartpi.calibration.PulseLimits``), read while a calibration is in progress. ``history``: the raw room
-        temperature samples (smartpi/temperature_history.py)."""
+        temperature samples (smartpi/temperature_history.py). ``start_allowed``: a pulse may start now (the quiet
+        window of smartpi/pulse_timing.py)."""
         self._temps = () if history is None else history
         self._calls += 1
         sign = -1.0 if cooling else 1.0
@@ -182,6 +191,7 @@ class MeasurePulse:
             if (
                 heat_or_cool
                 and wanted
+                and start_allowed
                 and low <= demand <= PULSE_START_UNDER_C + 1e-9
                 and previous_command < PULSE_START_MAX_COMMAND
                 and (self._last_end_s is None or now - self._last_end_s >= gap)
@@ -325,12 +335,15 @@ class MeasurePulse:
         elif now - cur["stop_start_s"] >= PULSE_STOP_MAX_S:
             self._finish(now, "time limit")
 
-    def _finish(self, now: float, reason: str) -> None:
+    def _finish(self, now: float, reason: str, plain: str | None = None) -> None:
         cur = self._cur
         self._cur = None
         self._state = STATE_IDLE
         if cur is None:
             return
+        plain = plain or INTERRUPTIONS.get(reason)
+        if cur["calibration"] and plain:
+            self.interrupted.append((plain, time.time()))
         cur["end_s"], cur["end_reason"] = now, reason
         if cur["heat_start_s"] is not None and cur["heat_end_s"] is None:
             cur["heat_end_s"], cur["heat_end_reason"] = now, reason
@@ -339,10 +352,17 @@ class MeasurePulse:
             self._last_end_s = now      # a calibration pulse ended before heating measured nothing: no gap after it
         self._history.append({k: v for k, v in cur.items() if not k.startswith("_")})
 
-    def interrupt(self, now: float, reason: str) -> None:
-        """The thermostat stops (off, window, shedding): the pulse in progress ends and is not resumed."""
+    def interrupt(self, now: float, reason: str, plain: str | None = None) -> None:
+        """The thermostat stops (off, window, shedding), the learning is blocked or the mode changes: the pulse in
+        progress ends and is not resumed. ``plain``: the interruption of a calibration pulse in words, when ``reason``
+        is not one of ``INTERRUPTIONS``."""
         if self._cur is not None:
-            self._finish(now, reason)
+            self._finish(now, reason, plain)
+
+    def take_interruptions(self) -> list[tuple[str, float]]:
+        """The interruptions of calibration pulses since the last call, taken once."""
+        taken, self.interrupted = self.interrupted, []
+        return taken
 
     # -- persistence -------------------------------------------------------------------------------------------
     def save(self, now: float | None = None) -> dict | None:
