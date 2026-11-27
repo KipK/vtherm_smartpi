@@ -151,31 +151,40 @@
       "description": "Calibration of {name}: {result}.\n\nPulse interruptions:\n{interruptions}\n\nA pulse lasts about {duration}: keep the setpoint unchanged meanwhile, preferably at night, or request the calibration again later."
     },
     "calibration_result_agreed": {
-      "title": "the readings agreed"
+      "title": "the readings agreed",
+      "description": "the readings agreed"
     },
     "calibration_result_pulses_done": {
-      "title": "the pulses are done without two agreeing readings"
+      "title": "the pulses are done without two agreeing readings",
+      "description": "the pulses are done without two agreeing readings"
     },
     "calibration_result_time_limit": {
-      "title": "the time limit of 48 hours was reached"
+      "title": "the time limit of 48 hours was reached",
+      "description": "the time limit of 48 hours was reached"
     },
     "calibration_result_cancelled": {
-      "title": "the calibration was cancelled"
+      "title": "the calibration was cancelled",
+      "description": "the calibration was cancelled"
     },
     "calibration_reason_setpoint_change": {
-      "title": "setpoint change"
+      "title": "setpoint change",
+      "description": "setpoint change"
     },
     "calibration_reason_thermostat_stopped": {
-      "title": "thermostat stopped"
+      "title": "thermostat stopped",
+      "description": "thermostat stopped"
     },
     "calibration_reason_mode_change": {
-      "title": "mode change"
+      "title": "mode change",
+      "description": "mode change"
     },
     "calibration_reason_learning_paused": {
-      "title": "learning paused"
+      "title": "learning paused",
+      "description": "learning paused"
     },
     "calibration_none": {
-      "title": "none"
+      "title": "none",
+      "description": "none"
     }
   }
 }

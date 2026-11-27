@@ -151,31 +151,40 @@
       "description": "Calibration de {name} : {result}.\n\nInterruptions des impulsions :\n{interruptions}\n\nUne impulsion dure environ {duration} : gardez la consigne inchangée pendant ce temps, de préférence la nuit, ou redemandez la calibration plus tard."
     },
     "calibration_result_agreed": {
-      "title": "les lectures concordent"
+      "title": "les lectures concordent",
+      "description": "les lectures concordent"
     },
     "calibration_result_pulses_done": {
-      "title": "les impulsions sont faites sans deux lectures concordantes"
+      "title": "les impulsions sont faites sans deux lectures concordantes",
+      "description": "les impulsions sont faites sans deux lectures concordantes"
     },
     "calibration_result_time_limit": {
-      "title": "la limite de 48 heures est atteinte"
+      "title": "la limite de 48 heures est atteinte",
+      "description": "la limite de 48 heures est atteinte"
     },
     "calibration_result_cancelled": {
-      "title": "la calibration a été annulée"
+      "title": "la calibration a été annulée",
+      "description": "la calibration a été annulée"
     },
     "calibration_reason_setpoint_change": {
-      "title": "changement de consigne"
+      "title": "changement de consigne",
+      "description": "changement de consigne"
     },
     "calibration_reason_thermostat_stopped": {
-      "title": "thermostat arrêté"
+      "title": "thermostat arrêté",
+      "description": "thermostat arrêté"
     },
     "calibration_reason_mode_change": {
-      "title": "changement de mode"
+      "title": "changement de mode",
+      "description": "changement de mode"
     },
     "calibration_reason_learning_paused": {
-      "title": "apprentissage en pause"
+      "title": "apprentissage en pause",
+      "description": "apprentissage en pause"
     },
     "calibration_none": {
-      "title": "aucune"
+      "title": "aucune",
+      "description": "aucune"
     }
   }
 }

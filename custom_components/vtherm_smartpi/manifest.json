@@ -1,6 +1,9 @@
 {
   "domain": "vtherm_smartpi",
   "name": "Versatile Thermostat SmartPI",
+  "categories": [
+    "climate.thermostats_heating"
+  ],
   "codeowners": [
     "@kipk"
   ],
