@@ -51,13 +51,17 @@ SmartPI publie un résumé structuré de diagnostics que la [carte Lovelace Equi
 
 SmartPI nécessite **Versatile Thermostat 10.6.2 ou supérieur**. Si la version installée est trop ancienne ou ne peut pas être vérifiée, SmartPI ne se charge pas et affiche une notification persistante Home Assistant. Mettez à jour Versatile Thermostat, puis redémarrez Home Assistant.
 
-### Via HACS (recommandé)
+### Via le Marketplace de Home Assistant (HACS) (recommandé)
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=KipK&repository=vtherm_smartpi&category=Integration)
+<!-- ha-marketplace:exclude-start -->
+[![Ouvrir votre instance Home Assistant et ouvrir un dépôt dans le Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=KipK&repository=vtherm_smartpi&category=integration)
 
-1. Assurez-vous d'avoir [HACS](https://hacs.xyz/) installé dans Home Assistant
-2. Cliquez sur le bouton ci-dessus ou ajoutez manuellement ce dépôt dans HACS
-3. Recherchez "Versatile Thermostat SmartPI" dans HACS
+Home Assistant antérieur à 2026.11 : [ouvrir dans HACS](https://my.home-assistant.io/redirect/hacs_repository/?owner=KipK&repository=vtherm_smartpi&category=integration).
+<!-- ha-marketplace:exclude-end -->
+
+1. Assurez-vous que le Marketplace est disponible dans Home Assistant (avant Home Assistant 2026.11, installez [HACS](https://hacs.xyz/))
+2. Cliquez sur le bouton ci-dessus ou ajoutez manuellement ce dépôt dans le Marketplace (HACS avant Home Assistant 2026.11)
+3. Recherchez "Versatile Thermostat SmartPI" dans le Marketplace (HACS avant Home Assistant 2026.11)
 4. Installez l'intégration
 5. Redémarrez Home Assistant
 6. Ajouter l'intégration `Vtherm_smartpi` depuis Paramètres / Appareils et Services / Integration
