@@ -58,6 +58,8 @@ You do not need to understand PI control theory to use SmartPI effectively. The 
 
 ## Before you start
 
+A short guide to good practices for learning well, from the bootstrap to everyday regulation: [Best practices](best_practices.md).
+
 For SmartPI to learn correctly, make sure the thermostat has:
 
 - a reliable indoor temperature,

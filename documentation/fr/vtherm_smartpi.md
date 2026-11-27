@@ -58,6 +58,8 @@ Il n'est pas nécessaire de connaître la théorie des boucles PI pour utiliser 
 
 ## Avant de commencer
 
+Un guide court des bonnes pratiques pour bien apprendre, de l'amorçage à la régulation au quotidien : [Bonnes pratiques](bonnes_pratiques.md).
+
 Pour que SmartPI apprenne correctement, le thermostat doit disposer :
 
 - d'une température intérieure fiable,
