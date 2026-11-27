@@ -81,6 +81,7 @@ SmartPI requires **Versatile Thermostat 10.6.2 or later**. If the installed vers
 Comprehensive documentation is available in English:
 
 - 🇬🇧 [User Documentation (English)](documentation/en/vtherm_smartpi.md)
+- 🇬🇧 [Best practices for good learning (English)](documentation/en/best_practices.md)
 - 🇬🇧 [Technical Documentation (English)](documentation/en/technical_doc.md)
 
 ## 👥 Authors
