@@ -83,6 +83,22 @@ The `live` block is organized by responsibility:
 | `valve` | Versatile Thermostat valve settings seen by SmartPI, `null` outside valve mode |
 | `room_model` | Room model |
 
+The fields most useful to read at a glance:
+
+| Path under `live` | Meaning |
+|---|---|
+| `model.deadtime_heat_s`, `model.deadtime_heat_reliable` | Dead time after a start in seconds (median of the last detections) and whether it is reliable; `deadtime_cool_*` replace them in COOL |
+| `model.tau_min`, `model.tau_reliable` | Time constant of the room, `1/b`, in minutes (`9999` while it is not reliable), and whether it is reliable |
+| `power.current_cycle_percent`, `power.next_cycle_percent` | Power committed for the cycle in progress and power requested for the next cycle, in % |
+| `control.in_deadband`, `control.in_near_band` | `true` while the room is in the deadband, in the near band |
+| `control.in_deadtime_window` | `true` while the integral is held for the effective dead time that follows a heater start |
+| `control.saturation_state` | `NO_SAT`, `SAT_HI` (upper limit reached) or `SAT_LO` (lower limit reached) |
+| `temperature.integral_mode` | State of the integral at the last calculation (for example `I:RUN`, `I:HOLD`, `I:FREEZE(deadband)`) |
+| `temperature.integral_hold_mode` | `none`, or the hold that follows a resume: `window_resume`, `power_shedding_resume`, `heating_unavailable_resume` |
+| `analysis.control.near_band_source` | How the near band is sized: `auto_model_aware` (from the response model and the A/B model) or the configured thresholds (`no response model`, `fallback_no_ext`, `fallback_slope_low`, `fallback_model`) |
+
+The other fields are advanced diagnostics, described in the technical documentation and shown by the supplied cards.
+
 `control.mode` is `smartpi` while the PI regulates, `hysteresis` during the
 bootstrap, and `heating cut above the setpoint` during a guard cut (the room went
 past the setpoint by the near-band above it: the heating is forced off). The PI is
@@ -95,7 +111,7 @@ indoor temperature.
 is held after a calibration pulse, until the room reaches the setpoint. It is
 `heating_unavailable` while the heating unavailable entity is on, then
 `heating_unavailable_resume` while the integral stays held for the effective dead
-time of the emitter after it turns off.
+time of the response model after it turns off.
 
 `learning.enabled` is the setting of the `set_smartpi_learning` service.
 `learning.block_reason` is `null` while SmartPI learns, else why every learning is
@@ -221,8 +237,8 @@ gains read the dead time after a start, not this model.
 |---|---|
 | `model.dead_time_s` | Dead time in seconds, `null` without a model |
 | `model.response_time_constant_s` | Response time constant in seconds, `null` without a model |
-| `model.response_source` | Source of the latest accepted event: `measurement pulses`, `bootstrap`, `calibration`, `regulation`, or `previous version` (values carried over from the dead time and emitter lag learned before the model existed, until the first accepted event); `null` without a model |
-| `model.response_confidence` | `measured` (two events agree on the dead time plus the time constant within 20 %), `provisional` (one event, or values of the previous version), `dead time assumed` (no event tells the dead time apart: half of the total is assumed); `null` without a model |
+| `model.response_source` | Source of the latest accepted event: `measurement pulses`, `bootstrap`, `calibration`, `regulation`, or `previous version` (values carried over from a saved state without a response model, until the first accepted event); `null` without a model |
+| `model.response_confidence` | `measured` (two events agree on the dead time plus the time constant within 20 %), `provisional` (one event, or values carried over from a saved state), `dead time assumed` (no event tells the dead time apart: half of the total is assumed); `null` without a model |
 
 `analysis.learning.response_model`:
 

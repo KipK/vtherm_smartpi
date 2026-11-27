@@ -87,14 +87,12 @@ SmartPI leaves `HYSTERESIS` once `b` has 5 measurements and `a` is published.
 `a` is published at 5 measurements, or from `AB_MIN_SAMPLES_A_CONSISTENT = 4`
 measurements when they agree: their median absolute deviation is at most
 `AB_A_CONSISTENT_MAX_REL_MAD = 0.10` of their median. The first publication of
-`a` also waits for the delivered power model (3.7): while the emitter lag is not
-resolved, measurements are collected without publication, until the collection
-holds `AB_HISTORY_SIZE = 31` measurements: the next accepted measurement then
-publishes `a`. Both buffers continue
-filling up to `AB_HISTORY_SIZE = 31` during normal SmartPI regulation. After a
-restart, the restored emitter lag state sets the phase from the first
-calculation; a state saved without an emitter lag block waits for the first
-learning update.
+`a` also waits for the delivered power model (3.7): until it is settled (the
+response model of the mode is published, or `RESPONSE_LAG_RESOLVE_EPISODES = 4`
+heating phases have ended without it), measurements are collected without
+publication, until the collection holds `AB_HISTORY_SIZE = 31` measurements: the
+next accepted measurement then publishes `a`. Both buffers continue
+filling up to `AB_HISTORY_SIZE = 31` during normal SmartPI regulation.
 
 Inside the hysteresis band, the output keeps its previous on/off state. A
 modulated output left by another phase is not a hysteresis state: it is set to 0
@@ -103,8 +101,7 @@ of the last calculation. After a bridged restart (5.4), the first calculation
 that has the indoor temperature resumes it inside the band, as an uninterrupted
 hysteresis would have; while it is awaited, the on/off state of before the stop
 is kept as described in Restarts. Outside the
-band, the thresholds decide. After any other restart, and for a state saved
-without it, the output starts at 0. A heating or cooling phase in progress can
+band, the thresholds decide. After any other restart the output starts at 0. A heating or cooling phase in progress can
 thus resume after a short restart.
 
 The heating phases of the hysteresis are measurement events: they are recorded
@@ -119,8 +116,7 @@ same learning stage, but the command is the PI and the stage waits for `b` until
 a starting value of `b` stands or the learning's own time constant has been
 reliable. The option acts on a blank start only: a state with measurements,
 starting values, pulses or readings keeps the start its learning began with (the
-direct start is saved as `learning_start`; a state without it began with the
-bootstrap), and a learning reset takes the configured start.
+direct start is saved as `learning_start`), and a learning reset takes the configured start.
 
 The `b` convergence used for drift-aware `a` learning relies on `b_converged_for_a()`:
 
@@ -131,7 +127,7 @@ The `b` convergence used for drift-aware `a` learning relies on `b_converged_for
 
 ### 3.2 Effective learning window
 
-The code no longer uses a `WINDOW_MIN_MINUTES` constant. Learning now relies on `LearningWindowManager` and on a sliding window that:
+Learning relies on `LearningWindowManager` and on a sliding window that:
 
 - requires outdoor temperature to be available,
 - obeys thermal governance,
@@ -274,8 +270,7 @@ response, not the power-transition direction:
 - `deadtime_cool`: dead time before the temperature starts falling.
 
 Therefore OFF -> ON learns `heat` in HEAT mode and `cool` in COOL mode; the
-other channel stays empty (a value an earlier version saved there, a dead time
-after a stop, is ignored at load). A power cut arms nothing: what follows a
+other channel stays empty. A power cut arms nothing: what follows a
 stop is read by the response model (3.7).
 
 Detection tracks the filtered indoor temperature, in regulation as during the bootstrap and the measurement pulses: a raw measurement that oscillates by one sensor step would otherwise detect a response as soon as the power steps. A detection in progress resumes after a bridged restart (5.4): its state, start, trough or peak, pre-start trend, last power and last power cut are persisted as wall-clock times, and its timeout still runs from the saved start. After any other restart it is dropped, and the minimum OFF duration must be observed again in the new session before a detection can be armed.
@@ -373,8 +368,7 @@ power over the stop, and the first update after the restart spans the stop with
 that power: a passive period goes on and the stop counts as passive; an episode
 goes on, and the first observation continues or ends it like any other. After
 any other restart the passive period is dropped and an episode is counted as
-ended. The episodes are saved under `lw_state.power_steps` (a state of the former
-`response_lag` block loads its durations and heating phases), and the command
+ended. The episodes are saved under `lw_state.power_steps`, and the command
 history under `lw_state.power_steps.commands` (wall-clock origin, offsets in
 seconds): a bridged restart resumes it, the heater having kept its command over
 the stop, and a model published later rebuilds the filter over it; after any
@@ -443,8 +437,7 @@ aside with its channel and brings it back with it. The values of the first
 hand-over earn 5 measures of feed-forward warm-up credit (4.2) for each value
 given, kept when it is released; a later hand-over of the other mode earns none.
 With the bootstrap start, the emitter lag of the readings is published with the
-values and does not set the horizon of the anticipation nor the emitter lag of
-the constant-power phases.
+values and does not set the horizon of the anticipation.
 
 **Direct start.** The PI is the command from the first calculation, on the
 fallback gains. Up to `PULSE_MAX_COUNT = 3` measurement pulses per mode
@@ -559,13 +552,11 @@ HVAC mode, a return of the learning stage, a learning reset or a pause of the
 learning cancels it (`cancelled`) and ends its pulse at once. The request, the pulses done, the mode, the
 start, the last request, the values in force and the corrections are saved
 (`calibration`); corrected starting values are saved with
-`corrected` in `starting_values` and load even when nothing was handed over; a
-state saved with the former calibration blocks (`cal_state`, `ac_state`) loads
-without a calibration in progress.
+`corrected` in `starting_values` and load even when nothing was handed over.
 
 The record, the readings in progress, the kept values and the pulses started are
 saved (`measure_events`, `event_reading`, `measure_pulse` and `learning_start`,
-and `starting_values` inside `est_state`); a state saved without them loads.
+and `starting_values` inside `est_state`).
 After a bridged restart the readings resume (a fit in flight is queued again);
 otherwise the readings in progress end and the record is dropped.
 
@@ -665,18 +656,12 @@ $S$. The windows of the learning wait $S$ whatever the split.
 
 The model, its readings and its record are saved under `response_state`. A
 state saved without it is seeded from the active dead time $L$ of each mode
-(`dt_est_state`) and the first emitter lag $S$ among the kept lag of the
-readings, the kept lag of a saved heating balance (heating) and the lag of the
-former response-lag estimator:
+(`dt_est_state`) and the emitter lag $S$ kept by the readings, when there is one:
 $\theta = \mathrm{clamp}(2L - S, 0, L)$, or $2L/3$ without $S$ (the split in
 halves of $S = 4L/3$), and $\tau_e = 2(L - \theta)$, so that the effective dead time equals $L$. The seed is
-published as `previous version`, `provisional`, until the first event fed to
-the mode; a mode without a reliable $L$ has no seed. A model saved without
-pending events (before the rule above) is repaired at its load: a mode with
-events and no seed whose seed can be computed again from the saved state gets
-it back as its reference, and its saved events are read again in order through
-the rule; those it would not feed become pending. A mode whose seed cannot be
-computed keeps its saved events.
+published as `previous version`, `provisional` (values carried over from a saved
+state without a response model), until the first event fed to the mode; a mode
+without a reliable $L$ has no seed.
 
 ### 3.8 Quiet periods of the room model
 
@@ -968,8 +953,7 @@ from the fits: without a qualified model in force nothing is published
 (`waiting for a qualified heat balance to check the model's heat loss`, shown
 with the status `learning`). The published value, the median of the last
 candidates, is checked again against the model in force when it is published;
-on a disagreement the publication in force is kept. A room model published by
-an earlier version stays in force.
+on a disagreement the publication in force is kept.
 
 **Emitter search.** The emitter in force is the HEAT response model (pure
 delay its dead time $\theta$, first order its response time constant $\tau_e$,
@@ -1125,7 +1109,7 @@ from it. Unlike a window resume, it does not pause the learning for
 learning; their states are read at the start of every calculation, and only the
 state `on` counts (`off`, `unavailable`, `unknown` and an absent entity count as
 off). While blocked: `update_learning` only feeds the records of the measurement
-events (so they stay continuous) and skips the windows, the emitter lag and the
+events (so they stay continuous) and skips the windows and the
 event detector; the dead-time detection is suspended but the
 temperature history is fed (anticipation, pulses); the room history and the room
 model receive the block as exclusion reason (an open window keeps its own reason)
@@ -1156,7 +1140,7 @@ The restart therefore keeps only useful persistent PI memory, without restoring 
 
 Additional protections currently present are:
 
-- `SmartPIGuards` (heating mode only, outside the bootstrap and the pulses of a calibration): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus the larger of `NEAR_BAND_HYSTERESIS_C = 0.05°C` and `GUARD_CUT_RESET_STEPS = 1.5` observed sensor steps (a reading flickering between two levels around the threshold would otherwise re-trigger the cut, and restart the cycle, at every measurement). During a cut the output stays at 0 (`I:OVERRIDE(guard_cut)`). While the PI still requests power, a positive integral tracks the forced 0 % by back-calculation, `d(Ki·I)/dt = −v/Ti` with `v` the PI request and `Ti = Kp/Ki`, at most one cycle per tick. Its rate follows the request, not the overshoot: an integral that carries more than the heat need comes down within a few cuts, even when the room barely exceeds the threshold. It comes down until it alone would hold the room at the cut threshold minus `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`); below that point it is kept, as is the heating need left after a setpoint decrease. Without this, a bias of the integral restored the same excess power at each release and the room cycled between cut and restart. The temperature filter, the dead time detector, the published temperature and the learning keep following the room. The PI is not computed during a cut: the published error (`temperature.error`, `analysis.control.error_p`) is the setpoint minus the temperature of the calculation, the published anticipation is `0` and `control.mode` is `heating cut above the setpoint`; the internal error terms and the anticipation keep their values for the release. The room then cools without heating, for example during the whole fall after a setpoint decrease: this is a passive window for `b` and for the emitter lag baseline. The governance sees a zero command outside any band, and `a` windows are blocked (`skip: guard cut`). The learning stays contiguous at the end of the cut; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized. In the bootstrap the heating runs between its own hysteresis thresholds and a running guard is released,
+- `SmartPIGuards` (heating mode only, outside the bootstrap and the pulses of a calibration): `guard_cut` forces the output to 0 when the measured temperature exceeds `setpoint + near_band_above` while the heater is active, until it falls back to that threshold minus the larger of `NEAR_BAND_HYSTERESIS_C = 0.05°C` and `GUARD_CUT_RESET_STEPS = 1.5` observed sensor steps (a reading flickering between two levels around the threshold would otherwise re-trigger the cut, and restart the cycle, at every measurement). During a cut the output stays at 0 (`I:OVERRIDE(guard_cut)`). While the PI still requests power, a positive integral tracks the forced 0 % by back-calculation, `d(Ki·I)/dt = −v/Ti` with `v` the PI request and `Ti = Kp/Ki`, at most one cycle per tick. Its rate follows the request, not the overshoot: an integral that carries more than the heat need comes down within a few cuts, even when the room barely exceeds the threshold. It comes down until it alone would hold the room at the cut threshold minus `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`); below that point it is kept, as is the heating need left after a setpoint decrease. Without this, a bias of the integral restored the same excess power at each release and the room cycled between cut and restart. The temperature filter, the dead time detector, the published temperature and the learning keep following the room. The PI is not computed during a cut: the published error (`temperature.error`, `analysis.control.error_p`) is the setpoint minus the temperature of the calculation, the published anticipation is `0` and `control.mode` is `heating cut above the setpoint`; the internal error terms and the anticipation keep their values for the release. The room then cools without heating, for example during the whole fall after a setpoint decrease: this is a passive window for `b`. The governance sees a zero command outside any band, and `a` windows are blocked (`skip: guard cut`). The learning stays contiguous at the end of the cut; `guard_kick` restarts the cycle when, inside the near-band, the temperature falls below `setpoint - near_band_below` while the command is below 99 %. In cooling mode neither guard acts and the near-band is not auto-sized. In the bootstrap the heating runs between its own hysteresis thresholds and a running guard is released,
 - per-tick anti-windup on the applicable upper limit (see below),
 - explicit `I:HOLD` during the effective dead time after a resume for `window_resume` and `power_shedding_resume` in heating mode,
 - `I:HOLD` with source `vt_safety` while Versatile Thermostat safety mode applies its default power instead of the SmartPI command,
@@ -1172,6 +1156,13 @@ The anti-windup acts at every calculation, in the linear demand space, on the ap
 - back-calculation: on every tick where the integral mode is `I:RUN`, `I:SKIP` or `I:CLAMP`, the excess of the PI output (`u_ff + u_pi`, clamped to `[0, 1]`) above the linear image of `max_on_percent` corrects the integral by `beta * excess / Ki`, with `beta = dt / max(Kp/Ki, dt)` (tracking time constant equal to `Ti = Kp/Ki`). The correction only moves the integral toward zero and stops at zero, so an excess carried by the proportional term alone never winds the integral in the opposite direction. The integral stays clamped to `±2/Ki`. Only the integral changes: `u_pi` keeps the decomposition that produced the command.
 
 The following are not treated as saturation: Versatile Thermostat quantization and valve retention (`dpercent`, period), minimum on/off times, and the rate limiter. The behavior is symmetric in HEAT and COOL, does not use Versatile Thermostat command receipts, and is identical with older Versatile Thermostat versions. The `aw_du` diagnostic is the correction (excess, `<= 0`) applied at the last tick.
+
+The calculation also distinguishes two zones around the setpoint:
+
+- the hysteretic deadband, used to stabilize the `in_deadband` state,
+- the core deadband, defined by `abs(error_i) < deadband_c` once the time constant is reliable, used to actually freeze P and I.
+
+This separation avoids keeping P and I frozen only because the hysteresis still holds the deadband state while the error has already left the configured deadband.
 
 ---
 
@@ -1277,13 +1268,11 @@ The current payload from `SmartPI.save_state()` notably contains:
 
 The control loop schedules at most one delayed write of this payload per five-minute window; Home Assistant flushes a pending write at shutdown. Services and entity removal write a snapshot immediately.
 
-Past event timestamps (temperature histories, start of a calibration, passive period and episode of the emitter lag on constant-power heating phases) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the 48-hour limit of a calibration keeps running after a restart.
+Past event timestamps (temperature histories, start of a calibration, passive period and episode of the power steps) are persisted as wall-clock times and converted back to the monotonic clock on load, so they keep their position in the past across a restart; in particular, the 48-hour limit of a calibration keeps running after a restart.
 
 The room history keeps its own store (state version 3): the history, the
 catalogue of quiet periods with their keys and the home position the catalogue
-was found with. A change of the home position forgets the catalogue. A state
-saved by an earlier version keeps its history and its quiet periods; the values
-it learned are ignored. A version 1 store keeps only its history. A later
+was found with. A change of the home position forgets the catalogue. A later
 version is ignored. It needs numpy and scipy (without them nothing is recorded
 and the room model shows `numerical libraries unavailable`), records nothing in
 valve mode (the room model shows `valve heaters are not supported yet`), and has
@@ -1294,12 +1283,7 @@ The room model keeps its own store (state version 2): published parameters
 and their candidates, windows and records keyed by their last quiet period,
 the observer state with the disturbance of the periods and the sub-steps
 waiting for a period, the energy balance in force with the last day computed,
-and the time of the last identification job. A version 1 store keeps its
-published model, the observer's physical state (air, walls, disturbance,
-command timeline, forecast scores), the energy balance in force and its
-records; its windows and candidates (keyed by day, selected by local hours) and
-its night disturbances (summed over local hours, without their sub-steps) are
-dropped, and the windows are computed again from the quiet periods. A later
+and the time of the last identification job. A later
 version is ignored.
 
 #### Restarts
@@ -1324,8 +1308,7 @@ All of these must hold:
   valve mode) is the same;
 - the actuator state was saved: the committed power in the algorithm store and,
   in HEAT, also the heater cycle state in the room history and the last tick of
-  the room model, for the stores that hold data (a store of an older format has
-  none);
+  the room model, for the stores that hold data;
 - SmartPI was in control at the last tick and is at the first tick: no window
   open, power shedding, safety mode, command overridden or unknown (after the
   restart, the window, shedding and safety state of the thermostat is read
@@ -1356,9 +1339,10 @@ until the decision.
 | Time tracking | the first tick spans the downtime, without the one-cycle learning freeze; setpoint shaping still starts from the raw setpoint on that cycle | first tick of a new session, learning frozen for one cycle |
 | Dead time detection | the detection in progress resumes (3.6) | dropped, minimum OFF time from the load |
 | a/b learning window | the window in progress resumes with its accumulators; its integral balance segment starts again | cleared |
-| Emitter lag (constant-power phases) | passive period or episode resumed (3.7) | episode counted as interrupted |
+| Power steps (a/b learning) | passive period, episode and command history resumed (3.7) | passive period dropped, episode counted as ended, command history started again |
 | Measurement readings | the record, the readings in progress and the rest or phase of the detector (heating) resume (3.7) | the readings in progress end, the record is dropped, the kept values stay |
 | Response model readings | the record and the readings in progress resume (3.7) | the readings in progress end, the record is dropped, the model stays |
+| Guard cut (HEAT only) | a cut running at the stop goes on until the usual release threshold | released |
 | Bootstrap on/off output | resumed inside the band (3.1) | starts at 0 |
 | Room history (HEAT only; in COOL as another restart) | the downtime is a missing sample (no invalid interval); the heater state at the stop is held until the first command after it, without any edge | the on period is closed at the last tick and only the downtime is invalid |
 | Room model (HEAT only; in COOL as another restart) | the command applied at the stop is held over the downtime; the state is propagated through it and the forecasts in progress go on | the heater is taken as stopped from the saved state, the uncertainty is reopened and the forecasts in progress are dropped |
@@ -1380,8 +1364,7 @@ invalid interval. The room model has its resume limit of 3 hours.
 
 The integral-balance pools and the window-outcome counters are not persisted:
 they start empty at each startup. The observations of the `a` and `b`
-measurements are persisted with the estimator state; a state that does not
-contain them loads with measurements that cannot be recomputed.
+measurements are persisted with the estimator state.
 
 The applied power that feeds the dead time, the room history and the
 room model comes from the applied-command receipts of the Versatile Thermostat
@@ -1508,7 +1491,7 @@ are specific to the current Home Assistant session.
 | `CALIBRATION_MAX_S`               | `172800`  |
 | `CALIBRATION_MIN_INTERVAL_S`      | `86400`   |
 | `CALIBRATION_CORRECT_REL`         | `0.30`    |
-| `CALIBRATION_CORRECT_B`           | `True`    |
+| `CALIBRATION_CORRECT_B`           | `False`   |
 | `CALIBRATION_SKIP_WHEN_OWN_AGREE` | `False`   |
 | `CALIBRATION_OWN_RECENT`          | `3`       |
 | `CALIBRATION_START_OVER_C`        | `0.2`     |

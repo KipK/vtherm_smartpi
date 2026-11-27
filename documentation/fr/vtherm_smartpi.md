@@ -45,7 +45,7 @@ Concrètement, SmartPI apprend :
 
 - à quelle vitesse l'équipement actif chauffe ou refroidit la pièce,
 - à quelle vitesse l'extérieur réchauffe ou refroidit passivement la pièce,
-- combien de temps la pièce met à réagir quand l'équipement démarre ou s'arrête.
+- combien de temps la pièce met à réagir quand l'équipement démarre.
 
 À partir de là, SmartPI construit une commande de chauffage ou de
 refroidissement généralement plus précise qu'un TPI fixe :
@@ -342,7 +342,7 @@ Une valeur en usage à moins de 30 % de la lecture est laissée telle quelle : u
 
 Une calibration se termine lorsque deux de ses impulsions concordent, lorsque ses trois impulsions sont faites et lues, ou après 48 heures. Lorsque cette fin arrive pendant une impulsion, une impulsion au repos rend la main à la régulation aussitôt, une impulsion qui chauffe à pleine puissance passe à son étape d'arrêt, et une impulsion dans son étape d'arrêt continue : la calibration se termine, et applique ses corrections, quand cette impulsion se termine. Une impulsion compte dès qu'elle a commencé à chauffer ; celle qui s'arrête pendant son repos (un changement de consigne, par exemple) ne compte pas. Éteindre le thermostat (ou une fenêtre, ou un délestage) termine l'impulsion en cours ; la calibration continue avec son impulsion suivante. Un passage entre chauffage et refroidissement, une réinitialisation de l'apprentissage ou une mise en pause de l'apprentissage l'annule aussitôt, avec son impulsion. Un redémarrage conserve la calibration en cours et son nombre d'impulsions ; l'impulsion en cours s'arrête.
 
-Le service peut être appelé par une automatisation : une demande qui ne peut pas lancer de calibration est refusée ou ignorée sans erreur, et la raison est publiée dans `live.calibration.last_request`. Une demande est refusée tant que le premier modèle est en apprentissage, que l'apprentissage est en pause, que le thermostat est éteint, et moins de 24 heures après la fin de la dernière calibration (une calibration annulée ne compte pas) ; elle est ignorée pendant une calibration en cours. Une fenêtre ouverte, un délestage ou une coupure de la chauffe après un dépassement ne la refusent pas : les impulsions attendent que la pièce puisse être mesurée. Par exemple, une pièce dont la consigne change rarement donne peu d'occasions de mesure à son apprentissage ; une automatisation hebdomadaire peut vérifier son modèle :
+Le service peut être appelé par une automatisation : une demande qui ne peut pas lancer de calibration est refusée ou ignorée sans erreur, et la raison est publiée dans `live.calibration.last_request`. Une demande est refusée tant que le premier modèle est en cours d'apprentissage, que l'apprentissage est en pause, que le thermostat est éteint, et moins de 24 heures après la fin de la dernière calibration (une calibration annulée ne compte pas) ; elle est ignorée pendant une calibration en cours. Une fenêtre ouverte, un délestage ou une coupure de la chauffe après un dépassement ne la refusent pas : les impulsions attendent que la pièce puisse être mesurée. Par exemple, une pièce dont la consigne change rarement donne peu d'occasions de mesure à son apprentissage ; une automatisation hebdomadaire peut vérifier son modèle :
 
 ```yaml
 triggers:
@@ -381,7 +381,7 @@ Le modèle n'utilise que les données enregistrées pendant que SmartPI pilote l
 - un saut de température de plus de 0,5 °C à plus de 20 °C/h, qu'aucun chauffage ne produit (la valeur est ignorée ; un nouveau niveau confirmé par 3 lectures est conservé) ;
 - une fenêtre ouverte, un délestage, le mode sécurité, un mode HVAC autre que le chauffage, une commande remplacée par Versatile Thermostat, ou une pause de l'apprentissage (voir [Suspendre l'apprentissage](#suspendre-lapprentissage)).
 
-Un ajustement d'identification n'utilise que les tranches de 10 minutes entièrement comprises dans ses périodes et exige au moins 50 de ces tranches, en séquences d'au moins une heure. Un occupant présent uniquement lorsque la consigne est haute n'est pas détecté.
+Un ajustement d'identification n'utilise que les tronçons de données valides compris dans ses périodes, en séquences d'au moins une heure, et exige au moins 40 relevés de température dans ces tronçons. Un occupant présent uniquement lorsque la consigne est haute n'est pas détecté.
 
 **Ce qu'il calcule**
 
@@ -417,7 +417,7 @@ Rien dans la commande. La puissance de maintien (le feed-forward) est la part de
 
 - Chauffages pilotés par cycles PWM ; les vannes ne sont pas encore prises en charge.
 - La position de la maison, telle que définie dans Home Assistant : sans elle, il n'y a aucune période calme et rien n'est identifié (le bilan thermique continue de tourner).
-- Une première publication demande 6 périodes calmes avec du chauffage qui déterminent le modèle (environ 6 jours avec un abaissement de nuit), ainsi qu'un bilan thermique en vigueur : la perte statique du modèle est contrôlée par rapport à ce bilan, à 5 % près, lors de la publication, et rien n'est publié avant un premier bilan thermique (il demande 4 journées entières exploitables de signaux enregistrés). Une maison aux nuits seulement courtes (été aux latitudes élevées) peut n'en donner aucune. Un modèle de pièce publié par une version antérieure reste en vigueur.
+- Une première publication demande 6 périodes calmes avec du chauffage qui déterminent le modèle (environ 6 jours avec un abaissement de nuit), ainsi qu'un bilan thermique en vigueur : la perte statique du modèle est contrôlée par rapport à ce bilan, à 5 % près, lors de la publication, et rien n'est publié avant un premier bilan thermique (il demande 4 journées entières exploitables de signaux enregistrés). Une maison aux nuits seulement courtes (été aux latitudes élevées) peut n'en donner aucune.
 - Il utilise les paquets `numpy` et `scipy`, installés avec l'intégration et chargés seulement par les calculs en arrière-plan ; ils tournent jusqu'à environ une minute par identification et par thermostat, et le balayage solaire quotidien de l'historique prend quelques secondes. S'ils ne peuvent pas être chargés, rien n'est enregistré et les diagnostics affichent `numerical libraries unavailable`.
 - Chauffage uniquement : rien n'est enregistré en refroidissement. En mode vanne, rien n'est enregistré et les diagnostics affichent `valve heaters are not supported yet`.
 - Ses paramètres et son état sont conservés dans leur propre fichier de stockage et survivent aux redémarrages. Le service `reset_smartpi_learning` les efface.
@@ -497,27 +497,27 @@ Ces valeurs viennent de simulations de chaque type d'installation. Un cycle à u
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------ | ----------------- |
 | **Délai minimal d'activation**       | Durée minimale pendant laquelle le chauffage reste allumé une fois activé. Sorties switch uniquement, ignoré pour les vannes.                             | `0 s`             |
 | **Délai minimal de désactivation**   | Durée minimale pendant laquelle le chauffage reste éteint une fois désactivé. Sorties switch uniquement, ignoré pour les vannes.                          | `0 s`             |
-| **Deadband**                         | Zone de tolérance autour de la consigne.                                                               | `0.05°C`          |
-| **Autoriser P dans la deadband**     | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
+| **Bande morte**                      | Zone de tolérance autour de la consigne.                                                               | `0.05°C`          |
+| **Autoriser P amorti près du bord de bande morte** | Permet à la branche proportionnelle de rester active à l'intérieur de la deadband.                     | `désactivé`       |
 | **Autoriser le redémarrage PWM aux transitions de bande** | Permet à SmartPI de redémarrer le cycle PWM courant lors d'une entrée ou sortie de deadband ou de near-band. | `désactivé` |
 | **Démarrage de l'apprentissage**     | Comment l'apprentissage démarre depuis un état vierge : `Amorçage` (cycles d'hystérésis à pleine puissance jusqu'à ce que le modèle soit appris) ou `Démarrage direct` (régulation PI dès la première minute avec des impulsions de mesure légères). Voir [Démarrage de l'apprentissage](#démarrage-de-lapprentissage). | `Amorçage`        |
 | **Hystérésis marche**                | Seuil de redémarrage pendant le bootstrap : le chauffage redémarre à consigne − seuil en HEAT, le refroidissement redémarre à consigne + seuil en COOL. Démarrage par amorçage uniquement. | `0.3°C`           |
 | **Hystérésis arrêt**                 | Seuil d'arrêt pendant le bootstrap : le chauffage s'arrête à consigne + seuil en HEAT, le refroidissement s'arrête à consigne − seuil en COOL. Démarrage par amorçage uniquement. | `0.5°C`           |
-| **Mode debug SmartPI**               | Enregistre les diagnostics live complets pour l'analyse historique.                                    | `désactivé`       |
-| **Linéarisation de courbe de vanne** | Adapte la demande SmartPI aux vannes de radiateur non linéaires.                                       | `désactivé`       |
+| **Enregistrer les diagnostics complets (debug)** | Enregistre les diagnostics live complets pour l'analyse historique.                                    | `désactivé`       |
+| **Activer la linéarisation de courbe de vanne** | Adapte la demande SmartPI aux vannes de radiateur non linéaires.                                       | `désactivé`       |
 | **Ouverture minimale de vanne**      | Première ouverture utile lorsque la linéarisation est activée.                                         | `7%`              |
 | **Demande au coude**                 | Demande SmartPI correspondant au changement de pente de la vanne.                                      | `80%`             |
 | **Ouverture de vanne au coude**      | Ouverture physique de la vanne au changement de pente.                                                 | `15%`             |
 | **Ouverture maximale de vanne**      | Ouverture maximale autorisée lorsque la linéarisation est activée.                                     | `100%`            |
-| **Entité de perturbation**           | Par thermostat uniquement. Un `binary_sensor` ou un `input_boolean` à `on` pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce : l'apprentissage est suspendu. Voir [Suspendre l'apprentissage](#suspendre-lapprentissage). | aucune |
-| **Entité de chauffage indisponible** | Par thermostat uniquement. Un `binary_sensor` ou un `input_boolean` à `on` pendant que l'émetteur ne peut pas produire : l'apprentissage est suspendu et l'intégrale est maintenue. Voir [Suspendre l'apprentissage](#suspendre-lapprentissage). | aucune |
+| **Entité de perturbation (facultative)** | Par thermostat uniquement. Un `binary_sensor` ou un `input_boolean` à `on` pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce : l'apprentissage est suspendu. Voir [Suspendre l'apprentissage](#suspendre-lapprentissage). | aucune |
+| **Entité de chauffage indisponible (facultative)** | Par thermostat uniquement. Un `binary_sensor` ou un `input_boolean` à `on` pendant que l'émetteur ne peut pas produire : l'apprentissage est suspendu et l'intégrale est maintenue. Voir [Suspendre l'apprentissage](#suspendre-lapprentissage). | aucune |
 
 ### Démarrage de l'apprentissage
 
 L'option choisit comment SmartPI apprend la pièce quand il part d'un état vierge :
 
 - **Amorçage** (par défaut) : cycles d'hystérésis à pleine puissance jusqu'à ce que le modèle soit appris, de quelques heures à deux jours, puis régulation. La température oscille entre les deux seuils d'hystérésis pendant ce temps.
-- **Démarrage direct** : régulation PI dès la première minute, avec au plus trois impulsions de mesure légères près de la consigne (la pièce peut descendre au plus 0,5 °C sous la consigne avant une impulsion). Le premier modèle est publié en environ 8 à 24 heures en simulation. Il demande des changements de consigne programmés chaque jour pour continuer à apprendre, et convient surtout à une sonde précise au 0,01 °C.
+- **Démarrage direct** : régulation PI dès la première minute, avec au plus trois impulsions de mesure légères près de la consigne (une impulsion démarre lorsque la pièce est à la consigne ou au plus 0,3 °C en dessous). Le premier modèle est publié en environ 8 à 24 heures en simulation. Il demande des changements de consigne programmés chaque jour pour continuer à apprendre, et convient surtout à une sonde précise au 0,01 °C.
 
 L'option s'applique à un nouveau thermostat et après `reset_smartpi_learning`. Un thermostat qui a déjà appris garde son modèle et le démarrage avec lequel son apprentissage a commencé ; une valeur modifiée prend effet à sa prochaine réinitialisation de l'apprentissage. Les seuils d'hystérésis ne s'appliquent qu'au bootstrap.
 
@@ -542,7 +542,7 @@ Rien de ce qui est appris n'est effacé. À la fin de la suspension, les mesures
 Les deux entités sont facultatives et se règlent par thermostat dans la configuration SmartPI. Chacune accepte un `binary_sensor` (un capteur binaire template, par exemple) ou un `input_boolean` (une entrée booléenne pilotée par des automatisations). SmartPI lit leur état à chaque cycle de régulation, dès le premier cycle après un redémarrage. Seul l'état `on` compte : `off`, `unavailable` (indisponible), `unknown` (inconnu) et une entité qui n'existe pas comptent comme off. Les entités ne modifient jamais le réglage du service.
 
 - **Entité de perturbation** : à `on` pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce, par exemple des invités, une cheminée, un fort ensoleillement ou un chauffage d'appoint. L'intégrale reste libre, puisque c'est elle qui compense la perturbation.
-- **Entité de chauffage indisponible** : à `on` pendant que l'émetteur piloté par le thermostat ne peut pas produire, par exemple une chaudière arrêtée, une priorité eau chaude, un dégivrage de pompe à chaleur, un délestage tarifaire ou un circulateur arrêté, en chauffage comme en climatisation. L'intégrale est maintenue tant qu'elle est à `on` (`I:HOLD`, source `heating_unavailable`), pour que l'erreur de cette période ne la gonfle pas et que la reprise ne provoque pas de dépassement. Repassez-la à `off` quand l'émetteur produit de nouveau : l'intégrale reste alors maintenue pendant le temps mort de l'émetteur (source `heating_unavailable_resume`), et l'apprentissage reprend aussitôt, sans l'attente de 20 minutes qui suit une fenêtre.
+- **Entité de chauffage indisponible** : à `on` pendant que l'émetteur piloté par le thermostat ne peut pas produire, par exemple une chaudière arrêtée, une priorité eau chaude, un dégivrage de pompe à chaleur, un délestage tarifaire ou un circulateur arrêté, en chauffage comme en climatisation. L'intégrale est maintenue tant qu'elle est à `on` (`I:HOLD`, source `heating_unavailable`), pour que l'erreur de cette période ne la gonfle pas et que la reprise ne provoque pas de dépassement. Repassez-la à `off` quand l'émetteur produit de nouveau : l'intégrale reste alors maintenue pendant le temps mort effectif du modèle de réponse (source `heating_unavailable_resume`), et l'apprentissage reprend aussitôt, sans l'attente de 20 minutes qui suit une fenêtre.
 
 ## Diagnostics et carte Markdown
 

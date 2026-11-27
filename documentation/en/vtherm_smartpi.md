@@ -45,7 +45,7 @@ In practice, SmartPI learns:
 
 - how strongly the active equipment heats or cools the room,
 - how quickly outdoors passively heats or cools the room,
-- how long the room takes to react after the equipment starts or stops.
+- how long the room takes to react after the equipment starts.
 
 From that, SmartPI builds a heating or cooling command that is usually more
 precise than a fixed TPI:
@@ -351,7 +351,7 @@ A value in use within 30 % of the reading is left as it is: a calibration of a w
 
 A calibration ends when two of its pulses agree, when its three pulses are done and read, or after 48 hours. When that end comes during a pulse, a pulse at rest hands back to the regulation at once, a pulse heating at full power goes to its stop step, and a pulse in its stop step goes on: the calibration ends, and applies its corrections, when that pulse ends. A pulse counts once it has started heating; one that ends during its rest (a setpoint change, for example) does not count. Switching the thermostat off (or a window, or power shedding) ends the pulse in progress; the calibration goes on with its next pulse. A change between heating and cooling, a learning reset or a pause of the learning cancels it at once, with its pulse. A restart keeps the calibration in progress and its pulse count; the pulse in progress ends.
 
-The service can be called by an automation: a request that cannot start a calibration is refused or ignored without error, and the reason is published in `live.calibration.last_request`. A request is refused while the first model is learned, while learning is paused, while the thermostat is off, and less than 24 hours after the end of the last calibration (a cancelled one does not count); it is ignored while a calibration is running. An open window, power shedding or a cut of the heating after an overshoot does not refuse it: the pulses wait until the room can be measured. For example, a room whose setpoint rarely changes gives its learning few occasions to measure; a weekly automation can check its model:
+The service can be called by an automation: a request that cannot start a calibration is refused or ignored without error, and the reason is published in `live.calibration.last_request`. A request is refused while the first model is being learned, while learning is paused, while the thermostat is off, and less than 24 hours after the end of the last calibration (a cancelled one does not count); it is ignored while a calibration is running. An open window, power shedding or a cut of the heating after an overshoot does not refuse it: the pulses wait until the room can be measured. For example, a room whose setpoint rarely changes gives its learning few occasions to measure; a weekly automation can check its model:
 
 ```yaml
 triggers:
@@ -390,7 +390,7 @@ The model only uses data recorded while SmartPI controls the heater. These perio
 - a temperature jump of more than 0.5 °C at more than 20 °C/h, which no heating produces (the value is ignored; a new level confirmed by 3 readings is kept);
 - window open, power shedding, safety mode, HVAC mode other than heating, a command overridden by Versatile Thermostat, or a learning pause (see [Pausing the learning](#pausing-the-learning)).
 
-An identification fit uses only the 10-minute bins wholly inside its periods and needs at least 50 of them in runs of at least one hour. An occupant present only while the setpoint is high is not detected.
+An identification fit uses only the stretches of valid data inside its periods, in runs of at least one hour, and needs at least 40 temperature readings in them. An occupant present only while the setpoint is high is not detected.
 
 **What it computes**
 
@@ -426,7 +426,7 @@ Nothing in the command. The holding power (the feed-forward) is the part of the 
 
 - Heaters driven by PWM cycles; valves are not supported yet.
 - The position of the home set in Home Assistant: without it there is no quiet period and nothing is identified (the heat balance still runs).
-- A first publication needs 6 quiet periods with some heating that determine the model (about 6 days with a night setback), and a heat balance in force: the model's heat loss is checked against it within 5 % when it is published, and nothing is published before a first heat balance (it needs 4 usable whole days of recorded signals). A home with only short nights (summer at high latitudes) may give none. A model published by an earlier version stays in force.
+- A first publication needs 6 quiet periods with some heating that determine the model (about 6 days with a night setback), and a heat balance in force: the model's heat loss is checked against it within 5 % when it is published, and nothing is published before a first heat balance (it needs 4 usable whole days of recorded signals). A home with only short nights (summer at high latitudes) may give none.
 - It uses the `numpy` and `scipy` packages, installed with the integration and loaded only by the background computations; they run up to about a minute per identification and per thermostat, and the daily sun scan of the history takes a few seconds. If they cannot be loaded, nothing is recorded and the diagnostics show `numerical libraries unavailable`.
 - Heating only: nothing is recorded in cooling. In valve mode nothing is recorded and the diagnostics show `valve heaters are not supported yet`.
 - Its parameters and state are kept in their own storage file and survive restarts. The `reset_smartpi_learning` service clears them.
@@ -507,26 +507,26 @@ These values come from simulations of each installation type. A cycle within one
 | **Minimal activation delay**   | Minimum time the heater stays on once activated. Switch outputs only; ignored for valves.                                                  | `0 s`         |
 | **Minimal deactivation delay** | Minimum time the heater stays off once deactivated. Switch outputs only; ignored for valves.                                               | `0 s`         |
 | **Deadband**                   | Tolerance zone around the setpoint.                                                               | `0.05°C`      |
-| **Allow P inside deadband**    | Allows the proportional branch to remain active inside the deadband.                              | `disabled`    |
+| **Allow damped P near deadband edge** | Allows the proportional branch to remain active inside the deadband.                              | `disabled`    |
 | **Allow PWM cycle restart on band transitions** | Allows SmartPI to restart the current PWM cycle when entering or leaving deadband or near-band. | `disabled` |
 | **Start of the learning** | How the learning starts from a blank state: `Bootstrap` (hysteresis cycles at full power until the model is learned) or `Direct start` (PI regulation from the first minute with light measurement pulses). See [Start of the learning](#start-of-the-learning). | `Bootstrap` |
 | **Hysteresis on** | Restart threshold during bootstrap learning: heating restarts at setpoint − threshold in HEAT, cooling restarts at setpoint + threshold in COOL. Bootstrap start only. | `0.3°C`       |
 | **Hysteresis off** | Stop threshold during bootstrap learning: heating stops at setpoint + threshold in HEAT, cooling stops at setpoint − threshold in COOL. Bootstrap start only. | `0.5°C`       |
-| **SmartPI debug mode**         | Records the complete live diagnostic payload for historical analysis.                             | `disabled`    |
-| **Valve curve linearization**  | Adapts SmartPI demand to non-linear radiator valves.                                              | `disabled`    |
+| **Record full diagnostics (debug)** | Records the complete live diagnostic payload for historical analysis.                             | `disabled`    |
+| **Enable valve curve linearization** | Adapts SmartPI demand to non-linear radiator valves.                                              | `disabled`    |
 | **Minimum valve opening**      | First useful opening when linearization is enabled.                                               | `7%`          |
 | **Demand at knee**             | SmartPI demand corresponding to the valve slope change.                                           | `80%`         |
 | **Valve opening at knee**      | Physical valve opening at the slope change.                                                       | `15%`         |
 | **Maximum valve opening**      | Maximum allowed opening when linearization is enabled.                                            | `100%`        |
-| **Disturbance entity**         | Per-thermostat only. A `binary_sensor` or `input_boolean` that is on while an unmeasured gain or loss disturbs the room: the learning pauses. See [Pausing the learning](#pausing-the-learning). | none |
-| **Heating unavailable entity** | Per-thermostat only. A `binary_sensor` or `input_boolean` that is on while the emitter cannot produce: the learning pauses and the integral is held. See [Pausing the learning](#pausing-the-learning). | none |
+| **Disturbance entity (optional)** | Per-thermostat only. A `binary_sensor` or `input_boolean` that is on while an unmeasured gain or loss disturbs the room: the learning pauses. See [Pausing the learning](#pausing-the-learning). | none |
+| **Heating unavailable entity (optional)** | Per-thermostat only. A `binary_sensor` or `input_boolean` that is on while the emitter cannot produce: the learning pauses and the integral is held. See [Pausing the learning](#pausing-the-learning). | none |
 
 ### Start of the learning
 
 The option chooses how SmartPI learns the room when it starts from a blank state:
 
 - **Bootstrap** (default): hysteresis cycles at full power until the model is learned, a few hours to two days, then the regulation. The temperature swings between the two hysteresis thresholds meanwhile.
-- **Direct start**: PI regulation from the first minute, with at most three light measurement pulses near the setpoint (the room is allowed at most 0.5 °C under the setpoint before a pulse). The first model is published in about 8 to 24 hours in simulation. It needs scheduled setpoint changes every day to keep learning, and works best with a precise 0.01 °C sensor.
+- **Direct start**: PI regulation from the first minute, with at most three light measurement pulses near the setpoint (a pulse starts when the room is at the setpoint or at most 0.3 °C under it). The first model is published in about 8 to 24 hours in simulation. It needs scheduled setpoint changes every day to keep learning, and works best with a precise 0.01 °C sensor.
 
 The option applies to a new thermostat and after `reset_smartpi_learning`. A thermostat that has already learned keeps its model and the start its learning began with; a changed value takes effect at its next learning reset. The hysteresis thresholds only apply to the bootstrap.
 
@@ -551,7 +551,7 @@ Nothing learned is erased. When the pause ends, the measurements start again fro
 The two entities are optional and set per thermostat in the SmartPI configuration. Each accepts a `binary_sensor` (a template binary sensor, for example) or an `input_boolean` (a toggle helper driven by automations). SmartPI reads their state at every regulation cycle, from the first cycle after a restart. Only the state `on` counts: `off`, `unavailable`, `unknown` and an entity that does not exist count as off. The entities never change the setting of the service.
 
 - **Disturbance entity**: on while an unmeasured heat gain or loss disturbs the room, for example guests, a fireplace, strong sun or an auxiliary heater. The integral stays free, since it is what compensates the disturbance.
-- **Heating unavailable entity**: on while the emitter driven by the thermostat cannot produce, for example a boiler off, hot-water priority, heat-pump defrost, a tariff cut-off or a stopped circulator, in heating and in cooling. The integral is held as long as it is on (`I:HOLD`, source `heating_unavailable`), so that the error of this period does not wind it up and the restart does not overshoot. Turn it off when the emitter produces again: the integral then stays held for the dead time of the emitter (source `heating_unavailable_resume`), and the learning resumes at once, without the 20-minute wait that follows a window.
+- **Heating unavailable entity**: on while the emitter driven by the thermostat cannot produce, for example a boiler off, hot-water priority, heat-pump defrost, a tariff cut-off or a stopped circulator, in heating and in cooling. The integral is held as long as it is on (`I:HOLD`, source `heating_unavailable`), so that the error of this period does not wind it up and the restart does not overshoot. Turn it off when the emitter produces again: the integral then stays held for the effective dead time of the response model (source `heating_unavailable_resume`), and the learning resumes at once, without the 20-minute wait that follows a window.
 
 ## Diagnostics and Markdown card
 

@@ -61,6 +61,10 @@
 {% set dt_key = 'deadtime_cool' if 'deadtime_cool_s' in model else 'deadtime_heat' %}
 {% set dt_heat = model.get(dt_key ~ '_s') %}
 {% set deadtime_heat_reliable = model.get(dt_key ~ '_reliable', false) %}
+{% set rm_dead_time = model.get('dead_time_s') %}
+{% set rm_tau_e = model.get('response_time_constant_s') %}
+{% set rm_source = model.get('response_source') %}
+{% set rm_confidence = model.get('response_confidence') %}
 
 {% set learning_enabled = learning.get('enabled') %}
 {% set block_reason = learning.get('block_reason') %}
@@ -137,11 +141,15 @@
 
 {% set hold_mode_label = {
   'none': 'none',
-  'setpoint_change': 'setpoint change',
-  'off_resume': 'OFF resume',
   'window_resume': 'window resume',
   'power_shedding_resume': 'power shedding resume',
-  'disturbance_recovery': 'disturbance recovery'
+  'heating_unavailable_resume': 'heating unavailable resume',
+  'heating_unavailable': 'heating unavailable',
+  'calibration_recovery': 'calibration recovery',
+  'vt_safety': 'safety mode',
+  'deadtime': 'dead time',
+  'deadband_hysteresis_shell': 'deadband edge',
+  'governance_sensor_invalid': 'outdoor temperature missing'
 }.get(hold_mode, hold_mode) %}
 
 {% set current_ff_blk = ((ff_pct / 100) * 18) | int %}
@@ -173,6 +181,12 @@
 {% set core_db_active = analysis_control.get('in_core_deadband', false) %}
 {% set nb_src = analysis_control.get('near_band_source', 'unknown') %}
 {% set tau_s = model.get('tau_min') %}
+{% set rm_effective = analysis_control.get('effective_dead_time_s') %}
+{% set rm_gain_delay = analysis_control.get('gain_delay_s') %}
+{% set rm_gain_delay_source = analysis_control.get('gain_delay_source') %}
+{% set rm_learning = analysis_learning.get('response_model') or {} %}
+{% set rm_rms = rm_learning.get('prediction_rms_c') %}
+{% set rm_pending = rm_learning.get('pending_outliers') %}
 {% set learn_ok = analysis_learning.get('learn_ok_count', 0) | int %}
 {% set learn_skip = analysis_learning.get('learn_skip_count', 0) | int %}
 {% set ff_ok = analysis_learning.get('ff_warmup_ok_count', 0) | int %}
@@ -333,6 +347,23 @@
 {% if has_analysis -%}
 | `tau` | {% if tau_s is not none %}{{ tau_s | float | round(1) }} min{% else %}—{% endif %} |
 | `kp_source` | `{{ kp_src }}` |
+{% endif %}
+
+---
+
+### 📐 Response model
+
+| Parameter | Value |
+|---|---:|
+| Dead time | {% if rm_dead_time is not none %}{{ rm_dead_time }} s{% else %}—{% endif %} |
+| Response time constant | {% if rm_tau_e is not none %}{{ rm_tau_e }} s{% else %}—{% endif %} |
+| Source | {% if rm_source %}`{{ rm_source }}`{% else %}—{% endif %} |
+| Confidence | {% if rm_confidence %}`{{ rm_confidence }}`{% else %}—{% endif %} |
+{% if has_analysis -%}
+| Effective dead time | {% if rm_effective is not none %}{{ rm_effective }} s{% else %}—{% endif %} |
+| Gain delay | {% if rm_gain_delay is not none %}{{ rm_gain_delay }} s{% if rm_gain_delay_source %} · `{{ rm_gain_delay_source }}`{% endif %}{% else %}—{% endif %} |
+| Prediction error (rms) | {% if rm_rms is not none %}{{ rm_rms }} °C{% else %}—{% endif %} |
+| Pending outliers | {% if rm_pending is not none %}{{ rm_pending }}{% else %}—{% endif %} |
 {% endif %}
 
 ---

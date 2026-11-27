@@ -83,6 +83,22 @@ Le bloc `live` est organisé par responsabilité :
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
 | `room_model` | Modèle de pièce |
 
+Les champs les plus utiles en un coup d'œil :
+
+| Chemin sous `live` | Signification |
+|---|---|
+| `model.deadtime_heat_s`, `model.deadtime_heat_reliable` | Temps mort après un démarrage en secondes (médiane des dernières détections) et s'il est fiable ; `deadtime_cool_*` les remplacent en COOL |
+| `model.tau_min`, `model.tau_reliable` | Constante de temps de la pièce, `1/b`, en minutes (`9999` tant qu'elle n'est pas fiable), et si elle est fiable |
+| `power.current_cycle_percent`, `power.next_cycle_percent` | Puissance engagée pour le cycle en cours et puissance demandée pour le cycle suivant, en % |
+| `control.in_deadband`, `control.in_near_band` | `true` tant que la pièce est dans la bande morte, dans la near-band |
+| `control.in_deadtime_window` | `true` tant que l'intégrale est figée pendant le temps mort effectif qui suit un démarrage du chauffage |
+| `control.saturation_state` | `NO_SAT`, `SAT_HI` (limite haute atteinte) ou `SAT_LO` (limite basse atteinte) |
+| `temperature.integral_mode` | État de l'intégrale au dernier calcul (par exemple `I:RUN`, `I:HOLD`, `I:FREEZE(deadband)`) |
+| `temperature.integral_hold_mode` | `none`, ou le maintien qui suit une reprise : `window_resume`, `power_shedding_resume`, `heating_unavailable_resume` |
+| `analysis.control.near_band_source` | Comment la near-band est dimensionnée : `auto_model_aware` (d'après le modèle de réponse et le modèle A/B) ou les seuils configurés (`no response model`, `fallback_no_ext`, `fallback_slope_low`, `fallback_model`) |
+
+Les autres champs sont des diagnostics avancés, décrits dans la documentation technique et affichés par les cartes fournies.
+
 `control.mode` vaut `smartpi` lorsque le PI régule, `hysteresis` pendant le
 bootstrap, et `heating cut above the setpoint` pendant une coupure de la garde
 (la pièce a dépassé la consigne de la near-band au-dessus : le chauffage est
@@ -95,7 +111,7 @@ température du dernier calcul, `analysis.control.anticipation_c` vaut `0` et
 l'intégrale est figée après une impulsion de calibration, jusqu'à ce que la
 pièce atteigne la consigne. Il vaut `heating_unavailable` tant que l'entité de
 chauffage indisponible est à `on`, puis `heating_unavailable_resume` tant que
-l'intégrale reste figée pendant le temps mort effectif de l'émetteur après son
+l'intégrale reste figée pendant le temps mort effectif du modèle de réponse après son
 retour à `off`.
 
 `learning.enabled` est le réglage du service `set_smartpi_learning`.
@@ -225,8 +241,8 @@ temps mort après un démarrage, pas ce modèle.
 |---|---|
 | `model.dead_time_s` | Temps mort en secondes, `null` sans modèle |
 | `model.response_time_constant_s` | Constante de temps de réponse en secondes, `null` sans modèle |
-| `model.response_source` | Origine du dernier événement accepté : `measurement pulses`, `bootstrap`, `calibration`, `regulation`, ou `previous version` (valeurs reprises du temps mort et du retard de l'émetteur appris avant l'existence du modèle, jusqu'au premier événement accepté) ; `null` sans modèle |
-| `model.response_confidence` | `measured` (deux événements concordent sur le temps mort plus la constante de temps à 20 % près), `provisional` (un événement, ou valeurs de la version précédente), `dead time assumed` (aucun événement ne distingue le temps mort : la moitié du total est supposée) ; `null` sans modèle |
+| `model.response_source` | Origine du dernier événement accepté : `measurement pulses`, `bootstrap`, `calibration`, `regulation`, ou `previous version` (valeurs reprises d'un état sauvegardé sans modèle de réponse, jusqu'au premier événement accepté) ; `null` sans modèle |
+| `model.response_confidence` | `measured` (deux événements concordent sur le temps mort plus la constante de temps à 20 % près), `provisional` (un événement, ou valeurs reprises d'un état sauvegardé), `dead time assumed` (aucun événement ne distingue le temps mort : la moitié du total est supposée) ; `null` sans modèle |
 
 `analysis.learning.response_model` :
 

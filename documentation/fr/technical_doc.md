@@ -88,12 +88,11 @@ SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 5 mesures et que `a` est publ
 `a` est publié à 5 mesures, ou dès `AB_MIN_SAMPLES_A_CONSISTENT = 4` mesures lorsqu'elles
 concordent : leur écart absolu médian est au plus `AB_A_CONSISTENT_MAX_REL_MAD = 0.10`
 de leur médiane. La première publication de `a` attend aussi le modèle de puissance
-délivrée (3.7) : tant que le retard de l'émetteur n'est pas résolu, les mesures sont
+délivrée (3.7) : tant qu'il n'est pas établi (le modèle de réponse du mode est publié, ou
+`RESPONSE_LAG_RESOLVE_EPISODES = 4` phases de chauffe se sont terminées sans lui), les mesures sont
 collectées sans publication, jusqu'à ce que la collecte atteigne `AB_HISTORY_SIZE = 31`
 mesures : la mesure admise suivante publie alors `a`. Les deux buffers continuent ensuite à se remplir jusqu'à
-`AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale. Après un redémarrage,
-l'état restauré du retard de l'émetteur fixe la phase dès le premier calcul ; un état
-sauvegardé sans bloc de retard de l'émetteur attend la première mise à jour de l'apprentissage.
+`AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale.
 
 Dans la bande d'hystérésis, la sortie conserve son état tout-ou-rien précédent. Une
 sortie modulée laissée par une autre phase n'est pas un état d'hystérésis : elle est
@@ -101,8 +100,7 @@ ramenée à 0 jusqu'au prochain seuil. L'état tout-ou-rien est persisté avec l
 murale du dernier calcul. Après un redémarrage ponté (5.4), le premier calcul
 disposant de la température intérieure le reprend dans la bande, comme l'aurait fait une hystérésis jamais interrompue ; en attendant, l'état
 tout-ou-rien d'avant l'arrêt est conservé, comme décrit dans Redémarrages.
-Hors de la bande, les seuils décident. Après tout autre redémarrage, et pour un
-état sauvegardé sans cet état, la sortie repart à 0. Une phase de chauffe ou de
+Hors de la bande, les seuils décident. Après tout autre redémarrage, la sortie repart à 0. Une phase de chauffe ou de
 refroidissement en cours peut ainsi reprendre après un redémarrage court.
 
 Les phases de chauffe de l'hystérésis sont des événements de mesure : elles sont
@@ -117,7 +115,7 @@ mais la commande est le PI et l'étape attend `b` jusqu'à ce qu'une valeur de d
 ou que la constante de temps propre de l'apprentissage ait été fiable. L'option n'agit que sur un
 démarrage vierge : un état avec des mesures, des valeurs de départ, des impulsions ou des lectures garde
 le démarrage avec lequel son apprentissage a commencé (le démarrage direct est sauvegardé sous
-`learning_start` ; un état sans cette clé a commencé par l'amorçage), et une réinitialisation de
+`learning_start`), et une réinitialisation de
 l'apprentissage reprend le démarrage configuré.
 
 La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dérive repose sur `b_converged_for_a()` :
@@ -129,7 +127,7 @@ La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dér
 
 ### 3.2 Fenêtre d'apprentissage réelle
 
-Le code n'utilise plus de constante `WINDOW_MIN_MINUTES`. L'apprentissage repose aujourd'hui sur `LearningWindowManager` et sur une fenêtre glissante qui :
+L'apprentissage repose sur `LearningWindowManager` et sur une fenêtre glissante qui :
 
 - exige une température extérieure disponible,
 - respecte la gouvernance thermique,
@@ -286,7 +284,7 @@ réponse physique de la pièce, pas le sens de la transition de puissance :
 - `deadtime_cool` : temps mort avant une baisse de température.
 
 Ainsi, OFF -> ON apprend `heat` en mode HEAT et `cool` en mode COOL ; l'autre
-canal reste vide (une valeur qu'une version antérieure y avait enregistrée, un temps mort après un arrêt, est ignorée au chargement). Une coupure de puissance n'arme rien : ce qui suit un arrêt est lu par le modèle de réponse (3.7).
+canal reste vide. Une coupure de puissance n'arme rien : ce qui suit un arrêt est lu par le modèle de réponse (3.7).
 
 La détection suit la température intérieure filtrée, en régulation comme pendant le bootstrap et les impulsions de mesure : une mesure brute qui oscille d'un pas de capteur détecterait sinon une réponse dès l'échelon de puissance. Une détection en cours reprend après un redémarrage ponté (5.4) : son état, son début, son creux ou son pic, la tendance avant le démarrage, la dernière puissance et la dernière coupure de puissance sont persistés en temps mural, et son délai d'expiration continue de courir depuis le début sauvegardé. Après tout autre redémarrage, elle est abandonnée, et la durée minimale OFF doit être observée à nouveau dans la session en cours avant qu'une détection puisse être armée.
 
@@ -321,7 +319,7 @@ $$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-\theta)/\tau_e}\right)\
 
 **Modèle établi.** Le modèle de puissance délivrée de `a` est établi dès que le modèle du mode est publié, ou après `RESPONSE_LAG_RESOLVE_EPISODES = 4` phases de chauffe sans lui (la puissance appliquée est alors utilisée) ; jusque-là, les mesures de `a` sont collectées sans publication. Pendant l'étape d'apprentissage, aucune fenêtre ne s'ouvre avant le modèle : sa première publication ne trouve donc aucune collecte ; lorsque le modèle varie ensuite de plus de `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` de son retard de l'émetteur (sur $S$ ou sur $\theta$) avant la première publication de `a`, les mesures collectées sont recalculées avec la nouvelle puissance délivrée. Seules les fenêtres admises par l'attente de stabilisation sont recalculées ; les autres sont écartées, puisque leur correction dépend de la forme de la réponse. Sur la même variation (première publication comprise, pas la première mise à jour après un chargement), les mesures de `b` du mode recalculent la puissance délivrée sur leur fenêtre à partir de l'historique des commandes avec le nouveau modèle, puis leur valeur (3.4) ; une fenêtre que l'historique ne couvre pas (avant lui, à moins de `RECORD_PRE_S` = 6 h de son début tronqué, ou à cheval sur une période non observée) garde sa puissance. Sans modèle, aucune fenêtre de l'étape d'apprentissage ne s'ouvre : l'étape attend le modèle (`learning.bootstrap_status` vaut `step1 - waiting response model`).
 
-Un redémarrage ponté (5.4) reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive avec la puissance délivrée et les températures à la coupure, ou début, puissance et constance de l'épisode) et reconverti en horloge monotone au chargement. Le chauffage a conservé la puissance engagée pendant l'arrêt, et la première mise à jour après le redémarrage couvre l'arrêt avec cette puissance : une période passive se poursuit, et l'arrêt compte comme passif ; un épisode se poursuit, et la première observation le prolonge ou le termine comme toute autre. Après tout autre redémarrage, la période passive est abandonnée et un épisode est compté comme terminé. Les épisodes sont sauvegardés sous `lw_state.power_steps` (un état de l'ancien bloc `response_lag` charge ses durées et ses phases de chauffe), et l'historique des commandes sous `lw_state.power_steps.commands` (origine en temps mural, décalages en secondes) : un redémarrage ponté le reprend, le chauffage ayant conservé sa commande pendant l'arrêt, et un modèle publié ensuite reconstruit le filtre dessus ; après tout autre redémarrage, l'historique et le filtre repartent de la première observation.
+Un redémarrage ponté (5.4) reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive avec la puissance délivrée et les températures à la coupure, ou début, puissance et constance de l'épisode) et reconverti en horloge monotone au chargement. Le chauffage a conservé la puissance engagée pendant l'arrêt, et la première mise à jour après le redémarrage couvre l'arrêt avec cette puissance : une période passive se poursuit, et l'arrêt compte comme passif ; un épisode se poursuit, et la première observation le prolonge ou le termine comme toute autre. Après tout autre redémarrage, la période passive est abandonnée et un épisode est compté comme terminé. Les épisodes sont sauvegardés sous `lw_state.power_steps`, et l'historique des commandes sous `lw_state.power_steps.commands` (origine en temps mural, décalages en secondes) : un redémarrage ponté le reprend, le chauffage ayant conservé sa commande pendant l'arrêt, et un modèle publié ensuite reconstruit le filtre dessus ; après tout autre redémarrage, l'historique et le filtre repartent de la première observation.
 
 #### Événements de mesure et valeurs de départ
 
@@ -383,7 +381,7 @@ mode HVAC met de côté le `a` en place avec son canal et le restitue avec lui. 
 transmission rapportent 5 mesures de crédit de montée en charge du feedforward (4.2) par valeur donnée,
 conservé lorsqu'elle est relâchée ; une transmission ultérieure de l'autre mode n'en rapporte aucune.
 Avec le démarrage par amorçage, le retard de l'émetteur des lectures est publié avec les valeurs ; il ne
-fixe ni l'horizon de l'anticipation ni le retard de l'émetteur des phases à puissance constante.
+fixe pas l'horizon de l'anticipation.
 
 **Démarrage direct.** Le PI commande dès le premier calcul, sur les gains de repli. Jusqu'à
 `PULSE_MAX_COUNT = 3` impulsions de mesure par mode (`measure_pulse.py`) remplacent la commande du PI
@@ -480,12 +478,11 @@ mode HVAC, un retour de l'étape d'apprentissage, une réinitialisation ou une m
 l'apprentissage l'annule (`cancelled`) et termine aussitôt son impulsion. La demande, les impulsions faites, le mode, le début, la dernière
 demande, les valeurs en vigueur et les corrections sont sauvegardés (`calibration`) ; les
 valeurs de départ corrigées sont sauvegardées avec `corrected` dans `starting_values` et se chargent même
-sans valeurs transmises ; un état sauvegardé avec les anciens blocs de calibration (`cal_state`,
-`ac_state`) se charge sans calibration en cours.
+sans valeurs transmises.
 
 L'enregistrement, les lectures en cours, les valeurs retenues et les impulsions démarrées sont sauvegardés
 (`measure_events`, `event_reading`, `measure_pulse` et `learning_start`, et `starting_values` dans
-`est_state`) ; un état sauvegardé sans eux se charge. Après un redémarrage ponté, les lectures reprennent
+`est_state`). Après un redémarrage ponté, les lectures reprennent
 (un ajustement en cours est remis en file) ; sinon les lectures en cours se terminent et l'enregistrement
 est abandonné.
 
@@ -585,17 +582,11 @@ répartition.
 
 Le modèle, ses lectures et son enregistrement sont sauvegardés sous `response_state`. Un
 état sauvegardé sans `response_state` est amorcé à partir du temps mort actif $L$ de
-chaque mode (`dt_est_state`) et du premier retard de l'émetteur $S$ parmi le retard
-retenu des lectures, le retard retenu d'un bilan de chauffe sauvegardé (en chauffage) et le retard de
-l'ancien estimateur de retard de réponse : $\theta = \mathrm{clamp}(2L - S, 0, L)$, ou $2L/3$ sans $S$ (la séparation en
+chaque mode (`dt_est_state`) et du retard de l'émetteur $S$ retenu par les lectures, s'il y en a un :
+$\theta = \mathrm{clamp}(2L - S, 0, L)$, ou $2L/3$ sans $S$ (la séparation en
 moitiés de $S = 4L/3$), et $\tau_e = 2(L - \theta)$, de sorte que le temps mort effectif égale $L$. L'amorçage est
-publié en `previous version`, `provisional`, jusqu'au premier événement donné au mode ;
-un mode sans $L$ fiable n'a pas d'amorçage. Un modèle sauvegardé sans événements en attente
-(avant la règle ci-dessus) est réparé à son chargement : un mode qui a des événements et pas
-d'amorçage, et dont l'amorçage peut être recalculé à partir de l'état sauvegardé, le
-retrouve comme référence, et ses événements sauvegardés sont relus dans l'ordre selon la
-règle ; ceux qu'elle ne donnerait pas au modèle passent en attente. Un mode dont l'amorçage
-ne peut pas être recalculé garde ses événements sauvegardés.
+publié en `previous version`, `provisional` (valeurs reprises d'un état sauvegardé sans modèle de
+réponse), jusqu'au premier événement donné au mode ; un mode sans $L$ fiable n'a pas d'amorçage.
 
 ### 3.8 Périodes calmes du modèle de pièce
 
@@ -769,7 +760,7 @@ $$ C = \tau_{int} \, s^2 (J^\top J)^{-1}, \qquad s^2 = \frac{\sum w r^2}{\sum w 
 
 avec $\tau_{int}$ le nombre de résidus divisé par leur nombre effectif (le temps d'autocorrélation intégré utilisé par la recherche de l'émetteur) : des résidus corrélés portent moins d'information que leur nombre. Les écarts-types des coordonnées qu'un ajustement apporte s'en déduisent par la méthode delta : $\ln a$ et $\ln(b_{eq}/a)$ pour le modèle simple ; $\ln a$, $\ln \alpha$ et $\ln c$ ($c = \gamma / \beta$) pour le modèle avec murs, dont $b_{eq}/a = (\alpha - c)/a$ n'est jamais la perte statique et est vérifié contre $s_{EB}$ à 5 % près avant une publication. Un ajustement est refusé (`the quiet periods do not determine the model precisely enough yet`) lorsque $1.96 \, \sigma$ de l'un d'eux dépasse la tolérance avec laquelle l'accord de deux fenêtres le compare : $\ln 1.15$ pour $a$, $\ln 1.25$ pour $b_{eq}/a$ et $\alpha$, $\ln 1.35$ pour $c$. Un modèle avec murs dont la part des murs $c/\alpha$ est inférieure à 0,1 n'est jamais utilisé, si bien que sa précision n'est pas exigée. La covariance est celle, asymptotique, des moindres carrés ; le niveau de 95 % et la réutilisation des tolérances d'accord sont des choix de la méthode. Il n'y a pas de durée minimale d'ajustement : c'est la précision qui décide si les périodes portent assez d'information. Les autres conditions ne changent pas : au moins 40 événements de température, une heure de chauffage équivalente à pleine puissance et un écart moyen intérieur-extérieur de 3 °C sur les morceaux ajustés.
 
-**Accord avec le bilan énergétique.** Chaque ajustement de l'identification prend l'apport gratuit en vigueur comme une entrée de chaleur connue, $a(u_e + g_{EB})$ ; l'apport n'est pas ajusté fenêtre par fenêtre : sur les périodes calmes, $T_{in} - T_{ext}$ varie trop peu pour séparer une entrée constante de la perte statique. Un candidat (modèle avec murs ou modèle simple) n'est publié que si son propre $b_{eq}/a$ concorde avec $s_{EB}$ à 5 % près ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$) ; sinon la fenêtre ne publie rien (`the model's heat loss disagrees with the measured heat balance`). Le modèle en vigueur est le dernier modèle qualifié au moment de la tâche. C'est le seul contrôle de $b_{eq}/a$ qui ne vient pas des ajustements : sans modèle qualifié en vigueur, rien n'est publié (`waiting for a qualified heat balance to check the model's heat loss`, affiché avec le statut `learning`). La valeur publiée, la médiane des derniers candidats, est contrôlée de nouveau contre le modèle en vigueur lors de sa publication ; en cas de désaccord, la publication en vigueur est conservée. Un modèle de pièce publié par une version antérieure reste en vigueur.
+**Accord avec le bilan énergétique.** Chaque ajustement de l'identification prend l'apport gratuit en vigueur comme une entrée de chaleur connue, $a(u_e + g_{EB})$ ; l'apport n'est pas ajusté fenêtre par fenêtre : sur les périodes calmes, $T_{in} - T_{ext}$ varie trop peu pour séparer une entrée constante de la perte statique. Un candidat (modèle avec murs ou modèle simple) n'est publié que si son propre $b_{eq}/a$ concorde avec $s_{EB}$ à 5 % près ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$) ; sinon la fenêtre ne publie rien (`the model's heat loss disagrees with the measured heat balance`). Le modèle en vigueur est le dernier modèle qualifié au moment de la tâche. C'est le seul contrôle de $b_{eq}/a$ qui ne vient pas des ajustements : sans modèle qualifié en vigueur, rien n'est publié (`waiting for a qualified heat balance to check the model's heat loss`, affiché avec le statut `learning`). La valeur publiée, la médiane des derniers candidats, est contrôlée de nouveau contre le modèle en vigueur lors de sa publication ; en cas de désaccord, la publication en vigueur est conservée.
 
 **Puissance supplémentaire des murs.** Avec des murs identifiés et le suivi `ok`, le modèle de pièce affiche la puissance supplémentaire des murs $\delta_{wall}/a$ du suivi (`room_model.wall_extra_power_percent`, avec ses deux signes, en % de la pleine puissance). C'est un affichage : la commande ne la lit pas.
 
@@ -844,7 +835,7 @@ chauffage indisponible bloquent chacune tout apprentissage ; leurs états sont l
 début de chaque calcul, et seul l'état `on` compte (`off`, `unavailable`, `unknown` et
 une entité absente comptent comme off). Pendant le blocage : `update_learning`
 alimente seulement les enregistrements des événements de mesure (qui restent
-continus) et saute les fenêtres, le retard de l'émetteur et le détecteur
+continus) et saute les fenêtres et le détecteur
 d'événements ; la détection du temps mort est suspendue mais l'historique
 de température est alimenté (anticipation, impulsions) ; l'historique de la pièce et le
 modèle de pièce reçoivent le blocage comme raison d'exclusion (une fenêtre ouverte
@@ -877,7 +868,7 @@ Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer 
 
 Les protections complémentaires actuellement présentes sont :
 
-- `SmartPIGuards` (chauffage uniquement, hors bootstrap et impulsions d'une calibration) : `guard_cut` force la sortie à 0 lorsque la température mesurée dépasse `setpoint + near_band_above` pendant que le chauffage est actif, jusqu'à ce qu'elle redescende à ce seuil diminué du plus grand de `NEAR_BAND_HYSTERESIS_C = 0.05°C` et de `GUARD_CUT_RESET_STEPS = 1.5` pas de capteur observés (sans quoi une mesure qui oscille entre deux paliers autour du seuil relancerait la coupure, et le cycle, à chaque mesure). Pendant une coupure, la sortie reste à 0 (`I:OVERRIDE(guard_cut)`). Tant que le PI demande encore de la puissance, une intégrale positive suit les 0 % imposés par back-calculation, `d(Ki·I)/dt = −v/Ti` avec `v` la demande du PI et `Ti = Kp/Ki`, au plus un cycle par itération. Sa vitesse suit la demande, pas le dépassement : une intégrale qui porte plus que le besoin de chauffe redescend en quelques coupures, même quand la pièce dépasse à peine le seuil. Elle redescend jusqu'au point où elle seule maintiendrait la pièce au seuil de coupure diminué de `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`) ; en dessous, elle est conservée, de même que le besoin de chauffe qui reste après une baisse de consigne. Sans cela, un biais de l'intégrale restituait le même excès de puissance à chaque fin de coupure, et la pièce cyclait entre coupure et reprise. Le filtre de température, le détecteur de temps mort, la température publiée et l'apprentissage continuent de suivre la pièce. Le PI n'est pas calculé pendant une coupure : l'écart publié (`temperature.error`, `analysis.control.error_p`) est la consigne moins la température du calcul, l'anticipation publiée vaut `0` et `control.mode` vaut `heating cut above the setpoint` ; les termes d'écart internes et l'anticipation gardent leurs valeurs pour la fin de la coupure. La pièce refroidit alors sans chauffage, par exemple pendant toute la descente qui suit une baisse de consigne : c'est une fenêtre passive pour `b` et pour la ligne de base du retard de l'émetteur. La gouvernance y voit une commande nulle hors de toute bande, et les fenêtres `a` sont bloquées (`skip: guard cut`). L'apprentissage reste contigu à la fin de la coupure ; `guard_kick` relance le cycle lorsque, dans la near-band, la température descend sous `setpoint - near_band_below` alors que la commande est inférieure à 99 %. En refroidissement, aucune des deux gardes n'agit et la near-band n'est pas calculée automatiquement. Pendant le bootstrap, le chauffage fonctionne entre ses propres seuils d'hystérésis et une garde en cours est relâchée,
+- `SmartPIGuards` (chauffage uniquement, hors bootstrap et impulsions d'une calibration) : `guard_cut` force la sortie à 0 lorsque la température mesurée dépasse `setpoint + near_band_above` pendant que le chauffage est actif, jusqu'à ce qu'elle redescende à ce seuil diminué du plus grand de `NEAR_BAND_HYSTERESIS_C = 0.05°C` et de `GUARD_CUT_RESET_STEPS = 1.5` pas de capteur observés (sans quoi une mesure qui oscille entre deux paliers autour du seuil relancerait la coupure, et le cycle, à chaque mesure). Pendant une coupure, la sortie reste à 0 (`I:OVERRIDE(guard_cut)`). Tant que le PI demande encore de la puissance, une intégrale positive suit les 0 % imposés par back-calculation, `d(Ki·I)/dt = −v/Ti` avec `v` la demande du PI et `Ti = Kp/Ki`, au plus un cycle par itération. Sa vitesse suit la demande, pas le dépassement : une intégrale qui porte plus que le besoin de chauffe redescend en quelques coupures, même quand la pièce dépasse à peine le seuil. Elle redescend jusqu'au point où elle seule maintiendrait la pièce au seuil de coupure diminué de `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`) ; en dessous, elle est conservée, de même que le besoin de chauffe qui reste après une baisse de consigne. Sans cela, un biais de l'intégrale restituait le même excès de puissance à chaque fin de coupure, et la pièce cyclait entre coupure et reprise. Le filtre de température, le détecteur de temps mort, la température publiée et l'apprentissage continuent de suivre la pièce. Le PI n'est pas calculé pendant une coupure : l'écart publié (`temperature.error`, `analysis.control.error_p`) est la consigne moins la température du calcul, l'anticipation publiée vaut `0` et `control.mode` vaut `heating cut above the setpoint` ; les termes d'écart internes et l'anticipation gardent leurs valeurs pour la fin de la coupure. La pièce refroidit alors sans chauffage, par exemple pendant toute la descente qui suit une baisse de consigne : c'est une fenêtre passive pour `b`. La gouvernance y voit une commande nulle hors de toute bande, et les fenêtres `a` sont bloquées (`skip: guard cut`). L'apprentissage reste contigu à la fin de la coupure ; `guard_kick` relance le cycle lorsque, dans la near-band, la température descend sous `setpoint - near_band_below` alors que la commande est inférieure à 99 %. En refroidissement, aucune des deux gardes n'agit et la near-band n'est pas calculée automatiquement. Pendant le bootstrap, le chauffage fonctionne entre ses propres seuils d'hystérésis et une garde en cours est relâchée,
 - anti-windup à chaque tick sur la limite haute applicable (voir ci-dessous),
 - `I:HOLD` explicite pendant le temps mort effectif après une reprise pour `window_resume` et `power_shedding_resume` en chauffage,
 - `I:HOLD` avec source `vt_safety` pendant que le mode sécurité de Versatile Thermostat applique sa puissance par défaut à la place de la commande SmartPI,
@@ -897,7 +888,7 @@ Ne sont pas traités comme une saturation : la quantification de Versatile Therm
 Le calcul distingue aussi deux zones autour de la consigne :
 
 - la deadband hystérétique, utilisée pour stabiliser l'état `in_deadband`,
-- la deadband centrale réelle, définie par `abs(error_i) < deadband_c`, utilisée pour geler effectivement P et I.
+- la deadband centrale réelle, définie par `abs(error_i) < deadband_c` une fois la constante de temps fiable, utilisée pour geler effectivement P et I.
 
 Cette séparation évite de garder P et I gelés uniquement parce que l'hystérésis maintient encore l'état de deadband alors que l'erreur a déjà quitté la deadband configurée.
 
@@ -1005,11 +996,11 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
 
 La boucle de régulation planifie au plus une écriture différée de ce payload par fenêtre de cinq minutes ; Home Assistant vide une écriture en attente à l'arrêt. Les services et la suppression de l'entité écrivent immédiatement un snapshot.
 
-Les timestamps d'événements passés (historiques de température, début d'une calibration, période passive et épisode du retard de l'émetteur sur les phases de chauffe à puissance constante) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, la limite de 48 heures d'une calibration continue de s'écouler après un redémarrage.
+Les timestamps d'événements passés (historiques de température, début d'une calibration, période passive et épisode des échelons de puissance) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, la limite de 48 heures d'une calibration continue de s'écouler après un redémarrage.
 
-L'historique de la pièce conserve son propre stockage (version d'état 3) : l'historique, le catalogue des périodes calmes avec leurs clés et la position de la maison avec laquelle le catalogue a été trouvé. Un changement de position de la maison oublie le catalogue. Un état sauvegardé par une version antérieure conserve son historique et ses périodes calmes ; les valeurs qu'il avait apprises sont ignorées. Un stockage de version 1 ne conserve que son historique. Une version plus récente est ignorée. Il a besoin de numpy et de scipy (sans eux rien n'est enregistré et le modèle de pièce affiche `numerical libraries unavailable`), n'enregistre rien en mode vanne (le modèle de pièce affiche `valve heaters are not supported yet`), et n'a aucune période calme sans position de la maison. Seul le modèle de pièce le lit ; la régulation ne lit ni l'historique ni le catalogue.
+L'historique de la pièce conserve son propre stockage (version d'état 3) : l'historique, le catalogue des périodes calmes avec leurs clés et la position de la maison avec laquelle le catalogue a été trouvé. Un changement de position de la maison oublie le catalogue. Une version plus récente est ignorée. Il a besoin de numpy et de scipy (sans eux rien n'est enregistré et le modèle de pièce affiche `numerical libraries unavailable`), n'enregistre rien en mode vanne (le modèle de pièce affiche `valve heaters are not supported yet`), et n'a aucune période calme sans position de la maison. Seul le modèle de pièce le lit ; la régulation ne lit ni l'historique ni le catalogue.
 
-Le modèle de pièce conserve son propre stockage (version d'état 2) : paramètres publiés et leurs candidats, fenêtres et enregistrements indexés par leur dernière période calme, état de l'observateur avec la perturbation des périodes et les sous-pas en attente d'une période, bilan thermique en vigueur avec le dernier jour calculé, et heure de la dernière tâche d'identification. Un stockage de version 1 conserve son modèle publié, l'état physique de l'observateur (air, murs, perturbation, chronologie des commandes, scores des prévisions), le bilan thermique en vigueur et ses enregistrements ; ses fenêtres et candidats (indexés par jour, sélectionnés par heures locales) et ses perturbations nocturnes (sommées sur les heures locales, sans leurs sous-pas) sont abandonnés, et les fenêtres sont recalculées à partir des périodes calmes. Une version plus récente est ignorée.
+Le modèle de pièce conserve son propre stockage (version d'état 2) : paramètres publiés et leurs candidats, fenêtres et enregistrements indexés par leur dernière période calme, état de l'observateur avec la perturbation des périodes et les sous-pas en attente d'une période, bilan thermique en vigueur avec le dernier jour calculé, et heure de la dernière tâche d'identification. Une version plus récente est ignorée.
 
 #### Redémarrages
 
@@ -1017,7 +1008,7 @@ Versatile Thermostat n'envoie aucune commande au chauffage lorsque l'intégratio
 
 - la durée d'arrêt, sur l'horloge murale, depuis le plus ancien dernier calcul des trois stockages (algorithme, historique de la pièce, modèle de pièce) jusqu'au premier calcul, est au plus `RESTART_BRIDGE_MAX_GAP_S = 600 s` ; un stockage écrit longtemps avant l'arrêt (une écriture différée perdue lors d'un plantage) rend la durée d'arrêt longue ;
 - le mode HVAC est le même au dernier calcul et au premier, HEAT ou COOL, et la configuration du cycle (durée de cycle, délais minimaux de marche et d'arrêt, mode vanne) est la même ;
-- l'état de l'actionneur a été sauvegardé : la puissance engagée dans le stockage de l'algorithme et, en HEAT, aussi l'état du cycle de chauffe dans l'historique de la pièce et le dernier calcul du modèle de pièce, pour les stockages qui contiennent des données (un stockage d'ancien format n'en a aucun) ;
+- l'état de l'actionneur a été sauvegardé : la puissance engagée dans le stockage de l'algorithme et, en HEAT, aussi l'état du cycle de chauffe dans l'historique de la pièce et le dernier calcul du modèle de pièce, pour les stockages qui contiennent des données ;
 - SmartPI avait la main au dernier calcul et l'a au premier : ni fenêtre ouverte, ni délestage, ni mode sécurité, ni commande remplacée, ni état inconnu (après le redémarrage, l'état de la fenêtre, du délestage et de la sécurité du thermostat est lu avant toute commande) ;
 - la première température intérieure passe la règle de saut de l'historique de la pièce (un saut de plus de `0.5 °C` à plus de `20 °C/h` n'est pas physique) par rapport à la dernière, datée de son dernier changement ;
 - l'horloge murale n'a pas sauté (pas de durée d'arrêt négative, pas de dernier calcul d'un stockage dans le futur).
@@ -1041,9 +1032,10 @@ Chaque composant consulte cette décision ; aucun ne décide seul. L'état trans
 | Suivi du temps | le premier calcul couvre la durée d'arrêt, sans le gel de l'apprentissage d'un cycle ; la mise en forme de la consigne repart encore de la consigne brute pendant ce cycle | premier calcul d'une nouvelle session, apprentissage gelé pendant un cycle |
 | Détection du temps mort | la détection en cours reprend (3.6) | abandonnée, durée minimale OFF comptée depuis le chargement |
 | Fenêtre d'apprentissage a/b | la fenêtre en cours reprend avec ses accumulateurs ; son segment de bilan intégral recommence | effacée |
-| Retard de l'émetteur (phases à puissance constante) | période passive ou épisode repris (3.7) | épisode compté comme interrompu |
+| Échelons de puissance (apprentissage a/b) | période passive, épisode et historique des commandes repris (3.7) | période passive abandonnée, épisode compté comme terminé, historique des commandes recommencé |
 | Lectures de mesure | l'enregistrement, les lectures en cours et le repos ou la phase du détecteur (chauffage) reprennent (3.7) | les lectures en cours se terminent, l'enregistrement est abandonné, les valeurs retenues restent |
 | Lectures du modèle de réponse | l'enregistrement et les lectures en cours reprennent (3.7) | les lectures en cours se terminent, l'enregistrement est abandonné, le modèle reste |
+| Coupure de surchauffe (chauffage seulement) | une coupure en cours à l'arrêt continue jusqu'au seuil de relâche habituel | relâchée |
 | Sortie tout-ou-rien du bootstrap | reprise dans la bande (3.1) | repart à 0 |
 | Historique de la pièce (HEAT uniquement ; en COOL comme un autre redémarrage) | la durée d'arrêt est un échantillon manquant (pas d'intervalle invalide) ; l'état du chauffage à l'arrêt est tenu jusqu'à la première commande qui suit, sans aucun front | la période de chauffe est close au dernier calcul, et seule la durée d'arrêt est invalide |
 | Modèle de pièce (HEAT uniquement ; en COOL comme un autre redémarrage) | la commande appliquée à l'arrêt est tenue pendant la durée d'arrêt ; l'état est propagé à travers elle et les prévisions en cours se poursuivent | le chauffage est considéré comme éteint d'après l'état sauvegardé, l'incertitude est rouverte et les prévisions en cours sont abandonnées |
@@ -1058,8 +1050,7 @@ L'historique de la pièce garde un repère de chaque redémarrage (dernier calcu
 
 Les pools de bilan intégral et les compteurs d'issues de fenêtres ne sont pas
 persistés : ils repartent vides à chaque démarrage. Les observations des mesures de
-`a` et de `b` sont persistées avec l'état de l'estimateur ; un état qui n'en contient
-pas se charge avec des mesures non recalculables.
+`a` et de `b` sont persistées avec l'état de l'estimateur.
 
 La puissance appliquée qui alimente le temps mort, l'historique de la pièce et le modèle de pièce vient des reçus de commande appliquée du scheduler de cycles de Versatile Thermostat (`AppliedCommandReceipt` de `vtherm_api`) : un reçu pour chaque commande qu'il applique réellement, un reçu `cycle_start` à chaque début de cycle maître et un reçu `update` pour chaque position de vanne appliquée en cours de cycle. Le reçu donne la puissance actionneur appliquée, convertie dans l'espace linéaire du modèle. SmartPI ne tague pas ses requêtes : il lit seulement les reçus.
 
@@ -1174,7 +1165,7 @@ sont propres à la session Home Assistant courante.
 | `CALIBRATION_MAX_S`               | `172800`  |
 | `CALIBRATION_MIN_INTERVAL_S`      | `86400`   |
 | `CALIBRATION_CORRECT_REL`         | `0.30`    |
-| `CALIBRATION_CORRECT_B`           | `True`    |
+| `CALIBRATION_CORRECT_B`           | `False`   |
 | `CALIBRATION_SKIP_WHEN_OWN_AGREE` | `False`   |
 | `CALIBRATION_OWN_RECENT`          | `3`       |
 | `CALIBRATION_START_OVER_C`        | `0.2`     |
@@ -1220,5 +1211,3 @@ La matrice pilote uniquement la mise à jour des gains et l'apprentissage thermi
 1. **Astrom K.J. et Hagglund T.**, travaux sur la régulation PID et l'usage de modèles FOPDT.
 2. **Sundaresan K.R. et Krishnaswamy P.R.**, estimation des paramètres de délai et de constante de temps.
 3. Régression **OLS** avec test t de Student pour la validation de pente.
-
-Ce document sert de référence alignée sur l'implémentation SmartPI actuelle.

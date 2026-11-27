@@ -26,6 +26,9 @@ SmartPI est un algorithme de contrôle thermique avancé basé sur un modèle de
 - **Feed-forward basé sur le modèle** : Estime la puissance de maintien nécessaire au point de consigne, introduite progressivement pendant que le modèle est appris
 - **Anticipation (chauffage et refroidissement)** : Lit la température que la pièce s'apprête à atteindre, à partir de sa pente et du temps entre une commande et son effet, pour baisser la commande en avance et limiter le dépassement des émetteurs lents
 - **Gouvernance Safety-First** : Une matrice par régime gèle ou déverrouille l'apprentissage et l'adaptation des gains selon le contexte opérationnel
+- **Choix du démarrage de l'apprentissage** : amorçage (cycles d'hystérésis à pleine puissance jusqu'à ce que le modèle soit appris) ou démarrage direct (régulation PI dès la première minute avec des impulsions de mesure légères)
+- **Pause de l'apprentissage** : par service, par une entité de perturbation (invités, cheminée, soleil) ou par une entité de chauffage indisponible (chaudière arrêtée, dégivrage) ; la régulation continue avec le modèle déjà appris
+- **Chauffage et refroidissement** : chaque mode conserve son propre taux de chauffe ou de refroidissement appris, son temps mort et sa réponse de l'émetteur
 - **Calibration sur demande** : quelques impulsions de mesure près de la consigne mesurent de nouveau la pièce et corrigent le modèle appris lorsqu'il est nettement faux ; peut être appelée par une automatisation
 - **Linéarisation de courbe de vanne** : Traduit la demande SmartPI en position de vanne adaptée au comportement non linéaire des vannes thermostatiques (TRV)
 - **Diagnostics détaillés** : Publie l'état de l'apprentissage, l'état du modèle et les données de régulation — consultable via une carte Markdown Home Assistant dédiée ou le panel de régulation [Equinox](https://github.com/KipK/equinox)
@@ -109,4 +112,4 @@ Si SmartPI vous est utile, vous pouvez soutenir son développement ici :
 
 ## 📄 Licence
 
-Ce projet est distribué selon les conditions de licence Smart-PI. Voir [LICENSE.md](LICENSE.md) pour plus de détails.
+Ce projet est distribué selon les conditions de la licence Apache 2. Voir [LICENSE](LICENSE) pour plus de détails.
