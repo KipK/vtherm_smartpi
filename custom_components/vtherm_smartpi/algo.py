@@ -1355,8 +1355,8 @@ class SmartPI:
         self.resume_hold.clear()
         self._hysteresis_restore = self._load_hysteresis_output(state.get("hysteresis_output"))
         self._start.load(state)
-        # Refreshed by each learning update: an unsettled power model keeps the learning stage from the first tick.
-        self.est.a_model_ready = self.learn_win.a_model_ready(self.est.model_hvac_mode)
+        # As at each learning update: an unsettled power model keeps the learning stage from the first tick.
+        self.learn_win.settle_power_model(self.est, self.est.model_hvac_mode)
         # The restart is decided at the first tick (resolve_restart); until then
         # the transient state above stays as after a cold start.
         self.restart.load(state.get("restart"))

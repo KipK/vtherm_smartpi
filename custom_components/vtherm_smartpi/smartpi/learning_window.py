@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .const import (
     AB_SETTLE_ACTIVE_CAP_FRAC,
@@ -180,6 +180,17 @@ class LearningWindowManager:
         if self.response_model is None or hvac_mode is None:
             return None
         return self.response_model.values(str(hvac_mode))
+
+    def settle_power_model(self, estimator: Any, hvac_mode: "VThermHvacMode | None") -> None:
+        """Tell ``estimator`` whether the delivered power model is settled, and publish ``a`` from its collected
+        measurements once it is (at each learning update and at a load, so the learning stage never ends with an
+        unpublished ``a``)."""
+        estimator.a_model_ready = self.a_model_ready(hvac_mode)
+        publish = getattr(estimator, "publish_collected_a", None)
+        if callable(publish):
+            from ..hvac_mode import VThermHvacMode_COOL
+
+            publish(-1.0 if hvac_mode == VThermHvacMode_COOL else 1.0)
 
     def a_model_ready(self, hvac_mode: "VThermHvacMode | None") -> bool:
         """Whether the delivered power model of the a learning is settled: the response model of the mode is
@@ -456,12 +467,7 @@ class LearningWindowManager:
                 ext=ext_temp,
             )
             self._follow_power_model(estimator, model, hvac_mode)
-        estimator.a_model_ready = self.a_model_ready(hvac_mode)
-        publish = getattr(estimator, "publish_collected_a", None)
-        if callable(publish):
-            from ..hvac_mode import VThermHvacMode_COOL
-
-            publish(-1.0 if hvac_mode == VThermHvacMode_COOL else 1.0)
+        self.settle_power_model(estimator, hvac_mode)
         was_active = self._active
         window_param = (
             "b" if self._u_first is not None and self._u_first < U_OFF_MAX else "a"
