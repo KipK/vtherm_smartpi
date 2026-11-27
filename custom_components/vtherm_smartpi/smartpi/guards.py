@@ -200,6 +200,14 @@ class SmartPIGuards:
             
         return GuardAction.NONE
 
+    def restore_cut(self, active: bool) -> None:
+        """Resume a guard cut that was running when VT stopped (bridged HEAT restart only).
+
+        The heater stayed off over the stop; the usual reset threshold then releases the cut.
+        """
+        if active:
+            self._guard_cut_active = True
+
     def _reset_margin_c(self) -> float:
         """Guard cut reset hysteresis: at least NEAR_BAND_HYSTERESIS_C and GUARD_CUT_RESET_STEPS sensor steps."""
         return max(NEAR_BAND_HYSTERESIS_C, GUARD_CUT_RESET_STEPS * self.sensor_step_c)

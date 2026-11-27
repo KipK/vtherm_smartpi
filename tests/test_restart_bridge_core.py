@@ -571,3 +571,48 @@ def test_phase_is_stable_in_the_harness() -> None:
     run = _Run()
     run.ticks(2)
     assert run.algo.phase == SmartPIPhase.STABLE
+
+
+# ---------------------------------------------------------------------------
+# Guard cut across a restart
+# ---------------------------------------------------------------------------
+def _cut_running() -> _Run:
+    """A regulated room driven above setpoint + near band while heating: the guard cut is running."""
+    run = _Run(setpoint=19.0, temp=18.5)
+    run.ticks(30)
+    run.room.temp = run.setpoint + 0.5
+    run.algo.guards.check_guard_cut(run.room.reading, run.setpoint, 0.2, True, VThermHvacMode_HEAT, False)
+    assert run.algo.guards.guard_cut_active
+    run.tick()
+    assert run.algo.on_percent == 0.0
+    return run
+
+
+def test_guard_cut_running_at_the_stop_goes_on_after_a_bridged_restart() -> None:
+    run = _cut_running()
+    run.stop()
+    run.tick()
+    run.start()
+    assert run.algo.restart.decision.bridged
+    assert run.algo.guards.guard_cut_active
+    assert run.algo.on_percent == 0.0
+    # The usual reset threshold releases it once the room is back under setpoint + near band - margin.
+    action = run.algo.guards.check_guard_cut(run.setpoint, run.setpoint, 0.2, False, VThermHvacMode_HEAT, False)
+    assert action == "cut_reset" or not run.algo.guards.guard_cut_active
+
+
+def test_guard_cut_is_not_resumed_after_a_long_stop_or_in_cool() -> None:
+    run = _cut_running()
+    run.stop()
+    run.ticks(int(RESTART_BRIDGE_MAX_GAP_S / TICK_S) + 1)
+    run.start()
+    assert run.algo.restart.decision.bridged is False
+    assert not run.algo.guards.guard_cut_active
+
+    run = _cut_running()
+    run.stop()
+    run.tick()
+    with _clocks(run.clock):
+        restored = _smartpi(run.saved)
+        restored.resolve_restart(VThermHvacMode_COOL, run.room.reading)
+    assert not restored.guards.guard_cut_active

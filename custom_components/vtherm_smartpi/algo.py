@@ -1118,6 +1118,7 @@ class SmartPI:
             calc_wall=monotonic_to_wall_ts(self._last_calculate_time),
             heat_episode_wall=monotonic_to_wall_ts(self._t_heat_episode_start),
             cool_episode_wall=monotonic_to_wall_ts(self._t_cool_episode_start),
+            guard_cut=self.guards.guard_cut_active,
         )
         return context
 
@@ -1258,10 +1259,9 @@ class SmartPI:
         except (KeyError, TypeError, ValueError):
             linear = actuator = 0.0
         # The heater kept the committed command over the stop.
-        self._committed_on_percent = linear
-        self._actuator_committed_on_percent = actuator
-        self._last_u_applied = linear
-        self.u_prev = linear
+        self._committed_on_percent, self._actuator_committed_on_percent = linear, actuator
+        self._last_u_applied = self.u_prev = linear
+        self.guards.restore_cut(decision.heat_bridged and saved.get("guard_cut") is True)  # a cut running at the stop goes on
         self._t_heat_episode_start = wall_to_monotonic_ts(saved.get("heat_episode_wall"))
         self._t_cool_episode_start = wall_to_monotonic_ts(saved.get("cool_episode_wall"))
         # The first tick spans the stop, without the learning freeze of a startup.
