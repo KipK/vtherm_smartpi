@@ -4,7 +4,7 @@ Instructions for any AI coding or debugging agent (Claude Code, Codex, others) w
 
 ## What this is
 
-SmartPI is a Home Assistant custom integration (`custom_components/vtherm_smartpi`) that plugs into **Versatile Thermostat (VT)** as a proportional algorithm through the `vtherm_api` package. It is a **discrete PI regulator on a 1R1C thermal model** (adaptive gains, feed-forward, dead-time estimation, learning governance, calibration, valve linearization; 0.7 line: response model (dead time and response time constant), room model, quiet periods). It follows Astrom & Hagglund, *PID Controllers* (2nd ed.). VT owns the entity, sensors, PWM/valve cycle and safety; SmartPI computes a normalized power in [0, 1]. Branches: `master` = released 0.6.x, `dev-1.0` = development toward 1.0 (see `.agents/context/project.md`).
+SmartPI is a Home Assistant custom integration (`custom_components/vtherm_smartpi`) that plugs into **Versatile Thermostat (VT)** as a proportional algorithm through the `vtherm_api` package. It is a **discrete PI regulator on a 1R1C thermal model** (adaptive gains, feed-forward, dead-time estimation, learning governance, calibration, valve linearization; 0.7 line: response model (dead time and response time constant), room model, quiet periods). It follows Astrom & Hagglund, *PID Controllers* (2nd ed.). VT owns the entity, sensors, PWM/valve cycle and safety; SmartPI computes a normalized power in [0, 1]. Branches: `master` = development toward the 1.0 release, `0.6-hotfixes` = maintenance of the released 0.6.x line (see `.agents/context/project.md`).
 
 ## Start of a session: what to read
 

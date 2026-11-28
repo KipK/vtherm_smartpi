@@ -14,7 +14,7 @@ Sibling folders of the workspace (paths relative to the workspace root, which co
 
 | Folder | What | Notes |
 |--------|------|-------|
-| `vtherm_smartpi` | this repo | branches: `master` (released 0.6.x), `dev-0.7` (0.7 line, never released), `dev-1.0` (redesign toward 1.0) |
+| `vtherm_smartpi` | this repo | branches: `master` (redesign toward 1.0), `0.6-hotfixes` (released 0.6.x line), `dev-0.7` (0.7 line, never released) |
 | `versatile_thermostat` | VT integration (upstream project) | read-only reference; changes go through upstream PRs |
 | `vtherm_api` | plugin API between VT and algorithms | upstream-bound: no plan/phase/review vocabulary in comments, docs or tests |
 | `vtherm_hysteresis` | simple hysteresis plugin | scaffold example for VT plugins |
@@ -30,9 +30,9 @@ A sibling folder may be absent in another environment; the SmartPI repo is self-
 
 ## Release lines and branches
 
-- `master`: released line (0.6.x). Releases are tags `X.Y.Z` on master; a workflow builds the zip and a draft release.
+- `master`: the line toward the 1.0 (the `dev-1.0` redesign, merged); its user-visible changes are in `CHANGELOG.md` under `[Unreleased]`. Releases are tags `X.Y.Z`; a workflow builds the zip and a draft release.
+- `0.6-hotfixes`: the released 0.6.x line (the state of `master` before the 1.0 merge), for 0.6.x fixes only.
 - `dev-0.7`: the 0.7 features; it is not released (owner): the next release is the 1.0.
-- `dev-1.0`: branched from `dev-0.7`, the redesign toward the 1.0; its user-visible changes are in `CHANGELOG.md` under `[Unreleased]`.
 - Other short-lived branches exist for experiments; they are not part of the shared knowledge.
 - Dev install: the maintainer copies `custom_components/vtherm_smartpi` into Home Assistant and restarts it; HACS keeps showing the last released version. To know what runs, look for a diagnostics field introduced by the expected commit (for example `analysis.learning.response_model`), not the HACS version. After copying from a version without restart context (0.6.x), the first restart shows `last_restart: no saved state of the last tick`, which is expected.
 

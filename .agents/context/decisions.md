@@ -1,6 +1,6 @@
 # SmartPI design decisions
 
-Purpose: why the code is the way it is, and which ideas were already tried and rejected. State of the `dev-1.0` line (branched from `dev-0.7`). Module paths are relative to `custom_components/vtherm_smartpi/` unless they start with `smartpi/` (then `custom_components/vtherm_smartpi/smartpi/`). Check the code before relying on a statement: removed items below no longer exist in the tree.
+Purpose: why the code is the way it is, and which ideas were already tried and rejected. State of the `master` line (the redesign toward the 1.0). Module paths are relative to `custom_components/vtherm_smartpi/` unless they start with `smartpi/` (then `custom_components/vtherm_smartpi/smartpi/`). Check the code before relying on a statement: removed items below no longer exist in the tree.
 
 Standing design rules (apply to any change):
 - Simple and universal: one or two parameters, same for any on/off emitter, neutral start, capped. No over-engineering.

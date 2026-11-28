@@ -1,8 +1,8 @@
 # Branch status: workstreams, open questions, next steps
 
-BRANCH-SPECIFIC index of the branch it lives on (here `dev-1.0`, branched from `dev-0.7`; the redesign toward a 1.0). Short index only, at most 60 lines: one to three lines per item (goal, state, next step). Narratives, bench numbers and field follow-ups live in the local task folders (`.agents/local/tasks/`, unversioned); outcomes go to `decisions.md`. On a merge, resolve it to the merged result: on `master` it only describes what `master` contains and what is planned for it.
+BRANCH-SPECIFIC index of the branch it lives on (here `master`, carrying the redesign toward the 1.0). Short index only, at most 60 lines: one to three lines per item (goal, state, next step). Narratives, bench numbers and field follow-ups live in the local task folders (`.agents/local/tasks/`, unversioned); outcomes go to `decisions.md`. On a merge, resolve it to the merged result.
 
-## What this line contains beyond `master` (0.6.7)
+## What this line contains beyond the released 0.6.7 (`0.6-hotfixes`)
 
 - Slope anticipation in HEAT and COOL, the one mechanism of the approach to the setpoint (the setpoint trajectory and its two options are gone).
 - Restart bridge and hold of the previous command while the indoor temperature is missing.
@@ -16,7 +16,7 @@ BRANCH-SPECIFIC index of the branch it lives on (here `dev-1.0`, branched from `
 
 ## Workstreams
 
-- **1.0 finish** (current): docs, cards and README aligned with the code; states saved by 0.6.7 and 0.7 load in `tests/test_saved_state_upgrade.py`. Known and left: a saved `None` estimator value makes the load fail (strict xfail, as in 0.6.7); a 0.6.7 bootstrap on/off output is not resumed at the upgrade. Next: `CHANGELOG.md` for 1.0 and release notes, then merge into `master` by the maintainer.
+- **1.0 finish** (current): docs, cards and README aligned with the code; states saved by 0.6.7 and 0.7 load in `tests/test_saved_state_upgrade.py`. Known and left: a saved `None` estimator value makes the load fail (strict xfail, as in 0.6.7); a 0.6.7 bootstrap on/off output is not resumed at the upgrade. Next: `CHANGELOG.md` for 1.0 and release notes, then the 1.0 release.
 - **Calibration by pulses**: the code with the owner's fixes is unit-tested; its bench is pending. The automatic calibration after an upgrade and the calibration report are not yet run in the field or benched.
 - **Field follow-up of this line**: anticipation (horizon, correction, no command swings or steps once settled), response-model outliers after the repair at load, direct start (`a` gate lock, `b` in fast rooms). Items and readings in the local task notes.
 
