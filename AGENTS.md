@@ -4,11 +4,11 @@ Instructions for any AI coding or debugging agent (Claude Code, Codex, others) w
 
 ## What this is
 
-SmartPI is a Home Assistant custom integration (`custom_components/vtherm_smartpi`) that plugs into **Versatile Thermostat (VT)** as a proportional algorithm through the `vtherm_api` package. It is a **discrete PI regulator on a 1R1C thermal model** (adaptive gains, feed-forward, dead-time estimation, learning governance, calibration, valve linearization; 0.7 line: response model (dead time and response time constant), room model, quiet periods). It follows Astrom & Hagglund, *PID Controllers* (2nd ed.). VT owns the entity, sensors, PWM/valve cycle and safety; SmartPI computes a normalized power in [0, 1]. Branches: `master` = released 0.6.x, `dev-0.7` = development.
+SmartPI is a Home Assistant custom integration (`custom_components/vtherm_smartpi`) that plugs into **Versatile Thermostat (VT)** as a proportional algorithm through the `vtherm_api` package. It is a **discrete PI regulator on a 1R1C thermal model** (adaptive gains, feed-forward, dead-time estimation, learning governance, calibration, valve linearization; 0.7 line: response model (dead time and response time constant), room model, quiet periods). It follows Astrom & Hagglund, *PID Controllers* (2nd ed.). VT owns the entity, sensors, PWM/valve cycle and safety; SmartPI computes a normalized power in [0, 1]. Branches: `master` = released 0.6.x, `dev-1.0` = development toward 1.0 (see `.agents/context/project.md`).
 
 ## Start of a session: what to read
 
-Always read `.agents/README.md` (index), `.agents/context/principles.md` (binding decisions) and `.agents/context/status.md` (ongoing work, open questions and next steps of the current branch). Then, by task:
+Always read `.agents/README.md` (index), `.agents/context/principles.md` (binding decisions) and `.agents/context/status.md` (workstreams, open questions and next steps of the current branch). When resuming a task, read its `.agents/local/tasks/<task-slug>/handoff.md` first. Then, by task:
 
 | Task | Read |
 |------|------|
@@ -60,6 +60,11 @@ Python >= 3.13, virtualenv `.venv`. Tests import `versatile_thermostat` and `vth
 
 If a user launched you to find why SmartPI misbehaves: follow `.agents/workflows/debugging-user-reports.md`; read data from the diagnostics sensor (`live`, `history` attributes) per `.agents/context/diagnostics.md`; stay read-only on their system; do not call learning-reset or calibration services without consent; ask them to redact personal data; produce the report in `.agents/templates/issue-report.md` format.
 
-## Keeping the memory alive
+## Two memory tiers
 
-`.agents/` is the shared, versioned project memory (current state only). Every task ends with the checklist of `.agents/workflows/memory-maintenance.md`: update the files the change touched in the same change (trigger table there), update `context/status.md` (the branch's working journal; it must shrink as often as it grows), prune what became obsolete (delete, git is the archive), run `python3 .agents/scripts/check_memory.py`, and say in the final message what memory was updated. Read-only profiles list what should be recorded; the orchestrating session applies it. A rule stated by the user goes into `context/principles.md`. Agent profiles in `.claude/agents/` and `.codex/agents/` mirror each other: edit both.
+- **Long-term, versioned**: `.agents/context/` - the current truth about the project, shared with every developer. A fact enters it only if it passes the admission test of `.agents/workflows/memory-maintenance.md`.
+- **Short-term, local, never versioned**: `.agents/local/tasks/<task-slug>/` (gitignored) with `plan.md`, `notes.md`, `handoff.md`. Work in progress, findings, dead ends, measurements, bench details, resumption state. Deleted when the task closes, after promoting the few durable facts.
+
+Plan first: a non-trivial task starts with `plan.md` (template `.agents/templates/plan.md`) validated by the user before code; `handoff.md` (template `.agents/templates/handoff.md`) is kept current at milestones and before a context compaction, and is the brief for sub-agents.
+
+Every task ends with the checklist of `.agents/workflows/memory-maintenance.md`: promote 0-3 durable facts from the task folder, update the files the change touched (trigger table there), prune what became obsolete (delete, git is the archive), run `python3 .agents/scripts/check_memory.py`, and say in the final message what memory was updated. Read-only profiles list what should be recorded; the orchestrating session applies it. A rule stated by the user goes into `context/principles.md`. Agent profiles in `.claude/agents/` and `.codex/agents/` mirror each other: edit both.

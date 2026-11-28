@@ -1,12 +1,12 @@
 # .agents - shared project memory for AI agents
 
-Versioned, tool-neutral memory of the SmartPI project. `AGENTS.md` (repo root) is the entry point and holds the binding rules; this tree holds the knowledge. Everything here is current-state, English, free of personal data, and independent of the gitignored local folders (`plans/`, `dev_tests/`, `tools/`).
+Tool-neutral memory of the SmartPI project. `AGENTS.md` (repo root) is the entry point and holds the binding rules; this tree holds the knowledge. Everything versioned here is current-state, English, free of personal data, and independent of the gitignored local folders (`plans/`, `dev_tests/`, `tools/`, `.agents/local/`).
 
 ## Layout
 
 | Path | Content |
 |------|---------|
-| `context/status.md` | BRANCH-SPECIFIC: ongoing work, bench verdicts, next steps, open questions of the current branch |
+| `context/status.md` | BRANCH-SPECIFIC index (at most 60 lines): long-running workstreams, next steps, open owner questions of the current branch |
 | `context/principles.md` | Binding product, process and evidence decisions of the maintainer |
 | `context/project.md` | What SmartPI is, sibling repos, branches, release lines, manifest trap, languages |
 | `context/theory.md` | Control theory and thermal physics background (Astrom-Hagglund, 1R1C, tuning, estimation) |
@@ -19,10 +19,22 @@ Versioned, tool-neutral memory of the SmartPI project. `AGENTS.md` (repo root) i
 | `context/decisions.md` | Adopted mechanisms, rejected/removed approaches and why, release timeline, open questions |
 | `context/field-knowledge.md` | Anonymized real-room scales, sensors, emitters, observed behaviours |
 | `workflows/` | memory-maintenance (checklist, triggers, pruning, audit), develop, testing, benchmarking, debugging-user-reports, release, docs-i18n, delegation |
-| `scripts/check_memory.py` | Consistency check: paths/symbols/constants/`live.*` paths, size budgets, privacy patterns (+ optional local blocklist), profile parse and mirror |
-| `templates/` | bench declaration, diagnostic report |
+| `scripts/check_memory.py` | Consistency check: paths/symbols/constants/`live.*` paths, size budgets, privacy patterns (+ optional local blocklist), profile parse and mirror, nothing tracked under `local/`, stale task folders |
+| `templates/` | bench declaration, diagnostic report, task plan, task handoff |
+| `local/` | Short-term memory, gitignored, one folder per task (`tasks/<task-slug>/`) |
 
 Agent profiles: `.claude/agents/*.md` (Claude Code) and `.codex/agents/*.toml` (Codex), same names, mirrored. Claude project settings: `.claude/settings.json`; Codex project config: `.codex/config.toml`.
+
+## Two tiers
+
+| | Long-term (`context/`) | Short-term (`local/tasks/<task-slug>/`) |
+|---|---|---|
+| Versioned | yes, shared with every developer | no, gitignored, one machine |
+| Content | current truths useful to future, different tasks | plan, findings, dead ends, measurements, bench details, resumption state |
+| Lifetime | until the code changes | the task; deleted at close |
+| Written by | the agent that changed the code, at task end, through the admission test | any agent, during the task |
+
+Admission test, promotion step and pruning rules: `workflows/memory-maintenance.md`.
 
 ## Rules for editing this memory
 
@@ -39,4 +51,5 @@ Agent profiles: `.claude/agents/*.md` (Claude Code) and `.codex/agents/*.toml` (
 The memory is versioned with the code, so each branch carries its own state.
 - Branch-neutral files (principles, theory, project, field knowledge, workflows, templates, agent profiles) change rarely and merge like any file.
 - Code-dependent files (architecture, runtime-flow, algorithm-*, diagnostics, pitfalls, decisions) describe the code of the branch they are on; update them in the same commit as the code, so a merge brings them along and conflicts are resolved to the merged code.
-- `context/status.md` is the in-progress journal of the branch: on `master` only master's state and plans, on a development branch its own work. On merge, resolve it to the merged result. Do not create files named after branches.
+- `context/status.md` is the index of the branch's workstreams: on `master` only master's state and plans, on a development branch its own work. On merge, resolve it to the merged result. Do not create files named after branches.
+- `local/` is not versioned: task folders do not follow a branch switch or a merge; name the branch in `handoff.md`.

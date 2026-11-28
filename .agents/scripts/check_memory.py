@@ -11,21 +11,32 @@ Exit code 1 when a hard problem is found. Checks:
     plus an optional local blocklist: env SMARTPI_MEMORY_BLOCKLIST or .agents/.local-blocklist,
     one case-insensitive word per line, never versioned)
   - Claude and Codex agent profiles parse, mirror each other and agree on read-only
+  - short-term memory `.agents/local/` (skipped by the scans above): nothing tracked by git,
+    task folders untouched for STALE_TASK_DAYS (warning); `context/status.md` line budget
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PKG = ROOT / "custom_components" / "vtherm_smartpi"
 SEARCH_BASES = [ROOT, PKG, PKG / "smartpi", ROOT / ".agents", ROOT / "tests"]
-MD_FILES = [ROOT / "AGENTS.md", ROOT / "CLAUDE.md", *sorted((ROOT / ".agents").rglob("*.md"))]
+LOCAL = ROOT / ".agents" / "local"
+MD_FILES = [
+    ROOT / "AGENTS.md",
+    ROOT / "CLAUDE.md",
+    *sorted(p for p in (ROOT / ".agents").rglob("*.md") if not p.is_relative_to(LOCAL)),
+]
 MAX_CONTEXT_LINES = 400
+MAX_STATUS_LINES = 60
+STALE_TASK_DAYS = 30
 MAX_AGENTS_BYTES = 24_000
 MAX_CONTEXT_BYTES = 32_000
 FIXTURE = ROOT / "tests" / "fixtures" / "published_diagnostics_paths.json"
@@ -164,6 +175,31 @@ def check_sizes() -> None:
             warnings.append(f"{md.relative_to(ROOT)} is {size} bytes (budget {MAX_CONTEXT_BYTES}): split or prune")
         if lines > MAX_CONTEXT_LINES:
             warnings.append(f"{md.relative_to(ROOT)} has {lines} lines (budget {MAX_CONTEXT_LINES}): split or prune")
+    status = ROOT / ".agents" / "context" / "status.md"
+    if status.exists():
+        lines = len(status.read_text(encoding="utf-8").splitlines())
+        if lines > MAX_STATUS_LINES:
+            warnings.append(f"{status.relative_to(ROOT)} has {lines} lines (budget {MAX_STATUS_LINES}): move details to local task notes")
+
+
+def check_local() -> None:
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "--", ".agents/local"],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()
+    except (OSError, subprocess.CalledProcessError):
+        tracked = []
+    for path in tracked:
+        errors.append(f"{path}: short-term memory is tracked by git (git rm --cached it; .agents/local/ is gitignored)")
+    tasks = LOCAL / "tasks"
+    if not tasks.is_dir():
+        return
+    limit = time.time() - STALE_TASK_DAYS * 86400
+    for task in sorted(p for p in tasks.iterdir() if p.is_dir()):
+        newest = max((f.stat().st_mtime for f in task.rglob("*") if f.is_file()), default=task.stat().st_mtime)
+        if newest < limit:
+            warnings.append(f"{task.relative_to(ROOT)} untouched for over {STALE_TASK_DAYS} days: promote its durable facts and delete it")
 
 
 def check_profiles() -> None:
@@ -208,6 +244,7 @@ def main() -> int:
         check_privacy(prof)
     check_sizes()
     check_profiles()
+    check_local()
     for w in warnings:
         print("WARN ", w)
     for e in errors:

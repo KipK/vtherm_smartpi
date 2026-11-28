@@ -177,7 +177,7 @@ qualified energy balance nothing is published (`WHY_NO_EB`). Published value = m
 (walls) needs a precise sensor (`RM_PRECISE_Q` = 0.015 C quantum), wall share >= `RM_WALL_SHARE_MIN = 0.1`, tau_wall >= 3 h and
 beating the reduced model on held-out data; otherwise the simple (reduced) model.
 
-What it influences: nothing in the command (owner decision, 26 November 2026). The holding power is always the learned
+What it influences: nothing in the command (owner decision). The holding power is always the learned
 `b / a` (`smartpi/feedforward.py::compute_ff`); the model published, the energy balance in force and the observer's
 wall extra power are never read by `algo.py`, the gains, the anticipation, the setpoint manager or the guards. The
 former selection (`select_source`, static part `s_EB (SP - Text) - g_EB`, wall extra power `delta_wall / a`,

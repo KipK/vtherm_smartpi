@@ -6,7 +6,7 @@ unless they start with `tests/`. Format: symptom/trap -> why -> what to do.
 ## Regulation and integral
 
 - Ki stuck at `KI_MIN` -> Ti = tau (1/b) makes Kp/Ti tiny -> `smartpi/gains.py` uses SIMC `Ti = min(tau, GAIN_TI_LAMBDA_FACTOR * (lambda + L))`; keep it.
-- Gains take their delay from `smartpi/gains.py::start_dead_time` (reliable active dead time after a start; feeding them the model's theta + tau_e/2 + h/2 made them too soft, lot b4); the integral holds from `SmartPI.hold_dead_time_s` (`effective_dead_time`: theta + tau_e/2, else the same dead time). Do not read `dt_est` directly for either.
+- Gains take their delay from `smartpi/gains.py::start_dead_time` (reliable active dead time after a start; feeding them the model's theta + tau_e/2 + h/2 made them too soft in a frozen bench); the integral holds from `SmartPI.hold_dead_time_s` (`effective_dead_time`: theta + tau_e/2, else the same dead time). Do not read `dt_est` directly for either.
 - Displayed integral jumps when the near-band taper moves Ki -> `algo.py` rescales `integral *= old_ki/new_ki` on any Ki change to keep `Ki*I` -> judge `u_i`/`Ki*I`, not the raw integral.
 - 0.1 C sensor: reading on the setpoint level freezes the integral (deadband), one step above saturates low and skips integration -> offset of about half a step -> `smartpi/controller.py` allows `I:UNWIND(sat)` within `NEAR_SETPOINT_UNWIND_STEPS` x observed sensor step. Do not widen guard thresholds by a sensor step to fix it.
 - Anti-windup `track_output_limit` back-calculates only in `smartpi/controller.py::_TRACKED_I_MODES` (`I:RUN/SKIP/CLAMP`); other modes (HOLD*, FREEZE, OVERRIDE, UNWIND) are untouched, and the integral only moves toward zero, never across. A new integral mode string must be classified on purpose.

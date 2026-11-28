@@ -28,8 +28,8 @@ Codex custom agents inherit the parent's sandbox, and Claude read-only profiles 
 2. Typical flow for a feature: architect (spec) -> developer(s) (code) -> test-engineer -> reviewer -> docs-writer -> translator. For a regulation change add: control-researcher (method), bench-engineer (frozen declaration then run).
 3. Typical flow for a user problem: debugger -> (data-analyst for exports) -> architect/researcher if it is a design limit -> developer for the fix.
 4. **Fable** is an unanchored second opinion for unclear cross-cutting or blocking research questions. Never for coding, benches or routine checks. Ask the user before each use unless they asked for it. Give it evidence files and precise questions, not your conclusions.
-5. **Fresh agent per task**, with a complete self-contained brief (goal, files to read, what was ruled out, rules, expected report). Resume an agent only for a short follow-up on the same task; never keep resuming one that accumulated a huge context.
+5. **Fresh agent per task**, with a complete self-contained brief built from the task's `.agents/local/tasks/<task-slug>/handoff.md` (goal, done, next step, what was ruled out), plus the files to read, the rules and the expected report. Point the agent to `plan.md`/`notes.md` of the folder rather than pasting them. Resume an agent only for a short follow-up on the same task; never keep resuming one that accumulated a huge context.
 6. **Briefs are tight**: point to files instead of restating context; ask for a short report. Include the standing rules (no commit, no polling, one bench at a time).
 7. Do not re-read a large report if the agent's summary is enough. Do not duplicate an agent's work while it runs.
 8. Parallel agents only for independent, read-mostly work. Never two benches at once.
-9. The orchestrator validates each step before the next, and checks delegated diffs.
+9. The orchestrator validates each step before the next, checks delegated diffs, and records the agent's findings in the task's `notes.md` and `handoff.md` (not in `.agents/context/`).

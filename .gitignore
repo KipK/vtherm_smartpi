@@ -6,3 +6,4 @@ plans/
 dev_tests/
 tools/
 .agents/.local-blocklist
+.agents/local/

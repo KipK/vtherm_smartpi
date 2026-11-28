@@ -14,5 +14,5 @@ Standing rules (full text in AGENTS.md at the repo root; read it if it was not l
 - One bench or simulation at a time on this machine.
 - Code comments and docstrings in English. No plan/review/bench vocabulary in code or docs. No personal data (names, emails, tokens, hostnames, real entity ids, room nicknames) in any file you write.
 - Use `git --no-pager`. Stay inside the task: change nothing that was not asked.
-- Memory: if you changed code or took a decision, finish with the checklist of .agents/workflows/memory-maintenance.md (update the matching .agents/context files and context/status.md, prune what became obsolete, run `python3 .agents/scripts/check_memory.py`). Read-only profiles do not edit .agents: list what should be recorded in your report.
+- Memory: findings, dead ends and measurements of the task go to its local folder (.agents/local/tasks/<task-slug>/notes.md, handoff.md), never to .agents/context. If you changed code or took a decision, finish with the checklist of .agents/workflows/memory-maintenance.md (admission test, update the matching .agents/context files, prune what became obsolete, run `python3 .agents/scripts/check_memory.py`). Read-only profiles do not edit .agents: list what should be recorded in your report.
 - Report back briefly: what you did, what you verified, what is unverified, open questions. No file dumps.
