@@ -178,9 +178,9 @@ def test_resume_after_override_does_not_integrate_gap(override):
     algo.est.b = 0.002
     algo.est.a_meas_hist.extend([0.02] * AB_MIN_SAMPLES_A)
     algo.est.b_meas_hist.extend([0.002] * AB_MIN_SAMPLES_B)
-    # A model past the bootstrap has a resolved response lag: the learning,
+    # A model past the bootstrap has a settled delivered power model: the learning,
     # fed during a guard cut, keeps the stable phase.
-    algo.learn_win.response_lag._episodes = RESPONSE_LAG_RESOLVE_EPISODES
+    algo.learn_win.power_steps._episodes = RESPONSE_LAG_RESOLVE_EPISODES
     clock = [10_000.0]
     target, current = 20.0, 19.0
     error = abs(target - current)
@@ -378,10 +378,9 @@ async def test_timing_quantization_is_not_tracked():
     with _clock() as mono, _stable_phase():
         _tick(valve, mono, 1000.0, 19.0)
         _tick(valve, mono, 1060.0, 19.0)
-        request_id = valve.stage_command(VThermHvacMode_HEAT)
         requested = valve.on_percent
         await valve.on_command_receipt(make_receipt(
-            request_id, requested - 0.05, requested=requested, alterations=("valve_retained",),
+            requested - 0.05, requested=requested, alterations=("valve_retained",),
         ))
         before = valve.integral
         await valve.on_cycle_completed(e_eff=requested - 0.05, elapsed_ratio=1.0, cycle_duration_min=10.0)
@@ -419,20 +418,6 @@ def test_tracking_follows_the_integral_mode(i_mode, tracked):
         assert ctl.integral == before
 
 
-def test_ownership_snapshot_keeps_the_tick_decomposition():
-    """The staged snapshot holds the u_i that produced the command, not the tracked integral."""
-    algo = _stable_algo(0.3)
-    with _clock() as mono, _stable_phase():
-        _tick(algo, mono, 1000.0, 18.5)
-        algo.ctl.integral = 0.2 / algo.Ki
-        _tick(algo, mono, 1060.0, 18.5)
-    assert algo.aw_du < 0.0
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-    snapshot = algo._command_ownership._requests[request_id]
-    assert snapshot.u_i == algo.ctl.u_i
-    assert algo.Ki * algo.integral != pytest.approx(snapshot.u_i)
-
-
 @pytest.mark.asyncio
 async def test_integral_trajectory_is_identical_with_and_without_receipts():
     """The anti-windup does not read receipts: VT with and without receipts match."""
@@ -447,8 +432,7 @@ async def test_integral_trajectory_is_identical_with_and_without_receipts():
                                slope=0.0, hvac_mode=VThermHvacMode_HEAT)
                 applied = algo.on_percent
                 if name == "receipts":
-                    request_id = algo.stage_command(VThermHvacMode_HEAT)
-                    await algo.on_command_receipt(make_receipt(request_id, applied))
+                    await algo.on_command_receipt(make_receipt(applied))
                 else:
                     await algo.on_cycle_started(0.0, 0.0, applied, VThermHvacMode_HEAT)
                 mono.return_value += 599.0

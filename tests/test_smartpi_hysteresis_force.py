@@ -4,7 +4,7 @@ from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
 from custom_components.vtherm_smartpi.algo import SmartPI
-from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase, SmartPICalibrationPhase
+from custom_components.vtherm_smartpi.smartpi.const import SmartPIPhase
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.smartpi.guards import GuardAction
 
@@ -43,11 +43,8 @@ async def test_smartpi_hysteresis_forces_cycle():
 
     # Mock Algorithm
     algo = MagicMock(spec=SmartPI)
-    algo.autocalib = MagicMock()
-    algo.calibration_mgr = MagicMock()
     algo.deadband_mgr = MagicMock()
     algo.deadband_mgr.near_band_changed = False
-    type(algo).calibration_state = PropertyMock(return_value=SmartPICalibrationPhase.IDLE)
     algo.guards = MagicMock()
     # Simulate hysteresis toggling to 100% (changed from default 0%)
     algo.on_percent = 1.0

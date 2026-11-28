@@ -64,3 +64,53 @@ class SmartPIStateStore:
             self._save_due = now + SAVE_DELAY_SEC
         except Exception as e:
             _LOGGER.error("Failed to schedule SmartPI state save: %s", e)
+
+
+# The key of the emitter lag learning of earlier versions: its recorded signals stay in use.
+HISTORY_STORAGE_KEY = "vtherm_smartpi.{}.tar_learning"
+
+
+class SmartPIRoomHistoryStore:
+    """Load and save the room history (recorded signals and quiet periods) of one thermostat.
+
+    The history keeps several days of signals: it has its own store, written
+    with a longer debounce than the algorithm state.
+    """
+
+    _KEY = HISTORY_STORAGE_KEY
+    _LABEL = "room history"
+
+    def __init__(self, hass: HomeAssistant, safe_name: str, save_delay_s: float) -> None:
+        self._store = Store(hass, STORAGE_VERSION, self._KEY.format(safe_name))
+        self._save_delay_s = save_delay_s
+        self._save_due = 0.0
+
+    async def async_load(self) -> dict[str, Any] | None:
+        """Load the saved learning data."""
+        return await self._store.async_load()
+
+    def save_now(self, manager) -> Coroutine[Any, Any, None]:
+        """Snapshot the learning data and return the coroutine writing it."""
+        self._save_due = 0.0
+        return self._store.async_save(manager.save_state())
+
+    def schedule_save(self, manager) -> None:
+        """Schedule a debounced write unless one is already pending."""
+        now = time.monotonic()
+        if now < self._save_due:
+            return
+        try:
+            self._store.async_delay_save(manager.save_state, self._save_delay_s)
+            self._save_due = now + self._save_delay_s
+        except Exception as e:
+            _LOGGER.error("Failed to schedule SmartPI %s save: %s", self._LABEL, e)
+
+
+ROOM_MODEL_STORAGE_KEY = "vtherm_smartpi.{}.room_model"
+
+
+class SmartPIRoomModelStore(SmartPIRoomHistoryStore):
+    """Load and save the room model of one thermostat (parameters and observer state)."""
+
+    _KEY = ROOM_MODEL_STORAGE_KEY
+    _LABEL = "room model"

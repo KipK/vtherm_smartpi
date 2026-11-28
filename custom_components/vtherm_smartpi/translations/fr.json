@@ -16,13 +16,18 @@
           "smart_pi_deadband": "Bande morte",
           "smart_pi_hysteresis_on": "Hystérésis marche",
           "smart_pi_hysteresis_off": "Hystérésis arrêt",
-          "smart_pi_release_tau_factor": "Facteur tau de relâchement",
-          "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
-          "smart_pi_use_ff3": "Utiliser FF3",
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
+          "smart_pi_learning_start": "Démarrage de l'apprentissage",
           "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
-          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne",
+          "smart_pi_disturbance_entity": "Entité de perturbation (facultative)",
+          "smart_pi_heating_unavailable_entity": "Entité de chauffage indisponible (facultative)"
+        },
+        "data_description": {
+          "smart_pi_learning_start": "L'amorçage fait des cycles de chauffe à pleine puissance jusqu'à ce que le modèle soit appris, puis régule. Le démarrage direct régule dès la première minute et mesure la pièce avec au plus trois impulsions légères près de la consigne ; il demande des changements de consigne programmés chaque jour pour continuer à apprendre et convient surtout à une sonde précise au 0,01 °C. Le choix s'applique quand l'apprentissage repart d'un état vierge (nouveau thermostat ou réinitialisation de l'apprentissage) ; un thermostat qui a déjà appris garde son modèle.",
+          "smart_pi_disturbance_entity": "Un capteur binaire ou une entrée booléenne (interrupteur d'aide) à l'état on pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce (invités, cheminée, soleil, chauffage d'appoint). Tant qu'elle est à on, tout apprentissage SmartPI est suspendu et la régulation continue sans changement. Seul l'état on compte : off, indisponible (unavailable), inconnu (unknown) ou une entité absente comptent comme off.",
+          "smart_pi_heating_unavailable_entity": "Un capteur binaire ou une entrée booléenne (interrupteur d'aide) à l'état on pendant que l'émetteur piloté par ce thermostat ne peut pas produire (chaudière arrêtée, priorité eau chaude, dégivrage de pompe à chaleur, délestage tarifaire, circulateur arrêté), en chauffage comme en climatisation. Tant qu'elle est à on, tout apprentissage SmartPI est suspendu et l'intégrale est maintenue ; la commande envoyée ne change pas. Repassez-la à off quand l'émetteur produit de nouveau : l'intégrale reste maintenue pendant le temps mort effectif du modèle de réponse (son temps mort plus la moitié de sa constante de temps de réponse). Seul l'état on compte : off, indisponible (unavailable), inconnu (unknown) ou une entité absente comptent comme off."
         }
       },
       "thermostat_valve_curve": {
@@ -56,13 +61,18 @@
           "smart_pi_deadband": "Bande morte",
           "smart_pi_hysteresis_on": "Hystérésis marche",
           "smart_pi_hysteresis_off": "Hystérésis arrêt",
-          "smart_pi_release_tau_factor": "Facteur tau de relâchement",
-          "smart_pi_use_setpoint_filter": "Utiliser le filtre de consigne",
-          "smart_pi_use_ff3": "Utiliser FF3",
           "smart_pi_deadband_allow_p": "Autoriser P amorti près du bord de bande morte",
           "smart_pi_allow_pwm_cycle_force": "Autoriser le redémarrage PWM aux transitions de bande",
+          "smart_pi_learning_start": "Démarrage de l'apprentissage",
           "smart_pi_debug": "Enregistrer les diagnostics complets (debug)",
-          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne"
+          "smart_pi_enable_valve_linearization": "Activer la linéarisation de courbe de vanne",
+          "smart_pi_disturbance_entity": "Entité de perturbation (facultative)",
+          "smart_pi_heating_unavailable_entity": "Entité de chauffage indisponible (facultative)"
+        },
+        "data_description": {
+          "smart_pi_learning_start": "L'amorçage fait des cycles de chauffe à pleine puissance jusqu'à ce que le modèle soit appris, puis régule. Le démarrage direct régule dès la première minute et mesure la pièce avec au plus trois impulsions légères près de la consigne ; il demande des changements de consigne programmés chaque jour pour continuer à apprendre et convient surtout à une sonde précise au 0,01 °C. Le choix s'applique quand l'apprentissage repart d'un état vierge (nouveau thermostat ou réinitialisation de l'apprentissage) ; un thermostat qui a déjà appris garde son modèle.",
+          "smart_pi_disturbance_entity": "Un capteur binaire ou une entrée booléenne (interrupteur d'aide) à l'état on pendant qu'un apport ou une perte de chaleur non mesuré perturbe la pièce (invités, cheminée, soleil, chauffage d'appoint). Tant qu'elle est à on, tout apprentissage SmartPI est suspendu et la régulation continue sans changement. Seul l'état on compte : off, indisponible (unavailable), inconnu (unknown) ou une entité absente comptent comme off.",
+          "smart_pi_heating_unavailable_entity": "Un capteur binaire ou une entrée booléenne (interrupteur d'aide) à l'état on pendant que l'émetteur piloté par ce thermostat ne peut pas produire (chaudière arrêtée, priorité eau chaude, dégivrage de pompe à chaleur, délestage tarifaire, circulateur arrêté), en chauffage comme en climatisation. Tant qu'elle est à on, tout apprentissage SmartPI est suspendu et l'intégrale est maintenue ; la commande envoyée ne change pas. Repassez-la à off quand l'émetteur produit de nouveau : l'intégrale reste maintenue pendant le temps mort effectif du modèle de réponse (son temps mort plus la moitié de sa constante de temps de réponse). Seul l'état on compte : off, indisponible (unavailable), inconnu (unknown) ou une entité absente comptent comme off."
         }
       },
       "valve_curve": {
@@ -82,6 +92,14 @@
       "knee_demand_out_of_range": "La demande au coude doit être strictement comprise entre 0 et 100 %."
     }
   },
+  "selector": {
+    "smart_pi_learning_start": {
+      "options": {
+        "bootstrap": "Amorçage",
+        "direct": "Démarrage direct"
+      }
+    }
+  },
   "services": {
     "reset_smartpi_learning": {
       "name": "Réinitialiser l'apprentissage SmartPI",
@@ -89,17 +107,17 @@
     },
     "set_smartpi_learning": {
       "name": "Définir l'apprentissage SmartPI",
-      "description": "Active ou met en pause l'apprentissage thermique SmartPI pour un thermostat.",
+      "description": "Active ou met en pause l'apprentissage thermique SmartPI pour un thermostat. La pause est enregistrée ; les entités de perturbation et de chauffage indisponible suspendent aussi l'apprentissage, sans modifier ce réglage.",
       "fields": {
         "learning_enabled": {
           "name": "Apprentissage activé",
-          "description": "Indique si SmartPI peut mettre à jour son modèle thermique et ses estimations de temps mort."
+          "description": "Indique si SmartPI peut apprendre : modèle thermique, temps morts, retard de l'émetteur, modèle de réponse et modèle de pièce. La régulation continue sans changement pendant la pause."
         }
       }
     },
     "force_smartpi_calibration": {
       "name": "Forcer la calibration SmartPI",
-      "description": "Force un cycle de calibration SmartPI pour un thermostat."
+      "description": "Lance une calibration SmartPI pour un thermostat : jusqu'à trois impulsions de mesure près de la consigne, une fois le premier modèle publié ; le modèle appris est corrigé là où la mesure s'en écarte de plus de 30 %. Peut être appelé par une automatisation : la demande est refusée pendant l'apprentissage du premier modèle, avec l'apprentissage en pause ou avec le thermostat éteint, et ignorée pendant une calibration en cours."
     },
     "reset_smartpi_integral": {
       "name": "Réinitialiser l'intégrale SmartPI",
@@ -127,6 +145,46 @@
     "opening_remap": {
       "title": "La linéarisation de vanne SmartPI entre en conflit avec les réglages d'ouverture de {name}",
       "description": "Le thermostat {name} utilise la linéarisation de vanne SmartPI, mais ses réglages d'ouverture Versatile Thermostat (« Seuil d'ouverture », « Ouvertures minimales », « Ouvertures maximales » ou « Fermetures maximale ») transforment l'ouverture avant qu'elle n'atteigne la vanne. SmartPI inverse sa courbe de vanne sur une valeur qui n'est plus l'ouverture physique de la vanne : son modèle est donc appris sur une commande erronée.\n\nPour corriger, désactivez la linéarisation de vanne dans les réglages SmartPI de {name}, ou rétablissez les réglages d'ouverture par défaut de Versatile Thermostat (seuil 0, minimum 0, maximum 100, fermeture maximale 100) uniquement si votre matériel le permet. En contrôle direct de vanne over_climate, le seuil de régulation relève aussi le seuil d'ouverture. Si votre matériel impose un seuil non nul, conservez-le et désactivez la linéarisation de vanne SmartPI. Si le radiateur ne commence à chauffer qu'au-delà d'une certaine ouverture et que votre matériel permet les réglages d'ouverture VT par défaut, réglez cette ouverture dans « Ouverture minimale de vanne » de la courbe de vanne SmartPI."
+    },
+    "calibration_report": {
+      "title": "Calibration SmartPI de {name}",
+      "description": "Calibration de {name} : {result}.\n\nInterruptions des impulsions :\n{interruptions}\n\nUne impulsion dure environ {duration} : gardez la consigne inchangée pendant ce temps, de préférence la nuit, ou redemandez la calibration plus tard."
+    },
+    "calibration_result_agreed": {
+      "title": "les lectures concordent",
+      "description": "les lectures concordent"
+    },
+    "calibration_result_pulses_done": {
+      "title": "les impulsions sont faites sans deux lectures concordantes",
+      "description": "les impulsions sont faites sans deux lectures concordantes"
+    },
+    "calibration_result_time_limit": {
+      "title": "la limite de 48 heures est atteinte",
+      "description": "la limite de 48 heures est atteinte"
+    },
+    "calibration_result_cancelled": {
+      "title": "la calibration a été annulée",
+      "description": "la calibration a été annulée"
+    },
+    "calibration_reason_setpoint_change": {
+      "title": "changement de consigne",
+      "description": "changement de consigne"
+    },
+    "calibration_reason_thermostat_stopped": {
+      "title": "thermostat arrêté",
+      "description": "thermostat arrêté"
+    },
+    "calibration_reason_mode_change": {
+      "title": "changement de mode",
+      "description": "changement de mode"
+    },
+    "calibration_reason_learning_paused": {
+      "title": "apprentissage en pause",
+      "description": "apprentissage en pause"
+    },
+    "calibration_none": {
+      "title": "aucune",
+      "description": "aucune"
     }
   }
 }

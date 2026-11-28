@@ -16,14 +16,14 @@ set_smartpi_learning:
   fields:
     learning_enabled:
       name: Learning enabled
-      description: Whether SmartPI may update its thermal model and dead-time estimates.
+      description: "Whether SmartPI may learn: thermal model, dead times, emitter lag, response model and room model. The regulation goes on unchanged while learning is paused."
       required: true
       selector:
         boolean:
 
 force_smartpi_calibration:
   name: Force SmartPI calibration
-  description: Force a SmartPI calibration cycle for a thermostat.
+  description: Start a SmartPI calibration for a thermostat (up to three measurement pulses near the setpoint, once the first model is published); the learned model is corrected where the measure differs from it by more than 30 %. Safe to call from an automation; a request is refused while learning the first model, while learning is paused or while the thermostat is off, and ignored while one is running.
   target:
     entity:
       integration: versatile_thermostat

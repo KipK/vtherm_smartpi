@@ -16,13 +16,18 @@
           "smart_pi_deadband": "Deadband",
           "smart_pi_hysteresis_on": "Hysteresis on",
           "smart_pi_hysteresis_off": "Hysteresis off",
-          "smart_pi_release_tau_factor": "Release tau factor",
-          "smart_pi_use_setpoint_filter": "Use setpoint filter",
-          "smart_pi_use_ff3": "Use FF3",
           "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
+          "smart_pi_learning_start": "Start of the learning",
           "smart_pi_debug": "Record full diagnostics (debug)",
-          "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+          "smart_pi_enable_valve_linearization": "Enable valve curve linearization",
+          "smart_pi_disturbance_entity": "Disturbance entity (optional)",
+          "smart_pi_heating_unavailable_entity": "Heating unavailable entity (optional)"
+        },
+        "data_description": {
+          "smart_pi_learning_start": "Bootstrap runs heating cycles at full power until the model is learned, then regulates. Direct start regulates from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The choice applies when the learning starts from a blank state (new thermostat or learning reset); a thermostat that has already learned keeps its model.",
+          "smart_pi_disturbance_entity": "A binary sensor or a toggle helper that is on while an unmeasured heat gain or loss disturbs the room (guests, fireplace, sun, auxiliary heater). While it is on, every SmartPI learning is paused and the regulation goes on unchanged. Only the state on counts: off, unavailable, unknown or a missing entity count as off.",
+          "smart_pi_heating_unavailable_entity": "A binary sensor or a toggle helper that is on while the emitter driven by this thermostat cannot produce (boiler off, hot-water priority, heat-pump defrost, tariff cut-off, circulator stopped), in heating and cooling alike. While it is on, every SmartPI learning is paused and the integral is held; the command sent is unchanged. Turn it off when the emitter produces again: the integral stays held for the effective dead time of the response model (its dead time plus half its response time constant). Only the state on counts: off, unavailable, unknown or a missing entity count as off."
         }
       },
       "thermostat_valve_curve": {
@@ -56,13 +61,18 @@
           "smart_pi_deadband": "Deadband",
           "smart_pi_hysteresis_on": "Hysteresis on",
           "smart_pi_hysteresis_off": "Hysteresis off",
-          "smart_pi_release_tau_factor": "Release tau factor",
-          "smart_pi_use_setpoint_filter": "Use setpoint filter",
-          "smart_pi_use_ff3": "Use FF3",
           "smart_pi_deadband_allow_p": "Allow damped P near deadband edge",
           "smart_pi_allow_pwm_cycle_force": "Allow PWM cycle restart on band transitions",
+          "smart_pi_learning_start": "Start of the learning",
           "smart_pi_debug": "Record full diagnostics (debug)",
-          "smart_pi_enable_valve_linearization": "Enable valve curve linearization"
+          "smart_pi_enable_valve_linearization": "Enable valve curve linearization",
+          "smart_pi_disturbance_entity": "Disturbance entity (optional)",
+          "smart_pi_heating_unavailable_entity": "Heating unavailable entity (optional)"
+        },
+        "data_description": {
+          "smart_pi_learning_start": "Bootstrap runs heating cycles at full power until the model is learned, then regulates. Direct start regulates from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes to keep learning and works best with a precise 0.01 °C sensor. The choice applies when the learning starts from a blank state (new thermostat or learning reset); a thermostat that has already learned keeps its model.",
+          "smart_pi_disturbance_entity": "A binary sensor or a toggle helper that is on while an unmeasured heat gain or loss disturbs the room (guests, fireplace, sun, auxiliary heater). While it is on, every SmartPI learning is paused and the regulation goes on unchanged. Only the state on counts: off, unavailable, unknown or a missing entity count as off.",
+          "smart_pi_heating_unavailable_entity": "A binary sensor or a toggle helper that is on while the emitter driven by this thermostat cannot produce (boiler off, hot-water priority, heat-pump defrost, tariff cut-off, circulator stopped), in heating and cooling alike. While it is on, every SmartPI learning is paused and the integral is held; the command sent is unchanged. Turn it off when the emitter produces again: the integral stays held for the effective dead time of the response model (its dead time plus half its response time constant). Only the state on counts: off, unavailable, unknown or a missing entity count as off."
         }
       },
       "valve_curve": {
@@ -82,6 +92,14 @@
       "knee_demand_out_of_range": "The demand at knee must be strictly between 0 and 100 %."
     }
   },
+  "selector": {
+    "smart_pi_learning_start": {
+      "options": {
+        "bootstrap": "Bootstrap",
+        "direct": "Direct start"
+      }
+    }
+  },
   "services": {
     "reset_smartpi_learning": {
       "name": "Reset SmartPI learning",
@@ -89,17 +107,17 @@
     },
     "set_smartpi_learning": {
       "name": "Set SmartPI learning",
-      "description": "Enable or pause SmartPI thermal learning for a thermostat.",
+      "description": "Enable or pause SmartPI thermal learning for a thermostat. The pause is saved; the disturbance and heating unavailable entities pause the learning too, without changing this setting.",
       "fields": {
         "learning_enabled": {
           "name": "Learning enabled",
-          "description": "Whether SmartPI may update its thermal model and dead-time estimates."
+          "description": "Whether SmartPI may learn: thermal model, dead times, emitter lag, response model and room model. The regulation goes on unchanged while learning is paused."
         }
       }
     },
     "force_smartpi_calibration": {
       "name": "Force SmartPI calibration",
-      "description": "Force a SmartPI calibration cycle for a thermostat."
+      "description": "Start a SmartPI calibration for a thermostat: up to three measurement pulses near the setpoint, once the first model is published; the learned model is corrected where the measure differs from it by more than 30 %. Safe to call from an automation: a request is refused while learning the first model, while learning is paused or while the thermostat is off, and ignored while one is running."
     },
     "reset_smartpi_integral": {
       "name": "Reset SmartPI integral",
@@ -127,6 +145,46 @@
     "opening_remap": {
       "title": "SmartPI valve linearization conflicts with the opening settings of {name}",
       "description": "The thermostat {name} uses the SmartPI valve linearization, but its Versatile Thermostat opening settings (\"Opening threshold degree\", \"Min opening degrees\", \"Max opening degrees\" or \"Max closing degree\") remap the opening before it reaches the valve. SmartPI inverts its valve curve on a value that is no longer the physical valve opening, so its model is learned on a wrong command.\n\nTo fix it, either disable the valve linearization in the SmartPI settings of {name}, or restore the default Versatile Thermostat opening settings (threshold 0, minimum 0, maximum 100, max closing 100) only if your device allows it. With direct valve control in over_climate mode, the regulation threshold also raises the opening threshold. If your device requires a non-zero threshold, keep it and disable the SmartPI valve linearization. If the radiator only starts heating above a given opening and your device allows the default Versatile Thermostat opening settings, set that opening as \"Minimum valve opening\" in the SmartPI valve curve."
+    },
+    "calibration_report": {
+      "title": "SmartPI calibration of {name}",
+      "description": "Calibration of {name}: {result}.\n\nPulse interruptions:\n{interruptions}\n\nA pulse lasts about {duration}: keep the setpoint unchanged meanwhile, preferably at night, or request the calibration again later."
+    },
+    "calibration_result_agreed": {
+      "title": "the readings agreed",
+      "description": "the readings agreed"
+    },
+    "calibration_result_pulses_done": {
+      "title": "the pulses are done without two agreeing readings",
+      "description": "the pulses are done without two agreeing readings"
+    },
+    "calibration_result_time_limit": {
+      "title": "the time limit of 48 hours was reached",
+      "description": "the time limit of 48 hours was reached"
+    },
+    "calibration_result_cancelled": {
+      "title": "the calibration was cancelled",
+      "description": "the calibration was cancelled"
+    },
+    "calibration_reason_setpoint_change": {
+      "title": "setpoint change",
+      "description": "setpoint change"
+    },
+    "calibration_reason_thermostat_stopped": {
+      "title": "thermostat stopped",
+      "description": "thermostat stopped"
+    },
+    "calibration_reason_mode_change": {
+      "title": "mode change",
+      "description": "mode change"
+    },
+    "calibration_reason_learning_paused": {
+      "title": "learning paused",
+      "description": "learning paused"
+    },
+    "calibration_none": {
+      "title": "none",
+      "description": "none"
     }
   }
 }

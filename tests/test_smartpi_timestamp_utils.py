@@ -8,7 +8,7 @@ import pytest
 
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.smartpi import timestamp_utils
-from custom_components.vtherm_smartpi.smartpi.calibration import CalibrationManager
+from custom_components.vtherm_smartpi.smartpi.calibration import Calibration
 from custom_components.vtherm_smartpi.smartpi.timestamp_utils import (
     convert_monotonic_to_wall_ts,
     convert_wall_to_monotonic_ts,
@@ -75,16 +75,17 @@ def test_deadline_helpers_still_expire(clock: _Clock) -> None:
 
 
 def test_calibration_start_time_round_trip_across_restart(clock: _Clock) -> None:
-    mgr = CalibrationManager("test")
-    mgr.start_calibration(now=clock.mono - 300.0)
-    state = mgr.save_state()
-    assert state["calibration_start_time"] == pytest.approx(clock.wall - 300.0)
+    cal = Calibration()
+    cal.begin()
+    cal.start_s = clock.mono - 300.0
+    state = cal.save()
+    assert state["start_wall"] == pytest.approx(clock.wall - 300.0)
 
     _restart(clock, downtime_s=120.0, mono_after_boot=3.0)
-    restored = CalibrationManager("test")
-    restored.load_state(state)
-    assert restored.is_calibrating
-    assert restored.calibration_start_time == pytest.approx(3.0 - 420.0)
+    restored = Calibration()
+    restored.load(state)
+    assert restored.in_progress
+    assert restored.start_s == pytest.approx(3.0 - 420.0)
 
 
 def test_learning_resume_deadline_is_not_restored(clock: _Clock) -> None:

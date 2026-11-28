@@ -1,4 +1,4 @@
-"""Bootstrap phase after a restart while the a learning waits for the response lag."""
+"""Learning stage after a restart while the a learning waits for its delivered power model."""
 
 from __future__ import annotations
 
@@ -24,10 +24,11 @@ def _smartpi(name: str, saved_state: dict | None = None) -> SmartPI:
     )
 
 
-def _waiting_state(response_lag: dict | None) -> dict:
-    """State with a collected, b published and the given response lag block."""
+def _waiting_state(power_steps: dict | None, model: dict | None = None, key: str = "power_steps") -> dict:
+    """State with a collected, b published, the given power steps block (under ``key``) and response model."""
     source = _smartpi("source")
     est = source.est
+    est.ensure_hvac_mode(VThermHvacMode_HEAT)
     est.b = 0.001
     est.learn_ok_count_b = 18
     est.learn_ok_count = 18
@@ -38,27 +39,27 @@ def _waiting_state(response_lag: dict | None) -> dict:
     assert len(est.b_meas_hist) >= AB_MIN_SAMPLES_B
     assert est.learn_ok_count_a == 0
     state = source.save_state()
-    if response_lag is None:
-        state["lw_state"].pop("response_lag", None)
-    else:
-        state["lw_state"]["response_lag"] = response_lag
+    state["lw_state"].pop("power_steps", None)
+    if power_steps is not None:
+        state["lw_state"][key] = power_steps
+    if model is not None:
+        state["response_state"]["model"] = model
     return state
 
 
-# Three inconsistent estimates, three heating phases: the lag is not resolved.
+# Three heating phases, no response model: the delivered power model is not settled.
 _UNRESOLVED = {
-    "estimates": [[200.0, 20.0], [700.0, 30.0], [1400.0, 40.0]],
     "durations": [1500.0, 1500.0, 1500.0, 1500.0],
-    "published": None,
     "episodes": 3,
     "hvac_mode": "heat",
 }
+_MODEL = {"seed": {"heat": {"theta_s": 60.0, "tau_e_s": 300.0}}}
 
 
 def test_restored_unresolved_lag_keeps_the_bootstrap_phase():
     smartpi = _smartpi("restored", _waiting_state(_UNRESOLVED))
 
-    assert smartpi.learn_win.response_lag.resolved is False
+    assert smartpi.learn_win.a_model_ready(VThermHvacMode_HEAT) is False
     assert smartpi.est.a_model_ready is False
     assert smartpi.phase == SmartPIPhase.HYSTERESIS
 
@@ -87,10 +88,26 @@ def test_restored_resolved_lag_leaves_the_bootstrap():
     assert smartpi.phase == SmartPIPhase.STABLE
 
 
-def test_legacy_state_without_response_lag_keeps_the_default():
-    smartpi = _smartpi("restored", _waiting_state(None))
+def test_restored_response_model_leaves_the_learning_stage():
+    smartpi = _smartpi("restored", _waiting_state(_UNRESOLVED, _MODEL))
 
     assert smartpi.est.a_model_ready is True
+    assert smartpi.phase == SmartPIPhase.STABLE
+
+
+def test_state_of_the_former_response_lag_loads_its_heating_phases():
+    former = dict(_UNRESOLVED, episodes=4, estimates=[[200.0, 20.0]] * 3, published=200.0)
+    smartpi = _smartpi("restored", _waiting_state(former, key="response_lag"))
+
+    assert smartpi.learn_win.power_steps.episodes_count == 4
+    assert smartpi.est.a_model_ready is True
+
+
+def test_state_without_power_steps_nor_model_keeps_the_learning_stage():
+    smartpi = _smartpi("restored", _waiting_state(None))
+
+    assert smartpi.est.a_model_ready is False
+    assert smartpi.phase == SmartPIPhase.HYSTERESIS
 
 
 def test_reset_learning_aligns_the_model_flag():
@@ -99,7 +116,7 @@ def test_reset_learning_aligns_the_model_flag():
 
     smartpi.reset_learning()
 
-    assert smartpi.learn_win.response_lag.resolved is False
+    assert smartpi.learn_win.a_model_ready(VThermHvacMode_HEAT) is False
     assert smartpi.est.a_model_ready is False
     assert smartpi.phase == SmartPIPhase.HYSTERESIS
 
@@ -136,32 +153,20 @@ def test_band_keeps_an_on_output():
     assert smartpi.on_percent == 1.0
 
 
-def test_bootstrap_status_names_the_response_lag_wait():
+def test_bootstrap_status_names_the_response_model_wait():
     smartpi = _smartpi("restored", _waiting_state(_UNRESOLVED))
-    smartpi.dt_est.deadtime_heat_reliable = True
-    smartpi.dt_est.deadtime_heat_s = 120.0
-    smartpi.dt_est.deadtime_cool_reliable = True
-    smartpi.dt_est.deadtime_cool_s = 300.0
 
     published = smartpi.get_published_diagnostics()
 
-    assert published["learning"]["bootstrap_status"] == (
-        "step2 - waiting response lag: estimates 3, heating phases 3/4"
-    )
-    response_lag = published["analysis"]["learning"]["response_lag"]
-    assert response_lag["episodes"] == 3
-    assert response_lag["episodes_target"] == 4
+    assert published["learning"]["bootstrap_status"] == "step1 - waiting response model"
+    assert "response_lag" not in published["analysis"]["learning"]
 
 
 def test_bootstrap_status_keeps_the_collection_counts_below_target():
-    state = _waiting_state(_UNRESOLVED)
+    state = _waiting_state(_UNRESOLVED, _MODEL)
     state["est_state"]["a_meas_hist"] = [0.02, 0.03]
     state["est_state"]["a_obs_hist"] = [None, None]
     smartpi = _smartpi("restored", state)
-    smartpi.dt_est.deadtime_heat_reliable = True
-    smartpi.dt_est.deadtime_heat_s = 120.0
-    smartpi.dt_est.deadtime_cool_reliable = True
-    smartpi.dt_est.deadtime_cool_s = 300.0
 
     published = smartpi.get_published_diagnostics()
 

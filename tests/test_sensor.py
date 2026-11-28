@@ -45,8 +45,8 @@ class DummySmartPI(SmartPI):
     def get_published_diagnostics(self):
         return {
             "control": {"phase": self.phase.value, "kp": 0.4, "ki": 0.002},
-            "temperature": {"indoor": 20.5, "integral_error": 75.0},
-            "setpoint": {"filtered_setpoint": 21.0},
+            "temperature": {"indoor": 20.5, "anticipated": 20.5, "integral_error": 75.0},
+            "setpoint": {"boost_active": False},
             "power": {
                 "applied_percent": 30.0,
                 "command_percent": 35.0,
@@ -514,15 +514,21 @@ def test_diagnostic_sensor_builds_stable_envelope_and_deduplicates(hass) -> None
         "live": live.get_published_diagnostics(),
         "history": {
             "control": {"kp": 0.4, "ki": 0.002},
-            "temperature": {"indoor": 20.5, "integral_error": 75.0},
-            "setpoint": {"filtered_setpoint": 21.0},
+            "temperature": {"indoor": 20.5, "anticipated": 20.5, "integral_error": 75.0},
             "power": {
                 "applied_percent": 30.0,
                 "command_percent": 35.0,
                 "pi_percent": 20.0,
                 "ff_percent": 15.0,
             },
-            "model": {"a": 0.05, "b": 0.001},
+            "model": {"a": 0.05, "b": 0.001, "effective_dead_time_s": None},
+            "feedforward": {"source": None},
+            "room_model": {
+                "a": None,
+                "b_eq": None,
+                "forecast_error_1h_c": None,
+                "forecast_error_12h_c": None,
+            },
         },
     }
     assert sensor.force_update is False
@@ -559,7 +565,7 @@ def test_diagnostic_sensor_records_history_changes_without_changing_live(hass, m
     history = sensor.extra_state_attributes["history"]
     assert history["temperature"]["integral_error"] == 80.0
     assert history["control"] == {"kp": 0.4, "ki": 0.0025}
-    assert history["setpoint"]["filtered_setpoint"] == 21.0
+    assert "setpoint" not in history
     assert sensor._unrecorded_attributes == frozenset({"live"})
     assert sensor._update_from_climate() is False
 

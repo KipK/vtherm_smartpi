@@ -22,14 +22,14 @@ from .const import (
     CONF_SMART_PI_HYSTERESIS_ON,
     CONF_SMART_PI_KNEE_DEMAND,
     CONF_SMART_PI_KNEE_VALVE,
+    CONF_SMART_PI_LEARNING_START,
     CONF_SMART_PI_MAX_VALVE,
     CONF_SMART_PI_MIN_VALVE,
-    CONF_SMART_PI_RELEASE_TAU_FACTOR,
-    CONF_SMART_PI_USE_FF3,
-    CONF_SMART_PI_USE_SETPOINT_FILTER,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
+    LEARNING_BLOCK_ENTITY_KEYS,
+    LEARNING_STARTS,
 )
 
 ERROR_INVALID_VALVE_CURVE = "invalid_valve_curve"
@@ -41,14 +41,17 @@ THERMOSTAT_TYPE_CLIMATE = "thermostat_over_climate"
 AUTO_REGULATION_VALVE = "auto_regulation_valve"
 CONF_THERMOSTAT_TYPE_KEY = "thermostat_type"
 CONF_AUTO_REGULATION_MODE_KEY = "auto_regulation_mode"
+# Domains of the entities that block the learning (disturbance, heating unavailable)
+LEARNING_BLOCK_ENTITY_DOMAINS = ["binary_sensor", "input_boolean"]
 
 
 def build_main_options_schema(
     defaults: dict[str, Any],
     *,
     include_valve_linearization: bool,
+    include_learning_block_entities: bool = False,
 ) -> vol.Schema:
-    """Build the SmartPI main options schema."""
+    """Build the SmartPI main options schema; the entities that block the learning belong to a thermostat entry."""
     schema = {
         vol.Optional(
             CONF_MINIMAL_ACTIVATION_DELAY,
@@ -108,25 +111,6 @@ def build_main_options_schema(
             )
         ),
         vol.Optional(
-            CONF_SMART_PI_RELEASE_TAU_FACTOR,
-            default=defaults[CONF_SMART_PI_RELEASE_TAU_FACTOR],
-        ): selector.NumberSelector(
-            selector.NumberSelectorConfig(
-                min=0.0,
-                max=5.0,
-                step=0.01,
-                mode=selector.NumberSelectorMode.BOX,
-            )
-        ),
-        vol.Optional(
-            CONF_SMART_PI_USE_SETPOINT_FILTER,
-            default=defaults[CONF_SMART_PI_USE_SETPOINT_FILTER],
-        ): bool,
-        vol.Optional(
-            CONF_SMART_PI_USE_FF3,
-            default=defaults[CONF_SMART_PI_USE_FF3],
-        ): bool,
-        vol.Optional(
             CONF_SMART_PI_DEADBAND_ALLOW_P,
             default=defaults[CONF_SMART_PI_DEADBAND_ALLOW_P],
         ): bool,
@@ -134,6 +118,16 @@ def build_main_options_schema(
             CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
             default=defaults[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE],
         ): bool,
+        vol.Optional(
+            CONF_SMART_PI_LEARNING_START,
+            default=defaults[CONF_SMART_PI_LEARNING_START],
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(LEARNING_STARTS),
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                translation_key=CONF_SMART_PI_LEARNING_START,
+            )
+        ),
         vol.Optional(
             CONF_SMART_PI_DEBUG,
             default=defaults[CONF_SMART_PI_DEBUG],
@@ -146,7 +140,15 @@ def build_main_options_schema(
                 default=defaults[CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION],
             )
         ] = bool
+    if include_learning_block_entities:
+        for key in LEARNING_BLOCK_ENTITY_KEYS:
+            schema[
+                vol.Optional(key, description={"suggested_value": defaults.get(key)})
+            ] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=LEARNING_BLOCK_ENTITY_DOMAINS)
+            )
     return vol.Schema(schema)
+
 
 
 def build_valve_curve_schema(defaults: dict[str, Any]) -> vol.Schema:
@@ -217,12 +219,15 @@ def build_user_target_schema() -> vol.Schema:
     )
 
 
-def build_user_settings_schema(defaults: dict[str, Any], is_valve: bool) -> vol.Schema:
+def build_user_settings_schema(
+    defaults: dict[str, Any], is_valve: bool
+) -> vol.Schema:
     """Build the SmartPI per-thermostat settings schema."""
     schema = dict(
         build_main_options_schema(
             defaults,
             include_valve_linearization=is_valve,
+            include_learning_block_entities=True,
         ).schema
     )
     return vol.Schema(schema)
@@ -456,10 +461,15 @@ class SmartPIOptionsFlow(OptionsFlow):
         defaults = dict(DEFAULT_OPTIONS)
         defaults.update(self._config_entry.options or self._config_entry.data)
         is_valve_target = self._is_valve_target_entry()
+        is_thermostat_entry = self._config_entry.data.get(CONF_TARGET_VTHERM) is not None
 
         if user_input is not None:
             data = dict(defaults)
             data.update(user_input)
+            if is_thermostat_entry:
+                # A cleared entity field is absent from the input: store it as unset.
+                for key in LEARNING_BLOCK_ENTITY_KEYS:
+                    data[key] = user_input.get(key)
             self._pending_options_data = data
             if (
                 is_valve_target
@@ -476,6 +486,7 @@ class SmartPIOptionsFlow(OptionsFlow):
             data_schema=build_main_options_schema(
                 defaults,
                 include_valve_linearization=is_valve_target,
+                include_learning_block_entities=is_thermostat_entry,
             ),
         )
 

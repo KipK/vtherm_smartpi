@@ -7,14 +7,6 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
-from custom_components.vtherm_smartpi.smartpi.command_ownership import (
-    CommandOwnershipBindingStatus,
-)
-from custom_components.vtherm_smartpi.smartpi.diagnostics import (
-    build_published_diagnostics,
-)
-from custom_components.vtherm_smartpi.smartpi.feedforward import FFResult
-from custom_components.vtherm_smartpi.smartpi.const import GovernanceDecision
 from helpers import force_smartpi_stable_mode, make_receipt
 from fakes.fake_cycle_scheduler import FakeReceiptCycleScheduler
 from fakes.fake_thermostat_runtime import FakeThermostatRuntime
@@ -39,27 +31,9 @@ class MockThermostat(FakeThermostatRuntime):
         self._smartpi_recalc_timer_remove = None
 
 
-def _configure_switch_ownership_context(algo: SmartPI, power: float = 0.5) -> None:
-    """Set one internally consistent control decomposition for switch tests."""
+def _configure_switch_context(algo: SmartPI, power: float = 0.5) -> None:
+    """Set one internally consistent control state for switch tests."""
     force_smartpi_stable_mode(algo)
-    algo._last_ff_result = FFResult(
-        u_ff1=0.3,
-        u_ff2=0.0,
-        u_ff_final=0.3,
-        u_ff3=0.0,
-        u_ff_trim=0.0,
-        u_ff_eff=0.3,
-        ff_reason="ff_none",
-    )
-    algo.ctl.u_ff = 0.3
-    algo.ctl.u_p = 0.1
-    algo.ctl.u_i = power - 0.4
-    algo.ctl.u_cmd = power
-    algo.ctl.last_sat = "NO_SAT"
-    algo.ctl.last_i_mode = "I:FREEZE(deadband)"
-    algo._last_u_cmd = power
-    algo._last_u_limited = power
-    algo._last_u_applied = power
     algo._set_linear_output(power)
 
 
@@ -74,8 +48,8 @@ def _new_switch_algo(name: str) -> SmartPI:
 
 
 @pytest.mark.asyncio
-async def test_handler_tags_the_staged_request_and_binds_its_receipt():
-    """The handler freezes the request before start_cycle and passes its id."""
+async def test_handler_sends_untagged_request_and_commits_its_receipt():
+    """The handler starts the cycle without a request id and commits the applied power of the receipt."""
     thermostat = MockThermostat()
     thermostat.cycle_scheduler = FakeReceiptCycleScheduler(cycle_duration_sec=120.0)
     handler = SmartPIHandler(thermostat)
@@ -83,7 +57,7 @@ async def test_handler_tags_the_staged_request_and_binds_its_receipt():
     thermostat.prop_algorithm = algo
     thermostat.cycle_min = 2
     handler.on_scheduler_ready(thermostat.cycle_scheduler)
-    _configure_switch_ownership_context(algo, power=0.132)
+    _configure_switch_context(algo, power=0.132)
 
     with (
         patch.object(algo, "calculate"),
@@ -91,63 +65,30 @@ async def test_handler_tags_the_staged_request_and_binds_its_receipt():
     ):
         await handler.control_heating(timestamp=None)
 
-    request_id = thermostat.cycle_scheduler.start_cycle.await_args.kwargs["request_id"]
-    assert request_id == algo._command_ownership.last_staged_id
-    binding = algo._command_ownership.last_binding
-    assert binding.status == CommandOwnershipBindingStatus.BOUND
-    assert binding.request_id == request_id
-    assert binding.requested_power == pytest.approx(0.132)
-    assert binding.realized_power == pytest.approx(0.125)
+    assert "request_id" not in thermostat.cycle_scheduler.start_cycle.await_args.kwargs
     assert algo.committed_on_percent == pytest.approx(0.125)
 
 
 @pytest.mark.asyncio
-async def test_switch_receipt_uses_frozen_ownership_not_live_control():
-    """A later controller change must not alter the submitted decomposition."""
-    algo = _new_switch_algo("switch-bind")
-    _configure_switch_ownership_context(algo, power=0.5)
-    frozen_i = algo.ctl.u_i
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-    algo.ctl.u_i = 0.4
-    algo.ctl.u_cmd = 0.8
-
-    await algo.on_command_receipt(make_receipt(request_id, 0.5))
-
-    assert (
-        algo._command_ownership.last_binding.status
-        == CommandOwnershipBindingStatus.BOUND
-    )
-    trace = algo._causal_power_trace
-    assert algo._fftrim_observer.physical_trace is trace
-    assert trace._active_ownership is not None
-    assert trace._active_ownership.u_i == pytest.approx(frozen_i)
-    assert "committed_mismatch" not in trace._active_ownership.constraint_flags
-
-
-@pytest.mark.asyncio
-async def test_min_on_off_receipt_and_repeat_are_not_owned():
-    """A command forced by the minimal delays is never owned, even repeated."""
+async def test_min_on_off_receipt_commits_the_applied_power():
+    """A command forced by the minimal delays commits the power actually applied, even repeated."""
     algo = _new_switch_algo("switch-min-on-off")
-    _configure_switch_ownership_context(algo, power=0.02)
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
+    _configure_switch_context(algo, power=0.02)
 
     await algo.on_command_receipt(
-        make_receipt(request_id, 0.0, requested=0.02, alterations=("min_on_off",))
+        make_receipt(0.0, requested=0.02, alterations=("min_on_off",))
     )
-    assert algo._command_ownership.last_binding.reason == "scheduler_timing"
-    assert algo._causal_power_trace._active_ownership is None
     assert algo.committed_on_percent == pytest.approx(0.0)
 
     await algo.on_command_receipt(
-        make_receipt(request_id, 0.0, requested=0.02, is_repeat=True, alterations=("min_on_off",))
+        make_receipt(0.0, requested=0.02, is_repeat=True, alterations=("min_on_off",))
     )
-    assert algo._command_ownership.last_binding.status == CommandOwnershipBindingStatus.REJECTED
-    assert algo._causal_power_trace._active_ownership is None
+    assert algo.committed_on_percent == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
-async def test_setpoint_change_flags_ownership_until_next_cycle_boundary():
-    """A setpoint change during the cycle is tagged until the next cycle starts."""
+async def test_setpoint_change_flag_clears_at_the_next_cycle_start():
+    """A setpoint change during the cycle is flagged until the next cycle starts."""
     algo = _new_switch_algo("setpoint-flag")
     force_smartpi_stable_mode(algo)
     algo.calculate(target_temp=20.0, current_temp=19.8, ext_current_temp=5.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
@@ -156,135 +97,9 @@ async def test_setpoint_change_flags_ownership_until_next_cycle_boundary():
     algo.calculate(target_temp=21.0, current_temp=19.8, ext_current_temp=5.0, slope=0.0, hvac_mode=VThermHvacMode_HEAT)
     assert algo._setpoint_changed_in_cycle is True
 
-    _configure_switch_ownership_context(algo, power=0.5)
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
+    await algo.on_command_receipt(make_receipt(0.5))
 
-    await algo.on_command_receipt(make_receipt(request_id, 0.5))
-
-    bound = algo._command_ownership.last_binding
-    assert bound.status == CommandOwnershipBindingStatus.BOUND
-    assert "setpoint_changed" in bound.snapshot.constraint_flags
     assert algo._setpoint_changed_in_cycle is False
-
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-    await algo.on_command_receipt(make_receipt(request_id, 0.5))
-
-    bound = algo._command_ownership.last_binding
-    assert bound.status == CommandOwnershipBindingStatus.BOUND
-    assert "setpoint_changed" not in bound.snapshot.constraint_flags
-
-
-@pytest.mark.asyncio
-async def test_published_ownership_diagnostics_report_bound_and_rejected_cycles():
-    """Published diagnostics retain the request and receipt evidence."""
-    algo = _new_switch_algo("ownership-diagnostics")
-    algo.receipts_supported = True
-    _configure_switch_ownership_context(algo, power=0.132)
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-
-    await algo.on_command_receipt(make_receipt(request_id, 0.125, requested=0.132))
-
-    ownership = build_published_diagnostics(algo)["feedforward"]["fftrim"][
-        "command_ownership"
-    ]
-    assert ownership == {
-        "receipts_supported": True,
-        "status": "bound",
-        "reason": None,
-        "request_sequence": request_id,
-        "kind": "cycle_start",
-        "requested_power": 0.132,
-        "realized_power": 0.125,
-        "power_delta": -0.007,
-        "realized_on_time_sec": 15,
-        "realized_off_time_sec": 105,
-        "alterations": [],
-        "forced_by_timing": False,
-        "rejection_counts": {},
-    }
-
-    _configure_switch_ownership_context(algo, power=0.5)
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-    await algo.on_command_receipt(
-        make_receipt(request_id, 0.0, requested=0.5, alterations=("min_on_off",))
-    )
-
-    ownership = build_published_diagnostics(algo)["feedforward"]["fftrim"][
-        "command_ownership"
-    ]
-    assert ownership["status"] == "rejected"
-    assert ownership["reason"] == "scheduler_timing"
-    assert ownership["request_sequence"] == request_id
-    assert ownership["alterations"] == ["min_on_off"]
-    assert ownership["forced_by_timing"] is True
-    assert ownership["power_delta"] == -0.5
-    assert ownership["rejection_counts"] == {"scheduler_timing": 1}
-
-
-@pytest.mark.asyncio
-async def test_pre_transfer_identical_command_does_not_confirm_engagement():
-    """The already submitted request cannot confirm a later transaction."""
-    algo = _new_switch_algo("switch-engagement")
-    _configure_switch_ownership_context(algo, power=0.5)
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-    algo.fftrim_coord.transfer_pending_request_id = algo._command_ownership.last_staged_id
-
-    await algo.on_command_receipt(make_receipt(request_id, 0.5))
-    await algo.on_command_receipt(make_receipt(request_id, 0.5, is_repeat=True))
-
-    assert algo.fftrim_coord.transfer_pending_request_id == request_id
-
-
-@pytest.mark.asyncio
-async def test_different_post_transfer_request_confirms_engagement():
-    """Any strictly later owned request proves the transaction was submitted."""
-    algo = _new_switch_algo("switch-engagement")
-    _configure_switch_ownership_context(algo, power=0.5)
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-    algo.fftrim_coord.transfer_pending_request_id = algo._command_ownership.last_staged_id
-    await algo.on_command_receipt(make_receipt(request_id, 0.5))
-
-    # An untagged command applied meanwhile proves nothing.
-    await algo.on_command_receipt(make_receipt(None, 0.25))
-    assert algo.fftrim_coord.transfer_pending_request_id == request_id
-
-    _configure_switch_ownership_context(algo, power=0.6)
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-    await algo.on_command_receipt(make_receipt(request_id, 0.6))
-
-    assert algo.fftrim_coord.transfer_pending_request_id is None
-
-
-def test_switch_requests_are_transient_and_reset_with_cycle_state():
-    """Requests must neither persist nor survive a runtime discontinuity."""
-    algo = _new_switch_algo("switch-sequence-reset")
-    _configure_switch_ownership_context(algo, power=0.5)
-    request_id = algo.stage_command(VThermHvacMode_HEAT)
-    algo.fftrim_coord.transfer_pending_request_id = request_id
-
-    state = algo.save_state()
-    assert "command_ownership" not in state
-    assert "request_sequence" not in state
-
-    algo.reset_cycle_state()
-    assert algo.fftrim_coord.transfer_pending_request_id is None
-    binding = algo._command_ownership.bind_receipt(make_receipt(request_id, 0.5))
-    assert binding.reason == "ownership_request_unknown"
-
-    restored = SmartPI(
-        hass=MagicMock(),
-        cycle_min=2,
-        minimal_activation_delay=0,
-        minimal_deactivation_delay=0,
-        name="switch-sequence-restored",
-        saved_state=state,
-    )
-    assert restored._command_ownership.last_staged_id > request_id
-    assert restored.fftrim_coord.transfer_pending_request_id is None
-    assert (
-        restored._command_ownership.bind_receipt(make_receipt(request_id, 0.5)).reason
-        == "ownership_request_unknown"
-    )
 
 
 @pytest.mark.asyncio
@@ -545,63 +360,6 @@ async def test_smartpi_reboot_discards_active_window():
 
 
 @pytest.mark.asyncio
-async def test_smartpi_ff3_is_latched_on_cycle_start():
-    """FF3 pending value must become the cycle value only at cycle start."""
-    algo = SmartPI(
-        hass=MagicMock(),
-        cycle_min=10,
-        minimal_activation_delay=0,
-        minimal_deactivation_delay=0,
-        name="TestAlgo",
-        use_ff3=True,
-    )
-
-    algo.ff3_state.u_pending = 0.05
-    algo.ff3_state.pending_active = True
-
-    assert algo.ff3_state.u_cycle == 0.0
-    assert algo.ff3_state.active_cycle is False
-
-    await algo.on_cycle_started(300.0, 300.0, 0.4, VThermHvacMode_HEAT)
-
-    assert algo.ff3_state.u_cycle == pytest.approx(0.05)
-    assert algo.ff3_state.active_cycle is True
-    assert algo.ff3_state.deadtime_cycles == 0
-    assert algo.ff3_state.horizon_capped is False
-
-
-@pytest.mark.parametrize("in_deadband", [False, True])
-def test_smartpi_runtime_ff_leaves_ff3_out_in_deadband(in_deadband):
-    """The latched FF3 value is injected outside the deadband only."""
-    algo = SmartPI(
-        hass=MagicMock(),
-        cycle_min=10,
-        minimal_activation_delay=0,
-        minimal_deactivation_delay=0,
-        name="TestAlgo",
-        use_ff3=True,
-    )
-    algo.ff3_state.u_cycle = 0.05
-    algo.deadband_mgr.in_deadband = in_deadband
-
-    runtime_ff = algo._apply_gains_and_ff(
-        GovernanceDecision.ADAPT_ON,
-        20.0,
-        5.0,
-        VThermHvacMode_HEAT,
-        0.1,
-        19.9,
-        0.1,
-        cycle_boundary=False,
-    )
-
-    ff_result = algo._last_ff_result
-    assert ff_result.u_ff3 == pytest.approx(0.05)
-    expected = ff_result.u_ff_final if in_deadband else ff_result.u_ff_eff
-    assert runtime_ff == pytest.approx(expected)
-    assert (runtime_ff == pytest.approx(ff_result.u_ff_final + 0.05)) is not in_deadband
-
-@pytest.mark.asyncio
 async def test_smartpi_power_stability_abort():
     """
     Verify that changing power output in a subsequent cycle
@@ -615,11 +373,8 @@ async def test_smartpi_power_stability_abort():
         minimal_deactivation_delay=0,
         name="TestAlgo"
     )
-    # Simulate deadtimes already learned so the bootstrap gate does not block A/B collection
-    algo.dt_est.deadtime_heat_reliable = True
-    algo.dt_est.deadtime_heat_s = 30.0
-    algo.dt_est.deadtime_cool_reliable = True
-    algo.dt_est.deadtime_cool_s = 30.0
+    # A response model of a fast emitter (settling waits of seconds) so that the learning stage opens A/B windows
+    algo._start.model.seed(str(VThermHvacMode_HEAT), 0.0, 1.0)
 
     # 1. Start a cycle with 50% power
     start_ts_dt = datetime.now() - timedelta(minutes=10)
@@ -639,7 +394,8 @@ async def test_smartpi_power_stability_abort():
         current_temp=20.0,
         ext_temp=10.0,
         u_active=0.5,
-        setpoint_changed=False
+        setpoint_changed=False,
+        hvac_mode=VThermHvacMode_HEAT,
     )
 
     assert algo.learn_win_active is True
@@ -655,7 +411,8 @@ async def test_smartpi_power_stability_abort():
         current_temp=20.01,
         ext_temp=10.0,
         u_active=0.6,
-        setpoint_changed=False
+        setpoint_changed=False,
+        hvac_mode=VThermHvacMode_HEAT,
     )
 
     # Window must stay open: moderate PI modulation is now allowed
@@ -670,7 +427,8 @@ async def test_smartpi_power_stability_abort():
             current_temp=20.0,
             ext_temp=10.0,
             u_active=0.0,
-            setpoint_changed=False
+            setpoint_changed=False,
+            hvac_mode=VThermHvacMode_HEAT,
         )
         if not algo.learn_win_active:
             break

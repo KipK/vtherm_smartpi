@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "ask": [
+      "Bash(git commit *)",
+      "Bash(git --no-pager commit *)",
+      "Bash(git push *)",
+      "Bash(git --no-pager push *)",
+      "Bash(git tag *)",
+      "Bash(git --no-pager tag *)",
+      "Agent(smartpi-fable-consult)"
+    ]
+  },
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "On va compacter le contexte. Mets à jour .agents/local/tasks/<slug>/handoff.md de la tâche en cours (objectif, fait, état, prochaine étape, pistes écartées, questions ; modèle .agents/templates/handoff.md). N'écris rien dans .agents/context/ à cette étape.",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, AsyncMock, PropertyMock
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
 from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_COOL, VThermHvacMode_HEAT
 from custom_components.vtherm_smartpi.algo import SmartPI, SmartPIPhase
-from custom_components.vtherm_smartpi.smartpi.const import SmartPICalibrationPhase
 from custom_components.vtherm_smartpi.smartpi.guards import GuardAction, SmartPIGuards
 
 
@@ -32,15 +31,12 @@ def _make_algo(guard_cut=GuardAction.NONE, guard_kick=GuardAction.NONE, on_perce
     """Build a minimal SmartPI mock for guard tests."""
     algo = MagicMock(spec=SmartPI)
     algo.guards = MagicMock()
-    algo.autocalib = MagicMock()
-    algo.calibration_mgr = MagicMock()
     algo.deadband_mgr = MagicMock()
     algo.deadband_mgr.deadband_changed = False
     algo.deadband_mgr.near_band_changed = False
     algo.guards.check_guard_cut.return_value = guard_cut
     algo.guards.check_guard_kick.return_value = guard_kick
     algo.on_percent = on_percent
-    type(algo).calibration_state = PropertyMock(return_value=SmartPICalibrationPhase.IDLE)
     # phase must not equal CALIBRATION or HYSTERESIS so guard-forced value is not masked
     type(algo).phase = PropertyMock(return_value=SmartPIPhase.STABLE)
     return algo
@@ -139,8 +135,8 @@ async def test_smartpi_guard_cut_maintain():
 
 
 @pytest.mark.asyncio
-async def test_smartpi_deadband_entry_with_ff3_does_not_force_cycle():
-    """Entering deadband with an active FF3 must not restart the cycle on its own."""
+async def test_smartpi_deadband_entry_does_not_force_cycle():
+    """Deadband entry must not restart the cycle on its own."""
     thermostat = _make_thermostat()
     thermostat.current_temperature = 19.95
     thermostat.current_outdoor_temperature = 10.0
@@ -154,35 +150,6 @@ async def test_smartpi_deadband_entry_with_ff3_does_not_force_cycle():
     algo.in_deadband = False
     algo.in_near_band = True
     algo.deadband_c = 0.10
-    algo.u_ff3 = 0.05
-    thermostat.prop_algorithm = algo
-
-    await handler.control_heating(timestamp=datetime.now())
-
-    algo.calculate.assert_called_once()
-    assert algo.calculate.call_args.kwargs["cycle_boundary"] is False
-    thermostat.cycle_scheduler.start_cycle.assert_called_once()
-    _, _, force = thermostat.cycle_scheduler.start_cycle.call_args[0]
-    assert force is False
-
-
-@pytest.mark.asyncio
-async def test_smartpi_deadband_entry_without_ff3_does_not_force_cycle():
-    """Deadband entry without FF3 must not restart the cycle on its own."""
-    thermostat = _make_thermostat()
-    thermostat.current_temperature = 19.95
-    thermostat.current_outdoor_temperature = 10.0
-    thermostat.last_temperature_slope = 0.0
-    thermostat.power_manager = None
-    thermostat.cycle_scheduler.is_cycle_running = True
-
-    handler = SmartPIHandler(thermostat)
-    algo = _make_algo(on_percent=0.15)
-    algo.calculate = MagicMock()
-    algo.in_deadband = False
-    algo.in_near_band = True
-    algo.deadband_c = 0.10
-    algo.u_ff3 = 0.0
     thermostat.prop_algorithm = algo
 
     await handler.control_heating(timestamp=datetime.now())

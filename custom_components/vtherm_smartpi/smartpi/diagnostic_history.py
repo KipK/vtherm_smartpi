@@ -7,13 +7,29 @@ from typing import Any, Mapping
 DIAGNOSTIC_SCHEMA_VERSION = 2
 
 
+def _horizon(errors: Any, label: str) -> Any:
+    return errors.get(label) if isinstance(errors, Mapping) else None
+
+
+def _effective_dead_time(model: Mapping[str, Any]) -> int | None:
+    """Dead time plus half the response time constant of the response model (whole seconds), None without it."""
+    dead, tau = model.get("dead_time_s"), model.get("response_time_constant_s")
+    return None if dead is None or tau is None else round(dead + tau / 2)
+
+
 def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the stable Recorder payload."""
+    """Return the stable Recorder payload.
+
+    The feed-forward, room model and effective dead time series are always
+    present, null when their block is missing or not computed yet.
+    """
     control = live["control"]
     temperature = live["temperature"]
-    setpoint = live["setpoint"]
     power = live["power"]
     model = live["model"]
+    feedforward = live.get("feedforward") or {}
+    room = live.get("room_model") or {}
+    errors = room.get("forecast_error_c")
     return {
         "control": {
             "kp": control["kp"],
@@ -21,10 +37,8 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
         },
         "temperature": {
             "indoor": temperature["indoor"],
+            "anticipated": temperature["anticipated"],
             "integral_error": temperature["integral_error"],
-        },
-        "setpoint": {
-            "filtered_setpoint": setpoint["filtered_setpoint"],
         },
         "power": {
             "applied_percent": power["applied_percent"],
@@ -35,6 +49,16 @@ def build_history_diagnostics(live: Mapping[str, Any]) -> dict[str, Any]:
         "model": {
             "a": model["a"],
             "b": model["b"],
+            "effective_dead_time_s": _effective_dead_time(model),
+        },
+        "feedforward": {
+            "source": feedforward.get("source"),
+        },
+        "room_model": {
+            "a": room.get("a"),
+            "b_eq": room.get("b_eq"),
+            "forecast_error_1h_c": _horizon(errors, "1h"),
+            "forecast_error_12h_c": _horizon(errors, "12h"),
         },
     }
 

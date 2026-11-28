@@ -3,6 +3,18 @@
 SmartPI expose un capteur de diagnostic Home Assistant dédié. Son état indique
 la phase de régulation courante et ses attributs suivent le schéma version 2.
 
+Tant que le premier modèle n'est pas publié, l'état, `live.control.phase`,
+`live.learning.stage` et `live.model.confidence` nomment le démarrage de l'apprentissage :
+
+| Démarrage | État | `control.phase` | `learning.stage` | `model.confidence` |
+|---|---|---|---|---|
+| Amorçage | `bootstrap_hysteresis` | `Hysteresis` | `bootstrap` | `ab_bootstrap` |
+| Démarrage direct | `learning_pulses` | `Learning` | `measurement pulses` | `ab_learning` |
+
+Ensuite les deux démarrages publient les mêmes valeurs (`stable` ou `calibration`,
+`Stable` ou `Calibration`, `learning`, `monitoring` ou `degraded`, `ab_ok`,
+`ab_degraded` ou `ab_bad`).
+
 ## Enveloppe des attributs
 
 ```yaml
@@ -26,22 +38,30 @@ Le mode debug enregistre `live` et `history`. Le contenu n'est pas dupliqué
 dans `history` : le contrat historique reste identique dans les deux modes. Le
 mode debug change donc la conservation, pas la publication.
 
-Le bloc `history` contient ces onze séries :
+Le bloc `history` contient ces dix-sept séries :
 
 | Chemin sous `history` | Signification |
 |---|---|
 | `temperature.indoor` | Température intérieure |
+| `temperature.anticipated` | Température intérieure plus la correction d'anticipation : la température lue par les erreurs proportionnelle et intégrale |
 | `temperature.integral_error` | État de l'intégrale (°C·min) ; `ki × integral_error` est sa part de la commande (0 à 1) |
 | `control.kp` | Gain proportionnel |
 | `control.ki` | Gain intégral |
-| `setpoint.filtered_setpoint` | Consigne filtrée utilisée par la régulation |
 | `power.applied_percent` | Commande appliquée après les contraintes de sortie |
 | `power.command_percent` | Commande demandée avant les effets de l'actionneur |
 | `power.pi_percent` | Contribution PI |
 | `power.ff_percent` | Contribution feed-forward |
 | `model.a` | Gain de chauffe appris |
 | `model.b` | Coefficient de déperdition appris |
+| `model.effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (`model.dead_time_s` plus la moitié de `model.response_time_constant_s`) ; les maintiens de l'intégrale, la bande proche au-dessus de la consigne et les impulsions de calibration le lisent |
+| `feedforward.source` | Source de la puissance de maintien, comme dans `live.feedforward.source` (toujours `learned model`) |
+| `room_model.a` | Réponse de chauffe du modèle de pièce, dans les unités de `model.a` ; `null` avant une publication |
+| `room_model.b_eq` | Déperdition statique du modèle de pièce, dans les unités de `model.b` ; `null` avant une publication |
+| `room_model.forecast_error_1h_c` | Racine de l'erreur quadratique moyenne des prévisions à 1 h sur les 7 derniers jours (°C) |
+| `room_model.forecast_error_12h_c` | Idem pour les prévisions à 12 h (°C) |
 
+Les séries feed-forward, modèle de pièce et temps mort effectif sont
+toujours présentes et valent `null` lorsque le bloc correspondant n'est pas calculé.
 La commande appliquée ne mesure pas la chaleur délivrée.
 
 ## Diagnostics live
@@ -50,50 +70,147 @@ Le bloc `live` est organisé par responsabilité :
 
 | Bloc | Contenu |
 |---|---|
-| `control` | Phase, mode, gains (`kp`, `ki`), temps intégral effectif `ti_min` (minutes), saturation et bandes de régulation |
+| `control` | Phase, mode, gains (`kp`, `ki`), temps intégral effectif `ti_min` (minutes), saturation, bandes de régulation et dernier redémarrage (`last_restart`) |
 | `power` | Puissances du cycle courant et suivant, PI/FF, limites et puissance appliquée |
-| `temperature` | Températures intérieure/extérieure, erreurs et état de l'intégrale |
-| `model` | Modèle A/B, confiance, constante de temps et temps morts |
-| `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées et dérive |
+| `temperature` | Températures intérieure/extérieure, température anticipée (`anticipated` : température intérieure plus la correction d'anticipation), erreurs et état de l'intégrale |
+| `model` | Modèle A/B, confiance, constante de temps, temps mort après un démarrage et modèle de réponse |
+| `learning` | Étape d'apprentissage, bootstrap, mises à jour acceptées, dérive et démarrage de l'apprentissage (`start`) |
 | `governance` | Régime thermique et décision de mise à jour du modèle |
-| `feedforward` | État FF3, source de bande morte et diagnostics FFTrim canoniques |
-| `setpoint` | Consigne filtrée, trajectoire et résumé du boost |
-| `autocalib` | État du superviseur de calibration automatique |
-| `calibration` | État de la calibration, compteur d'essais AutoCalib (`autocalib.retry_count`, jusqu'à `AUTOCALIB_MAX_RETRIES`) et date de la dernière calibration |
+| `feedforward` | Source de la puissance de maintien et source de bande morte |
+| `setpoint` | État du boost de consigne |
+| `calibration` | La calibration en cours ou la dernière : état, impulsions, résultat, dernière demande, temps mort mesuré, lecture, valeurs en usage et corrections |
 | `analysis` | Champs avancés utilisés par les cartes de diagnostic fournies |
 | `valve` | Réglages de vanne Versatile Thermostat vus par SmartPI, `null` hors mode vanne |
+| `room_model` | Modèle de pièce |
+
+Les champs les plus utiles en un coup d'œil :
+
+| Chemin sous `live` | Signification |
+|---|---|
+| `model.deadtime_heat_s`, `model.deadtime_heat_reliable` | Temps mort après un démarrage en secondes (médiane des dernières détections) et s'il est fiable ; `deadtime_cool_*` les remplacent en COOL |
+| `model.tau_min`, `model.tau_reliable` | Constante de temps de la pièce, `1/b`, en minutes (`9999` tant qu'elle n'est pas fiable), et si elle est fiable |
+| `power.current_cycle_percent`, `power.next_cycle_percent` | Puissance engagée pour le cycle en cours et puissance demandée pour le cycle suivant, en % |
+| `control.in_deadband`, `control.in_near_band` | `true` tant que la pièce est dans la bande morte, dans la near-band |
+| `control.in_deadtime_window` | `true` tant que l'intégrale est figée pendant le temps mort effectif qui suit un démarrage du chauffage |
+| `control.saturation_state` | `NO_SAT`, `SAT_HI` (limite haute atteinte) ou `SAT_LO` (limite basse atteinte) |
+| `temperature.integral_mode` | État de l'intégrale au dernier calcul (par exemple `I:RUN`, `I:HOLD`, `I:FREEZE(deadband)`) |
+| `temperature.integral_hold_mode` | `none`, ou le maintien qui suit une reprise : `window_resume`, `power_shedding_resume`, `heating_unavailable_resume` |
+| `analysis.control.near_band_source` | Comment la near-band est dimensionnée : `auto_model_aware` (d'après le modèle de réponse et le modèle A/B) ou les seuils configurés (`no response model`, `fallback_no_ext`, `fallback_slope_low`, `fallback_model`) |
+
+Les autres champs sont des diagnostics avancés, décrits dans la documentation technique et affichés par les cartes fournies.
+
+`control.mode` vaut `smartpi` lorsque le PI régule, `hysteresis` pendant le
+bootstrap, et `heating cut above the setpoint` pendant une coupure de la garde
+(la pièce a dépassé la consigne de la near-band au-dessus : le chauffage est
+forcé à l'arrêt). Le PI n'est pas calculé pendant une coupure :
+`temperature.error` et `analysis.control.error_p` sont alors la consigne moins la
+température du dernier calcul, `analysis.control.anticipation_c` vaut `0` et
+`temperature.anticipated` est la température intérieure.
+
+`temperature.integral_hold_source` vaut `calibration_recovery` tant que
+l'intégrale est figée après une impulsion de calibration, jusqu'à ce que la
+pièce atteigne la consigne. Il vaut `heating_unavailable` tant que l'entité de
+chauffage indisponible est à `on`, puis `heating_unavailable_resume` tant que
+l'intégrale reste figée pendant le temps mort effectif du modèle de réponse après son
+retour à `off`.
+
+`learning.enabled` est le réglage du service `set_smartpi_learning`.
+`learning.block_reason` vaut `null` quand SmartPI apprend, sinon la raison pour
+laquelle tout apprentissage est suspendu : `heating unavailable` (entité de
+chauffage indisponible à `on`), `disturbance` (entité de perturbation à `on`) ou
+`paused` (service), dans cet ordre quand plusieurs s'appliquent.
+
+`control.last_restart` décrit le dernier redémarrage de Home Assistant ou de
+l'intégration. Il vaut `null` avant le premier calcul de la régulation après le
+redémarrage, et pour un thermostat qui démarre sans données sauvegardées.
+
+| Champ | Signification |
+|---|---|
+| `bridged` | `true` lorsque le redémarrage a été ponté : les mesures en cours ont repris et rien n'a été exclu des données d'apprentissage. `false` lorsque SmartPI a repris avec prudence |
+| `downtime_s` | Durée de l'arrêt, en secondes ; `null` lorsqu'elle ne peut pas être mesurée (saut d'horloge, pas de données sauvegardées) |
+| `reason` | Raison pour laquelle le redémarrage n'a pas été ponté, `null` lorsqu'il l'a été : `stop too long`, `heater state not saved`, `not heating or cooling before the stop`, `not heating or cooling after the restart`, `HVAC mode changed across the stop`, `cycle settings changed`, `indoor temperature unknown` (aussi lorsque la commande est passée à 0 pendant que la température était attendue), `temperature jump across the stop`, `clock jump`, `no saved state of the last tick`, ou une exclusion avant l'arrêt ou après le redémarrage (par exemple `window open before the stop`, `safety mode after the restart`) |
+
+`learning.start` résume comment l'apprentissage a démarré et ce que les
+impulsions de mesure du démarrage direct ont donné (voir l'option **Démarrage de
+l'apprentissage** dans la [documentation SmartPI](vtherm_smartpi.md)). Les valeurs
+sont celles du mode HVAC dans lequel se trouve le modèle ; le démarrage par
+amorçage affiche `0` impulsion et aucune impulsion en cours.
+
+| Champ | Signification |
+|---|---|
+| `mode` | Démarrage de l'apprentissage en cours : `bootstrap` ou `direct`. Un thermostat qui a déjà appris garde le démarrage avec lequel son apprentissage a commencé, quelle que soit l'option |
+| `pulses_done` | Impulsions de mesure démarrées depuis le début de l'apprentissage, dans le mode courant (trois au plus) ; les impulsions d'une calibration ne sont pas comptées |
+| `pulse` | L'impulsion en cours : `none`, `rest` (sans chauffage, en attendant que la pièce descende), `full power` ou `stop` (attente du pic de température) ; une impulsion de calibration affiche `none` ici |
+| `values_kept` | `true` lorsque deux lectures concordantes ont donné des valeurs pour le mode courant |
+| `values_kept_at` | Heure locale à laquelle les valeurs ont été conservées (ISO 8601), `null` si aucune n'est conservée ou si l'heure est inconnue |
+| `kept_a` | Vitesse de chauffe conservée en °C/min à pleine puissance (5 décimales), `null` si aucune n'est conservée |
+| `kept_b` | Coefficient de pertes conservé en 1/min (6 décimales), `null` si aucun n'est conservé |
+| `kept_lag_s` | Retard de l'émetteur conservé en secondes, `null` si aucun n'est conservé |
+
+`calibration` résume la calibration demandée avec le service
+`force_smartpi_calibration` ou lancée par SmartPI lui-même (voir **Calibration** dans la
+[documentation SmartPI](vtherm_smartpi.md)) : la calibration en cours, ou la
+dernière jusqu'à la demande suivante.
+
+| Champ | Signification |
+|---|---|
+| `state` | `idle` (aucune calibration en cours), `waiting` (entre deux impulsions, la régulation fonctionne), ou l'étape de son impulsion en cours : `rest`, `full power`, `stop` |
+| `pulses_done` | Impulsions démarrées par la calibration (trois au plus ; une impulsion interrompue compte) |
+| `result` | `null` avant toute calibration, `in progress`, `readings agree` (deux impulsions concordent), `pulses done` (trois impulsions lues sans concordance), `time limit` (48 heures) ou `cancelled` (passage entre chauffage et refroidissement, retour de la phase d'apprentissage, réinitialisation de l'apprentissage, apprentissage suspendu par le service ou une entité) |
+| `last_request` | Réponse à la dernière demande, `null` avant toute demande : `started`, `refused: learning stage` (premier modèle en apprentissage), `refused: learning paused` (apprentissage suspendu par le service ou une entité), `refused: thermostat off` (thermostat éteint), `ignored: in progress` (calibration en cours) |
+| `last_time` | Heure locale de fin de la dernière calibration non annulée (ISO 8601), `null` avant |
+| `deadtime_start_s` | Dernier temps mort après un démarrage mesuré pendant une impulsion de la calibration, en secondes, `null` sans mesure |
+| `reading_a` | Vitesse de chauffe des deux impulsions concordantes en °C/min à pleine puissance (5 décimales), `null` tant que deux impulsions ne concordent pas |
+| `reading_b` | Coefficient de pertes des deux impulsions concordantes en 1/min (6 décimales), `null` tant que deux impulsions ne concordent pas ; publié seulement, jamais corrigé |
+| `reading_lag_s` | Retard de l'émetteur des deux impulsions concordantes en secondes, `null` tant que deux impulsions ne concordent pas |
+| `in_force_a` | Vitesse de chauffe en usage lorsque les impulsions ont concordé, en °C/min à pleine puissance (5 décimales), comparée à `reading_a` ; `null` tant que deux impulsions ne concordent pas |
+| `in_force_b` | Coefficient de pertes en usage lorsque les impulsions ont concordé, en 1/min (6 décimales) ; `null` tant que deux impulsions ne concordent pas |
+| `in_force_lag_s` | Horizon de l'anticipation en usage lorsque les impulsions ont concordé, en secondes, affiché à côté de `reading_lag_s` ; `null` tant que deux impulsions ne concordent pas |
+| `corrected` | Ce que la calibration a corrigé : une liste parmi `heating rate` (vitesse de chauffe), `loss coefficient` (coefficient de pertes) ; vide si rien n'a été corrigé |
+| `automatic` | `true` lorsque la calibration en cours, ou la dernière, a été lancée par SmartPI lui-même (après une mise à jour), `false` lorsqu'elle a été demandée |
+| `interruptions` | Impulsions de la calibration en cours, ou de la dernière, qui ont été interrompues : une liste de `{reason, at}`, `reason` valant `setpoint change`, `thermostat stopped`, `mode change` ou `learning paused`, `at` l'heure locale (ISO 8601) ; vide s'il n'y en a pas |
+| `automatic_status` | Où en est la calibration automatique du mode courant : `not needed` (le modèle de réponse du mode a des événements mesurés, ou rien n'est repris), `waiting: 3 days after the update`, `waiting: quiet night` (toute autre condition, dont la fenêtre calme, est attendue), `in progress`, `attempts used` (trois calibrations automatiques ont été lancées), `home position unknown` |
+
+Les temps morts après un démarrage mesurés par les impulsions rejoignent les
+temps morts appris comme toute autre mesure. Une grandeur de la lecture n'est corrigée que si elle
+s'écarte de plus de 30 % de la valeur en usage (voir **Calibration** dans la
+[documentation SmartPI](vtherm_smartpi.md)). Le retard de l'émetteur est corrigé
+par le modèle de réponse lui-même : les impulsions de calibration sont des
+événements du modèle, et deux d'entre elles qui concordent remplacent son
+historique lorsque leur retard de l'émetteur s'écarte de plus de 30 % de celui
+qu'il publiait avant elles.
 
 `analysis` regroupe les valeurs live avancées dans `control`, `learning`,
-`trajectory`, `deadtime`, `governance`, `feedforward` et, lorsqu'il
-est disponible, `twin`.
+`deadtime`, `governance` et `feedforward`.
+
+`analysis.control` publie, parmi les termes d'erreur et la géométrie de bande,
+l'anticipation de la température, en chauffage et en refroidissement :
+
+| Champ | Signification |
+|---|---|
+| `anticipation_c` | Correction en °C ajoutée à la température mesurée pour les erreurs proportionnelle et intégrale au dernier tick, `0` lorsqu'elle est inactive (hors phase stable, sans horizon, sans pente montante ou descendante, ou pendant une coupure de la garde) |
+| `anticipation_horizon_s` | Horizon de l'anticipation en secondes (le temps entre une commande et son effet), `0` lorsqu'il n'y en a pas |
+| `anticipation_horizon_source` | Origine de l'horizon : `response model` (retard de l'émetteur du modèle de réponse du mode : temps mort plus constante de temps de réponse), et sans modèle `measurement pulses` (retard de l'émetteur conservé des impulsions de mesure du démarrage direct), `dead time` (le temps mort fiable de chauffe (HEAT) ou de refroidissement (COOL) après un démarrage) ou `none` |
+| `effective_dead_time_s` | Temps mort effectif du modèle de réponse, en secondes (temps mort plus la moitié de la constante de temps de réponse), `null` sans modèle ; les maintiens de l'intégrale, la bande proche au-dessus de la consigne et les impulsions de calibration le lisent |
+| `gain_delay_s` | Retard lu par la règle des gains, en secondes : le temps mort fiable de chauffe (HEAT) ou de refroidissement (COOL) après un démarrage, tel quel ; `null` sans lui (gains de sécurité) |
+| `gain_delay_source` | Origine de `gain_delay_s` : `dead time` ; `null` sans retard |
+| `gain_closed_loop_time_s` | Temps en boucle fermée de la règle des gains, en secondes : le plus grand entre 3 fois `gain_delay_s` (4 fois pour une vanne), 2 cycles et 5 minutes ; `null` sans retard |
 
 `analysis.deadtime` suit la détection du temps mort :
 
 | Champ | Signification |
 |---|---|
-| `state` | État du détecteur (`WAITING_HEAT_RESPONSE`, `WAITING_COOL_RESPONSE`, `HEATING`, `COOLING`, `OFF`) |
+| `state` | État du détecteur : `WAITING_HEAT_RESPONSE` (HEAT) ou `WAITING_COOL_RESPONSE` (COOL) tant que la réponse à un démarrage est attendue, `HEATING` / `COOLING` pendant que la puissance est active, `OFF` |
 | `last_power` | Dernière puissance vue par le détecteur |
 | `waiting_elapsed_s` | Âge de la réponse attendue en secondes, `null` quand aucune détection n'est armée |
-| `heat_last_outcome` / `cool_last_outcome` | Issue de la dernière attente d'une réponse montante / descendante : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger), `null` avant la première |
-
-`analysis.learning.response_lag` décrit le retard de réponse utilisé par l'apprentissage de `a` :
-
-| Champ | Signification |
-|---|---|
-| `lag_s` | Retard de réponse publié en secondes, `null` tant qu'il n'existe pas un ensemble cohérent d'estimations |
-| `estimates` | Nombre d'estimations conservées (7 au plus) |
-| `episodes` | Nombre de phases de chauffe terminées depuis le début de l'apprentissage (des périodes de chauffe séparées par moins de 10 minutes sans chauffe ne comptent que pour une phase) ; il continue après la publication du retard et peut dépasser `episodes_target` |
-| `episodes_target` | Nombre de phases de chauffe après lequel le modèle de puissance délivrée est résolu sans retard publié (`4`) |
-| `episode_median_s` | Durée médiane des épisodes actifs récents en secondes, `null` avec moins de 3 épisodes |
-| `last_reason` | Issue du dernier épisode actif (estimation retenue, ou raison de son non-usage). `episode interrupted by restart` : épisode en cours lors d'un redémarrage, non repris, terminé sans estimation. Peut être vide juste après un redémarrage |
+| `heat_last_outcome` (HEAT) / `cool_last_outcome` (COOL) | Issue de la dernière attente de la réponse à un démarrage, montante en HEAT, descendante en COOL : `detected`, `timeout`, `aborted` (transition de puissance avant détection), `rejected` (la température évoluait déjà dans le sens de la réponse avant le démarrage de la puissance, trop fortement ou trop irrégulièrement pour la mesurer), `ignored` (une mesure plus courte que le temps mort publié, écartée parce que la température évoluait déjà dans le sens de la réponse avant le démarrage ou que la fenêtre avant le démarrage était trop courte pour juger), `null` avant la première |
 
 Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 
 | Valeur | Signification |
 |---|---|
-| `step1 - deadtime: heat:… cool:…` | Attente des temps morts actif et passif |
+| `step1 - waiting response model` | Aucune fenêtre d'apprentissage avant la publication du modèle de réponse du mode (la première phase de chauffe ou impulsion lue en entier le donne) |
 | `step2 - collecting emeas: A:n/5 B:n/5` | Collecte des mesures de `a` et `b` |
-| `step2 - waiting response lag: estimates N, heating phases K/4` | Collectes complètes ; la publication de `a` attend le modèle de puissance délivrée (retard publié, `K` atteint 4, ou 31 mesures de `a` collectées) |
 
 `valve` vaut `null` sauf si le thermostat pilote une vanne. En mode vanne, il contient :
 
@@ -105,23 +222,85 @@ Pendant le bootstrap, `learning.bootstrap_status` décrit l'étape en cours :
 | `quantization_step_linear_percent` | Demande linéaire, en pourcentage, déplacée par un pas de vanne de `1%` à la position de vanne engagée ; `1.0` sans linéarisation, `null` lorsque la vanne est fermée |
 | `issues` | Codes de filtrage, de retard de commande ou de transformation d'ouverture en conflit avec la linéarisation SmartPI : `dpercent_filter`, `period_filter`, `opening_remap`. Les mêmes avertissements apparaissent dans les Réparations de Home Assistant ; un filtrage ou un retard ne prouve pas, à lui seul, un échec de l'apprentissage |
 
-FFTrim utilise des blocs canoniques imbriqués :
+### Modèle de réponse
 
-```yaml
-live:
-  feedforward:
-    fftrim:
-      stationary: {}
-      periodic: {}
-      transfer: {}
-      command_ownership: {}
-      observation_mode: ...
-      last_reject_reason: ...
-      last_update_reason: ...
-      last_result: ...
-      last_transaction: ...
-      windows_since_update: ...
-```
+Le modèle de réponse décrit, pour le mode HVAC dans lequel se trouve le modèle, la façon
+dont la pièce répond à la puissance : un temps mort (sonde, transport, actionneur) suivi
+d'une constante de temps de réponse (l'émetteur, l'air et la masse proche ensemble). Il est ajusté sur des événements de mesure
+entiers : les impulsions, les phases du bootstrap, les impulsions de calibration et les
+montées de confort de la régulation après un repos (celles-ci seulement la nuit, la position
+du domicile étant connue). L'apprentissage de `a` et `b` le lit (aucune fenêtre d'apprentissage de la phase
+d'apprentissage avant lui, puissance délivrée, délai d'une fenêtre d'apprentissage après un
+démarrage ou un arrêt), de même que l'horizon de l'anticipation (le retard de l'émetteur, temps
+mort plus constante de temps de réponse), la bande proche en chauffage (le temps mort effectif
+au-dessus de la consigne, le retard de l'émetteur au-dessous), les limites des impulsions de
+calibration et les impulsions de mesure du démarrage direct (elles continuent tant que le modèle
+du mode n'est pas publié). Avec `dead time assumed` ces valeurs sont les bornes prudentes :
+l'horizon est le retard de l'émetteur entier et le temps mort effectif ses trois quarts. Les maintiens
+de l'intégrale après un démarrage ou une reprise durent le temps mort effectif ; les gains lisent le
+temps mort après un démarrage, pas ce modèle.
+
+| Chemin | Signification |
+|---|---|
+| `model.dead_time_s` | Temps mort en secondes, `null` sans modèle |
+| `model.response_time_constant_s` | Constante de temps de réponse en secondes, `null` sans modèle |
+| `model.response_source` | Origine du dernier événement accepté : `measurement pulses`, `bootstrap`, `calibration`, `regulation`, ou `previous version` (valeurs reprises d'un état sauvegardé sans modèle de réponse, jusqu'au premier événement accepté) ; `null` sans modèle |
+| `model.response_confidence` | `measured` (deux événements concordent sur le temps mort plus la constante de temps à 20 % près), `provisional` (un événement, ou valeurs reprises d'un état sauvegardé), `dead time assumed` (aucun événement ne distingue le temps mort : la moitié du total est supposée) ; `null` sans modèle |
+
+`analysis.learning.response_model` :
+
+| Champ | Signification |
+|---|---|
+| `events` | Nombre d'événements acceptés conservés pour le mode (au plus 7) |
+| `pending_outliers` | Nombre d'événements du mode mis de côté parce que leur temps mort plus constante de temps dépasse le double, ou est sous la moitié, de celui du modèle en vigueur (au plus 3) ; deux d'entre eux qui concordent du même côté remplacent l'historique du mode |
+| `last` | Dernier événement ajusté, `null` avant le premier : `source`, `dead_time_s`, `response_time_constant_s`, `rms_c` (racine de la moyenne des carrés des résidus aux changements de température, °C), `outcome` (`accepted`, `accepted, response time constant at its lower limit` (60 s, un émetteur rapide), `used in daylight until an event in darkness`, `not used in daylight`, `not used: far from the model in force, waiting for a confirming event`, `accepted with an earlier event far from the model, both replace it`, ou la raison du rejet : `too few temperature changes`, `temperature rise too small`, `no heating seen`, `dead time at its limit`, `response time constant at its limit`, `fit too far from the room temperature`), `daytime` (`true` pour un événement de jour : sa chauffe démarre hors de la nuit, ou la nuit couvre moins de trois retards d'émetteur après elle ; utilisé seulement tant que le mode n'a pas d'autre événement), `prediction_rms_c` (pour un événement donné au modèle : racine de la moyenne des carrés des résidus, °C, du modèle en vigueur avant lui sur sa fenêtre, son temps mort et sa constante de temps de réponse fixés ; `null` sans modèle en vigueur) |
+| `last_reason` | Issue du dernier événement examiné : l'issue de son ajustement, ou la raison pour laquelle il n'a pas été lu (par exemple `rest before heating too short`, `heating too short`, `temperature rise too small`, `SmartPI not in control`, `thermostat stopped`, `home position unknown`, `no record`, `24 hours`, `eight fits`) ; `null` avant le premier |
+| `prediction_rms_c` | Médiane des 7 dernières valeurs `last.prediction_rms_c` du mode (°C) : la qualité de prédiction des nouveaux événements par le modèle ; montrée seulement, `null` avant la première |
+| `peak_samples` | Constantes de temps de réponse en secondes lues aux derniers pics de température confirmés après une coupure (au plus 7), à partir du temps mort, de la pente de la pièce avant la coupure et de ses pertes ; montrées seulement |
+
+### Modèle de pièce
+
+`room_model` décrit le modèle de pièce (voir [Modèle de pièce](./vtherm_smartpi.md#modèle-de-pièce)). Il ne sert qu'à l'observation : il ne modifie jamais la commande (`used_by_regulation` vaut `false`), et la puissance de maintien provient toujours du modèle appris.
+
+| Champ | Signification |
+|---|---|
+| `used_by_regulation` | Toujours `false` : le modèle de pièce identifie, suit et prévoit, et la régulation ne le lit pas |
+| `status` | `learning`, `identified` (modèle avec murs), `simple model` (modèle sans murs), ou `not identified: ` suivi de la raison, en anglais (par exemple `not identified: too little heating during the quiet periods`) |
+| `tracking` | État du suivi de la pièce : `ok`, `waiting for an identified model`, `waiting for measurements`, `paused (SmartPI not heating or not in control)`, `settling after a restart`, `measurements drift away from the model`, `measurements inconsistent with the model`, `temperature estimate uncertain`, `large unexplained heat gains or losses` ou `wall state implausible` |
+| `walls` | `identified`, ou la raison pour laquelle les murs ne sont pas dans le modèle : `not identified: temperature sensor too coarse`, `not identified: no thermal mass detected`, `not identified: not confirmed yet`, `not identified: no better than the simple model` ; `null` avant tout résultat |
+| `a` | Réponse de chauffe à pleine puissance, dans les unités de `model.a` (°C par minute) |
+| `b_eq` | Déperdition statique du modèle, dans les unités de `model.b` (par minute). La régulation ne l'utilise pas. `b_eq / a` doit correspondre à `energy_balance_loss_per_c` à 5 % près pour qu'il y ait une publication (rien n'est publié avant un premier bilan thermique) |
+| `b_air` | Taux de perte totale de l'air, vers l'extérieur et vers les murs (par minute) ; `null` pour le modèle simple |
+| `b_wall` | Part en régime établi de cette perte qui passe par les murs (par minute), avec `b_eq` = `b_air` − `b_wall` ; `null` pour le modèle simple |
+| `forecast_c` | Température prévue de la pièce à `1h`, `2h`, `6h` et `12h` si la puissance de chauffe actuelle était maintenue (°C) ; `null` tant que le suivi ne tourne pas |
+| `forecast_error_c` | Racine de l'erreur quadratique moyenne des prévisions passées, par horizon, sur les 7 derniers jours, par rapport à la température mesurée (°C) ; les prévisions sont rejouées avec la puissance réellement appliquée et la température extérieure mesurée |
+| `forecast_checks` | Nombre de prévisions passées vérifiées par horizon |
+| `unchanged_temperature_error_c` | Même erreur pour une prévision qui garde la température inchangée, comme référence |
+| `wall_extra_power_percent` | Puissance supplémentaire que les murs absorbent actuellement au-delà de leur part en régime établi, en % de la pleine puissance (négative lorsqu'ils restituent de la chaleur) ; `null` sans murs identifiés, sans sonde précise ou tant que le suivi n'est pas `ok` |
+| `identified_day` | Jour des valeurs en usage (le jour où leur dernière période calme s'est terminée), `null` avant une publication |
+| `last_identification_day` | Jour de la dernière identification (le jour où sa dernière période calme s'est terminée) |
+| `last_refusal_reason` | Raison pour laquelle la dernière identification n'a rien publié (par exemple `waiting for a second series of quiet periods to confirm`, `the quiet periods do not determine the model precisely enough yet`, `heating response delay not known yet`, `the heating response delay does not match the measured temperature`, `the heating response differs too much from the one measured by the regulation`, `the model's heat loss disagrees with the measured heat balance` ou `waiting for a qualified heat balance to check the model's heat loss`), `null` lorsqu'elle a publié |
+| `energy_balance_loss_per_c` | Déperdition du bilan thermique en vigueur : la puissance nécessaire par °C d'écart intérieur-extérieur, dans les unités de `model.b / model.a`. C'est la pente d'une droite passant par les bilans thermiques quotidiens des journées entières conservées (jusqu'à 7), calculée une fois par jour. La régulation ne l'utilise pas : c'est la référence à laquelle le `b_eq / a` du modèle est comparé. Un jour dont le bilan thermique est refusé garde les valeurs précédentes ; `null` avant une première valeur acceptée |
+| `energy_balance_free_gain_percent` | Apport gratuit constant du bilan thermique en vigueur, en % de la pleine puissance : chaleur d'une pièce plus chaude voisine ou d'occupants présents de façon stable, négatif pour une perte vers une pièce plus froide. `0` tant que l'écart intérieur-extérieur n'a pas assez varié entre les jours pour distinguer un apport des pertes (et que les jours n'en montrent aucun) ; `null` avant une première valeur acceptée |
+| `energy_balance_days` | Nombre de jours utilisés par le bilan thermique en vigueur, `null` avant une première valeur acceptée |
+| `energy_balance_day` | Jour où les valeurs en vigueur ont été calculées, `null` avant une première valeur acceptée |
+| `energy_balance_refusal_reason` | Raison pour laquelle le dernier bilan thermique quotidien n'a donné aucune nouvelle valeur (`not enough recorded days yet`, `heating response not known yet`, `too few usable days (missing data or no heating)`, `indoor-outdoor temperature difference too small`, `too little heating`, `free heat gains detected; the outdoor temperature has not varied enough yet to separate them from the losses`, `the heating need varies too much from one day to the next`, `the heating need is still drifting from day to day (walls storing or releasing heat)`, `value out of the plausible range` ou `computation failed`), `null` lorsqu'il en a donné une |
+| `sensor_resolution_c` | Plus petit pas de la sonde de température observé dans l'historique enregistré (°C) |
+| `quiet_periods` | `reason` : raison pour laquelle aucune période calme ne peut être trouvée (`home position unknown: the absence of sun cannot be checked`), `null` sinon ; `count` : nombre de périodes calmes du catalogue ; `last` : `start`, `end` et `regulated_from` (heures locales) de la dernière période calme fermée, `regulated_from` étant le début de sa partie régulée, `null` lorsque la pièce n'a jamais régulé à sa consigne basse ; `last` vaut `null` sans période |
+| `data_invalid_reason` | Raison pour laquelle les données actuellement enregistrées sont exclues (par exemple `window open`), `null` lorsqu'elles sont valides |
+| `history_h` | Heures d'historique enregistré |
+| `last_error` | Raison de l'échec du dernier calcul (`the calculation failed, see the log` ; le détail est dans le journal), `null` lorsqu'il n'y en a pas |
+
+### Feed-forward
+
+`feedforward` commence par la source de la puissance de maintien (le
+feed-forward structurel) :
+
+| Champ | Signification |
+|---|---|
+| `source` | Toujours `learned model` : le modèle A/B, `model.b / model.a`. Le modèle de pièce n'entre jamais dans la puissance de maintien (`room_model.used_by_regulation` vaut `false`) |
+
+`analysis.feedforward` publie `u_ff1`, la puissance de maintien injectée dans la commande, et sa `reason` ; `u_ff_final` et `u_ff_effective` portent la même valeur.
 
 ## Fréquence de publication
 

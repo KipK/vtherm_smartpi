@@ -125,7 +125,7 @@ class _Run:
 
     @property
     def lag(self):
-        return self.algo.learn_win.response_lag
+        return self.algo.learn_win.power_steps
 
 
 def _to_heating(run: _Run, minutes: int) -> None:
@@ -154,13 +154,11 @@ def _reference() -> _Run:
 
 def test_short_restart_in_the_band_keeps_heating_and_resumes_the_episode():
     reference = _reference()
-    assert reference.lag.last_reason == "estimated"
-    expected = reference.lag._estimates[-1][0]
+    expected = reference.lag._durations[-1]
 
     run = _Run()
     _to_heating(run, 20)
     episodes = run.lag.episodes_count
-    estimates = run.lag.estimates_count
     run.stop()
     run.tick()
     run.tick()
@@ -172,9 +170,8 @@ def test_short_restart_in_the_band_keeps_heating_and_resumes_the_episode():
     _finish_heating(run)
 
     assert run.lag.episodes_count == episodes + 1
-    assert run.lag.estimates_count == estimates + 1
-    assert run.lag.last_reason == "estimated"
-    assert run.lag._estimates[-1][0] == pytest.approx(expected, rel=0.1)
+    # The episode resumed across the restart: same heating phase duration as without the restart.
+    assert run.lag._durations[-1] == pytest.approx(expected, abs=TICK_S)
 
 
 def test_long_restart_starts_off():
@@ -191,7 +188,6 @@ def test_long_restart_starts_off():
     assert run.u == 0.0
     run.tick()
     assert run.lag.episodes_count == episodes + 1
-    assert run.lag.last_reason == "episode interrupted by restart"
 
 
 def test_other_hvac_mode_does_not_resume_the_output():
@@ -315,8 +311,9 @@ def test_saved_output_waits_for_the_indoor_temperature():
     run.tick()
     run.start()
 
+    # The heating of before the stop is kept during the wait.
     _calculate(run, current_temp=None, advance_s=5.0)
-    assert run.u == 0.0
+    assert run.u == 1.0
     assert run.algo._hysteresis_restore is not None
     assert run.algo._hysteresis_output_context()["on"] is True
 
@@ -335,9 +332,11 @@ def test_saved_output_is_dropped_when_the_temperature_comes_back_too_late():
     run.start()
 
     _calculate(run, current_temp=None, advance_s=5.0)
-    _calculate(
-        run, current_temp=run.room.reading, advance_s=RESPONSE_LAG_RESTART_MAX_GAP_S + 1.0
-    )
+    assert run.u == 1.0
+    # Past the longest bridged stop the heating is cut.
+    _calculate(run, current_temp=None, advance_s=RESPONSE_LAG_RESTART_MAX_GAP_S + 1.0)
+    assert run.u == 0.0
+    _calculate(run, current_temp=run.room.reading, advance_s=5.0)
     assert run.algo._hysteresis_restore is None
     assert run.algo.ctl.hysteresis_state == "band"
     assert run.u == 0.0

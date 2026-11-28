@@ -9,7 +9,7 @@ Produces two output signals from raw sensor readings:
 Learning slopes (a, b estimation) are computed on raw measured temperatures,
 not on these filtered signals.
 
-The PI control loop, deadband, twin and governance are NOT affected.
+The PI control loop, deadband and governance are NOT affected.
 """
 from __future__ import annotations
 

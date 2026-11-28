@@ -1,5 +1,5 @@
 """Tests for heat-mode B learning guards."""
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
@@ -46,6 +46,7 @@ def _update_once(
     hvac_mode=VThermHvacMode_HEAT,
     slope=-0.1,
 ):
+    win.temperatures.raw = _make_dt_est().tin_history
     with patch(
         "custom_components.vtherm_smartpi.smartpi.ab_estimator.ABEstimator.robust_dTdt_per_min",
         return_value=(slope, "test_slope", 3),
@@ -56,13 +57,8 @@ def _update_once(
             ext_temp=ext_temp,
             u_active=0.0,
             estimator=est,
-            dt_est=_make_dt_est(),
             governance=_make_governance(),
             now=120.0,
-            in_deadband=False,
-            in_near_band=False,
-            t_heat_episode_start=None,
-            t_cool_episode_start=None,
             hvac_mode=hvac_mode,
             target_temp=target_temp,
         )
@@ -122,6 +118,8 @@ def test_b_learning_allowed_when_real_heat_loss_gradient_exists():
     est.learn.assert_called_once_with(
         dT_int_per_min=-0.1,
         u=0.0,
+        residual_power=0.0,
+        power_window=ANY,
         t_int=21.0,
         t_ext=8.0,
         hvac_mode=VThermHvacMode_HEAT,
@@ -171,6 +169,8 @@ def test_b_learning_allowed_with_passive_heat_gain_in_cool():
     est.learn.assert_called_once_with(
         dT_int_per_min=0.1,
         u=0.0,
+        residual_power=0.0,
+        power_window=ANY,
         t_int=20.0,
         t_ext=30.0,
         hvac_mode=VThermHvacMode_COOL,

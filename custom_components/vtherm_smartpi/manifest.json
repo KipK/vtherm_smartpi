@@ -1,6 +1,9 @@
 {
   "domain": "vtherm_smartpi",
   "name": "Versatile Thermostat SmartPI",
+  "categories": [
+    "climate.thermostats_heating"
+  ],
   "codeowners": [
     "@kipk"
   ],
@@ -13,7 +16,9 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/kipk/vtherm_smartpi/issues",
   "requirements": [
-    "vtherm_api>=0.7.0"
+    "vtherm_api>=0.7.0",
+    "numpy",
+    "scipy>=1.14"
   ],
   "version": "0.0.0"
 }

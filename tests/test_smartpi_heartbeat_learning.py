@@ -9,11 +9,8 @@ from custom_components.vtherm_smartpi.hvac_mode import VThermHvacMode_HEAT
 def test_heartbeat_accumulation():
     """Verify that learning window accumulates over multiple calculate calls."""
     smartpi = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0, name="TestHB")
-    # Simulate deadtimes already learned so the bootstrap gate does not block A/B collection
-    smartpi.dt_est.deadtime_heat_reliable = True
-    smartpi.dt_est.deadtime_heat_s = 30.0
-    smartpi.dt_est.deadtime_cool_reliable = True
-    smartpi.dt_est.deadtime_cool_s = 30.0
+    # A response model of a fast emitter (settling waits of seconds) so that the learning stage opens A/B windows
+    smartpi._start.model.seed(str(VThermHvacMode_HEAT), 0.0, 1.0)
 
     # Initial state
     # Pre-warmup to stabilize power output (avoid power instability reset)
@@ -29,9 +26,6 @@ def test_heartbeat_accumulation():
     smartpi._last_calculate_time = time.monotonic() - 60.0
     # Clear the reboot learning freeze: this test doesn't concern reboot behavior
     smartpi.learn_win.set_learning_resume_ts(None)
-    # Clear episode start so the deadtime gating does not block the learning window
-    smartpi._t_heat_episode_start = None
-    smartpi._t_cool_episode_start = None
     
     # 1. Start accumulation
     # Call calculate: should start window (using the power from warmup)
@@ -66,22 +60,17 @@ def test_heartbeat_accumulation():
 def test_heartbeat_learning_trigger_on_slope_quality():
     """Verify that learning submits once OLS slope is robust."""
     smartpi = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0, name="TestHB_Trigger")
-    # Simulate deadtimes already learned so the bootstrap gate does not block A/B collection
-    smartpi.dt_est.deadtime_heat_reliable = True
-    smartpi.dt_est.deadtime_heat_s = 30.0
-    smartpi.dt_est.deadtime_cool_reliable = True
-    smartpi.dt_est.deadtime_cool_s = 30.0
-    smartpi._t_heat_episode_start = None
-    smartpi._t_cool_episode_start = None
+    # A response model of a fast emitter (settling waits of seconds) so that the learning stage opens A/B windows
+    smartpi._start.model.seed(str(VThermHvacMode_HEAT), 0.0, 1.0)
     smartpi.learn_win.set_learning_resume_ts(None)
 
-    # Pre-populate tin_history with 20 samples, 1 min apart, rising temperature.
+    # Pre-populate the temperature history with 20 samples, 1 min apart, rising temperature.
     # (i=0 = oldest = 19 min ago, i=19 = most recent = now)
     # Amplitude = 0.95°C >> DT_DERIVATIVE_MIN_ABS (0.03°C); slope ≈ +0.05°C/min.
     base_now = time.monotonic()
-    smartpi.dt_est._tin_history = [
+    smartpi.learn_win.temperatures.raw.extend(
         (base_now - (19 - i) * 60, 19.0 + i * 0.05) for i in range(20)
-    ]
+    )
 
     # Single call with 20-min window: start_ts goes back 20 min, all 20 samples in range.
     # The slope gate should pass immediately and the window should submit.
@@ -94,23 +83,20 @@ def test_heartbeat_learning_trigger_on_slope_quality():
 def test_learning_rejects_change_tick_and_reopens_during_ascent():
     """Reject the causal change tick, then allow A during early ascent."""
     smartpi = SmartPI(hass=MagicMock(), cycle_min=10, minimal_activation_delay=0, minimal_deactivation_delay=0, name="TestHB_Reset")
-    # Simulate deadtimes already learned so the bootstrap gate does not block A/B collection
-    smartpi.dt_est.deadtime_heat_reliable = True
-    smartpi.dt_est.deadtime_heat_s = 30.0
-    smartpi.dt_est.deadtime_cool_reliable = True
-    smartpi.dt_est.deadtime_cool_s = 30.0
+    # A response model of a fast emitter (settling waits of seconds) so that the learning stage opens A/B windows
+    smartpi._start.model.seed(str(VThermHvacMode_HEAT), 0.0, 1.0)
 
     # Start window
-    smartpi.update_learning(1.0, 19.0, 10.0, 1.0)
+    smartpi.update_learning(1.0, 19.0, 10.0, 1.0, hvac_mode=VThermHvacMode_HEAT)
     assert smartpi.learn_win_active
 
     # The exact change tick cannot belong to a window spanning two regimes.
-    smartpi.update_learning(1.0, 19.0, 10.0, 1.0, setpoint_changed=True)
+    smartpi.update_learning(1.0, 19.0, 10.0, 1.0, setpoint_changed=True, hvac_mode=VThermHvacMode_HEAT)
     assert not smartpi.learn_win_active
     assert smartpi.est.learn_last_reason == "skip: setpoint transition"
 
     # Once the change tick has passed, the strong ascent is valid A excitation.
-    smartpi.update_learning(1.0, 19.0, 10.0, 1.0, setpoint_changed=False)
+    smartpi.update_learning(1.0, 19.0, 10.0, 1.0, setpoint_changed=False, hvac_mode=VThermHvacMode_HEAT)
     assert smartpi.learn_win_active
 
 def test_heartbeat_integration_in_calculate():

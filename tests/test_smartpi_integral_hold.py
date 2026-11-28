@@ -34,7 +34,6 @@ def _force_stable_phase(pi):
     pi.est.learn_ok_count_a = max(pi.est.learn_ok_count_a, 1)
     pi.est.learn_ok_count_b = max(pi.est.learn_ok_count_b, 1)
     pi._output_initialized = True
-    pi.calibration_mgr.last_calibration_time = time.time()
 
 
 def _set_reliable_deadtime(pi, dt_s: float):
@@ -442,15 +441,12 @@ def test_deadband_shell_holds_during_a_regime_transition() -> None:
     assert pi.ctl.integral == before
 
 
-def _resume_hold_update(hold, ctl, error_i: float, *, in_window: bool) -> None:
-    dt_est = MagicMock()
-    dt_est.active_deadtime.return_value = (300.0, True)
+def _resume_hold_update(hold, ctl, error_i: float, *, in_window: bool, hold_s: float | None = 300.0) -> None:
     hold.update(
         error_i=error_i,
         in_core_deadband=False,
         deadband_c=0.05,
-        hvac_mode=VThermHvacMode_HEAT,
-        dt_est=dt_est,
+        hold_s=hold_s,
         ctl=ctl,
         in_deadtime_window=lambda: in_window,
     )

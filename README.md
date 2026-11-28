@@ -23,10 +23,13 @@ SmartPI is an advanced PI-based thermal control algorithm built around a first-o
 
 - **1R1C Thermal Model**: Learns your room's heating gain, heat-loss rate, and reaction dead times from real observations — no manual tuning required
 - **Auto-Tuned PI Gains**: Computes Kp and Ki automatically from the learned time constant and dead time using IMC and heuristic rules
-- **Model-Based Feed-Forward**: Estimates the steady-state power needed to hold the setpoint, combined with a slow bias trim and an FF3 predictive correction enabled by default for disturbance recovery
-- **Analytical Setpoint Trajectory**: Shapes the proportional reference with a model-aware late-braking trajectory in heating and cooling to reach the target quickly while limiting overshoot
+- **Model-Based Feed-Forward**: Estimates the steady-state power needed to hold the setpoint, ramped in progressively while the model is being learned
+- **Anticipation (heating and cooling)**: Reads the temperature the room is about to reach, from its slope and the time between a command and its effect, to lower the command early and limit the overshoot of slow emitters
 - **Safety-First Governance**: A regime-based matrix freezes or unlocks learning and gain adaptation depending on the current operating context
-- **Auto-Calibration**: Monitors model quality over time and triggers a recalibration sequence when learning stagnates
+- **Choice of the learning start**: bootstrap (hysteresis cycles at full power until the model is learned) or direct start (PI regulation from the first minute with light measurement pulses)
+- **Pausing the learning**: by service, by a disturbance entity (guests, fireplace, sun) or by a heating unavailable entity (boiler off, defrost); the regulation goes on with the model already learned
+- **Heating and cooling**: each mode keeps its own learned heating or cooling rate, dead time and emitter response
+- **Calibration on request**: a few measurement pulses near the setpoint measure the room again and correct the learned model when it is clearly off; safe to call from an automation
 - **Valve Curve Linearization**: Translates SmartPI demand into a valve position adapted to the non-linear behavior of radiator TRVs
 - **Rich Diagnostics**: Publishes detailed learning status, model state, and regulation data — viewable via a dedicated Home Assistant Markdown card or the [Equinox](https://github.com/KipK/equinox) Regulation panel
 
@@ -82,6 +85,7 @@ Home Assistant older than 2026.11: [open it in HACS](https://my.home-assistant.i
 Comprehensive documentation is available in English:
 
 - 🇬🇧 [User Documentation (English)](documentation/en/vtherm_smartpi.md)
+- 🇬🇧 [Best practices for good learning (English)](documentation/en/best_practices.md)
 - 🇬🇧 [Technical Documentation (English)](documentation/en/technical_doc.md)
 
 ## 👥 Authors

@@ -2,7 +2,6 @@
 """SmartPI algorithm handler for the plugin runtime."""
 
 import logging
-import time
 from typing import TYPE_CHECKING
 from homeassistant.util import slugify
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
@@ -12,34 +11,30 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from datetime import timedelta
 
 from .algo import SmartPI
-from .state_store import SmartPIStateStore
-from .smartpi.const import (
-    SMARTPI_RECALC_INTERVAL_SEC,
-    SmartPIPhase,
-    SmartPICalibrationResult,
-)
+from .state_store import SmartPIRoomHistoryStore, SmartPIRoomModelStore, SmartPIStateStore
+from .smartpi.room_model.const import RM_EXCLUDED_SHEDDING, RM_EXCLUDED_WINDOW, RM_SAVE_DELAY_S
+from .smartpi.learning_start import command_is_on_off
+from .smartpi.room_history.const import HISTORY_SAVE_DELAY_S
+from .smartpi.room_history.deps import dependencies_importable
+from .smartpi.const import SMARTPI_RECALC_INTERVAL_SEC, SmartPIPhase
+from .smartpi.calibration_report import schedule_report
 from .const import (
     CONF_TARGET_VTHERM,
     CONF_MINIMAL_ACTIVATION_DELAY,
     CONF_MINIMAL_DEACTIVATION_DELAY,
     CONF_SMART_PI_DEADBAND,
-    CONF_SMART_PI_USE_SETPOINT_FILTER,
-    CONF_SMART_PI_USE_FF3,
     CONF_SMART_PI_HYSTERESIS_ON,
     CONF_SMART_PI_HYSTERESIS_OFF,
-    CONF_SMART_PI_RELEASE_TAU_FACTOR,
     CONF_SMART_PI_DEADBAND_ALLOW_P,
     CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE,
     CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION,
-    CONF_SMART_PI_MIN_VALVE,
-    CONF_SMART_PI_KNEE_DEMAND,
-    CONF_SMART_PI_KNEE_VALVE,
-    CONF_SMART_PI_MAX_VALVE,
+    CONF_SMART_PI_LEARNING_START, CONF_SMART_PI_MIN_VALVE, CONF_SMART_PI_KNEE_DEMAND, CONF_SMART_PI_KNEE_VALVE, CONF_SMART_PI_MAX_VALVE,
     DEFAULT_OPTIONS,
     DIAGNOSTIC_SENSOR_UNIQUE_ID_PREFIX,
     DOMAIN,
     diag_update_signal,
     EventType,
+    HVAC_OFF_REASON_WINDOW_DETECTION,
     SIGNAL_SMARTPI_TARGET_UPDATED,
 )
 from .hvac_mode import VThermHvacMode_OFF, VThermHvacMode_HEAT, VThermHvacMode_COOL
@@ -59,7 +54,12 @@ class SmartPIHandler:
         """Initialize handler with parent thermostat reference."""
         self._thermostat = thermostat
         self._store: SmartPIStateStore | None = None
+        self._history_store: SmartPIRoomHistoryStore | None = None
+        self._room_store: SmartPIRoomModelStore | None = None
+        self._learning_task = None
         self._recalc_timer_remove = None
+        # The recalculation timer has not started yet in this session
+        self._first_timer_start = True
         # Remover of the applied-command receipt callback; None without receipts
         self._receipt_remove = None
         # State for learning
@@ -82,6 +82,8 @@ class SmartPIHandler:
         # Initialize storage with slugified name to allow retrieval if re-created
         safe_name = slugify(t.name)
         self._store = SmartPIStateStore(t.hass, safe_name)
+        self._history_store = SmartPIRoomHistoryStore(t.hass, safe_name, HISTORY_SAVE_DELAY_S)
+        self._room_store = SmartPIRoomModelStore(t.hass, safe_name, RM_SAVE_DELAY_S)
 
         # Use the thermostat's cycle_min property directly for consistency
         # (base_thermostat reads CONF_CYCLE_MIN in __init__)
@@ -100,11 +102,8 @@ class SmartPIHandler:
 
         # SmartPI specific
         deadband = entry[CONF_SMART_PI_DEADBAND]
-        use_setpoint_filter = entry[CONF_SMART_PI_USE_SETPOINT_FILTER]
-        use_ff3 = entry[CONF_SMART_PI_USE_FF3]
         hyst_on = entry[CONF_SMART_PI_HYSTERESIS_ON]
         hyst_off = entry[CONF_SMART_PI_HYSTERESIS_OFF]
-        release_tau_factor = entry[CONF_SMART_PI_RELEASE_TAU_FACTOR]
         deadband_allow_p = entry[CONF_SMART_PI_DEADBAND_ALLOW_P]
         self._allow_pwm_cycle_force = entry[CONF_SMART_PI_ALLOW_PWM_CYCLE_FORCE]
         self._valve_linearization_configured = entry[CONF_SMART_PI_ENABLE_VALVE_LINEARIZATION]
@@ -135,20 +134,21 @@ class SmartPIHandler:
             name=t.name,
             max_on_percent=max_on_percent,
             deadband_c=deadband,
-            use_setpoint_filter=use_setpoint_filter,
-            use_ff3=use_ff3,
             hysteresis_on=hyst_on,
             hysteresis_off=hyst_off,
-            release_tau_factor=release_tau_factor,
             deadband_allow_p=deadband_allow_p,
             enable_valve_linearization=valve_linearization_enabled,
             valve_curve_params=self._valve_curve_params,
+            room_model=True,
+            learning_start=entry[CONF_SMART_PI_LEARNING_START],
         )
         t.prop_algorithm.configure_valve_linearization(
             valve_linearization_enabled,
             self._valve_curve_params,
             valve_mode=valve_mode_enabled,
         )
+        t.prop_algorithm.restart_exclusion_probe = self._restart_exclusion
+        t.prop_algorithm.learning_block.configure(t.hass, entry)  # disturbance and heating-unavailable entities
 
         _LOGGER.info("%s - SmartPI Algorithm initialized", t)
         async_dispatcher_send(t.hass, SIGNAL_SMARTPI_TARGET_UPDATED, t.unique_id)
@@ -190,6 +190,106 @@ class SmartPIHandler:
                     _LOGGER.debug("%s - SmartPI state loaded", t)
             except Exception as e:
                 _LOGGER.error("%s - Failed to load SmartPI state: %s", t, e)
+        algo = t.prop_algorithm
+        if self._history_store and isinstance(algo, SmartPI) and getattr(algo, "room_history", None) is not None:
+            try:
+                algo.room_history.load_state(await self._history_store.async_load())
+            except Exception as e:
+                _LOGGER.error("%s - Failed to load SmartPI room history: %s", t, e)
+            # The quiet periods need the home position to rule out the sun (validated by the manager)
+            config = getattr(t.hass, "config", None)
+            algo.room_history.set_position(getattr(config, "latitude", None), getattr(config, "longitude", None))
+            available = dependencies_importable()
+            algo.room_history.set_dependencies(available)
+        if self._room_store and isinstance(algo, SmartPI) and getattr(algo, "room_model", None) is not None:
+            try:
+                algo.room_model.load_state(await self._room_store.async_load())
+            except Exception as e:
+                _LOGGER.error("%s - Failed to load SmartPI room model data: %s", t, e)
+
+    @staticmethod
+    def _window_open(t) -> bool:
+        window_manager = getattr(t, "window_manager", None)
+        return (
+            getattr(window_manager, "is_window_detected", None) is True
+            or t.hvac_off_reason == HVAC_OFF_REASON_WINDOW_DETECTION
+        )
+
+    @staticmethod
+    def _history_exclusion(t, algo) -> str | None:
+        """Why the heater is not under SmartPI's command at this tick (None when it is)."""
+        if t.vtherm_hvac_mode != VThermHvacMode_HEAT:
+            return "hvac not heating"
+        return SmartPIHandler._control_exclusion(t, algo)
+
+    @staticmethod
+    def _control_exclusion(t, algo) -> str | None:
+        """Why SmartPI's command is not the applied one, whatever the HVAC mode (None when it is)."""
+        if SmartPIHandler._window_open(t):
+            return RM_EXCLUDED_WINDOW
+        if t.is_overpowering_detected is True:
+            return RM_EXCLUDED_SHEDDING
+        if algo.vt_safety_override:
+            return "safety mode"
+        on_percent = t.on_percent
+        if on_percent is None:
+            return "command unknown"
+        if abs(on_percent - algo.on_percent) > 1e-6:
+            return "command overridden"
+        return None
+
+    def _restart_exclusion(self) -> str | None:
+        """Why SmartPI is not in control at the first tick after a restart, before any command.
+
+        The command itself (overridden or unknown) is only known once applied:
+        the safety mode is what overrides it at a restart.
+        """
+        t = self._thermostat
+        if self._window_open(t):
+            return RM_EXCLUDED_WINDOW
+        if t.is_overpowering_detected is True:
+            return RM_EXCLUDED_SHEDDING
+        if getattr(getattr(t, "safety_manager", None), "is_safety_detected", False) is True:
+            return "safety mode"
+        return None
+
+    @staticmethod
+    def _room_model_exclusion(t, algo) -> str | None:
+        """_history_exclusion, except that an open window wins over the HVAC mode it forces.
+
+        VT turns the heater off (or to fan only) while a window is open: the room
+        model follows the air through the window instead of pausing.
+        """
+        if SmartPIHandler._window_open(t) and getattr(t, "requested_hvac_mode", None) == VThermHvacMode_HEAT:
+            return RM_EXCLUDED_WINDOW
+        return SmartPIHandler._history_exclusion(t, algo)
+
+    def _learning_jobs(self, algo) -> list:
+        """The (manager, store) pairs whose computations run in the executor: room history, room model, readings."""
+        start = getattr(algo, "_start", None)
+        pairs = ((getattr(algo, "room_history", None), self._history_store), (getattr(algo, "room_model", None), self._room_store),
+                 (getattr(start, "reading", None), None), (getattr(start, "model_reading", None), None))
+        return [(manager, store) for manager, store in pairs if manager is not None]
+
+    async def _run_learning(self, managers) -> None:
+        """Run the due computations of the managers, one after the other."""
+        for manager in managers:
+            if manager.active:
+                await manager.async_run(self._thermostat.hass)
+
+    def _process_learning(self, algo) -> None:
+        """Start the due computations (none while the learning is blocked); persist the managers that have a store."""
+        t, jobs = self._thermostat, self._learning_jobs(algo)
+        blocked = getattr(getattr(algo, "learning_block", None), "blocked", False) is True
+        may_run = (self._learning_task is None or self._learning_task.done()) and not blocked
+        if may_run and any(manager.active for manager, _ in jobs):
+            self._learning_task = t.hass.async_create_background_task(
+                self._run_learning([manager for manager, _ in jobs]), f"{DOMAIN}_learning"
+            )
+        for manager, store in jobs:
+            if store is not None and manager.dirty:
+                store.schedule_save(manager)
+        schedule_report(t, algo)   # the end report of a calibration, sent from a task of its own
 
     async def async_startup(self):
         """Startup actions."""
@@ -207,11 +307,6 @@ class SmartPIHandler:
             except Exception as e:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
-    def _fire_autocalib_event(self, event):
-        """Fire an AutoCalib event: `entity_id` is the climate entity, `name` the thermostat name."""
-        self._thermostat.hass.bus.async_fire(event.event_type, {**event.payload, "entity_id": self._thermostat.entity_id})
-        _LOGGER.info("%s - AutoCalib event fired: %s", self._thermostat.name, event.event_type)
-
     def remove(self):
         """Cleanup and save state on removal."""
         t = self._thermostat
@@ -219,12 +314,27 @@ class SmartPIHandler:
             try:
                 # Snapshot now; the write itself cannot be awaited from this sync method.
                 t.hass.async_create_task(self._store.save_now(t.prop_algorithm))
+                history = getattr(t.prop_algorithm, "room_history", None)
+                if self._history_store is not None and history is not None:
+                    t.hass.async_create_task(self._history_store.save_now(history))
+                room = getattr(t.prop_algorithm, "room_model", None)
+                if self._room_store is not None and room is not None:
+                    t.hass.async_create_task(self._room_store.save_now(room))
             except Exception as e:
                 _LOGGER.error("%s - Failed to save SmartPI state: %s", t, e)
 
+        self._stop_learning_tasks()
         self._stop_recalc_timer()
         self._remove_receipt_callback()
         clear_valve_config_issues(t)
+
+    def _stop_learning_tasks(self) -> None:
+        """Stop the learning computations: the executor jobs end early, the tasks are cancelled."""
+        for manager, _ in self._learning_jobs(self._thermostat.prop_algorithm):
+            manager.stop()
+        if self._learning_task is not None and not self._learning_task.done():
+            self._learning_task.cancel()
+        self._learning_task = None
 
     def _remove_receipt_callback(self) -> None:
         """Unregister the applied-command receipt callback, if any."""
@@ -248,7 +358,7 @@ class SmartPIHandler:
                 valve_mode=bool(getattr(scheduler, "is_valve_mode", False)),
             )
             self._remove_receipt_callback()
-            # Capability check before any request_id reaches start_cycle (older VT raise TypeError)
+            # Older VT versions do not report applied commands
             if hasattr(scheduler, "register_command_receipt_callback"):
                 self._receipt_remove = scheduler.register_command_receipt_callback(
                     algo.on_command_receipt
@@ -256,12 +366,10 @@ class SmartPIHandler:
             else:
                 _LOGGER.warning(
                     "%s - Versatile Thermostat does not report applied commands: "
-                    "SmartPI runs without command ownership (no bumpless transfer, "
-                    "no periodic feed-forward trim)",
+                    "SmartPI takes the applied power from the cycle start notifications",
                     self._thermostat,
                 )
                 scheduler.register_cycle_start_callback(self._on_legacy_cycle_started)
-            algo.receipts_supported = self._receipt_remove is not None
             scheduler.register_cycle_end_callback(algo.on_cycle_completed)
 
     def _synchronize_scheduler_timing(
@@ -364,7 +472,7 @@ class SmartPIHandler:
                 is_device_active=t.is_device_active,
                 hvac_mode=t.vtherm_hvac_mode,
                 is_calibration=(algo.phase == SmartPIPhase.CALIBRATION),
-                is_bootstrap=(algo.phase == SmartPIPhase.HYSTERESIS),
+                is_bootstrap=command_is_on_off(algo),
             )
 
             if guard_cut_action == GuardAction.CUT_TRIGGER:
@@ -380,7 +488,7 @@ class SmartPIHandler:
                 on_percent=algo.calculated_on_percent,
                 hvac_mode=t.vtherm_hvac_mode,
                 is_calibration=(algo.phase == SmartPIPhase.CALIBRATION),
-                is_bootstrap=(algo.phase == SmartPIPhase.HYSTERESIS),
+                is_bootstrap=command_is_on_off(algo),
             )
 
             if guard_kick_action == GuardAction.KICK_TRIGGER:
@@ -396,6 +504,11 @@ class SmartPIHandler:
             )
             safety = getattr(getattr(t, "safety_manager", None), "is_safety_detected", False)
             algo.vt_safety_override = safety is True
+            if isinstance(algo, SmartPI):
+                # The restart is decided once, before the first observations of this session.
+                algo.resolve_restart(
+                    t.vtherm_hvac_mode, t.current_temperature, t.is_overpowering_detected is True
+                )
             t.prop_algorithm.calculate(
                 target_temp=t.target_temperature,
                 current_temp=t.current_temperature,
@@ -407,6 +520,27 @@ class SmartPIHandler:
                 off_reason=t.hvac_off_reason,
                 temperature_measure_id=getattr(t, "last_temperature_measure", None),
             )
+            if isinstance(algo, SmartPI):
+                # The restart decision checks the HVAC mode itself (HEAT or COOL).
+                algo.note_control_exclusion(self._control_exclusion(t, algo))
+            if isinstance(algo, SmartPI) and getattr(algo, "room_history", None) is not None:
+                algo.observe_room_history(
+                    t.target_temperature,
+                    t.current_temperature,
+                    t.current_outdoor_temperature,
+                    t.vtherm_hvac_mode,
+                    excluded=self._history_exclusion(t, algo),
+                )
+            if isinstance(algo, SmartPI) and getattr(algo, "room_model", None) is not None:
+                algo.observe_room_model(
+                    t.current_temperature,
+                    t.current_outdoor_temperature,
+                    t.vtherm_hvac_mode,
+                    excluded=self._room_model_exclusion(t, algo),
+                    measure_id=getattr(t, "last_temperature_measure", None),
+                )
+            if isinstance(algo, SmartPI):
+                self._process_learning(algo)
 
             # Force cycle restart on deadband and near-band transitions so the
             # physically engaged PWM follows the zone change quickly.
@@ -453,23 +587,13 @@ class SmartPIHandler:
             force_cycle = (
                 force
                 or (t.prop_algorithm.phase == SmartPIPhase.CALIBRATION)
-                or (t.prop_algorithm.phase == SmartPIPhase.HYSTERESIS and on_percent_changed)
+                or (command_is_on_off(t.prop_algorithm) and on_percent_changed)
             )
-
-            # An untagged request (no request_id) is never owned.
-            request_kwargs = {}
-            if algo is not None:
-                if abs(on_percent - algo.on_percent) > 1e-6:
-                    # VT override (e.g. safety default): not owned by the SmartPI request.
-                    algo.reset_command_ownership("runtime_power_override")
-                elif self._receipt_remove is not None:
-                    request_kwargs = {"request_id": algo.stage_command(t.vtherm_hvac_mode)}
 
             await t.cycle_scheduler.start_cycle(
                 t.vtherm_hvac_mode,
                 on_percent,
                 force_cycle,
-                **request_kwargs,
             )
             if (
                 algo is not None
@@ -496,38 +620,6 @@ class SmartPIHandler:
         if self._store and t.prop_algorithm:
             self._store.schedule_save(t.prop_algorithm)
 
-        # --- AutoCalibTrigger: hourly check ---
-        if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
-            algo = t.prop_algorithm
-            now_wall = time.time()
-
-            # A calibration run ended since the previous pass
-            completed_result = algo.calibration_mgr.take_completed_result()
-            if completed_result is not None:
-                ac_event = algo.autocalib.on_calibration_complete(
-                    now_wall=now_wall,
-                    algo=algo,
-                    result=completed_result,
-                )
-                if ac_event is not None:
-                    self._fire_autocalib_event(ac_event)
-
-            # Hourly stagnation check
-            ac_event = algo.autocalib.check_hourly(
-                now_wall=now_wall,
-                algo=algo,
-                ext_temp=t.current_outdoor_temperature,
-                current_temp=t.current_temperature,
-            )
-            if ac_event is not None:
-                self._fire_autocalib_event(ac_event)
-                if ac_event.should_trigger_calibration:
-                    # AutoCalibTrigger decided to start a calibration
-                    algo.calibration_mgr.request_calibration(phase=algo.phase)
-                    _LOGGER.warning(
-                        "%s - AutoCalib: calibration requested by supervisor", t.name
-                    )
-
         if self._should_publish_intermediate:
             async_dispatcher_send(t.hass, diag_update_signal(t.unique_id))
 
@@ -542,14 +634,17 @@ class SmartPIHandler:
             self._start_recalc_timer()
 
             # When resuming from OFF state (e.g., window close), reset the cycle start state
-            # to prevent using stale learning window data.
+            # to prevent using stale learning window data. A bridged restart is not
+            # a resume: its learning window goes on.
+            first_start, self._first_timer_start = self._first_timer_start, False
             if timer_was_stopped and t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
-                t.prop_algorithm.reset_cycle_state()
-                _LOGGER.debug("%s - SmartPI resumed from OFF: cycle and learning window reset", t.name)
+                if first_start and t.prop_algorithm.restart_bridged:
+                    _LOGGER.debug("%s - SmartPI started after a bridged restart: cycle state kept", t.name)
+                else:
+                    t.prop_algorithm.reset_cycle_state()
+                    _LOGGER.debug("%s - SmartPI resumed from OFF: cycle and learning window reset", t.name)
         else:
             self._stop_recalc_timer()
-            # Cancel any ongoing calibration when switching to OFF/SLEEP mode
-            await self._cancel_calibration_if_active()
 
     def _start_recalc_timer(self):
         """Start the periodic recalculation timer."""
@@ -579,32 +674,6 @@ class SmartPIHandler:
             self._recalc_timer_remove = None
             _LOGGER.debug("%s - SmartPI calc timer stopped", t)
 
-    async def _cancel_calibration_if_active(self):
-        """Cancel any ongoing calibration (manual or auto) when HVAC is turned off."""
-        t = self._thermostat
-        algo = t.prop_algorithm
-        if not algo or not isinstance(algo, SmartPI):
-            return
-
-        if not algo.calibration_mgr.is_calibrating:
-            return
-
-        _LOGGER.info("%s - HVAC OFF: canceling ongoing calibration", t.name)
-
-        # Reset the calibration manager
-        algo.calibration_mgr.reset()
-
-        # Notify autocalib trigger about the cancellation (it never returns an event)
-        algo.autocalib.on_calibration_complete(time.time(), algo, SmartPICalibrationResult.CANCELLED)
-
-        # The cancellation is notified above: drop the pending completion
-        algo.calibration_mgr.take_completed_result()
-
-        # Update attributes and save state
-        self.update_attributes()
-        t.async_write_ha_state()
-        await self._async_save()
-
     def update_attributes(self):
         """Keep climate attributes generic for SmartPI."""
         t = self._thermostat
@@ -612,9 +681,7 @@ class SmartPIHandler:
         diagnostic_entity_id = self._resolve_diagnostic_entity_id()
         specific_states["regulation_diagnostics"] = diagnostic_entity_id
         algo = t.prop_algorithm if isinstance(t.prop_algorithm, SmartPI) else None
-        specific_states["smartpi_learning_enabled"] = (
-            algo.learning_enabled if algo is not None else True
-        )
+        specific_states["smartpi_learning_enabled"] = algo.learning_enabled if algo is not None else True
 
     def _resolve_diagnostic_entity_id(self) -> str | None:
         """Resolve the SmartPI diagnostic sensor entity id from the registry."""
@@ -660,25 +727,20 @@ class SmartPIHandler:
             await self._async_save()
 
     async def service_force_smartpi_calibration(self):
-        """Force calibration."""
+        """Request a calibration (measurement pulses near the setpoint)."""
         t = self._thermostat
         if t.prop_algorithm and isinstance(t.prop_algorithm, SmartPI):
-            event = t.prop_algorithm.force_calibration()
+            t.prop_algorithm.force_calibration()
             t.hass.bus.async_fire(EventType.SMART_PI_EVENT.value, {
                  "entity_id": t.entity_id,
                  "type": "force_calibration"
              })
-            if event is not None:
-                self._fire_autocalib_event(event)
-
             write_event_log(_LOGGER, t, "SmartPI forced calibration triggered")
             # Force immediate recalculation to update state
             await self.control_heating(force=True)
             self.update_attributes()
             t.async_write_ha_state()
             await self._async_save()
-
-            _LOGGER.debug("%s - AutoCalib: manual calibration triggered, will check exit on completion", t.name)
 
     async def service_reset_smartpi_integral(self):
         """Reset the integral accumulator to zero."""

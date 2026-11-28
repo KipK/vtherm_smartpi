@@ -54,16 +54,15 @@ def test_smartpi_window_negative_integral_bug():
     algo.est.learn_ok_count_a = 20
     algo.est.learn_ok_count_b = 20
     algo.est.learn_ok_count = 50
+    algo.est.ramp_count = 50  # feed-forward warm-up count: no starting values, so the own count
     algo.est.a = 0.001
     algo.est.b = 0.001
     
-    # Force deadtime reliability to avoid automatic CALIBRATION phase
+    # Reliable dead times
     algo.dt_est.deadtime_heat_reliable = True
     algo.dt_est.deadtime_cool_reliable = True
     algo.dt_est.deadtime_heat_s = 600.0
     algo.dt_est.deadtime_cool_s = 600.0
-    import time
-    algo.calibration_mgr.last_calibration_time = time.time()
     
     # 1. Initialize in HEAT mode, reach Deadband
     # Target = 20, Current = 20 -> Error = 0

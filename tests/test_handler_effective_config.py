@@ -4,10 +4,12 @@ from types import SimpleNamespace
 
 from custom_components.vtherm_smartpi.const import (
     CONF_SMART_PI_DEADBAND,
+    CONF_SMART_PI_LEARNING_START,
     CONF_TARGET_VTHERM,
     DEFAULT_OPTIONS,
     DOMAIN,
 )
+from custom_components.vtherm_smartpi.algo import SmartPI
 from custom_components.vtherm_smartpi.handler import SmartPIHandler
 from fakes.fake_thermostat_runtime import FakeThermostatRuntime
 
@@ -77,3 +79,41 @@ def test_disabled_global_entry_does_not_hide_enabled_dedicated_entry():
 
     assert applied is dedicated
     assert config[CONF_SMART_PI_DEADBAND] == DEDICATED_DEADBAND
+
+
+def test_entry_with_the_removed_ff3_option_sets_up():
+    """A stored entry that still holds the removed feed-forward option is applied without it."""
+    thermostat = FakeThermostatRuntime()
+    thermostat.hass.config_entries._entries.append(
+        SimpleNamespace(
+            unique_id=DOMAIN,
+            data={"smart_pi_use_ff3": False},
+            options={"smart_pi_use_ff3": True, CONF_SMART_PI_DEADBAND: GLOBAL_DEADBAND},
+            disabled_by=None,
+        )
+    )
+    handler = SmartPIHandler(thermostat)
+
+    handler.init_algorithm()
+
+    assert isinstance(thermostat.prop_algorithm, SmartPI)
+    assert thermostat.prop_algorithm.deadband_c == GLOBAL_DEADBAND
+
+
+def _algorithm_of(data: dict, options: dict):
+    thermostat = FakeThermostatRuntime()
+    thermostat.hass.config_entries._entries.append(
+        SimpleNamespace(unique_id=DOMAIN, data=data, options=options, disabled_by=None)
+    )
+    SmartPIHandler(thermostat).init_algorithm()
+    return thermostat.prop_algorithm
+
+
+def test_the_handler_passes_the_start_of_the_learning_to_the_algorithm():
+    """The option reaches SmartPI; an entry without it (saved before the option existed) runs the bootstrap."""
+    direct = _algorithm_of({}, {CONF_SMART_PI_LEARNING_START: "direct"})
+    assert direct.learning_start == "direct" and direct.command_is_hysteresis is False
+    assert direct.dt_est.direct is True
+    for data, options in (({}, {}), ({}, {CONF_SMART_PI_DEADBAND: GLOBAL_DEADBAND}), ({CONF_SMART_PI_LEARNING_START: "bootstrap"}, {})):
+        bootstrap = _algorithm_of(data, options)
+        assert bootstrap.learning_start == "bootstrap" and bootstrap.command_is_hysteresis is True

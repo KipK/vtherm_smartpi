@@ -3,8 +3,7 @@ Feed-Forward A,B Confidence Policy for Smart-PI.
 
 Evaluates the reliability of the thermal model parameters a,b and determines:
   - Whether u_ff1 should be used normally (AB_OK).
-  - Whether u_ff_trim should be slowed / frozen (AB_DEGRADED).
-  - Whether the model is unreliable (AB_BAD).
+  - Whether the model is degraded (AB_DEGRADED) or unreliable (AB_BAD).
 
 This class consumes existing reliability signals — it does not recompute them.
 """

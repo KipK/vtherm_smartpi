@@ -17,7 +17,7 @@ from custom_components.vtherm_smartpi.smartpi.const import (
     KP_MIN,
     KP_SAFE,
 )
-from custom_components.vtherm_smartpi.smartpi.gains import GainScheduler
+from custom_components.vtherm_smartpi.smartpi.gains import GainScheduler, start_dead_time
 from custom_components.vtherm_smartpi.hvac_mode import (
     VThermHvacMode_COOL,
     VThermHvacMode_HEAT,
@@ -39,28 +39,27 @@ def _calculate_gains(
     cycle_min=10.0,
     valve_mode_enabled=False,
     hvac_mode=VThermHvacMode_HEAT,
+    pre_model_a=None,
 ):
     """Build a complete gain calculation fixture."""
     scheduler = scheduler or GainScheduler("test")
     estimator = MagicMock()
     estimator.a = a
     dt_est = MagicMock()
-    dt_est.deadtime_heat_reliable = deadtime_reliable
-    dt_est.deadtime_heat_s = deadtime_s
-    dt_est.deadtime_cool_reliable = deadtime_reliable
-    dt_est.deadtime_cool_s = deadtime_s
+    dt_est.active_deadtime.return_value = (deadtime_s, deadtime_reliable)
 
     return scheduler.calculate(
         tau_reliable=tau_reliable,
         tau_min=tau_min,
         estimator=estimator,
-        dt_est=dt_est,
+        delay=start_dead_time(dt_est, hvac_mode),
         in_near_band=in_near_band,
         governance_decision=governance_decision,
         near_band_ratio=near_band_ratio,
         cycle_min=cycle_min,
         valve_mode_enabled=valve_mode_enabled,
         hvac_mode=hvac_mode,
+        pre_model_a=pre_model_a,
     )
 
 
@@ -193,6 +192,14 @@ def test_smartpi_gain_adaptation():
     assert result.ki == result.kp / min(200.0, GAIN_TI_LAMBDA_FACTOR * (20.0 + 2.0))
     assert result.kp_source == "imc_simc"
     assert result.ki_source == "imc_simc"
+
+
+def test_gains_from_the_measurement_pulses_publish_a_plain_source():
+    """Before the first model, the heating rate kept from the pulses gives the gains; their source is plain like the others."""
+    result = _calculate_gains(tau_reliable=False, pre_model_a=0.02)
+    assert result.kp_source == result.ki_source == "measurement_pulses"
+    near = _calculate_gains(tau_reliable=False, pre_model_a=0.02, in_near_band=True, near_band_ratio=0.5)
+    assert near.kp_source == "measurement_pulses_nearband"
 
 
 def test_smartpi_gain_adaptation_is_symmetric_in_cool_mode():

@@ -54,12 +54,10 @@ $$ u = u_{FF} + u_{PI} $$
 
 avec :
 
-- `u_ff1` : feed-forward structurel dérivé de $b/a$,
-- `u_ff2` : biais lent `FFTrim`,
-- `u_ff3` : correction prédictive bornée de court horizon, activée par défaut et nulle hors contexte éligible,
+- `u_ff1` : feed-forward structurel (puissance de maintien), dérivé de $b/a$ (le modèle de pièce n'entre jamais dans la commande),
 - `u_pi` : terme PI discret.
 
-La sortie réellement injectée dans le calcul est `u_ff_eff + u_pi`, puis elle passe par :
+La sortie injectée dans le calcul est `u_ff1 + u_pi`, puis elle passe par :
 
 - limitation de vitesse,
 - anti-windup,
@@ -73,11 +71,12 @@ La sortie réellement injectée dans le calcul est `u_ff_eff + u_pi`, puis elle 
 
 En phase `HYSTERESIS`, l'apprentissage suit un ordre strict :
 
-1. le temps mort de la réponse active doit être fiable avant toute collecte
-   utile pour `a` (`heat` en HEAT, `cool` en COOL),
-2. le temps mort de la réponse passive doit être fiable avant toute collecte
-   utile pour `b` (`cool` en HEAT, `heat` en COOL),
-3. `b` doit progresser avant `a` via un soft gate.
+1. le modèle de réponse du mode (3.7) doit être publié avant toute fenêtre
+   `a` ou `b`,
+2. `b` doit progresser avant `a` via un soft gate : une fenêtre `a` soumise
+   alors que `b` a moins de `AB_A_SOFT_GATE_MIN_B` mesures est conservée
+   (`skip: a kept until b is learned`), recalculée à la publication de `b` (3.4),
+   et publiée avec la collecte dès que `b` a ses mesures.
 
 Règles effectivement codées :
 
@@ -89,22 +88,35 @@ SmartPI quitte `HYSTERESIS` lorsque `b` dispose de 5 mesures et que `a` est publ
 `a` est publié à 5 mesures, ou dès `AB_MIN_SAMPLES_A_CONSISTENT = 4` mesures lorsqu'elles
 concordent : leur écart absolu médian est au plus `AB_A_CONSISTENT_MAX_REL_MAD = 0.10`
 de leur médiane. La première publication de `a` attend aussi le modèle de puissance
-délivrée (3.7) : tant que le retard de réponse n'est pas résolu, les mesures sont
+délivrée (3.7) : tant qu'il n'est pas établi (le modèle de réponse du mode est publié, ou
+`RESPONSE_LAG_RESOLVE_EPISODES = 4` phases de chauffe se sont terminées sans lui), les mesures sont
 collectées sans publication, jusqu'à ce que la collecte atteigne `AB_HISTORY_SIZE = 31`
 mesures : la mesure admise suivante publie alors `a`. Les deux buffers continuent ensuite à se remplir jusqu'à
-`AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale. Après un redémarrage,
-l'état restauré du retard de réponse fixe la phase dès le premier calcul ; un état
-sauvegardé sans bloc de retard de réponse attend la première mise à jour de l'apprentissage.
+`AB_HISTORY_SIZE = 31` pendant la régulation SmartPI normale.
 
 Dans la bande d'hystérésis, la sortie conserve son état tout-ou-rien précédent. Une
 sortie modulée laissée par une autre phase n'est pas un état d'hystérésis : elle est
 ramenée à 0 jusqu'au prochain seuil. L'état tout-ou-rien est persisté avec l'heure
-murale du dernier calcul. Au redémarrage, le premier calcul disposant de la température intérieure et de la consigne le reprend dans la bande
-lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` (3.7) et que
-le mode HVAC est inchangé, comme l'aurait fait une hystérésis jamais interrompue.
-Hors de la bande, les seuils décident. Sinon, et pour un état sauvegardé sans cet
-état, la sortie repart à 0. Une phase de chauffe en cours peut ainsi reprendre après
-un redémarrage court.
+murale du dernier calcul. Après un redémarrage ponté (5.4), le premier calcul
+disposant de la température intérieure le reprend dans la bande, comme l'aurait fait une hystérésis jamais interrompue ; en attendant, l'état
+tout-ou-rien d'avant l'arrêt est conservé, comme décrit dans Redémarrages.
+Hors de la bande, les seuils décident. Après tout autre redémarrage, la sortie repart à 0. Une phase de chauffe ou de
+refroidissement en cours peut ainsi reprendre après un redémarrage court.
+
+Les phases de chauffe de l'hystérésis sont des événements de mesure : elles sont
+enregistrées et lues dans leur ensemble, et à la fin du bootstrap les lectures
+donnent à l'apprentissage des valeurs de départ pour `a` et `b` (3.7, Événements
+de mesure et valeurs de départ). La commande d'hystérésis, l'ordre ci-dessus et
+la règle de sortie sont les mêmes avec ou sans elles.
+
+Cet ordre est celui du démarrage par amorçage. Avec le démarrage direct (option
+`smart_pi_learning_start`, 3.7, Démarrage direct), l'étape `HYSTERESIS` est la même étape d'apprentissage,
+mais la commande est le PI et l'étape attend `b` jusqu'à ce qu'une valeur de départ de `b` tienne lieu
+ou que la constante de temps propre de l'apprentissage ait été fiable. L'option n'agit que sur un
+démarrage vierge : un état avec des mesures, des valeurs de départ, des impulsions ou des lectures garde
+le démarrage avec lequel son apprentissage a commencé (le démarrage direct est sauvegardé sous
+`learning_start`), et une réinitialisation de
+l'apprentissage reprend le démarrage configuré.
 
 La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dérive repose sur `b_converged_for_a()` :
 
@@ -115,23 +127,22 @@ La convergence de `b` utilisée pour l'apprentissage `a` avec détection de dér
 
 ### 3.2 Fenêtre d'apprentissage réelle
 
-Le code n'utilise plus de constante `WINDOW_MIN_MINUTES`. L'apprentissage repose aujourd'hui sur `LearningWindowManager` et sur une fenêtre glissante qui :
+L'apprentissage repose sur `LearningWindowManager` et sur une fenêtre glissante qui :
 
 - exige une température extérieure disponible,
-- respecte la gouvernance thermique sauf en calibration,
+- respecte la gouvernance thermique,
 - rejette ou réinitialise une fenêtre ON/`a` sur l'observation exacte du changement
   de consigne utilisateur, afin qu'une fenêtre ne puisse pas couvrir les deux
   régimes,
 - conserve l'éligibilité de la montée active initiale suivant cette observation
   pour `a`, sous les garde-fous existants de temps mort, stabilité de puissance,
-  pente robuste, FF3 et gouvernance,
+  pente robuste et gouvernance,
 - conserve l'apprentissage passif OFF/`b` sous ses garde-fous physiques existants ;
-  la calibration conserve son contrat dédié et les réponses dues uniquement à une
-  perturbation ne sont pas bloquées par ce gate de consigne,
-- bloque la collecte en bootstrap tant que les temps morts requis ne sont pas fiables,
+  les réponses dues uniquement à une perturbation ne sont pas bloquées par ce gate
+  de consigne,
+- n'ouvre aucune fenêtre de l'étape d'apprentissage (bootstrap ou démarrage direct) avant la publication du modèle de réponse du mode, provisoire compris (`skip: learning stage - response model not yet published`, 3.7),
 - applique une pause après reprise (`LEARNING_PAUSE_RESUME_MIN = 20`),
-- ancre le début de fenêtre après la fin du temps mort quand c'est nécessaire,
-- retarde le début de fenêtre jusqu'à l'extinction de la réponse transitoire (`skip: response transient (a|b)`) : une fois le retard de réponse publié (3.7), une fenêtre `a` débute au moins `min(3 retard, moitié de l'épisode actif médian)` après l'échelon de puissance ; une fenêtre `b` débute après la coupure de puissance au moins du plus long de `3 retard` (retard publié) et de `AB_SETTLE_K_PASSIVE_DEADTIME = 1.5` temps morts passifs fiables : l'émetteur continue de chauffer après une coupure, et comme la pièce ne commence à se refroidir que lorsque cette chaleur résiduelle passe sous les pertes, le temps mort passif borne sa décroissance même lorsque le retard est inconnu. Pendant le bootstrap et la calibration, seul le terme `3 retard` s'applique,
+- retarde le début de fenêtre jusqu'à l'extinction de la réponse transitoire (`skip: response transient (a|b)`), avec les attentes du modèle de réponse (3.7) : une fenêtre `a` débute au moins `min(θ + τ_e, moitié de l'épisode actif médian)` après l'échelon de puissance, une fenêtre `b` au moins `θ + τ_e` après la coupure de puissance. Sans modèle (hors étape d'apprentissage), il n'y a pas d'attente,
 - ne soumet pas une fenêtre active plus courte qu'un cycle PWM (`active_window_shorter_than_cycle`) : sa durée est fixée avant ses données, car arrêter dès qu'une fenêtre courte paraît significative favorise les pentes les plus fortes parmi les données bruitées. Pendant le bootstrap, le chauffage fonctionne à pleine puissance entre les seuils d'hystérésis et une phase de chauffe peut être plus courte qu'un cycle : le minimum est alors plafonné à la moitié de la phase de chauffe médiane (`AB_SETTLE_ACTIVE_CAP_FRAC`), mesurée sur les phases précédentes,
 - clôt la fenêtre à sa dernière observation lorsque deux mises à jour ne sont pas contiguës (intervalle plafonné à un cycle) : la fenêtre est soumise sur les données jusqu'à cet instant lorsque sa pente y est robuste, sinon abandonnée (`skip: observation gap`) ; elle ne couvre jamais la période non observée,
 - surveille la stabilité de puissance via le coefficient de variation (`U_CV_MAX`),
@@ -177,7 +188,11 @@ Le calcul suivi par `learn()` est :
 
 - phase OFF :
 
-$$ b = -\frac{dT/dt}{T_{int} - T_{ext}} $$
+$$ b = \frac{a \cdot p - dT/dt}{T_{int} - T_{ext}} $$
+
+avec $p$ la puissance moyenne encore délivrée sur la fenêtre après la coupure (3.7)
+et $a$ la valeur utilisable (publiée, ou valeur de départ en vigueur) ; tant que `a`
+n'est pas utilisable, $p$ n'est pas compté ($b = -\frac{dT/dt}{T_{int} - T_{ext}}$).
 
 - phase ON :
 
@@ -194,6 +209,17 @@ recalculées avec ce `b`, puis `a` est agrégé à nouveau s'il a déjà été p
 mesure de `a` faite avant que `b` soit précis suit donc ses corrections. Une mesure
 restaurée sans observation, ou dont le recalcul contredirait le signe du mode,
 garde sa valeur.
+
+De même, chaque mesure de `b` conserve son observation (`dT/dt`, `T_int - T_ext`,
+`p`, mode, et le début et la fin de sa fenêtre, sauvegardés en temps mural). À
+chaque publication, valeur de départ ou correction de `a`, les mesures
+de `b` conservées de ce mode avec une puissance résiduelle sont recalculées avec ce
+`a`, puis `b` est agrégé à nouveau s'il a déjà été publié (sauf si une valeur de
+départ de `b` est en vigueur). Une variation inférieure à `AB_VAL_TOLERANCE` ne
+recalcule rien. Un recalcul n'en déclenche jamais un autre : une variation de `b`
+recalcule les mesures de `a`, une variation de `a` recalcule les mesures de `b`, une
+fois chacune. Une variation du modèle de réponse recalcule le `p` des mesures de
+`b` (3.7, modèle établi) ; le `b` qui en résulte ne recalcule rien non plus.
 
 ### 3.5 Bilan intégral des fenêtres sans pente robuste
 
@@ -250,61 +276,374 @@ relative jusqu'à 0,40).
 
 ### 3.6 Estimation du temps mort
 
-`DeadTimeEstimator` implémente une FSM indépendante. Les canaux décrivent la
+`DeadTimeEstimator` implémente une FSM indépendante qui mesure le temps mort
+après un démarrage de puissance (OFF -> ON). Ses canaux décrivent la
 réponse physique de la pièce, pas le sens de la transition de puissance :
 
-- `deadtime_heat` : délai avant une montée de température,
-- `deadtime_cool` : délai avant une baisse de température.
+- `deadtime_heat` : temps mort avant une montée de température,
+- `deadtime_cool` : temps mort avant une baisse de température.
 
-Ainsi, OFF -> ON apprend `heat` en mode HEAT mais `cool` en mode COOL.
-La transition ON -> OFF apprend la réponse passive opposée.
+Ainsi, OFF -> ON apprend `heat` en mode HEAT et `cool` en mode COOL ; l'autre
+canal reste vide. Une coupure de puissance n'arme rien : ce qui suit un arrêt est lu par le modèle de réponse (3.7).
 
-La détection suit la température intérieure filtrée, y compris pendant une calibration forcée : une mesure brute qui oscille d'un pas de capteur détecterait sinon une réponse dès l'échelon de puissance. Une détection en cours n'est pas reprise après un redémarrage, et la durée minimale OFF doit être observée dans la session en cours avant qu'une détection puisse être armée.
+La détection suit la température intérieure filtrée, en régulation comme pendant le bootstrap et les impulsions de mesure : une mesure brute qui oscille d'un pas de capteur détecterait sinon une réponse dès l'échelon de puissance. Une détection en cours reprend après un redémarrage ponté (5.4) : son état, son début, son creux ou son pic, la tendance avant le démarrage, la dernière puissance et la dernière coupure de puissance sont persistés en temps mural, et son délai d'expiration continue de courir depuis le début sauvegardé. Après tout autre redémarrage, elle est abandonnée, et la durée minimale OFF doit être observée à nouveau dans la session en cours avant qu'une détection puisse être armée.
 
-Une réponse est détectée dès que la température s'est écartée de `0.05 °C` de son creux (chauffe) ou de son pic (refroidissement) depuis la transition de puissance. Le temps mort court de la transition au dernier instant à moins de `0.01 °C` de ce creux ou de ce pic, suivi pendant l'attente : il ne dépend donc pas de la rétention de l'historique de température. L'attente abandonne après `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s` pour une réponse active (puissance démarrée) et `DEADTIME_PASSIVE_TIMEOUT_S = 43200 s` pour une réponse passive (puissance coupée) : après une coupure, un émetteur qui stocke beaucoup de chaleur (plancher chauffant) continue de réchauffer la pièce, puis plafonne, et la baisse peut arriver plusieurs heures plus tard. Pendant le bootstrap, l'attente passive se termine par une détection ou par une reprise de chauffe, qui exige une baisse que la détection voit d'abord ; la limite ne fait que borner le délai au-delà duquel une baisse n'est plus attribuée à la coupure. Une transition de puissance abandonne une attente en cours. L'issue de la dernière attente de chaque réponse et l'âge de l'attente en cours sont publiés (`analysis.deadtime`).
+Une réponse est détectée dès que la température s'est écartée de `0.05 °C` de son creux (chauffe) ou de son pic (refroidissement) depuis la transition de puissance. Le temps mort court de la transition au dernier instant à moins de `0.01 °C` de ce creux ou de ce pic, suivi pendant l'attente : il ne dépend donc pas de la rétention de l'historique de température. L'attente abandonne après `DEADTIME_ACTIVE_TIMEOUT_S = 14400 s`. Une coupure de puissance interrompt une attente en cours. L'issue de la dernière attente de chaque réponse et l'âge de l'attente en cours sont publiés (`analysis.deadtime`).
 
 La réponse à un démarrage de puissance est l'écart de la température par rapport à l'évolution qu'elle suivait avant le démarrage. Sans chauffe, la température d'une pièce reste stable ou baisse : le suivi du creux ci-dessus date alors la réponse. Une pièce qui se réchauffe déjà avec le chauffage éteint (occupants, soleil, pièce voisine) s'éloigne par elle-même du niveau de démarrage, et le suivi du creux daterait la réponse trop tôt (en COOL, il en va de même pour une pièce qui se refroidit déjà avant le début du refroidissement). Ainsi, à un démarrage actif (puissance activée), `deadtime_trend.prestart_trend()` ajuste une droite sur la température brute de la période OFF précédant le démarrage :
 
-- fenêtre : les `DEADTIME_PRESTART_WINDOW_S = 1800 s` précédant le démarrage, commençant au plus tôt à la dernière coupure de puissance augmentée du temps mort passif (l'émetteur agit encore sur la pièce avant ce délai) ;
+- fenêtre : les `DEADTIME_PRESTART_WINDOW_S = 1800 s` précédant le démarrage, commençant au plus tôt à la dernière coupure de puissance augmentée du retard de l'émetteur `θ + τ_e` du modèle de réponse du mode (l'émetteur agit encore sur la pièce avant ce délai), plus le temps mort après un démarrage sans modèle ;
 - avec moins de `DEADTIME_PRESTART_MIN_SPAN_S = 900 s` ou moins de `DEADTIME_PRESTART_MIN_SAMPLES = 4` échantillons, aucune tendance n'est retirée ;
 - une tendance dont la variation ajustée reste dans un pas de capteur (la plus petite variation observée dans la fenêtre, au moins `DEADTIME_PRESTART_STEP_FLOOR_C = 0.01 °C`), ou qui va à l'encontre de la réponse, n'est pas non plus retirée : la détection est le suivi du creux (ou du pic) ci-dessus, inchangé. C'est le cas habituel pendant le bootstrap, où la chauffe reprend parce que la pièce s'est refroidie ;
 - une tendance dans le sens de la réponse est ajustée sur toute la fenêtre et sur sa moitié récente (au moins `DEADTIME_PRESTART_MIN_HALF_SAMPLES = 3` échantillons par moitié). La détection est rejetée si la tendance n'est pas une droite : un résidu rms supérieur à la moitié du seuil de détection (et supérieur à un pas de capteur), ou une pente qui, de la première moitié à la seconde, croît dans le sens de la réponse de plus du seuil de détection par demi-fenêtre. Une droite sous-estimerait alors la tendance au démarrage ;
 - sinon, le détecteur suit la température moins la tendance extrapolée, avec la pente la plus forte des deux ajustements : en retirer trop ne fait que retarder la détection. Le creux, le seuil de `0.05 °C` et la rétrospection de `0.01 °C` s'appliquent à cette différence ;
 - au moment de la détection, la mesure est rejetée si la tendance seule couvre au moins le seuil de détection depuis le démarrage : la réponse n'est alors pas séparable de la tendance.
 
-Une mesure rejetée publie l'issue `rejected` et laisse les détections inchangées : le temps mort conserve sa valeur précédente. Une réponse passive (coupure de puissance) n'est pas concernée : la tendance précédant une coupure est celle de la chauffe elle-même.
+Une mesure rejetée publie l'issue `rejected` et laisse les détections inchangées : le temps mort conserve sa valeur précédente.
 
 Une mesure qui ferait baisser le temps mort publié est aussi ignorée (issue `ignored`, le temps mort garde sa valeur) lorsque la preuve est faible : la tendance avant le démarrage va nettement dans le sens de la réponse (variation ajustée d'au moins `DEADTIME_PRESTART_RISE_MIN_STEPS = 2` pas du capteur sur la fenêtre, même si elle a été retirée plutôt que rejetée), ou la fenêtre est trop courte pour évaluer une tendance. Une pièce qui se réchauffe avant le démarrage ne peut que faire paraître la réponse plus précoce : elle ne raccourcit donc jamais le temps mort. Une mesure égale ou plus longue que la valeur publiée suit les règles ci-dessus, de même que toute mesure avant la première valeur publiée.
 
 La fiabilité devient vraie dès qu'au moins une mesure valide a été capturée sur le canal correspondant. Chaque canal garde ses 6 dernières détections ; la valeur publiée est leur médiane, de sorte qu'une détection aberrante isolée ne la déplace pas (avec une ou deux détections, la médiane vaut leur moyenne). Au redémarrage, la valeur publiée est recalculée à partir des détections restaurées.
 
-### 3.7 Retard de réponse et puissance délivrée
+### 3.7 Retard de l'émetteur et puissance délivrée
 
-À l'échelle d'une fenêtre d'apprentissage, la pièce se comporte comme un intégrateur derrière des retards rapides (actionneur, émetteur, brassage de l'air, boîtier de la sonde) et un retard pur (réponse intégratrice du premier ordre avec temps mort). Après un échelon de puissance, la pente se stabilise progressivement et son asymptote de rampe croise la trajectoire passive extrapolée à $t = T_{ar} = L + \sum \tau_i$, le temps de séjour moyen de la réponse (Åström et Hägglund). Une fenêtre qui débute $k \cdot T_{ar}$ après l'échelon présente un déficit de pente d'au plus $e^{-k}$ pour un retard unique, quelle que soit la part du retard pur. Une fenêtre comprise dans le régime transitoire sous-estime `a`, d'autant plus que les retards sont longs ou que la sonde rapporte en retard.
+À l'échelle d'une fenêtre d'apprentissage, la pièce se comporte comme un intégrateur derrière un temps mort pur $\theta$ (sonde, transport, actionneur) et une constante de temps de réponse du premier ordre $\tau_e$ (l'émetteur, l'air et la masse proche) : le modèle de réponse du mode (Modèle de réponse, ci-dessous). Après un échelon de puissance, la pente se stabilise progressivement ; une fenêtre comprise dans le régime transitoire sous-estime `a`, d'autant plus que le retard de l'émetteur $\theta + \tau_e$ est long ou que la sonde rapporte en retard. L'apprentissage de a/b lit le modèle publié de son mode (`ResponseModel.values`), et rien d'autre, pour trois choses.
 
-`ResponseLagEstimator` (`response_lag.py`) mesure $T_{ar}$ sur les épisodes actifs à puissance constante (écart d'au plus `RESPONSE_LAG_U_TOL = 0.05`) :
+**Échelons de puissance.** `PowerSteps` (`power_steps.py`) suit la puissance appliquée sur chaque intervalle de mise à jour : un épisode actif est une période de puissance après un échelon depuis le repos (il reste constant tant que la puissance varie d'au plus `RESPONSE_LAG_U_TOL = 0.05`), une coupure le termine. Une discontinuité de plus de 1 s entre deux mises à jour termine l'épisode au dernier instant observé, et la coupure de puissance est datée à la reprise. Les `RESPONSE_LAG_HISTORY = 7` dernières durées d'épisode sont conservées (leur médiane, dès que `RESPONSE_LAG_MIN_ESTIMATES = 3` sont connues, plafonne l'attente de `a`). Une phase de chauffe regroupe les épisodes actifs séparés par des coupures de puissance inférieures à `RESPONSE_LAG_PHASE_MIN_OFF_S = 600 s`.
 
-- l'épisode doit suivre une période passive d'au moins `max(RESPONSE_LAG_MIN_OFF_S = 1800 s, RESPONSE_LAG_MIN_OFF_LAGS = 5 × retard connu)`, afin que la puissance de l'épisode précédent soit retombée ;
-- la référence passive est la pente OLS robuste de la fin de cette période OFF (sur `RESPONSE_LAG_PASSIVE_SPAN_S = 3600 s` au plus), à défaut le `b` publié ;
-- la droite tardive est ajustée sur les franchissements de niveau de l'historique brut (au moins `RESPONSE_LAG_MIN_CROSSINGS = 3`). Pour un saut d'un pas de capteur, le franchissement est daté au milieu des deux échantillons ; un saut de plusieurs pas conserve la valeur brute. Cela supprime les biais en escalier et de seuil de déclenchement des capteurs qui rapportent sur changement ;
-- l'ordonnée à l'origine d'une droite OLS ajustée sur un segment transitoire tombe avant $T_{ar}$ : l'estimateur inverse la forme close de l'ordonnée à l'origine d'une réponse à retard unique sur l'intervalle ajusté (monotone en le retard). Un épisode n'est pas utilisé lorsque l'inversion est trop plate (`RESPONSE_LAG_MIN_INVERSION_SLOPE = 0.05`) ou lorsque l'ordonnée à l'origine atteint `RESPONSE_LAG_RESOLVABLE_FRAC = 0.9` de sa limite pour un retard infini. Une estimation au-delà de `RESPONSE_LAG_MAX_S` (`DT_MAX_MIN` × 60 = 14 400 s) est également écartée (`intercept not resolvable`) ;
-- chaque estimation porte son écart-type, propagé à partir des résidus de l'ajustement et d'une incertitude relative supposée de `b` égale à `RESPONSE_LAG_B_REL_UNC = 0.10`.
+**Puissance délivrée.** La puissance délivrée à la pièce est la commande retardée de $\theta$, puis filtrée par un premier ordre de $\tau_e$ (la répartition publiée). Sans modèle, la puissance délivrée est égale à la puissance appliquée. `a` est rapporté à la puissance délivrée moyenne de sa fenêtre ; la puissance délivrée résiduelle d'une fenêtre `b` entre dans `b` (3.4) ; les pools de bilan de `b` (3.5) gardent la puissance appliquée. La commande appliquée est conservée en points de changement sur les dernières `RECORD_SPAN_S` (30,5 h, au plus `RECORD_MAX_POINTS = 6000` points), les périodes non observées étant marquées. Lorsque le filtre suivait la puissance appliquée (pas encore de modèle, ou redémarrage sans son historique) et que le modèle du mode est publié, le filtre est reconstruit sur les commandes observées depuis la dernière période non observée, sa sortie valant la plus ancienne d'entre elles à son début : les premières fenêtres `b` après une coupure comptent la chaleur que l'émetteur donne encore, au lieu d'un filtre repartant de la puissance appliquée (0). Après une période non observée (coupure de garde, OFF, intervalle plafonné à un cycle), le filtre repart de la puissance appliquée. Pour une fenêtre active qui débute $t_0$ après l'échelon et dure $W$, la fraction délivrée moyenne vaut (`response_model.delivered_fraction`) :
 
-Les `RESPONSE_LAG_HISTORY = 7` dernières estimations sont conservées. Le retard est publié lorsqu'au moins `RESPONSE_LAG_MIN_ESTIMATES = 3` estimations donnent un écart-type combiné de leur médiane pondérée par l'inverse des variances au plus égal à `RESPONSE_LAG_MAX_REL_UNC = 0.15` de cette médiane (plancher `RESPONSE_LAG_UNC_FLOOR_S = 30 s`) ; les estimations situées à plus de trois écarts-types de la médiane ne sont pas combinées. Un ensemble incohérent conserve la valeur publiée, afin que des estimations dispersées n'activent et ne désactivent pas le modèle de puissance délivrée. Une discontinuité de plus de 1 s entre deux mises à jour termine l'épisode au dernier instant observé, et la coupure de puissance est datée à la reprise.
+$$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-\theta)/\tau_e}\right)\mathbb{1}_{t>\theta}\,dt $$
 
-Un redémarrage reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive, ou début, puissance, constance, durée passive préalable et température extérieure de l'épisode) et reconverti en horloge monotone au chargement. Il s'applique à la première observation qui suit, lorsque l'arrêt a duré au plus `RESPONSE_LAG_RESTART_MAX_GAP_S = 600 s` et que le mode HVAC est inchangé. Pendant un arrêt court, l'actionneur conserve son dernier état ; au-delà (hôte arrêté, coupure de courant, mise à jour), la puissance n'est pas connue. Une période passive reprend, et l'arrêt compte comme passif. Un épisode reprend lorsque la première puissance appliquée après le redémarrage est égale à la sienne à `RESPONSE_LAG_U_TOL` près. Sinon, il se termine sans estimation (`episode interrupted by restart`), et une puissance non nulle ouvre un nouvel épisode sans période passive connue. Les franchissements viennent de l'historique brut du détecteur de temps mort, persisté de la même façon ; il ne contient aucun échantillon pendant l'arrêt. Un état sauvegardé sans ce contexte ne reprend rien.
+**Attentes de stabilisation.** Une fenêtre débute un retard de l'émetteur $H = \theta + \tau_e$ après l'échelon de puissance (`a`) ou la coupure (`b`), quelle que soit la répartition (tant que la répartition est supposée, $H = S$). L'attente de `a` est plafonnée à la moitié de l'épisode actif médian (`AB_SETTLE_ACTIVE_CAP_FRAC`) : une attente plus longue dépasserait une phase de chauffe du bootstrap avec un émetteur lent. Le modèle de puissance délivrée corrige le reste du transitoire : la montée dans `a`, la chaleur résiduelle de l'émetteur après la coupure dans `b`. La même règle vaut en régulation, au bootstrap et au démarrage direct. Sans modèle, il n'y a pas d'attente.
 
-L'inversion suppose une réponse à retard unique (premier ordre). Elle ne restitue le temps de séjour moyen que pour un tel émetteur, ou lorsque l'épisode dure plusieurs fois le retard. Sur un émetteur qui combine un retard pur et une inertie, ou deux inerties successives, l'ordonnée à l'origine d'un épisode court est plus tardive que celle d'un retard unique de même temps de séjour : le retard publié est alors surestimé, d'environ 1,3 fois sur les formes simulées, ou n'est jamais publié lorsque l'épisode reste dans le régime transitoire.
+**Modèle établi.** Le modèle de puissance délivrée de `a` est établi dès que le modèle du mode est publié, ou après `RESPONSE_LAG_RESOLVE_EPISODES = 4` phases de chauffe sans lui (la puissance appliquée est alors utilisée) ; jusque-là, les mesures de `a` sont collectées sans publication. Pendant l'étape d'apprentissage, aucune fenêtre ne s'ouvre avant le modèle : sa première publication ne trouve donc aucune collecte ; lorsque le modèle varie ensuite de plus de `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` de son retard de l'émetteur (sur $S$ ou sur $\theta$) avant la première publication de `a`, les mesures collectées sont recalculées avec la nouvelle puissance délivrée. Seules les fenêtres admises par l'attente de stabilisation sont recalculées ; les autres sont écartées, puisque leur correction dépend de la forme de la réponse. Sur la même variation (première publication comprise, pas la première mise à jour après un chargement), les mesures de `b` du mode recalculent la puissance délivrée sur leur fenêtre à partir de l'historique des commandes avec le nouveau modèle, puis leur valeur (3.4) ; une fenêtre que l'historique ne couvre pas (avant lui, à moins de `RECORD_PRE_S` = 6 h de son début tronqué, ou à cheval sur une période non observée) garde sa puissance. Sans modèle, aucune fenêtre de l'étape d'apprentissage ne s'ouvre : l'étape attend le modèle (`learning.bootstrap_status` vaut `step1 - waiting response model`).
 
-L'ordonnée à l'origine fixe le retard moyen de la réponse, pas sa forme. Le modèle de puissance délivrée la répartit en un retard pur $L = \min(\text{temps mort actif}, T_{ar})$, puis en un retard du premier ordre de $T_{ar} - L$. Le temps mort est détecté après le début de la réponse ; il borne donc le retard pur par le haut : le modèle ne délivre jamais de puissance plus tôt qu'un retard pur de même ordonnée à l'origine. Sans retard publié ni temps mort fiable, la puissance délivrée est égale à la puissance appliquée. Pour une fenêtre active qui débute $t_0$ après l'échelon et dure $W$, la fraction délivrée moyenne vaut, avec $\tau = T_{ar} - L$ :
+Un redémarrage ponté (5.4) reprend la période passive ou l'épisode actif en cours lors de la sauvegarde. Le contexte est persisté en temps mural (dernier instant observé, puis début de la période passive avec la puissance délivrée et les températures à la coupure, ou début, puissance et constance de l'épisode) et reconverti en horloge monotone au chargement. Le chauffage a conservé la puissance engagée pendant l'arrêt, et la première mise à jour après le redémarrage couvre l'arrêt avec cette puissance : une période passive se poursuit, et l'arrêt compte comme passif ; un épisode se poursuit, et la première observation le prolonge ou le termine comme toute autre. Après tout autre redémarrage, la période passive est abandonnée et un épisode est compté comme terminé. Les épisodes sont sauvegardés sous `lw_state.power_steps`, et l'historique des commandes sous `lw_state.power_steps.commands` (origine en temps mural, décalages en secondes) : un redémarrage ponté le reprend, le chauffage ayant conservé sa commande pendant l'arrêt, et un modèle publié ensuite reconstruit le filtre dessus ; après tout autre redémarrage, l'historique et le filtre repartent de la première observation.
 
-$$ \eta = \frac{1}{W}\int_{t_0}^{t_0+W} \left(1 - e^{-(t-L)/\tau}\right)\mathbb{1}_{t>L}\,dt $$
+#### Événements de mesure et valeurs de départ
 
-Le modèle est résolu dès que le retard est publié, ou après `RESPONSE_LAG_RESOLVE_EPISODES = 4` phases de chauffe sans publication (la puissance appliquée est alors utilisée). Une phase de chauffe regroupe les épisodes actifs séparés par des coupures de puissance inférieures à `RESPONSE_LAG_PHASE_MIN_OFF_S = 600 s` : un épisode qui commence moins de 600 s après la fin du précédent ne compte pas comme une phase supplémentaire. Jusque-là, les mesures de `a` sont collectées sans publication. Lorsque le retard publié apparaît ou varie de plus de `RESPONSE_LAG_MODEL_CHANGE_REL = 0.5` avant la première publication de `a`, les mesures collectées sont recalculées avec la nouvelle puissance délivrée. Seules les fenêtres admises par la porte de stabilisation sont recalculées ; les autres sont écartées, puisque leur correction dépend de la forme de la réponse.
+Un détecteur unique (`measure_event.py`, `MeasureEventDetector`, détenu par la fenêtre
+d'apprentissage) surveille la puissance appliquée à l'émetteur et la température de la pièce, en
+chauffage et en refroidissement. Un événement est un repos, une phase de puissance supérieure à
+1 % et une coupure, puis la recherche du pic de température. Les chauffes séparées de moins de
+`EVENT_PHASE_MIN_OFF_S` (10 minutes) appartiennent à la même phase. Un repos plus court que
+`EVENT_MIN_REST_S = 1800 s` avant la phase marque l'événement comme tel (les événements de la
+régulation ne sont alors pas lus). Une référence, la droite des moindres carrés des échantillons
+de température sur la fin du repos (au plus `EVENT_BASELINE_SPAN_S = 3600 s`, au moins 4
+échantillons), tient lieu de trajectoire passive. La recherche du pic (`peak_search.py`) regroupe
+les échantillons en tranches consécutives de `EVENT_PEAK_BIN_S = 300 s` à partir de la coupure ;
+la première tranche à la moyenne strictement la plus élevée (la plus basse en refroidissement) est
+le pic, confirmé lorsqu'une tranche fermée se trouve au moins `EVENT_PEAK_CONFIRM_S = 1800 s`
+après elle ; la recherche est abandonnée lorsque la chauffe reprend alors que la meilleure tranche
+est la dernière à contenir des échantillons, ou après `EVENT_PEAK_MAX_S = 4 h`. Chaque événement
+porte la source qui commandait au début de sa phase : impulsion de mesure, hystérésis du
+bootstrap, impulsion d'une calibration ou régulation. Le lecteur ci-dessous lit ceux du bootstrap
+et des impulsions ; le lecteur du modèle de réponse les lit tous (3.7, Modèle de réponse). La
+phase de chauffe en cours, ou le repos qui la précède, est sauvegardée (`lw_state.event_restart`),
+reprise après un redémarrage ponté et abandonnée sinon.
 
-L'état est publié dans `analysis.learning.response_lag` (`lag_s`, `estimates`, `episodes`, `episodes_target`, `episode_median_s`, `last_reason`) et persisté avec l'état d'apprentissage. `episodes` compte les phases de chauffe terminées depuis le début de l'apprentissage, y compris après la publication du retard ; `episodes_target` vaut `RESPONSE_LAG_RESOLVE_EPISODES`. Lorsque les deux collectes ont atteint leur seuil et que `a` attend ce modèle, `learning.bootstrap_status` vaut `step2 - waiting response lag: estimates N, heating phases K/4`.
+Jusqu'à ce que des valeurs soient retenues, pendant la phase d'apprentissage, une calibration ou une lecture, un
+enregistrement borné (`MeasureRecord`) conserve la puissance appliquée, la température de la pièce
+et la température extérieure sous forme de points de changement : 6000 points au plus par canal et
+environ 30,5 heures. Pour un contacteur, le canal de puissance contient les vrais fronts de marche et
+d'arrêt de chaque cycle que l'ordonnanceur a appliqué (d'après les accusés de commande appliquée) ;
+pour une vanne, ou un ordonnanceur sans accusés, il contient la fraction de cycle. L'enregistrement
+est sauvegardé.
 
-Le retard est appris sur des épisodes à puissance constante, que fournit le bootstrap par hystérésis. En régulation PWM, le rapport cyclique change d'un cycle à l'autre : une installation déjà sortie du bootstrap en fournit donc rarement.
+Un événement fermé du bootstrap ou d'une impulsion de mesure ouvre une lecture (`event_reading.py`). Sa fenêtre commence
+1800 s avant l'échelon de chauffe et se termine d'abord à la fermeture de l'événement : elle contient
+donc les échantillons qu'attendait la confirmation du pic. Un ajustement (`event_fit.py`) explique
+ensuite la température enregistrée avec toute la chaîne : l'émetteur donne à la pièce la puissance
+appliquée retardée d'un retard pur $D$ et filtrée par un retard du premier ordre $\tau$, et la pièce
+suit $dT/dt = a\,q - b\,(T - T_{out})$. Il trouve $D$, $\tau$ et $b$ par recherche et $a$ par
+moindres carrés ; le retard de l'émetteur de la lecture vaut $D + \tau$. L'ajustement s'exécute en
+arrière-plan, hors de la régulation : c'est l'un des travaux de la boucle d'arrière-plan unique qui
+exécute aussi l'historique de la pièce (son balayage solaire quotidien), le modèle de pièce et les ajustements de lecture, un travail à la fois, et
+le calcul suivant en applique le résultat. Après chaque ajustement, la fenêtre est prolongée à six
+retards du résultat, au plus 8 ajustements, et la lecture est complète lorsque la fenêtre en couvre 90 %.
+numpy et scipy sont chargés au premier ajustement.
+
+Deux lectures complètes du même mode concordent lorsque leur `a` et leur retard de l'émetteur diffèrent
+chacun d'au plus 20 % du plus grand. Les moyennes de deux lectures concordantes sont retenues pour leur
+mode, sauvegardées, et effacées par une réinitialisation de l'apprentissage. Les valeurs retenues sont par
+mode, comme le canal `a` de l'estimateur : une période dans l'autre mode démarre sans valeurs retenues et
+fait ses propres lectures et impulsions. Un arrêt du thermostat, un changement de mode ou le début d'une
+calibration termine les lectures en cours.
+
+**Valeurs de départ.** Le `a` retenu de chaque mode est donné une seule fois à l'apprentissage de `a` et
+`b` comme valeur de départ, et le `b` retenu (propriété de la pièce, partagé par les modes) avec la
+première transmission seulement : avec le démarrage direct à la rétention, avec le démarrage par amorçage
+à la fin du bootstrap. Elles tiennent lieu des valeurs propres de l'apprentissage et n'écrivent aucun
+historique de mesures : `a` cesse de tenir lieu à la première publication de `a` par l'apprentissage
+lui-même, et `b` lorsque la constante de temps propre de l'apprentissage devient fiable. Un changement de
+mode HVAC met de côté le `a` en place avec son canal et le restitue avec lui. Les valeurs de la première
+transmission rapportent 5 mesures de crédit de montée en charge du feedforward (4.2) par valeur donnée,
+conservé lorsqu'elle est relâchée ; une transmission ultérieure de l'autre mode n'en rapporte aucune.
+Avec le démarrage par amorçage, le retard de l'émetteur des lectures est publié avec les valeurs ; il ne
+fixe pas l'horizon de l'anticipation.
+
+**Démarrage direct.** Le PI commande dès le premier calcul, sur les gains de repli. Jusqu'à
+`PULSE_MAX_COUNT = 3` impulsions de mesure par mode (`measure_pulse.py`) remplacent la commande du PI
+pour une courte séquence, tant que l'étape d'apprentissage dure et que les lectures n'ont retenu aucune
+valeur dans le mode. Une impulsion démarre lorsque la pièce est à la consigne ou au plus
+`PULSE_START_UNDER_C = 0,3 °C` du côté de la demande, que la commande précédente est inférieure à
+`PULSE_START_MAX_COMMAND = 0,8` et que `PULSE_MIN_GAP_S = 6 h` se sont écoulées depuis l'impulsion
+précédente. Elle se repose (au plus `PULSE_REST_MAX_S = 45 min`, ou jusqu'à ce que la pièce soit à
+`PULSE_REST_UNDER_C = 0,5 °C` du côté de la demande), chauffe à pleine puissance jusqu'à ce que
+l'estimateur de temps mort ait détecté la réponse, qu'elle se détache de trois pas de la sonde et que la
+pièce soit revenue à moins de `PULSE_HEAT_BACK_C = 0,1 °C` du côté de la demande de la consigne, cette
+dernière condition seulement tant que l'étape a duré moins de `PULSE_HEAT_EXTEND_MAX_S = 30 min` (au plus
+`PULSE_HEAT_MAX_S = 2 h`, ou dès que la pièce est à `PULSE_HEAT_OVER_C = 0,3 °C` de l'autre côté), puis
+s'arrête jusqu'à la fermeture de l'événement de mesure de l'impulsion : coupure vue et recherche de pic terminée (au plus `PULSE_STOP_MAX_S = 4 h` ; le PI reprend la
+main lorsque la pièce est à `PULSE_TAKEOVER_C = 0,5 °C` du côté de la demande et plus basse d'un pas de la
+sonde qu'au début de l'arrêt, et dans tous les cas à `PULSE_TAKEOVER_CAP_C = 0,8 °C`). Une impulsion interrompue
+par un redémarrage, un arrêt, un changement de consigne ou de mode n'est pas reprise et
+compte. Les lectures des événements que provoquent les impulsions donnent les valeurs retenues. Tant que
+l'apprentissage n'a pas publié son propre modèle, elles en tiennent lieu : `pre_model_gains` donne les
+gains à partir du `a` retenu et du temps mort actif après un démarrage (4.1 ; la règle IMC/SIMC d'une pièce lente, aucun gain
+au-dessus de sa valeur de repli), le retard de l'émetteur retenu est l'horizon de l'anticipation (source
+`measurement pulses`). Le terme intégral repart de zéro au calcul où l'étape d'apprentissage se termine.
+
+**Calibration.** Sur demande (`force_smartpi_calibration`), une fois le premier modèle publié, une
+calibration (`calibration.py`) lance des impulsions de mesure quel que soit le démarrage, avec son propre
+compte (`PULSE_MAX_COUNT = 3` impulsions au plus) ; elles ne comptent pas pour l'étape d'apprentissage.
+`Calibration.request` répond à chaque demande sans lever d'erreur et publie la réponse (`last_request`) :
+refusée pendant l'étape d'apprentissage, avec l'apprentissage en pause, avec le thermostat éteint par
+l'utilisateur (le dernier calcul a vu le mode HVAC OFF sans la raison fenêtre) ; ignorée pendant une
+calibration en cours ; une fenêtre, une coupure de garde ou un délestage diffèrent seulement les impulsions.
+Une demande n'a pas d'intervalle minimum depuis la dernière calibration (`Calibration.too_soon`,
+`CALIBRATION_MIN_INTERVAL_S = 24 h`, est une condition de la seule calibration automatique).
+Les impulsions d'une calibration ont leurs propres limites, calculées à chaque calcul par `pulse_limits` à
+partir du modèle de réponse du mode (`Le` = $\theta + \tau_e/2$ le temps mort effectif, `S` = $\theta + \tau_e$
+le retard de l'émetteur, tous deux 0 sans modèle), de l'horizon d'anticipation en usage `H` et de la vitesse de baisse `s` (moindres carrés sur les dernières
+`CALIBRATION_FALL_WINDOW_S = 900 s` de la température brute, du côté de la demande, au moins 0) ; les
+limites statiques sont figées au début de l'impulsion :
+
+| Étape | Impulsion d'une calibration |
+|---|---|
+| démarrage | demande dans [-`CALIBRATION_START_OVER_C` = -0,2 °C, `PULSE_START_UNDER_C` = 0,3 °C], commande précédente < 0,8, `clamp(2 H, 1 h, 6 h)` après la fin de l'impulsion précédente |
+| repos | se termine à `min(S + CALIBRATION_REST_EXTRA_S, 4 h)` (`CALIBRATION_REST_EXTRA_S` = 900 s de fenêtre libre + 300 s), ou quand `demande + s Le >= PULSE_REST_UNDER_C` = 0,5 °C |
+| chauffe | montée vue et (`demande <= PULSE_HEAT_BACK_C` = 0,1 °C ou étape >= `PULSE_HEAT_EXTEND_MAX_S` = 30 min), 0,3 °C au-dessus, ou `clamp(2 (Le + H), 2 h, 4 h)` |
+| arrêt | événement fermé ; reprise à `demande >= 0,5 °C` une fois la pièce plus basse d'un pas du capteur qu'au début de l'arrêt, ou à `demande >= CALIBRATION_DEPTH_CAP_C` = 0,8 °C ; 4 h |
+
+Les impulsions de l'étape d'apprentissage gardent les constantes de `measure_pulse.py`. Une impulsion est
+appliquée comme une commande tout-ou-rien : engagée aussitôt, puis l'estimateur de temps mort est alimenté
+avec la puissance engagée, une fois par calcul ; ses mesures rejoignent la médiane des temps morts après un démarrage comme
+toute autre. La phase est `Calibration` tant qu'une impulsion de la calibration commande la sortie ; entre
+deux impulsions, la régulation fonctionne en phase stable. Les événements des impulsions de calibration
+(source `calibration`) sont lus comme les autres mais forment un ensemble à part, comparés entre eux
+seulement : deux lectures concordantes (`a` et retard à 20 % près) donnent la lecture de la calibration
+(`a`, `b`, retard de l'émetteur, et si les deux `b` concordent à 20 % près). À la fin sur cette lecture,
+`LearningStart._correct` compare `a` et `b` aux valeurs en vigueur dans le mode de la calibration
+(`|a|`, `b` ; l'horizon d'anticipation en usage est publié à côté du retard de la lecture) et les corrige
+quand `|lecture - en vigueur| > CALIBRATION_CORRECT_REL * en vigueur` (0,30) :
+
+- `a` : `ABEstimator.correct_a` réinitialise le canal du mode et pose la lecture comme valeur de départ
+  (`StartingValues.correct`), libérée à la première publication propre de `a` ;
+- `b` : lu et publié seulement (`CALIBRATION_CORRECT_B = False` : le `b` lu sur une impulsion est biaisé
+  dans une pièce à murs épais). Avec l'interrupteur activé et les deux `b` concordants,
+  `ABEstimator.correct_b` vide le canal de `b` (mesures, historique publié, compteur, dérive, `own_b`) et pose
+  la lecture, libérée quand la constante de temps propre est de nouveau fiable ; les mesures de `a` sont
+  rejouées avec elle.
+
+Le retard de l'émetteur est corrigé par le modèle de réponse lui-même, quel que soit le démarrage : les
+événements concordants de la calibration remplacent son historique selon la même règle des 30 % (Modèle de
+réponse, ci-dessous), et l'horizon, la bande proche et l'apprentissage de a/b le suivent.
+
+Avec `CALIBRATION_SKIP_WHEN_OWN_AGREE = True` (désactivé par défaut), `a` ou `b` n'est pas corrigé tant que
+son tampon de dérive est vide et que ses `CALIBRATION_OWN_RECENT = 3` dernières mesures sont dans le seuil
+de la valeur en vigueur. Une correction verrouille le crédit du feed-forward au compte de la rampe d'avant
+(`StartingValues.latch`) et note le gain appris `b / a` d'avant dans le transfert de pas
+(`LearnedStepTransfer.note`) : au feed-forward suivant, le saut de la puissance de maintien apprise,
+évalué à la même consigne, la même température extérieure et la même montée en charge, est reporté dans
+l'intégrale. Un changement de `Kp` qui suit une correction n'est pas reporté
+dans l'intégrale : le terme proportionnel agit sur l'erreur comme d'habitude, et un changement de `Ki` ne fait que
+remettre l'intégrale à l'échelle (`SmartPIController.transfer_gains`). Un démarrage par bootstrap dont `b` est posé par une correction ne revient pas à son étape
+d'apprentissage. Le détecteur d'événements et les échelons de puissance observent les impulsions comme
+toute phase de chauffe. Une calibration se termine lorsque deux de ses lectures concordent (`readings
+agree`), lorsque ses impulsions sont faites et leurs lectures terminées (`pulses done`), ou
+`CALIBRATION_MAX_S = 48 h` après son premier calcul (`time limit`) ; ses lectures en cours se terminent
+alors. Lorsque cette fin arrive pendant une impulsion de la calibration, l'impulsion se termine d'abord : au
+repos elle rend la main aussitôt, dans son étape de chauffe elle passe à son étape d'arrêt
+(`MeasurePulse.stop_heating`, raison `calibration ended`), dans son étape d'arrêt elle continue ; la
+calibration se termine au calcul où l'impulsion se termine, avant que le PI calcule, et les corrections
+s'appliquent à ce calcul. La fin est aussi vérifiée sur un calcul coupé par la garde
+(`LearningStart.follow_calibration`). Pendant une calibration (de la demande à la fin), `ABEstimator.learn`
+ne prend aucune mesure de `a` : une fenêtre avec `u > U_ON_MIN` est écartée (`skip: calibration in
+progress`) ; les fenêtres de `b`, le temps mort, les événements de mesure et les échelons de puissance continuent.
+Après chaque impulsion de calibration (`LearningStart.recovering`), l'intégrale est figée (`I:HOLD`, source
+`calibration_recovery`) jusqu'à ce que la pièce atteigne la consigne ; les impulsions de l'étape
+d'apprentissage ne la figent pas. Un arrêt du thermostat termine l'impulsion en cours, qui compte, et la calibration continue ; un changement de
+mode HVAC, un retour de l'étape d'apprentissage, une réinitialisation ou une mise en pause de
+l'apprentissage l'annule (`cancelled`) et termine aussitôt son impulsion. La demande, les impulsions faites, le mode, le début, la dernière
+demande, les valeurs en vigueur et les corrections sont sauvegardés (`calibration`) ; les
+valeurs de départ corrigées sont sauvegardées avec `corrected` dans `starting_values` et se chargent même
+sans valeurs transmises.
+
+**Moment des impulsions, calibration automatique, rapport.**
+`pulse_timing.quiet_window(wall, position, log, lag_s, require_history)` (pure) est vraie lorsque : il fait nuit à la
+position du domicile (`quiet_periods/solar.py`, `is_dark`) ; la consigne et le mode HVAC n'ont pas changé depuis
+`QUIET_STABLE_S = 1 h` (`SetpointLog.last_change`, le début de l'observation s'il n'y a aucun changement) ; et, lorsque
+le journal couvre au moins `QUIET_DAYS = 2` jours (`wall - since`), pour $d = 1, 2$ aucun changement n'a lieu dans
+$[t - 24d\,\mathrm{h},\ t - 24d\,\mathrm{h} + D]$ avec $D = \mathrm{clamp}(6S, 3\,\mathrm{h}, 6\,\mathrm{h})$
+(`pulse_window_s`, $S$ l'horizon d'anticipation du mode, 3 h s'il est inconnu) ; sans cette couverture le contrôle est
+ignoré, ou la fenêtre est refusée avec `require_history`. `SetpointLog` garde les instants (temps mural) des changements
+de consigne et de mode des `LOG_KEEP_S = 72 h` dernières heures, au plus `LOG_MAX = 256`, et le début de l'observation ;
+il est alimenté à chaque calcul (`LearningStart.begin`), un écart de plus de `LOG_GAP_S = 1 h` entre deux calculs compte
+comme un changement, et il est sauvegardé sous `setpoint_log` (un état sauvegardé sans lui démarre un nouveau journal).
+`LearningStart._start_allowed` donne à `MeasurePulse.update(start_allowed=...)` son booléen : les impulsions d'une calibration
+automatique ont besoin de la fenêtre avec l'historique de deux jours (`model_reading.position` valide et astral
+importable ; sans elle elles ne démarrent jamais) ; les impulsions de l'étape d'apprentissage et celles d'une
+calibration demandée n'ont aucune règle. Rien d'autre de la logique des impulsions ne change.
+
+`LearningStart._auto_calibrate` (règles dans `auto_calibration.py`) s'exécute à chaque calcul en HEAT ou COOL.
+`AutoCalibration.observe` enregistre l'instant (temps mural) où le modèle de réponse du mode a été vu repris pour la
+première fois (aucun événement, source `previous version`) et l'oublie dès que le mode a un événement. Il demande une
+calibration (`request_calibration(automatic=True)`, les refus du service) lorsque `due` (vu depuis
+`AUTO_CALIBRATION_WAIT_S = 3 jours`, moins de `AUTO_CALIBRATION_ATTEMPTS = 3` tentatives dans le mode, la dernière il y a
+au moins `AUTO_CALIBRATION_RETRY_S = 20 h`), que l'étape d'apprentissage est terminée, que l'apprentissage n'est pas
+bloqué, que le thermostat est allumé, qu'aucune calibration n'est en cours, que la dernière s'est terminée il y a plus de
+`CALIBRATION_MIN_INTERVAL_S`, que la position du domicile est connue et que la fenêtre calme avec `require_history`
+est vraie ; une tentative compte quand la demande démarre. L'état est sauvegardé sous `auto_calibration` (`seen`,
+`attempts`, `last` par mode). `automatic_status` en est publié.
+
+Chaque calibration enregistre les interruptions de ses impulsions (`MeasurePulse.interrupted` repris par
+`LearningStart._note_interruptions` ; raisons `setpoint change`, `thermostat stopped`, `mode change`, `learning paused`),
+sauvegardées avec la calibration et son indicateur `automatic`. `Calibration.finish` laisse un rapport (`take_report`,
+une seule fois ; une réinitialisation de l'apprentissage n'en laisse pas). Le gestionnaire appelle
+`calibration_report.schedule_report` après son calcul ; une tâche émet l'événement `calibration_ended` et crée,
+remplace ou supprime la notification `vtherm_smartpi_calibration_<unique id>` (textes des traductions `issues`), en
+interceptant et journalisant toute exception.
+
+L'enregistrement, les lectures en cours, les valeurs retenues et les impulsions démarrées sont sauvegardés
+(`measure_events`, `event_reading`, `measure_pulse` et `learning_start`, et `starting_values` dans
+`est_state`). Après un redémarrage ponté, les lectures reprennent
+(un ajustement en cours est remis en file) ; sinon les lectures en cours se terminent et l'enregistrement
+est abandonné.
+
+#### Modèle de réponse
+
+`response_model.py` tient, par mode, un modèle dynamique de la réponse de la pièce à la
+puissance : un temps mort pur $\theta$ (sonde, transport, actionneur) suivi d'une
+constante de temps de réponse $\tau_e$ du premier ordre (l'émetteur, l'air et la masse
+proche ensemble). L'apprentissage de a/b le lit (3.7 : aucune fenêtre de l'étape
+d'apprentissage avant lui, puissance délivrée, attentes de stabilisation), de même que
+l'horizon d'anticipation (retard de l'émetteur $\theta + \tau_e$, 4.3), la bande proche en
+chauffage (temps mort effectif au-dessus de la consigne, retard de l'émetteur au-dessous,
+4.4), les limites des impulsions de calibration (ci-dessus) et les impulsions de mesure du
+démarrage direct, voulues tant que le modèle du mode n'est pas publié ou que les lectures
+ne retiennent pas de valeurs. Les maintiens de l'intégrale (4.3) lisent son temps mort
+effectif ; les gains (4.1) gardent le temps mort actif après un démarrage. Il est publié à côté des temps morts et des retards ci-dessus.
+
+Un second lecteur (`ModelReader`, `event_reading.py`) lit les événements de mesure avec
+les mêmes fenêtres que le lecteur ci-dessus (avance de 1800 s, première fin à la clôture
+de l'événement, prolongée à six retards de la dernière estimation, 8 ajustements, 24 h),
+sur un enregistrement propre qui tourne à chaque étape et avec son propre travail
+d'arrière-plan. Il lit les événements des impulsions, du bootstrap et des calibrations
+quelles que soient les valeurs retenues, et les événements de régulation qui suivent un
+repos de 1800 s, une chauffe d'au moins 600 s en équivalent pleine puissance, une hausse
+d'au moins 0.3 °C jusqu'à leur pic, alors que SmartPI pilote l'actionneur sur toute la
+fenêtre (ni arrêt, ni exclusion vue par le thermostat : fenêtre, délestage, mode sécurité,
+commande remplacée) et seulement avec une position home connue. La fenêtre d'un événement
+de régulation se termine six retards d'émetteur après le début de sa chauffe (le retard
+publié ; sans modèle publié, le retard de sa dernière estimation, une fenêtre plus longue
+étant ajustée de nouveau plus courte), quelle que soit la clôture de la phase régulée.
+
+Avec une position home connue, la fenêtre d'un événement dont la chauffe démarre dans
+l'obscurité (`quiet_periods/solar.py`) se termine au lever du soleil suivant. Un événement
+est de jour lorsque sa chauffe ne démarre pas dans l'obscurité, ou lorsque l'obscurité
+qui suit le début de la chauffe dure moins de trois retards d'émetteur (le retard publié,
+sinon celui de son estimation). Un événement de jour, de
+toute source, est ajusté et montré avec `daytime` ; il n'est donné au modèle que lorsque
+le mode n'a encore aucun événement, et le premier événement dans l'obscurité le remplace
+alors. Sans position home aucun événement n'est de jour (et aucun événement de régulation
+n'est lu).
+
+L'ajustement (`event_fit.fit_response`) explique la pièce avec la chaîne du lecteur
+ci-dessus, avec des résidus seulement aux franchissements de niveau de la pièce : un
+changement d'un pas de sonde (au plus 1.5 pas) est pris au milieu des deux niveaux, un
+changement plus grand à sa nouvelle valeur, et le modèle est interpolé à ces instants.
+Une grille de profils de $\theta$ (0 à 1200 s par pas de 60 s, puis 1500 à 5400 s par pas
+de 300 s) et de $\tau_e$ (24 valeurs sur échelle logarithmique, de 60 s à 4 h) cherche $b$
+par une recherche scalaire bornée pour chaque cellule ($a$ et la température de départ par
+moindres carrés), puis Nelder-Mead affine la meilleure cellule dans les bornes de la
+grille. Les résidus de franchissements successifs sont corrélés sur environ
+$S = \theta + \tau_e$ : le nombre de résidus indépendants est pris égal à
+$n = \max(W/S, 1)$, $W$ étant la fenêtre après le début de la chauffe. Les cellules dont
+le coût est au plus le minimum multiplié par $1 + 3.84 / n$ donnent les plages de $\theta$
+et de $S$ ; l'ajustement distingue $\theta$ lorsque la plage de $\theta$ est au plus
+$\max(300\,s, 0.5\,S)$. Un ajustement est rejeté avec moins de 8 franchissements, une
+hausse de moins de 3 pas de sonde et de moins de 0.10 °C (avec une sonde à 0.1 °C la règle des pas donne 0.3 °C), aucune chauffe vue ($a = 0$), $\theta$ ou $\tau_e$ sur
+sa borne haute (5400 s, 4 h), ou une racine de la moyenne des carrés des résidus de plus de
+2 pas de sonde (0.01 °C au moins) : `fit too far from the room temperature`. Un ajustement
+dont $\tau_e$ est sur sa borne basse (60 s, un émetteur rapide dont la vraie valeur peut
+être plus courte) est accepté à 60 s et montré comme `accepted, response time constant at
+its lower limit`.
+
+Par mode, les 7 derniers événements acceptés sont conservés. $S$ est leur médiane, $\theta$
+la médiane des événements qui le distinguent (au plus $S$), sinon $S/2$ (le milieu de
+$[0, S]$ : temps mort effectif $3S/4$) ; $\tau_e = S - \theta$. Un événement publie le modèle en `provisional`, deux événements dont les $S$
+concordent à 20 % près le rendent `measured`, et aucun événement qui distingue $\theta$
+le rend `dead time assumed`. Les événements d'une calibration rejoignent l'historique ;
+lorsque deux d'entre eux concordent sur $S$ et que leur moyenne s'écarte de plus de 30 %
+du $S$ de l'historique, ces deux-là le remplacent. Grandeurs dérivées : temps mort
+effectif $\theta + \tau_e/2$, retard de l'émetteur $\theta + \tau_e$, attentes de
+stabilisation de l'apprentissage de a/b (3.7). Chaque pic confirmé après une coupure donne aussi un
+échantillon $\tau_e = (t_{peak} - \theta) / \ln(1 + s_{cut}/\ell)$, avec $\ell = b\,(T_{cut}
+- T_{out})$ et $s_{cut}$ la pente aux moindres carrés de la pièce sur les dernières
+$\min(\tau_e, 1800\,s)$ avant la coupure, lorsque $s_{cut} \ge \ell$ et que le pic vient au
+moins 600 s après $\theta$ ; les échantillons sont publiés seulement.
+
+Un événement éloigné du modèle en vigueur doit être confirmé. La référence d'un mode est son
+$S_{ref}$ publié : la médiane de ses événements, ou l'amorçage tant qu'il n'en a pas. Un
+événement (hors calibration) dont le $S$ sort de $[S_{ref}/2, 2\,S_{ref}]$ est mis en
+attente, 3 au plus par mode (le plus ancien abandonné), et ne change rien : `not used: far
+from the model in force, waiting for a confirming event`. Un événement ultérieur hors de la
+bande du même côté, dont le $S$ concorde à 20 % près avec un événement en attente, le
+confirme : les deux remplacent l'historique du mode (`accepted with an earlier event far
+from the model, both replace it`) et les événements en attente du mode sont abandonnés, de
+sorte qu'un changement durable de la pièce, comme un nouvel émetteur, déplace encore le
+modèle. Un mode sans référence (ni événement, ni amorçage) prend son premier événement tel
+quel. Sans cette règle, un seul événement peut lire un mode lent de la pièce au lieu de
+l'émetteur (par exemple la nuit dans une chambre occupée) et multiplier par dix l'horizon
+d'anticipation.
+
+Lorsque la séparation est incertaine (`dead time assumed`), chaque utilisateur du modèle
+prend pour son propre usage l'extrémité prudente de $\theta \in [0, S]$ : les maintiens de
+l'intégrale lisent le temps mort effectif $3S/4$, la bande proche au-dessus de la consigne et les impulsions de
+calibration lisent aussi $3S/4$, et l'horizon d'anticipation et la bande proche au-dessous de
+la consigne lisent $S$. Les fenêtres de l'apprentissage attendent $S$ quelle que soit la
+répartition.
+
+Le modèle, ses lectures et son enregistrement sont sauvegardés sous `response_state`. Un
+état sauvegardé sans `response_state` est amorcé à partir du temps mort actif $L$ de
+chaque mode (`dt_est_state`) et du retard de l'émetteur $S$ retenu par les lectures, s'il y en a un :
+$\theta = \mathrm{clamp}(2L - S, 0, L)$, ou $2L/3$ sans $S$ (la séparation en
+moitiés de $S = 4L/3$), et $\tau_e = 2(L - \theta)$, de sorte que le temps mort effectif égale $L$. L'amorçage est
+publié en `previous version`, `provisional` (valeurs reprises d'un état sauvegardé sans modèle de
+réponse), jusqu'au premier événement donné au mode ; un mode sans $L$ fiable n'a pas d'amorçage.
+
+### 3.8 Périodes calmes du modèle de pièce
+
+Le modèle de pièce sélectionne ses données, conservées par l'historique de la pièce (`smartpi/room_history/`), avec `smartpi/quiet_periods/`, un module Python pur partagé par les méthodes qui ont besoin d'une pièce à l'abri des apports solaires. Aucune heure locale n'intervient dans la sélection ; les temps sont des secondes epoch et des intervalles semi-ouverts `[start, end)`.
+
+**Obscurité.** La position provient de la configuration de Home Assistant (`hass.config.latitude`, `hass.config.longitude`), injectée par le handler et validée par le manager : nombres finis dans [-90, 90] et [-180, 180] (zéro est valide). L'élévation géométrique du centre du soleil est calculée avec le paquet `astral` livré avec Home Assistant. L'obscurité correspond à un centre situé sous `-0.833 - 0.5 = -1.333` degrés : -0,833 degré est le lever et le coucher du soleil standard (le bord supérieur sur l'horizon apparent, 34' de réfraction plus 16' de rayon), et 0,5 degré couvre l'étalement habituel de la réfraction près de l'horizon. L'élévation est échantillonnée toutes les 600 s sur une grille alignée sur l'epoch ; un échantillon ne compte comme sombre qu'à 0,05 degré sous le seuil (l'élévation s'écarte d'une corde d'au plus 0,014 degré sur un pas de 600 s près de l'horizon), chaque franchissement est affiné par dichotomie à 1 s, puis chaque borne est repoussée de 120 s vers l'intérieur pour la précision de l'algorithme solaire. L'obscurité se termine donc quelques minutes avant le lever du soleil et commence quelques minutes après le coucher, jamais plus tard que le lever. Une obscurité de plus de 24 h (nuit polaire) est découpée en blocs de 24 h ancrés sur son début réel ; un jour polaire n'a pas d'obscurité. Sans position valide (ou sans `astral`), il n'y a ni obscurité ni période : les méthodes restent silencieuses et `room_model.quiet_periods.reason` en donne la raison.
+
+**Périodes.** Un plateau est un intervalle maximal à consigne constante. Une séquence de baisse de consigne va de la baisse à la hausse suivante (les baisses suivantes restent dans la séquence). Une hausse vers une consigne encore inférieure à celle d'avant la baisse, avec la pièce strictement au-dessus de la nouvelle consigne au moment de la hausse, ne demande pas de chauffe : elle ne termine pas la séquence, et son plateau en est un morceau de plus. Une obscurité contient au plus un épisode : la plus longue partie d'une séquence de baisse de consigne située dans l'obscurité, ou toute l'obscurité lorsque la consigne ne change pas à l'intérieur (consigne maintenue). L'épisode se termine à la hausse qui achève la séquence, ou à la fin de l'obscurité. Ses composantes calmes sont ses morceaux de plateau intersectés avec les plages valides de l'historique (`RoomHistory.valid_spans` : tout sauf les intervalles invalides) ; un redémarrage ponté ne laisse aucun intervalle invalide et ne les coupe pas. La composante retenue est la plus longue (au moins 1 h, la plus ancienne en cas d'égalité).
+
+**Début régulé** (`regulated_from` dans les diagnostics). Pour une composante, le premier démarrage du chauffage à partir du début de son plateau avec la température intérieure à moins de 0,3 °C de la consigne ; lorsqu'il précède la composante, le début de la composante si les données entre les deux sont valides. Un démarrage du chauffage dans les 60 s suivant un redémarrage ne compte pas. Aucun lorsque la pièce ne régule jamais à cet endroit.
+
+**Intervalle d'identification.** La composante retenue, prolongée après la hausse qui termine l'épisode tant qu'il fait encore nuit, que la nouvelle consigne reste constante et que les données sont valides, pendant 2 h au plus. La réponse à la hausse est la principale excitation de la réponse de l'émetteur : sans elle, la réponse de chauffe d'une pièce régulée est mal déterminée.
+
+**Clés.** Un épisode est fermé dès que sa fin est antérieure ou égale à la dernière observation, établi dès que son intervalle d'identification est connu lui aussi, et complet lorsque l'historique le couvre depuis son début. Sa clé est `q<version>:<origine>:<début de la composante retenue>` à 0,1 s près, l'origine étant le début de l'épisode. Le manager reconstruit le catalogue au plus toutes les 10 minutes et conserve les épisodes établis et complets (60 au plus) avec leurs composantes : le catalogue conservé n'avance que vers l'avant, si bien qu'une clé ne change jamais lorsque l'historique est élagué, et une période retrouvée reçoit la même clé.
+
+**Usages.**
+
+| Règle | Données |
+|---|---|
+| Fenêtre d'identification | les intervalles d'identification de trois épisodes établis consécutifs (tranches entièrement comprises dans celles-ci), l'état des murs commençant 10 h avant le premier ; comparée à la fenêtre des trois épisodes précédents, sans recouvrement |
+| Modèle de pièce | les mêmes fenêtres de trois épisodes établis et leurs intervalles d'identification, moins les périodes que le suivi a trouvées perturbées (voir 4.2) ; la perturbation du suivi est sommée par clé |
 
 ---
 
@@ -314,9 +653,10 @@ Le retard est appris sur des épisodes à puissance constante, que fournit le bo
 
 `GainScheduler.calculate()` applique la logique suivante :
 
-1. si `tau`, le signe de `a` ou le temps mort actif ne sont pas fiables,
+1. si `tau` ou le signe de `a` ne sont pas fiables, ou qu'aucun retard $L$ n'est connu,
    repli sur `KP_SAFE = 0.55` et `KI_SAFE = 0.010`,
-2. sinon calcul IMC/SIMC avec la magnitude du gain actif :
+2. sinon calcul IMC/SIMC avec la magnitude du gain actif, avec
+   $\lambda = \max(3L, 2\,cycle, 5\,min)$ ($4L$ en mode vanne) :
 
 $$ K_p = \frac{1}{|a| \cdot (\lambda + L)} $$
 
@@ -342,11 +682,18 @@ pendant les maintiens.
 
 `GainScheduler.generation` compte les changements des gains du modèle non
 atténués (IMC/SIMC ou gains de sécurité). Elle n'avance que tant que les gains
-ne sont pas gelés et n'est pas avancée par l'atténuation en bande proche. La
-fenêtre périodique du trim FF rejette une fenêtre qui couvre plusieurs
-générations (`periodic_gains_changed`).
+ne sont pas gelés et n'est pas avancée par l'atténuation en bande proche.
 
-Le temps mort actif est `deadtime_heat` en HEAT et `deadtime_cool` en COOL.
+Le retard $L$ de la règle (`gains.start_dead_time`) est le temps mort actif fiable après
+un démarrage du mode (`deadtime_heat` en HEAT, `deadtime_cool` en COOL), tel quel, source
+`dead time` ; sans lui, gains de sécurité. Le modèle de réponse (3.7) n'entre pas dans les
+gains : les maintiens de l'intégrale lisent son temps mort effectif $\theta + \tau_e/2$ (4.3).
+Le temps mort actif est une lecture à seuil de la première montée, plus courte que le temps
+mort effectif ; la règle et son facteur 3 sont calibrés sur lui.
+
+Les gains d'avant modèle du démarrage direct (vitesse de chauffe retenue des impulsions,
+avant le premier modèle a/b) lisent le même $L$. `analysis.control` publie `gain_delay_s`,
+`gain_delay_source` et le temps en boucle fermée `gain_closed_loop_time_s` ($\lambda$).
 
 Important :
 
@@ -377,176 +724,194 @@ porte que la part de la charge que le feedforward ne couvrait pas : le
 feedforward repart donc au niveau qu'il avait avant le redémarrage, sans
 à-coup.
 
-Le trim FF2 reste gelé (`ff_warmup`) tant que `warmup_scale` est inférieur à 1.
+Le nombre d'apprentissages valides est le plus grand des mesures admises et du
+crédit des valeurs de départ (3.7, Événements de mesure et valeurs de départ) :
+chaque valeur de départ donnée compte pour 5 mesures et garde ce crédit lorsqu'elle
+est relâchée, si bien que la montée en charge ne recule jamais.
 
 $k_{ff}$ est nul, et donc $u_{ff1}$ l'est aussi, lorsque le modèle n'est pas prêt (`a` non publié avec moins de 5 mesures, ou moins de 5 mesures de `b`), que `tau` n'est pas fiable, ou que le signe de `a` ne correspond pas au mode actif.
 
-$T_{ext}$ est la dernière température extérieure valide reçue par SmartPI. Lorsque la sonde extérieure ne fournit aucune valeur, FF1, le modèle de consigne et la near-band continuent d'utiliser cette dernière valeur, sans limite d'âge. Tant qu'aucune température extérieure n'a été reçue, $u_{ff1}$ et $u_{ff2}$ sont tous deux nuls (`ff_reason` `ff_no_ext_temp`).
+$T_{ext}$ est la dernière température extérieure valide reçue par SmartPI. Lorsque la sonde extérieure ne fournit aucune valeur, FF1, le modèle de consigne et la near-band continuent d'utiliser cette dernière valeur, sans limite d'âge. Tant qu'aucune température extérieure n'a été reçue, $u_{ff1}$ est nul (`ff_reason` `ff_no_ext_temp`).
 
-À cela s'ajoutent :
+#### Le modèle de pièce n'entre pas dans la puissance de maintien
 
-- `u_ff2` : correction lente `FFTrim`, gelée tant que `ABConfidence` vaut `AB_DEGRADED` ou `AB_BAD`, ou tant que `warmup_scale` est inférieur à 1 (`ff2_freeze_reason` `ff_warmup`), et nulle tant qu'aucune température extérieure n'a été reçue.
+La puissance de maintien est toujours la loi apprise ci-dessus, en HEAT et en COOL, avec des chauffages pilotés par cycles PWM et avec des vannes. Le modèle de pièce (ci-dessous) ne sert qu'à l'observation : il identifie, suit et prévoit, et publie `live.room_model` (`used_by_regulation` vaut `false`) ; il ne modifie jamais la commande, les gains, l'anticipation, la consigne ni les gardes. `feedforward.source` vaut toujours `learned model`. Un transfert sans à-coup subsiste pour la seule loi apprise : le saut d'une correction par la calibration (3.7) est reporté dans l'intégrale.
 
-### 4.3 FF3
+Le modèle statique du bilan énergétique (ci-dessous, `room_model.energy_balance_*`) est la référence à laquelle les ajustements du modèle de pièce sont confrontés, non une puissance de maintien. Avec des murs lourds, le $b_{eq} = b_{air} - b_{wall}$ ajusté est une petite différence de deux termes plus grands, et il se déplace avec le temps de réponse de l'émetteur utilisé par l'ajustement (d'une fraction de pourcent par seconde de temps d'émetteur) ; le bilan énergétique sur plusieurs jours n'en dépend pas.
 
-`ff3.py` ajoute une correction prédictive activée par défaut et désactivable par configuration :
+**Bilan énergétique.** Une tâche propre calcule, une fois par jour local, 20 minutes après le minuit local et quelles que soient les périodes calmes, le bilan de chaque journée locale entière de l'historique de la pièce qui précède le jour (7 au plus ; intervalles de 10 min, intervalles invalides exclus). Minuit n'est que la limite de ces journées civiles (journées de 23 h et de 25 h aux changements d'heure) ; il ne sélectionne aucune période :
 
-- horizon calculé par `ff3_predictor.compute_ff3_horizon()` : `deadtime_cycles + FF3_RESPONSE_LOOKAHEAD_CYCLES`, borné entre `FF3_MIN_HORIZON_CYCLES` et `FF3_MAX_HORIZON_CYCLES`,
-- prédiction ouverte locale avec le modèle discret exact 1R1C ZOH, sans appel à `ThermalTwin1R1C.step()` et sans mise à jour de l'observateur du jumeau,
-- autorité max `FF3_MAX_AUTHORITY = 0.20`, multipliée par `authority_factor`,
-- pas d'exploration `FF3_DELTA_U = 0.05`,
-- scoring local quadratique avec coût de suivi, coût terminal, coût d'overshoot et coût de mouvement.
+$$ u_d = \frac{\sum u \, \Delta t - \Delta T_{in} / a}{\sum \Delta t}, \qquad D_d = \overline{T_{in} - T_{ext}} $$
 
-FF3 est désactivé si l'une des conditions suivantes n'est pas satisfaite :
+avec $u$ la puissance appliquée équivalente en chaleur et $\Delta T_{in}$ la variation de
+la température intérieure sur chaque segment valide (stockage d'air retiré avec le `a` en
+ligne). Une journée est retenue lorsque au plus 20 % de ses intervalles sont invalides, que son
+taux de chauffe moyen est d'au moins 0,02 et que $D_d > 0$. Les moindres carrés pondérés (poids :
+la part valide du jour) ajustent
 
-- configuration activée,
-- mode chauffage,
-- température extérieure disponible,
-- `tau` fiable,
-- jumeau thermique initialisé et prédiction utilisable,
-- pas de warm-up du jumeau,
-- état stationnaire du jumeau valide,
-- pas de calibration,
-- pas de power shedding,
-- pas de changement récent de consigne,
-- pas en deadband,
-- présence en near-band,
-- régime de gouvernance compatible,
-- pas de trajectoire active de source `setpoint`,
-- présence d'un contexte crédible de perturbation externe.
+$$ u_d = s_{EB} \, D_d - g_{EB} + e_d $$
 
-Le contexte de perturbation accepte un modèle structurellement utilisable même si `model_reliable = False`.
-Dans ce cas, `prediction_quality = "degraded"` et l'autorité est réduite via `FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR`.
-`warming_up = True` et `T_steady_valid = False` restent des blocages absolus.
+et la pente seule $u_d = s_0 D_d$. Les jours entiers laissent subsister dans chaque point une
+petite part du stockage des murs lié à un changement de consigne ou de température extérieure.
+Le verdict utilise les quantiles de Student $t_{0.975}$ sur la dispersion des résidus ; chaque écart-type
+est au moins sa valeur par jackknife (un jour retiré à la fois), pour qu'une estimation qui repose
+sur un seul jour éloigné des autres ne soit pas retenue :
 
-Le contexte de perturbation retenu ne repose pas sur `T_steady` comme faux négatif RMSE.
-Il repose sur :
+- au moins 4 jours exploitables, un taux de chauffe moyen d'au moins 0,05 et une moyenne de
+  $D$ d'au moins 6 °C ;
+- la forme avec apport gratuit exige un écart-type pondéré de $D_d$ d'au moins 1 °C (en
+  dessous, les écarts de $D$ d'un jour à l'autre viennent de la régulation elle-même, et la
+  pente les lirait comme une perte), une demi-largeur à 95 % $t_{0.975, n-2} \, \sigma_s / s_{EB}
+  \le 5$ % (la pente est la référence d'un accord à 5 %), $0 < s_{EB} \le 3$, et un apport qui
+  laisse un besoin dans $]0, 1]$ sur chaque jour retenu avec $|g_{EB}| \le s_{EB} \overline{D}$ ;
+- avec cette dispersion, une forme avec apport non déterminée est refusée (`free heat gains
+  detected; ...` lorsque $g$ est significatif et plausible, sinon `the heating need varies too
+  much ...`) : le rapport des moyennes porterait ce que la droite n'explique pas ;
+- avec moins de dispersion, la pente seule ($g_{EB} = 0$) avec
+  $t_{0.975, n-1} \, \sigma_{s_0} / s_0 \le 5$ % ; un apport que les jours ne peuvent pas montrer
+  reste dans $s_0 = s_{EB} - g/\overline{D}$, juste au $D$ habituel seulement ;
+- la forme qualifiée ne doit pas dériver : une tendance linéaire de $u_d$ avec le jour, ajustée
+  avec le modèle, est refusée lorsqu'elle est significative (95 %) et déplace le besoin de plus
+  de 2,5 % de sa moyenne sur l'ensemble des jours (stockage des murs après un changement ; la moitié
+  de la tolérance, car le stockage restant après les jours n'est pas dans la tendance).
 
-- un écart persistant entre la prédiction du jumeau et le comportement observé, interprété comme un résidu crédible (`bias_warning` ou `external_gain_detected` ou `external_loss_detected`),
-- puis une cohérence dynamique via `perturbation_dTdt` et, si nécessaire, la pente thermique mesurée.
+Un jour refusé garde le modèle qualifié précédent (`room_model.energy_balance_refusal_reason`
+indique pourquoi) ; le modèle en vigueur, son jour et son nombre de jours sont sauvegardés avec
+le modèle de pièce.
 
-Dans ce contrat, FF3 n'est plus un optimiseur générique near-band. Il est réservé à la récupération de perturbation, et il ne provoque plus de restart de cycle dédié à l'entrée en deadband.
+**Recherche de l'émetteur.** L'émetteur en vigueur est le modèle de réponse HEAT (retard pur son temps mort $\theta$, premier ordre sa constante de temps de réponse $\tau_e$, 3.7) ; sans lui, un premier ordre dont la constante de temps est le temps mort HEAT après un démarrage ; sans l'un ni l'autre, une fenêtre est refusée (`heating response delay not known yet`). Le retard de l'émetteur (premier moment) des ajustements est recherché sur une grille fixe, indépendante du temps mort en vigueur : 13 valeurs réparties en logarithme entre 60 s (le pas de l'ajustement) et 3600 s (un tiers du plus court temps caractéristique des murs $1/\beta$, soit 3 h, afin que l'émetteur et les murs restent séparables), chaque premier moment essayé (point de grille ou évaluation de Brent) est ajusté sous deux formes : un premier ordre pur, et une répartition en retard pur et premier ordre selon la part de retard du modèle de réponse en vigueur, $\theta / (\theta + \tau_e)$ (le retard est cette part du premier moment), lorsque cette part est positive ; la forme au coût $J$ le plus bas est retenue, avec sa part pour la suite des calculs ; sans modèle de réponse ou avec une part nulle, seul le premier ordre pur est essayé. Le coût $J$ le plus bas est affiné par une recherche de Brent bornée en $\log \tau$ entre ses deux voisins de grille (à 1 % près, 10 ajustements au plus de plus). Le profil est significatif lorsque $\max (J - J_{min}) / J_{min} \cdot N_{eff} > \chi^2_{1, 0.95} = 3.84$, avec $N_{eff}$ le nombre de résidus du meilleur ajustement sur leur temps d'autocorrélation intégré ($1 + 2\sum \rho_k$ jusqu'au premier $\rho_k$ non positif). Un optimum à l'une des extrémités de la grille, avec un profil significatif, est refusé (`the heating response delay does not match the measured temperature`). Un profil non significatif ne détermine pas l'émetteur : les ajustements utilisent l'optimum de la grille, et l'accord avec le bilan énergétique juge la perte statique.
 
-### 4.4 Gestion de consigne
+**Contrôles des résidus.** Le test de série des résidus de l'ajustement (grille de 10 min dans
+les périodes ajustées) compte les changements de signe de leurs moyennes horaires, lorsqu'il y en
+a au moins 10 ; les autres contrôles (biais, dispersion, autocorrélation à 1 h, corrélation avec
+la sortie de l'émetteur, la consigne et la température extérieure) restent les mêmes.
 
-`SmartPISetpointManager` pilote désormais une trajectoire analytique pour la branche P.
-Cette trajectoire s’active uniquement lorsqu’un écart thermique significatif apparaît, que le modèle est jugé fiable et que la consigne évolue dans un sens nécessitant un lissage de la référence P.
+**Fenêtres d'identification.** Le modèle de pièce lit le catalogue des périodes calmes de l'historique de la pièce (§3.8) par `RoomHistoryManager.quiet_periods` ; `room_model/periods.py` en est l'adaptateur. Une fenêtre est formée de trois périodes fermées consécutives du catalogue, chacune ajustée sur son intervalle d'identification (la composante calme, prolongée par la réponse à la hausse pendant 2 h au plus dans l'obscurité), découpée par les intervalles invalides et conservée en morceaux d'au moins 1 h, chaque morceau avec son propre état initial de l'air et des murs. Elle est indexée par sa dernière période et comparée à la fenêtre des trois périodes qui la précèdent, si bien que les deux ne partagent jamais une période ; les premières fenêtres n'en ont pas (`waiting for a second series of quiet periods to confirm`). Une fenêtre est calculée une seule fois, lorsque sa dernière période est établie, de la plus ancienne à la plus récente, au plus une tâche par heure écoulée ; aucune heure locale n'intervient. Une fenêtre dont les données ont quitté l'historique de 7 jours est ignorée.
 
-Le principe est le suivant :
+**Périodes perturbées.** Le suivi conserve la perturbation $d$ de chaque sous-pas suivi de 60 s (36 h au plus) jusqu'à ce que les périodes auxquelles il peut appartenir soient établies, puisque la sélection d'une période n'est définitive qu'alors. Chaque période établie reçoit alors $\int d \, dt$ et la durée suivie sur son intervalle d'identification, un sous-pas franchissant une borne comptant pour sa fraction intérieure ; les pas antérieurs à sa fin sont abandonnés. Une période d'au moins 4 h suivies dont la moyenne s'écarte de plus de 0,08 °C/h de la médiane des 14 dernières périodes est exclue des fenêtres qui la contiennent.
 
-- la branche I continue d’utiliser la consigne brute,
-- la branche P reçoit `filtered_setpoint`,
-- la branche P conserve la consigne brute tant que la zone de freinage prédite n'est pas atteinte,
-- un changement de consigne significatif arme une seule fois le freinage tardif ; HEAT et COOL utilisent ensuite les mêmes équations signées de fenêtre de freinage,
-- un déclenchement dû à une perturbation continue d'exiger le seuil d'écart significatif,
-- le modèle 1R1C appris, le temps mort de réponse passive du mode (`deadtime_cool` en HEAT, `deadtime_heat` en COOL), la latence restante du cycle et la puissance engagée sur le cycle servent à détecter cette zone de freinage,
-- une trajectoire de freinage tardif douce façonne alors la référence P vers une cible de freinage située en deçà de la consigne brute dans le sens de la demande,
-- lorsque le freinage n'est plus nécessaire, la référence filtrée remonte progressivement vers la consigne brute avant l'arrêt de la trajectoire,
-- pour une trajectoire issue d'un changement de consigne, l'entrée en phase `release` verrouille ensuite cette phase jusqu'à la fin de la trajectoire, sans retour vers `tracking`,
-- pendant `release`, la référence P reste du côté de la demande par rapport à la température mesurée de la pièce, sans franchir la consigne brute : elle ne dépasse jamais la cible en HEAT et ne descend jamais sous celle-ci en COOL,
-- la trajectoire se termine une fois en `release`, lorsque la référence P et la pièce sont toutes deux à moins de `0,05 °C` de la cible et que le retour de P à la consigne brute modifie la commande proportionnelle d'au plus `0,03`,
-- la trajectoire se termine aussi dès que la pièce atteint ou franchit la cible dans le sens de la demande, ou lors de tout changement réel de consigne ; la branche P utilise alors de nouveau la consigne brute,
-- `trajectory_active` indique si la trajectoire analytique est en cours.
+**Information.** Chaque ajustement (modèle simple et modèle avec murs) reçoit la covariance de tous ses paramètres à partir de la jacobienne $J$ de ses sorties pondérées du modèle à l'optimum : les paramètres non linéaires, $a$, les états initiaux de l'air et des murs de chaque morceau et, lorsque la fenêtre a estimé l'émetteur (recherche sur grille, et non l'émetteur en vigueur), le logarithme du premier moment de l'émetteur (différence centrale à ±2 %) :
 
-Le jumeau thermique, FF3 et la prédiction d'entrée en freinage partagent une
-fonction pure de propagation 1R1C à puissance constante. Chaque consommateur
-conserve ses horizons, sa politique de retard et ses validations.
+$$ C = \tau_{int} \, s^2 (J^\top J)^{-1}, \qquad s^2 = \frac{\sum w r^2}{\sum w - p} $$
 
-La propagation utilise la forme discrète du modèle 1R1C dans l'espace de commande interne linéaire :
+avec $\tau_{int}$ le nombre de résidus divisé par leur nombre effectif (le temps d'autocorrélation intégré utilisé par la recherche de l'émetteur) : des résidus corrélés portent moins d'information que leur nombre. Les écarts-types des coordonnées qu'un ajustement apporte s'en déduisent par la méthode delta : $\ln a$ et $\ln(b_{eq}/a)$ pour le modèle simple ; $\ln a$, $\ln \alpha$ et $\ln c$ ($c = \gamma / \beta$) pour le modèle avec murs, dont $b_{eq}/a = (\alpha - c)/a$ n'est jamais la perte statique et est vérifié contre $s_{EB}$ à 5 % près avant une publication. Un ajustement est refusé (`the quiet periods do not determine the model precisely enough yet`) lorsque $1.96 \, \sigma$ de l'un d'eux dépasse la tolérance avec laquelle l'accord de deux fenêtres le compare : $\ln 1.15$ pour $a$, $\ln 1.25$ pour $b_{eq}/a$ et $\alpha$, $\ln 1.35$ pour $c$. Un modèle avec murs dont la part des murs $c/\alpha$ est inférieure à 0,1 n'est jamais utilisé, si bien que sa précision n'est pas exigée. La covariance est celle, asymptotique, des moindres carrés ; le niveau de 95 % et la réutilisation des tolérances d'accord sont des choix de la méthode. Il n'y a pas de durée minimale d'ajustement : c'est la précision qui décide si les périodes portent assez d'information. Les autres conditions ne changent pas : au moins 40 événements de température, une heure de chauffage équivalente à pleine puissance et un écart moyen intérieur-extérieur de 3 °C sur les morceaux ajustés.
 
-$$
-\alpha = e^{-b \cdot h}
-$$
+**Accord avec le bilan énergétique.** Chaque ajustement de l'identification prend l'apport gratuit en vigueur comme une entrée de chaleur connue, $a(u_e + g_{EB})$ ; l'apport n'est pas ajusté fenêtre par fenêtre : sur les périodes calmes, $T_{in} - T_{ext}$ varie trop peu pour séparer une entrée constante de la perte statique. Un candidat (modèle avec murs ou modèle simple) n'est publié que si son propre $b_{eq}/a$ concorde avec $s_{EB}$ à 5 % près ($|\ln(\frac{b_{eq}/a}{s_{EB}})| \le \ln 1.05$) ; sinon la fenêtre ne publie rien (`the model's heat loss disagrees with the measured heat balance`). Le modèle en vigueur est le dernier modèle qualifié au moment de la tâche. C'est le seul contrôle de $b_{eq}/a$ qui ne vient pas des ajustements : sans modèle qualifié en vigueur, rien n'est publié (`waiting for a qualified heat balance to check the model's heat loss`, affiché avec le statut `learning`). La valeur publiée, la médiane des derniers candidats, est contrôlée de nouveau contre le modèle en vigueur lors de sa publication ; en cas de désaccord, la publication en vigueur est conservée.
 
-$$
-T_{pred} = T_{ext} + (T - T_{ext}) \cdot \alpha + \frac{a}{b}(1-\alpha) \cdot u
-$$
+**Puissance supplémentaire des murs.** Avec des murs identifiés et le suivi `ok`, le modèle de pièce affiche la puissance supplémentaire des murs $\delta_{wall}/a$ du suivi (`room_model.wall_extra_power_percent`, avec ses deux signes, en % de la pleine puissance). C'est un affichage : la commande ne la lit pas.
 
-L'entrée en freinage prédit la variation signée dans le sens de la demande active (`+1` en HEAT, `-1` en COOL) sur le reste du cycle, le temps mort passif et l'éventuelle puissance déjà prévue pour le cycle suivant. L'écart de freinage vaut cette variation prédite multipliée par `TRAJECTORY_BRAKE_GAIN = 1.20`.
+**Fenêtre ouverte.** Il n'y a aucun maintien après une fenêtre. Pendant qu'elle est ouverte, le suivi cale l'air sur la mesure et y entraîne les murs. À la reprise, l'air est recalé sur la mesure, ses corrélations avec les murs et la perturbation sont abandonnées et les statistiques d'innovation repartent ; le suivi est de nouveau `ok` aussitôt. Une fenêtre ouverte élève l'échange réel air-murs au-dessus de celui du modèle, si bien que les murs suivis tendent à être plus chauds que les murs réels et que la puissance supplémentaire des murs affichée est sous-estimée. Une sonde proche de la fenêtre peut biaiser dans l'autre sens ; la borne sur le terme des murs et les contrôles d'innovation couvrent ce cas.
 
-Le bloc canonique `live.setpoint` publie le résumé :
+### 4.3 Gestion de consigne
 
-- `filtered_setpoint`,
-- `trajectory_active`,
-- `trajectory_source`,
-- `boost_active`.
+La régulation travaille sur la consigne brute en HEAT comme en COOL. Les branches I et P lisent la même consigne ; les erreurs P et I lisent une température anticipée (voir **Anticipation** ci-dessous), qui est le seul mécanisme abaissant la commande en avance de la consigne.
 
-Le même payload dans les deux modes expose les détails de trajectoire dans
-`live.analysis.trajectory` :
+`SmartPISetpointManager` conserve l'état du boost. Un changement de consigne significatif (`SETPOINT_BOOST_THRESHOLD = 0.3 °C`) active le boost, qui relève la limite de pente de la sortie (`SETPOINT_BOOST_RATE`) jusqu'à ce que l'erreur passe sous `SETPOINT_BOOST_ERROR_MIN = 0.3 °C`. La détection d'un changement de consigne qui invalide les fenêtres d'apprentissage est faite par l'orchestrateur, à partir de la variation de la consigne brute (supérieure à `0,01 °C`).
 
-- `start_setpoint`, `target_setpoint`, `tau_ref_min`, `elapsed_s` et `phase`,
-- `pending_target_change_braking`, `braking_needed` et `model_ready`,
-- `remaining_cycle_min`, `next_cycle_reference`, `bumpless_delta` et `bumpless_ready`.
+#### Anticipation (chauffage et refroidissement)
 
-Le façonnage de référence est limité à la branche P, ce qui laisse la consigne brute intacte côté intégrale. Aucun plafond de commande n'est appliqué après le calcul PI : la commande PI passe directement par les contraintes douces (limiteur de pente, `max_on_percent`) puis par les contraintes de temporisation.
+En HEAT et en COOL, en phase stable, l'erreur proportionnelle et l'erreur intégrale lisent une température anticipée : la température mesurée plus une correction $c$, la distance que la pièce est sur le point de parcourir pendant le temps entre une commande et son effet. La deadband, la near-band, les gardes, le feed-forward et l'apprentissage conservent la température mesurée.
+
+La correction est la pente $s$ des moindres carrés de l'historique de température brute sur les $W = \min(\max(\text{ANTICIPATION\_MIN\_WINDOW\_S},\ H),\ \text{ANTICIPATION\_MAX\_WINDOW\_S})$ dernières secondes ($H$ est l'horizon ci-dessous), multipliée par $H$ et limitée à $\pm$ `ANTICIPATION_MAX_C` (`1.0 °C` ; `ANTICIPATION_MIN_WINDOW_S = 600 s`, `ANTICIPATION_MAX_WINDOW_S = 1800 s`). Une fenêtre plus courte que $H$ transformerait un saut rapide de la sonde en une grande correction. Elle vaut 0 sans horizon, hors phase stable, avec moins de 3 échantillons, ou lorsque les échantillons couvrent moins de la moitié de la fenêtre. Elle s'établit ensuite progressivement avec la distance à la consigne : avec $e = $ cible $-$ température mesurée,
+
+$$c \leftarrow c \cdot \mathrm{clamp}\left(2 - \frac{e}{c},\ 0,\ 1\right)$$
+
+donc la correction vaut 0 lorsque la pièce se rapproche de la consigne et en est plus éloignée que $2c$, elle est pleine à moins de $c$ de celle-ci, au-delà de la consigne, ou lorsque la pièce s'éloigne de la consigne.
+
+Le rapport $e / c$ ne dépend pas du mode : en COOL, la pièce qui approche la consigne depuis le haut a $e < 0$ et $c < 0$, si bien que la règle est la même dans les deux modes.
+
+Dans la deadband du régulateur (état laissé par le tick précédent), la correction est conservée jusqu'à ce qu'elle vaille 0 ou que son signe diffère de celui du tick précédent, puis elle vaut 0 tant que la pièce reste dans la deadband. Une pièce qui arrive à sa consigne garde son freinage, donc la commande ne saute pas à l'entrée ; une pièce installée à sa consigne ne s'en approche pas, et une petite variation rapide de la sonde serait sinon extrapolée sur tout l'horizon. La correction reprend lorsque la pièce quitte la deadband.
+
+Les erreurs sont calculées sur la température anticipée $T + c$ avec le signe du mode (cible $-$ température en HEAT, température $-$ cible en COOL) :
+
+- HEAT : $e_P = \text{cible} - (T + c)$ et $e_I = (\text{cible} - T) - c$,
+- COOL : $e_P = (T + c) - \text{cible}$ et $e_I = (T - \text{cible}) + c$.
+
+L'horizon $H$ est le temps entre une commande et son effet sur la pièce. Il se lit selon le mode :
+
+- le retard de l'émetteur $\theta + \tau_e$ du modèle de réponse du mode (3.7, Modèle de réponse) lorsqu'il est publié, source `response model` ; avec `dead time assumed`, c'est le retard de l'émetteur $S$ lui-même, l'extrémité prudente de $\theta \in [0, S]$ ;
+- sinon le retard de l'émetteur retenu des lectures des impulsions de mesure du démarrage direct dans le mode, lorsqu'il est positif, source `measurement pulses` ;
+- sinon le temps mort après un démarrage du mode (le temps mort de chauffe en HEAT, le temps mort de refroidissement en COOL) lorsqu'il est fiable et positif, source `dead time` ;
+- sinon 0 : pas d'anticipation, source `none`.
+
+`analysis.control` publie `anticipation_c` (la correction appliquée au dernier tick), `anticipation_horizon_s` et `anticipation_horizon_source`. `temperature.anticipated` publie la température anticipée (température mesurée plus correction), dans `live` et dans `history`.
+
+Le bloc canonique `live.setpoint` publie `boost_active`.
+
+Aucun plafond de commande n'est appliqué après le calcul PI : la commande PI passe directement par les contraintes douces (limiteur de pente, `max_on_percent`) puis par les contraintes de temporisation.
 
 Après un changement de consigne ou une reprise, l'intégrale suit l'erreur brute
 à la consigne sans règle de rattrapage supplémentaire : seuls l'anti-windup
 (ci-dessous), les modes de deadband et de near-band, le clamp de dépassement et
-la coupure de surchauffe la limitent. La trajectoire de consigne ne freine que
-la branche proportionnelle.
-
-Une trajectoire de récupération de perturbation freine la branche P parce que le
-modèle prédit que la puissance engagée suffit à combler l'écart. Quand ce modèle
-est biaisé, la pièce peut se stabiliser sur un plateau sous la consigne et la
-trajectoire ne se termine jamais. Un test de plateau termine alors la
-trajectoire :
-
-- l'erreur signée est moyennée par blocs de
-  `RECOVERY_PLATEAU_BLOCK_CYCLES = 3` cycles,
-- un bloc est stationnaire si sa moyenne reste au-dessus du plancher d'erreur
-  résiduelle (le plus grand de `RECOVERY_ERROR_FLOOR_DEADBAND_RATIO = 2` fois la
-  deadband et de la deadband augmentée de son hystérésis) et ne varie pas de plus
-  de `RECOVERY_PLATEAU_SLOPE_ABS_H = 0.12 °C/h` appliqué sur un bloc,
-- il faut `RECOVERY_PLATEAU_BLOCKS = 2` blocs stationnaires consécutifs,
-- et aucun progrès net sur `RECOVERY_PLATEAU_PROGRESS_BLOCKS = 4` blocs :
-  la moyenne ne doit pas avoir baissé de plus de
-  `RECOVERY_PLATEAU_PROGRESS_MIN_C = 0.03 °C`. Une queue de récupération lente,
-  vue à travers une sonde quantifiée, n'est donc pas prise pour un plateau.
-
-À la détection, la trajectoire repasse en passthrough. Aucune nouvelle
-trajectoire de perturbation ne démarre tant que l'erreur n'est pas redescendue
-sous le seuil de déclenchement diminué de l'hystérésis de suivi, ou jusqu'à un
-changement de consigne ou une remise à zéro. Une nouvelle perturbation reste
-donc freinée normalement.
+la coupure de surchauffe la limitent.
 
 Les reprises suivant détection d'ouverture et power shedding gèlent l'intégrale
-pendant le temps mort en chauffage :
+pendant le temps mort effectif du mode en chauffage : $\theta + \tau_e/2$ du modèle de
+réponse, sinon le temps mort actif fiable (`smartpi/resume_hold.py`) :
 
 - à la reprise, SmartPI arme un `I:HOLD` explicite (`window_resume` ou
   `power_shedding_resume`),
-- ce hold reste actif tant que la réaction de chauffe est encore dans la fenêtre exploitable de `deadtime_heat`,
+- ce hold reste actif tant que l'épisode de chauffe est plus jeune que ce temps mort effectif,
 - à la fin de cette fenêtre, l'intégrale reprend son fonctionnement normal,
 - une reprise dont l'erreur résiduelle signée est déjà sous le plancher
   d'erreur résiduelle termine le hold avant le début de la fenêtre de temps mort,
-- sans temps mort de chauffe fiable, aucun hold n'est appliqué.
+- sans temps mort effectif, aucun hold n'est appliqué.
 
-Cette séquence évite de faire apprendre à l'intégrale une dynamique de reprise encore dominée par le temps mort de chauffe.
+Cette séquence évite de faire apprendre à l'intégrale une dynamique de reprise encore dominée par le temps mort.
+
+La fin d'une période de chauffage indisponible (l'entité repasse à `off`, en
+chauffage ou en refroidissement) arme le même maintien (`heating_unavailable_resume`) ;
+l'épisode de chauffe ou de refroidissement en cours repart à cet instant, si bien que
+le maintien couvre le temps mort effectif compté depuis lui. Contrairement à une reprise
+de fenêtre, elle ne suspend pas l'apprentissage pendant `LEARNING_PAUSE_RESUME_MIN`.
+
+**Blocage de l'apprentissage** (`learning_block.py`). La pause de
+`set_smartpi_learning` (enregistrée), l'entité de perturbation et l'entité de
+chauffage indisponible bloquent chacune tout apprentissage ; leurs états sont lus au
+début de chaque calcul, et seul l'état `on` compte (`off`, `unavailable`, `unknown` et
+une entité absente comptent comme off). Pendant le blocage : `update_learning`
+alimente seulement les enregistrements des événements de mesure (qui restent
+continus) et saute les fenêtres et le détecteur
+d'événements ; la détection du temps mort est suspendue mais l'historique
+de température est alimenté (anticipation, impulsions) ; l'historique de la pièce et le
+modèle de pièce reçoivent le blocage comme raison d'exclusion (une fenêtre ouverte
+garde la sienne) et le handler ne lance aucun de leurs calculs ; aucune impulsion de
+mesure n'avance et aucune valeur retenue n'est transmise ; une demande de calibration
+est refusée. Quand l'apprentissage se bloque, une calibration en cours est annulée,
+l'impulsion en cours se termine et les lectures en cours se terminent sans résultat ;
+le lecteur du modèle de réponse enregistre le blocage comme une exclusion, si bien
+qu'un événement de régulation qui le chevauche est refusé. Chaque changement du
+blocage relance la fenêtre d'apprentissage et la détection du temps mort, en gardant
+l'historique de température et l'épisode de chauffe. La raison publiée est
+`learning.block_reason`. L'entité de perturbation laisse l'intégrale libre ; l'entité
+de chauffage indisponible la maintient (ci-dessus).
 
 Les états transitoires de rattrapage ne sont pas restaurés après reboot :
 
-- la trajectoire analytique active est purgée,
 - tout `integral_hold_mode` temporaire est effacé.
 
 Le redémarrage repart donc d'un état PI persistant utile, mais sans restaurer des états servo transitoires qui ne sont plus physiquement valides hors de leur session d'origine. Le timestamp mural de la dernière régulation active valide est persisté et n'est pas rafraîchi lorsque le mode HVAC est OFF. Si l'inactivité dépasse 96 heures, la mémoire PI du contrôleur est purgée à la reprise tandis que le modèle A/B appris reste disponible. Si le mode HVAC après un redémarrage diffère du mode du modèle persisté (HEAT versus COOL), l'intégrale est effacée. Lorsqu'une itération de régulation est ignorée parce que le capteur de température est absent ou que `guard_cut` est actif, le suivi du temps repart comme après un passage en OFF, afin que l'erreur ne soit pas intégrée sur la période ignorée.
 
-### 4.5 Deadband, near-band et protections
+
+### 4.4 Deadband, near-band et protections
 
 `DeadbandManager` gère :
 
 - une deadband symétrique avec hystérésis absolue (`DEADBAND_HYSTERESIS = 0.025`),
 - une near-band asymétrique en chauffage ; en refroidissement, la near-band utilise la valeur configurée `near_band_deg` des deux côtés de la consigne,
-- un calcul automatique de near-band en chauffage uniquement, si `deadtime_heat` et le modèle sont exploitables,
+- un calcul automatique de near-band en chauffage uniquement, si le modèle de réponse du mode et le modèle a/b sont exploitables : $NB = db + pente \cdot (L + cycle/2)$ avec $L$ le temps mort effectif $\theta + \tau_e/2$ au-dessus de la consigne et le retard de l'émetteur $\theta + \tau_e$ au-dessous ($3S/4$ et $S$ avec `dead time assumed`) ; `near_band_source` vaut `no response model` sans modèle de réponse,
 - un repli sur les seuils configurés sinon.
 
 Les protections complémentaires actuellement présentes sont :
 
-- `SmartPIGuards` (chauffage uniquement, hors bootstrap et calibration) : `guard_cut` force la sortie à 0 lorsque la température mesurée dépasse `setpoint + near_band_above` pendant que le chauffage est actif, jusqu'à ce qu'elle redescende à ce seuil diminué du plus grand de `NEAR_BAND_HYSTERESIS_C = 0.05°C` et de `GUARD_CUT_RESET_STEPS = 1.5` pas de capteur observés (sans quoi une mesure qui oscille entre deux paliers autour du seuil relancerait la coupure, et le cycle, à chaque mesure). Pendant une coupure, la sortie reste à 0 (`I:OVERRIDE(guard_cut)`). Tant que le PI demande encore de la puissance, une intégrale positive suit les 0 % imposés par back-calculation, `d(Ki·I)/dt = −v/Ti` avec `v` la demande du PI et `Ti = Kp/Ki`, au plus un cycle par itération. Sa vitesse suit la demande, pas le dépassement : une intégrale qui porte plus que le besoin de chauffe redescend en quelques coupures, même quand la pièce dépasse à peine le seuil. Elle redescend jusqu'au point où elle seule maintiendrait la pièce au seuil de coupure diminué de `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`) ; en dessous, elle est conservée, de même que le besoin de chauffe qui reste après une baisse de consigne. Sans cela, un biais de l'intégrale restituait le même excès de puissance à chaque fin de coupure, et la pièce cyclait entre coupure et reprise. Le filtre de température, le détecteur de temps mort, la température publiée et l'apprentissage continuent de suivre la pièce. La pièce refroidit alors sans chauffage, par exemple pendant toute la descente qui suit une baisse de consigne : c'est une fenêtre passive pour `b` et pour la ligne de base du retard de réponse. La gouvernance y voit une commande nulle hors de toute bande, et les fenêtres `a` sont bloquées (`skip: guard cut`). L'apprentissage reste contigu à la fin de la coupure ; `guard_kick` relance le cycle lorsque, dans la near-band, la température descend sous `setpoint - near_band_below` alors que la commande est inférieure à 99 %. En refroidissement, aucune des deux gardes n'agit et la near-band n'est pas calculée automatiquement. Pendant le bootstrap, le chauffage fonctionne entre ses propres seuils d'hystérésis et une garde en cours est relâchée,
+- `SmartPIGuards` (chauffage uniquement, hors bootstrap et impulsions d'une calibration) : `guard_cut` force la sortie à 0 lorsque la température mesurée dépasse `setpoint + near_band_above` pendant que le chauffage est actif, jusqu'à ce qu'elle redescende à ce seuil diminué du plus grand de `NEAR_BAND_HYSTERESIS_C = 0.05°C` et de `GUARD_CUT_RESET_STEPS = 1.5` pas de capteur observés (sans quoi une mesure qui oscille entre deux paliers autour du seuil relancerait la coupure, et le cycle, à chaque mesure). Pendant une coupure, la sortie reste à 0 (`I:OVERRIDE(guard_cut)`). Tant que le PI demande encore de la puissance, une intégrale positive suit les 0 % imposés par back-calculation, `d(Ki·I)/dt = −v/Ti` avec `v` la demande du PI et `Ti = Kp/Ki`, au plus un cycle par itération. Sa vitesse suit la demande, pas le dépassement : une intégrale qui porte plus que le besoin de chauffe redescend en quelques coupures, même quand la pièce dépasse à peine le seuil. Elle redescend jusqu'au point où elle seule maintiendrait la pièce au seuil de coupure diminué de `NEAR_BAND_HYSTERESIS_C` (`Ki·I/Kp`) ; en dessous, elle est conservée, de même que le besoin de chauffe qui reste après une baisse de consigne. Sans cela, un biais de l'intégrale restituait le même excès de puissance à chaque fin de coupure, et la pièce cyclait entre coupure et reprise. Le filtre de température, le détecteur de temps mort, la température publiée et l'apprentissage continuent de suivre la pièce. Le PI n'est pas calculé pendant une coupure : l'écart publié (`temperature.error`, `analysis.control.error_p`) est la consigne moins la température du calcul, l'anticipation publiée vaut `0` et `control.mode` vaut `heating cut above the setpoint` ; les termes d'écart internes et l'anticipation gardent leurs valeurs pour la fin de la coupure. La pièce refroidit alors sans chauffage, par exemple pendant toute la descente qui suit une baisse de consigne : c'est une fenêtre passive pour `b`. La gouvernance y voit une commande nulle hors de toute bande, et les fenêtres `a` sont bloquées (`skip: guard cut`). L'apprentissage reste contigu à la fin de la coupure ; `guard_kick` relance le cycle lorsque, dans la near-band, la température descend sous `setpoint - near_band_below` alors que la commande est inférieure à 99 %. En refroidissement, aucune des deux gardes n'agit et la near-band n'est pas calculée automatiquement. Pendant le bootstrap, le chauffage fonctionne entre ses propres seuils d'hystérésis et une garde en cours est relâchée,
 - anti-windup à chaque tick sur la limite haute applicable (voir ci-dessous),
-- `I:HOLD` explicite pendant la phase post-reprise liée à `deadtime_heat` pour `window_resume` et `power_shedding_resume` en chauffage,
+- `I:HOLD` explicite pendant le temps mort effectif après une reprise pour `window_resume` et `power_shedding_resume` en chauffage,
 - `I:HOLD` avec source `vt_safety` pendant que le mode sécurité de Versatile Thermostat applique sa puissance par défaut à la place de la commande SmartPI,
 - `I:HOLD` avec source `deadband_hysteresis_shell` tant que l'état de deadband hystérétique est actif et que l'erreur est hors de la deadband centrale,
 - `I:HOLD` avec source `governance_sensor_invalid` tant qu'aucune température extérieure n'a été reçue (régime `DEGRADED`),
+- `I:HOLD` avec source `calibration_recovery` après chaque impulsion de calibration jusqu'à ce que la pièce atteigne la consigne,
+- `I:HOLD` avec source `heating_unavailable` tant que l'entité de chauffage indisponible est à `on` (`smartpi/learning_block.py`), puis le `I:HOLD` explicite `heating_unavailable_resume` sur le temps mort effectif compté depuis son retour à `off` (l'épisode de chauffe ou de refroidissement repart à cet instant), par le maintien de reprise ci-dessus,
 - gel de P et I dans la deadband centrale.
 
 L'anti-windup agit à chaque calcul, dans l'espace de demande linéaire, sur la limite haute applicable : `1`, ou l'image linéaire de `max_on_percent` lorsqu'elle est plus basse. Il comporte deux parties :
@@ -559,42 +924,9 @@ Ne sont pas traités comme une saturation : la quantification de Versatile Therm
 Le calcul distingue aussi deux zones autour de la consigne :
 
 - la deadband hystérétique, utilisée pour stabiliser l'état `in_deadband`,
-- la deadband centrale réelle, définie par `abs(error_i) < deadband_c`, utilisée pour geler effectivement P et I.
+- la deadband centrale réelle, définie par `abs(error_i) < deadband_c` une fois la constante de temps fiable, utilisée pour geler effectivement P et I.
 
 Cette séparation évite de garder P et I gelés uniquement parce que l'hystérésis maintient encore l'état de deadband alors que l'erreur a déjà quitté la deadband configurée.
-
-### 4.6 Auto-calibration
-
-`AutoCalibTrigger` supervise l'algorithme hors loi de commande.
-
-Comportement implémenté :
-
-- snapshot initial quand `tau`, `deadtime_heat` et `deadtime_cool` sont fiables,
-- fallback snapshot après `AUTOCALIB_DT_COOL_FALLBACK_DAYS = 7` jours sans `deadtime_cool` fiable,
-- snapshot roulant tous les `AUTOCALIB_SNAPSHOT_PERIOD_H = 120` heures,
-- vérification horaire,
-- garde de cooldown `AUTOCALIB_COOLDOWN_H = 24` heures,
-- seuils de stagnation `AUTOCALIB_A_MAD_THRESHOLD = 0.25` et `AUTOCALIB_B_MAD_THRESHOLD = 0.30`,
-- la stagnation de `b` n'est évaluée que pendant que `b` peut être appris : le gradient intérieur-extérieur est au moins `AB_B_MIN_PASSIVE_GRADIENT_C` et la température extérieure est à au moins `AB_B_OUTDOOR_TARGET_MARGIN_C` de la consigne du côté passif (en dessous en HEAT, au-dessus en COOL), bornes de la fenêtre d'apprentissage ; sans température extérieure ou intérieure, `b` n'est pas évalué,
-- la sortie positive est évaluée sur les paramètres qui ont déclenché la calibration (`triggered_params`) : un `a` ou un `b` déclencheur demande au moins `AUTOCALIB_EXIT_NEW_OBS_MIN = 1` nouvelle observation, un temps mort déclencheur doit être fiable ; une demande manuelle (`manual_request`) est jugée sur `deadtime_heat` et `deadtime_cool`,
-- jusqu'à `AUTOCALIB_MAX_RETRIES = 3` essais,
-- un essai échoué planifie le retry `AUTOCALIB_RETRY_DELAY_H = 6` heures plus tard : jusqu'à cette échéance, la garde de cooldown est remplacée par ce délai et le retry n'attend pas la période du snapshot. L'échéance est publiée sous `autocalib.next_check_ts` et effacée au démarrage du retry, lorsqu'un snapshot est pris ou lorsque la stagnation qui l'exigeait a disparu (le compteur de retry est alors réinitialisé).
-
-`AutoCalibTrigger` publie ses transitions sur le bus d'événements Home Assistant via le handler :
-`smartpi_autocalib_snapshot_taken`, `smartpi_autocalib_triggered`, `smartpi_autocalib_success`,
-`smartpi_autocalib_retry`, `smartpi_autocalib_degraded` et `smartpi_autocalib_unreachable`. Chaque payload d'événement contient `entity_id`
-(l'entité climate, par exemple `climate.salon`) et `name` (le nom du thermostat, par exemple `Salon`),
-suivis des champs propres à chaque événement (`smartpi_autocalib_unreachable` : `triggered_params` et `retry_count`).
-
-Le cycle forcé est géré par `CalibrationManager` :
-
-- `COOL_DOWN` jusqu'à `sp - 0.3°C`,
-- `HEAT_UP`,
-- `COOL_DOWN_FINAL` jusqu'au retour à `sp`.
-
-Avant et pendant chaque phase, le manager vérifie, à partir de la seule température extérieure mesurée, que le cycle peut être mené à terme ; le jumeau thermique n'intervient pas. Une phase passive ne peut que ramener la pièce vers la température extérieure ; à chaque calcul, le manager prend donc le seuil passif à atteindre : le seuil de la phase courante si elle est passive, sinon le seuil de la prochaine phase passive du cycle. En mode HEAT, `COOL_DOWN` utilise `target − HYST_LOWER_C`, et `HEAT_UP` et `COOL_DOWN_FINAL` utilisent `target` (le refroidissement final qui suit `HEAT_UP`). En mode COOL, `COOL_DOWN` et `HEAT_UP` utilisent `target + HYST_UPPER_C` (la remontée passive), et `COOL_DOWN_FINAL` n'est pas vérifiée. Le cycle est inatteignable lorsque la température extérieure est trop proche de ce seuil, à `CALIBRATION_REACHABILITY_MARGIN_C = 0.5°C` près ou au-delà : en mode HEAT `T_ext > seuil − marge`, en mode COOL `T_ext < seuil + marge`. Rien n'est jugé tant que la température extérieure est inconnue, ni tant que la phase courante est passive et que la température mesurée a déjà atteint son seuil (la phase avance). Lorsque le seuil n'est pas atteignable, le cycle se termine immédiatement avec le résultat `Unreachable`, distinct de `Cancelled` (HVAC OFF, timeout de `CALIBRATION_TIMEOUT_MIN = 600` minutes, reset) : `last_calibration_time` n'est pas défini, `AutoCalibTrigger` ne consomme aucun retry et publie `smartpi_autocalib_unreachable`, et la tentative suivante attend `AUTOCALIB_COOLDOWN_H` heures (`autocalib.next_check_ts`). Le résultat n'est pas un diagnostic publié : `calibration.state` ne porte que la phase.
-
-`CalibrationManager.take_completed_result()` renvoie le résultat d'une exécution terminée (`Success`, `Cancelled`, `Unreachable`), afin que le handler signale chaque exécution à `AutoCalibTrigger`, y compris une exécution qui se termine dans le tick qui l'a démarrée.
 
 ---
 
@@ -614,31 +946,38 @@ Avant et pendant chaque phase, le manager vérifie, à partir de la seule tempé
 | ---------------------- | -------------------------------------------------------- |
 | `const.py`             | constantes, enums, matrice de gouvernance                |
 | `ab_estimator.py`      | estimation de pente et `ABEstimator`                     |
-| `deadtime_estimator.py` | `DeadTimeEstimator`, débuts d’épisode actif et fenêtre de temps mort |
+| `deadtime_estimator.py` | `DeadTimeEstimator` et débuts d’épisode actif |
 | `ab_aggregator.py`     | agrégation médiane ou médiane pondérée des mesures `a/b` |
 | `ab_drift.py`          | détection et recentrage de dérive persistante sur `a/b`, avec une séquence de candidats par canal |
 | `learning_window.py`   | gestion des fenêtres d'apprentissage et de leurs gardes  |
 | `ab_window_balance.py` | bilan intégral des fenêtres sans pente robuste et pools `a/b` |
-| `response_lag.py`      | `ResponseLagEstimator` : retard de réponse, portes de stabilisation et modèle de puissance délivrée |
+| `power_steps.py`       | `PowerSteps` : échelons de puissance de l'apprentissage de a/b (épisodes, phases de chauffe), puissance délivrée et portes de stabilisation issues du modèle de réponse |
+| `peak_search.py`       | recherche du pic de température après une coupure |
+| `sensor_step.py`       | pas de la sonde, lu sur la dernière heure d'échantillons |
+| `measure_event.py`     | détecteur des événements de mesure et enregistrement de la puissance et des températures |
+| `event_reading.py`     | lecture des événements du bootstrap et des impulsions, valeurs retenues par mode ; lecteur de chaque événement pour le modèle de réponse |
+| `measure_pulse.py`     | impulsions de mesure du démarrage direct                 |
+| `event_fit.py`         | ajustement de la réponse de la pièce à un événement de chauffe, et ajustement par profils du modèle de réponse (travaux d'arrière-plan) |
+| `response_model.py`    | temps mort et constante de temps de réponse par mode, publiés seulement |
+| `temperature_history.py` | historique brut et filtré de la température de la pièce lu par l'apprentissage |
+| `starting_values.py`   | valeurs de départ de `a` et `b`, relâchement et crédit de montée en charge |
+| `learning_start.py`    | début de l'apprentissage (phase de l'algorithme, source de la commande, transmission des valeurs retenues) |
+| `learning_block.py`    | blocage de l'apprentissage : pause du service, entités de perturbation et de chauffage indisponible, leurs effets |
 | `learning_outcomes.py` | compteurs bornés des issues de fenêtres d'apprentissage  |
 | `gains.py`             | calcul et gel des gains                                  |
-| `controller.py`        | PI discret, anti-windup, maintien, hystérésis            |
+| `controller.py`        | PI discret, anti-windup, maintien, hystérésis, transferts d'intégrale |
 | `deadband.py`          | deadband et near-band                                    |
-| `setpoint.py`          | trajectoire analytique de la référence P                    |
-| `resume_hold.py`       | maintien I:HOLD pendant le temps mort après reprise de fenêtre ou de délestage |
-| `recovery_plateau.py`  | test de plateau d'une trajectoire de récupération de perturbation |
-| `feedforward.py`       | orchestration `u_ff1/u_ff2/u_ff3`, gain FF signé `b/a` et facteur de montée en charge |
-| `ff_trim.py`           | biais causal et transfert borné trim/intégrale           |
-| `ff_trim_runtime.py`   | `FFTrimCoordinator` : décomposition de commande figée des requêtes du scheduler, routage des résultats des observateurs de trim, transactions bumpless trim/intégrale à la frontière de cycle, état de transfert |
-| `command_ownership.py` | identifiants de requête, snapshots figés et rattachement des reçus de commande appliquée du scheduler |
-| `ff_trim_periodic.py`  | sélection de fenêtres d’équilibre périodique par phase   |
+| `setpoint.py`          | consigne de régulation et état du boost |
+| `anticipation.py`      | horizon et correction de l'anticipation de la température mesurée (chauffage et refroidissement) |
+| `resume_hold.py`       | maintien I:HOLD pendant le temps mort effectif après un démarrage de chauffe (`control.in_deadtime_window`) et après reprise de fenêtre, de délestage ou de chauffage indisponible, plancher d'erreur résiduelle |
+| `feedforward.py`       | calcul de `u_ff1`, gain FF signé `b/a`, facteur de montée en charge, transfert d'un saut de calibration dans l'intégrale |
 | `ff_ab_confidence.py`  | politique de confiance sur `a/b`                         |
-| `ff3.py`               | correction prédictive bornée FF3 et son état d’exécution par cycle (`FF3RuntimeState`) |
 | `governance.py`        | décisions de gel                                         |
-| `calibration.py`       | FSM de calibration forcée                                |
-| `autocalib.py`         | supervision et déclenchement automatique                 |
+| `calibration.py`       | calibration sur demande : demandes, limites des impulsions, fin, règle de correction, résumé publié |
 | `guards.py`            | `guard_cut` et `guard_kick`                              |
-| `thermal_twin_1r1c.py` | jumeau thermique et diagnostics prédictifs               |
+| `restart_bridge.py`    | décision unique de pontage ou non d'un redémarrage, consultée par chaque composant, et contexte du dernier calcul |
+| `quiet_periods/`       | obscurité d'après la position de la maison (`astral`), plateaux, séquences de baisse de consigne, épisodes, clés et début régulé des périodes calmes |
+| `room_history/`        | `RoomHistoryManager` : les signaux de 7 jours dont le modèle de pièce a besoin (températures intérieure et extérieure, consigne, fronts du chauffage, intervalles invalides), le catalogue des périodes calmes, son propre stockage et le balayage solaire quotidien |
 | `diagnostics.py`       | payload canonique des diagnostics live                  |
 | `diagnostic_history.py` | enveloppe versionnée et séries Recorder stables         |
 | `tint_filter.py`       | filtrage adaptatif de la température intérieure          |
@@ -650,72 +989,21 @@ Les composants instanciés par `SmartPI.__init__()` sont notamment :
 
 ```python
 self.gov = SmartPIGovernance(name)
-self.sp_mgr = SmartPISetpointManager(name, enabled=use_setpoint_filter, release_tau_factor=release_tau_factor)
+self.sp_mgr = SmartPISetpointManager(name)
 self.ctl = SmartPIController(name)
 self.est = ABEstimator()
 self.learn_win = LearningWindowManager(name)
 self.deadband_mgr = DeadbandManager(name, near_band_deg)
-self.calibration_mgr = CalibrationManager(name)
 self.gain_scheduler = GainScheduler(name)
 self.tint_filter = AdaptiveTintFilter(name, enabled=ENABLE_ADAPTIVE_TINT_FILTER)
 self.resume_hold = ResumeDeadtimeHold()
 self.dt_est = DeadTimeEstimator()
-self.twin = ThermalTwin1R1C(dt_s=SMARTPI_RECALC_INTERVAL_SEC, gamma=0.1)
 self.guards = SmartPIGuards()
-self.autocalib = AutoCalibTrigger(name)
-self.ff3_state = FF3RuntimeState()
-self._ff_trim = FFTrim()
-self._fftrim_observer = CausalFFTrimObserver(cycle_min, self._causal_power_trace)
-self._fftrim_periodic_observer = PeriodicFFTrimObserver(cycle_min)
-self._command_ownership = CommandOwnershipTracker()
-self.fftrim_coord = FFTrimCoordinator(self)
 self._ab_confidence = ABConfidence()
+self._ff_step = LearnedStepTransfer()
 ```
 
 ### 5.4 Persistance actuelle
-
-L'observateur causal aligne une seconde timeline, pondérée dans le temps, de
-la propriété des termes de commande avec celle de la puissance physique. Une
-fenêtre stricte en deadband peut ainsi séparer le biais intégral stable
-$J=mean(K_i integral)$ du déficit physique
-$D=H-mean(u_{applied})$. Une fenêtre stricte en deadband exige le régime
-`DEAD_BAND` avec une intégrale qui ne bouge pas : gelée dans le cœur de la
-deadband, ou maintenue dans la bordure d'hystérésis de la deadband (source de
-maintien `deadband_hysteresis_shell`). Tout autre maintien de l'intégrale
-(fenêtre, délestage, capteur invalide, sécurité) n'est pas éligible. Dans la
-bordure, la pièce est écartée de la consigne : le transfert n'y exige pas une
-erreur moyenne dans la résolution du capteur (la borne d'erreur par échantillon
-et les contrôles de stationnarité restent appliqués) et prend $D=0$ : le déficit
-dû à l'écart appartient à la boucle, seule la part intégrale se déplace et la
-commande reste inchangée. Après trois fenêtres indépendantes cohérentes, une
-transaction bornée applique
-`delta_trim = alpha * lambda * (J + D)` et
-`delta_u_i = -alpha * lambda * J`, donc
-`delta_u_cmd = alpha * lambda * D`. Le même facteur `alpha` respecte l'autorité du
-trim, les clamps FF, la capacité intégrale et la marge de commande. La
-transaction s'exécute uniquement à la frontière de cycle,
-dans le même espace de puissance signé en HEAT et COOL.
-Les transferts inférieurs au seuil générique de précision de l'actionneur
-restent ignorés, sauf lorsqu'ils réduisent strictement des contributions trim
-et intégrale opposées. Ce compactage de propriété conserve les mêmes bornes
-atomiques et le même invariant de commande.
-
-Les observateurs stationnaire et périodique réutilisent une seule timeline de
-puissance physique et de propriété, mais conservent des mesures thermiques, un
-washout et des buffers de persistance séparés. La voie périodique accepte la
-saturation basse et le maintien de l’intégrale comme parties d’un cycle créé
-par la régulation. Elle ne ferme la fenêtre qu’après un retour à la même phase
-thermique et au moins `max(6 cycles VT, 2 × temps mort)` ; elle n’a donc pas de
-plancher fixe de trente minutes. Son estimation causale pondérée dans le temps
-n’effectue jamais de transfert de propriété de l’intégrale ; les corrections
-persistantes restent soumises au même taux d’apprentissage et à la même limite
-d’autorité du trim.
-
-Un gel du trim vide le buffer stationnaire. Un gel de raison `saturated`
-conserve les mesures et les propositions en attente de la voie périodique, et
-la fenêtre périodique reste valide ; le trim lui-même n'est pas modifié tant
-qu'il est gelé. Toute autre raison de gel vide le buffer périodique et
-invalide la fenêtre.
 
 Le payload actuel de `SmartPI.save_state()` contient notamment :
 
@@ -724,8 +1012,6 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "version": 2,
     "learning_enabled": ...,
     "last_active_wall_ts": ...,
-    "deadtime_skip_count_a": ...,
-    "deadtime_skip_count_b": ...,
     "est_state": {...},
     "dt_est_state": {...},
     "gov_state": {...},
@@ -733,65 +1019,78 @@ Le payload actuel de `SmartPI.save_state()` contient notamment :
     "sp_mgr_state": {...},
     "lw_state": {...},
     "db_state": {...},
-    "cal_state": {...},
     "gs_state": {...},
-    "twin_state": {...},
     "guards_state": {...},
-    "ac_state": {...},
-    "ff_v2_trim": {...},
-    "ff_trim_delta": ...,
     "tint_filter_state": {...},
     "hysteresis_output": {...},  # bootstrap uniquement
+    "measure_events": {...},  # enregistrement de la puissance et des températures (3.7)
+    "event_reading": {...},  # lectures en cours et valeurs retenues (3.7)
+    "calibration": {...},  # calibration en cours ou dernière (3.7)
+    "restart": {...},  # dernier calcul, puissance engagée (pontage du redémarrage)
 }
 ```
 
 La boucle de régulation planifie au plus une écriture différée de ce payload par fenêtre de cinq minutes ; Home Assistant vide une écriture en attente à l'arrêt. Les services et la suppression de l'entité écrivent immédiatement un snapshot.
 
-Les timestamps d'événements passés (historiques de température, début de calibration, période passive et épisode du retard de réponse) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, le délai d'expiration de la calibration continue de s'écouler après un redémarrage.
+Les timestamps d'événements passés (historiques de température, début d'une calibration, période passive et épisode des échelons de puissance) sont persistés en temps mural et reconvertis en horloge monotonic au chargement, afin de conserver leur position dans le passé après un redémarrage ; en particulier, la limite de 48 heures d'une calibration continue de s'écouler après un redémarrage.
+
+L'historique de la pièce conserve son propre stockage (version d'état 3) : l'historique, le catalogue des périodes calmes avec leurs clés et la position de la maison avec laquelle le catalogue a été trouvé. Un changement de position de la maison oublie le catalogue. Une version plus récente est ignorée. Il a besoin de numpy et de scipy (sans eux rien n'est enregistré et le modèle de pièce affiche `numerical libraries unavailable`), n'enregistre rien en mode vanne (le modèle de pièce affiche `valve heaters are not supported yet`), et n'a aucune période calme sans position de la maison. Seul le modèle de pièce le lit ; la régulation ne lit ni l'historique ni le catalogue.
+
+Le modèle de pièce conserve son propre stockage (version d'état 2) : paramètres publiés et leurs candidats, fenêtres et enregistrements indexés par leur dernière période calme, état de l'observateur avec la perturbation des périodes et les sous-pas en attente d'une période, bilan thermique en vigueur avec le dernier jour calculé, et heure de la dernière tâche d'identification. Une version plus récente est ignorée.
+
+#### Redémarrages
+
+Versatile Thermostat n'envoie aucune commande au chauffage lorsque l'intégration est déchargée ou que Home Assistant s'arrête, ni au démarrage en chauffe ou en refroidissement avant son premier cycle : sur un arrêt court, le chauffage garde son dernier état commandé. Un tel arrêt n'est qu'un trou de quelques échantillons. `restart_bridge.py` décide une seule fois, au premier calcul d'un thermostat prêt (une consigne et une température intérieure sont disponibles) après un chargement, si le redémarrage est **ponté**. Jusque-là le redémarrage reste en attente : une sonde qui rapporte quelques secondes après le chargement ne l'empêche pas, et la durée d'arrêt est mesurée jusqu'au calcul qui décide. Toutes les conditions suivantes doivent être réunies :
+
+- la durée d'arrêt, sur l'horloge murale, depuis le plus ancien dernier calcul des trois stockages (algorithme, historique de la pièce, modèle de pièce) jusqu'au premier calcul, est au plus `RESTART_BRIDGE_MAX_GAP_S = 600 s` ; un stockage écrit longtemps avant l'arrêt (une écriture différée perdue lors d'un plantage) rend la durée d'arrêt longue ;
+- le mode HVAC est le même au dernier calcul et au premier, HEAT ou COOL, et la configuration du cycle (durée de cycle, délais minimaux de marche et d'arrêt, mode vanne) est la même ;
+- l'état de l'actionneur a été sauvegardé : la puissance engagée dans le stockage de l'algorithme et, en HEAT, aussi l'état du cycle de chauffe dans l'historique de la pièce et le dernier calcul du modèle de pièce, pour les stockages qui contiennent des données ;
+- SmartPI avait la main au dernier calcul et l'a au premier : ni fenêtre ouverte, ni délestage, ni mode sécurité, ni commande remplacée, ni état inconnu (après le redémarrage, l'état de la fenêtre, du délestage et de la sécurité du thermostat est lu avant toute commande) ;
+- la première température intérieure passe la règle de saut de l'historique de la pièce (un saut de plus de `0.5 °C` à plus de `20 °C/h` n'est pas physique) par rapport à la dernière, datée de son dernier changement ;
+- l'horloge murale n'a pas sauté (pas de durée d'arrêt négative, pas de dernier calcul d'un stockage dans le futur).
+
+Pendant que le redémarrage attend la température intérieure, un calcul avec une
+consigne garde la commande engagée avant l'arrêt au lieu de forcer 0 : le chauffage
+a conservé cette commande pendant l'arrêt, et la couper pour une sonde qui rapporte
+quelques secondes plus tard interromprait la chauffe. La commande est gardée tant que
+chaque règle ci-dessus qui ne lit pas la température intérieure est remplie au
+calcul courant : l'arrêt et l'attente ensemble durent `RESTART_BRIDGE_MAX_GAP_S` au plus.
+Sinon, la sortie vaut 0 comme pour tout capteur absent, et reste à 0 jusqu'à l'arrivée
+de la température. Un redémarrage dont la sortie a été forcée à 0 pendant l'attente
+n'est pas ponté (`indoor temperature unknown` lorsqu'aucune autre règle ne le refuse) :
+le chauffage n'a pas conservé son état.
+
+Chaque composant consulte cette décision ; aucun ne décide seul. L'état transitoire dont chaque composant a besoin est sauvegardé avec elle (en temps mural) et reste en attente jusqu'à la décision.
+
+| Composant | Redémarrage ponté | Autre redémarrage |
+|---|---|---|
+| Puissance engagée | restaurée (le chauffage l'a conservée) ; le premier calcul couvre la durée d'arrêt avec elle | 0 jusqu'à la première commande appliquée |
+| Suivi du temps | le premier calcul couvre la durée d'arrêt, sans le gel de l'apprentissage d'un cycle ; la mise en forme de la consigne repart encore de la consigne brute pendant ce cycle | premier calcul d'une nouvelle session, apprentissage gelé pendant un cycle |
+| Détection du temps mort | la détection en cours reprend (3.6) | abandonnée, durée minimale OFF comptée depuis le chargement |
+| Fenêtre d'apprentissage a/b | la fenêtre en cours reprend avec ses accumulateurs ; son segment de bilan intégral recommence | effacée |
+| Échelons de puissance (apprentissage a/b) | période passive, épisode et historique des commandes repris (3.7) | période passive abandonnée, épisode compté comme terminé, historique des commandes recommencé |
+| Lectures de mesure | l'enregistrement, les lectures en cours et le repos ou la phase du détecteur (chauffage) reprennent (3.7) | les lectures en cours se terminent, l'enregistrement est abandonné, les valeurs retenues restent |
+| Lectures du modèle de réponse | l'enregistrement et les lectures en cours reprennent (3.7) | les lectures en cours se terminent, l'enregistrement est abandonné, le modèle reste |
+| Coupure de surchauffe (chauffage seulement) | une coupure en cours à l'arrêt continue jusqu'au seuil de relâche habituel | relâchée |
+| Sortie tout-ou-rien du bootstrap | reprise dans la bande (3.1) | repart à 0 |
+| Historique de la pièce (HEAT uniquement ; en COOL comme un autre redémarrage) | la durée d'arrêt est un échantillon manquant (pas d'intervalle invalide) ; l'état du chauffage à l'arrêt est tenu jusqu'à la première commande qui suit, sans aucun front | la période de chauffe est close au dernier calcul, et seule la durée d'arrêt est invalide |
+| Modèle de pièce (HEAT uniquement ; en COOL comme un autre redémarrage) | la commande appliquée à l'arrêt est tenue pendant la durée d'arrêt ; l'état est propagé à travers elle et les prévisions en cours se poursuivent | le chauffage est considéré comme éteint d'après l'état sauvegardé, l'incertitude est rouverte et les prévisions en cours sont abandonnées |
+
+L'état du chauffage à l'arrêt est celui de l'écriture du stockage : un rechargement écrit les stockages au déchargement, et Home Assistant écrit les stockages en attente à son arrêt. Une période de chauffe prévue pour se terminer avant l'arrêt est terminée ; un chauffage allumé à l'arrêt reste allumé jusqu'à la première commande après le redémarrage.
+
+Un redémarrage non ponté n'exclut de l'historique de la pièce que sa durée d'arrêt (du dernier calcul au premier), et non une marge autour : l'état de l'actionneur pendant la durée d'arrêt est inconnu, mais les observations avant et après sont valides.
+
+L'historique de la pièce garde un repère de chaque redémarrage (dernier calcul, premier calcul, ponté) dans `restarts`, afin que les règles ultérieures voient encore un redémarrage qui n'a laissé aucun intervalle invalide. Le modèle de pièce a sa limite de reprise de 3 heures.
+
+`control.last_restart` publie la décision de la session courante (5.5).
 
 Les pools de bilan intégral et les compteurs d'issues de fenêtres ne sont pas
 persistés : ils repartent vides à chaque démarrage. Les observations des mesures de
-`a` sont persistées avec l'état de l'estimateur ; un état qui n'en contient pas se
-charge avec des mesures non recalculables.
+`a` et de `b` sont persistées avec l'état de l'estimateur.
 
-Seul le trim appris reste persistant. Les fenêtres de propriété, propositions
-en attente et transferts d'intégrale sont transitoires ; après redémarrage,
-l'observateur est reconstruit et le gel existant de trois cycles est conservé.
+La puissance appliquée qui alimente le temps mort, l'historique de la pièce et le modèle de pièce vient des reçus de commande appliquée du scheduler de cycles de Versatile Thermostat (`AppliedCommandReceipt` de `vtherm_api`) : un reçu pour chaque commande qu'il applique réellement, un reçu `cycle_start` à chaque début de cycle maître et un reçu `update` pour chaque position de vanne appliquée en cours de cycle. Le reçu donne la puissance actionneur appliquée, convertie dans l'espace linéaire du modèle. SmartPI ne tague pas ses requêtes : il lit seulement les reçus.
 
-La propriété des commandes vient des reçus de commande appliquée du scheduler
-de cycles de Versatile Thermostat (`AppliedCommandReceipt` de `vtherm_api`).
-Juste avant de soumettre une requête, SmartPI fige sa décomposition de
-commande et passe un `request_id` strictement croissant à `start_cycle`. Le
-scheduler renvoie cet identifiant dans un reçu pour chaque commande qu’il
-applique réellement : un reçu `cycle_start` à chaque début de cycle maître, y
-compris son redémarrage automatique, et un reçu `update` pour chaque position
-de vanne appliquée en cours de cycle. Aucun reçu n’est émis pour une requête
-switch en attente du cycle suivant. Le reçu engage la puissance actionneur
-appliquée, convertie dans l’espace linéaire du modèle, et rattache le snapshot
-figé de sa requête. Un reçu n’est possédé que si sa requête est connue, garde
-son mode HVAC, ne porte aucune altération `min_on_off` ou `valve_retained` et
-n’a pas été contrainte par le timing ; une requête rejetée reste rejetée pour
-ses reçus suivants. Les commandes non taguées ne sont jamais possédées : les
-substitutions de Versatile Thermostat comme la puissance par défaut de
-sécurité, et les mises à jour de vanne différées de Versatile Thermostat. Les
-32 dernières requêtes sont conservées, de sorte qu’un scheduler qui applique
-une requête plus ancienne l’attribue encore à cette requête. Un reçu absent ou
-rejeté ne reconstruit jamais la propriété depuis l’état courant du contrôleur.
-Un transfert bumpless est engagé dès qu’un reçu possédé porte une requête
-préparée après le transfert.
-
-Sans prise en charge des reçus par Versatile Thermostat, SmartPI soumet des
-requêtes non taguées et engage la puissance indiquée par le callback de début
-de cycle, ou l’ouverture de vanne publiée en mode vanne, sans propriété. Le
-trim stationnaire utilise alors le `u_ff1` échantillonné, le trim périodique et
-le transfert bumpless restent inactifs, et la régulation PI est inchangée. Une
-mise à jour de vanne sans ouverture publiée n’engage rien et ouvre un
-intervalle de puissance non observée (`missing_valve_position`) qui dure
-jusqu’à la prochaine puissance observée (mise à jour de vanne, début ou fin de
-cycle). La trace conserve la dernière puissance connue sur cet intervalle :
-une fenêtre de trim qui le chevauche est donc rejetée
-(`causal_power_not_covered`) ; un court trou du scheduler comblé par la
-puissance précédente (`legacy_gap_fill`) reste utilisable.
+Sans prise en charge des reçus par Versatile Thermostat, SmartPI engage la puissance indiquée par le callback de début de cycle, ou l'ouverture de vanne publiée en mode vanne (relue après une mise à jour en cours de cycle). Une mise à jour de vanne sans ouverture publiée n'engage rien.
 
 ### 5.5 Diagnostics publiés
 
@@ -801,8 +1100,16 @@ puissance précédente (`legacy_gap_fill`) reste utilisable.
 - `build_published_diagnostics()` : la fonction qui construit ce payload.
 
 `diagnostic_history.py` enveloppe ce payload dans `schema_version`, `live` et le
-bloc stable de onze séries `history`. Les entités normales excluent `live` du
+bloc stable de dix-sept séries `history`. Les entités normales excluent `live` du
 Recorder ; la sous-classe debug l'enregistre directement. Le mode debug ne fait que sélectionner la classe de capteur enregistrée ; il n'ajoute pas de second bloc de diagnostic.
+
+`control.last_restart` donne la décision sur le redémarrage de la session courante : `bridged`, la durée d'arrêt `downtime_s` (en secondes, `null` lorsque l'horloge a sauté ou que rien n'a été sauvegardé) et, pour un redémarrage non ponté, la `reason` en mots simples. Il vaut `null` avant le premier calcul d'un thermostat restauré depuis un stockage, et pour un thermostat sans état sauvegardé.
+
+`learning.start` est un résumé simple du démarrage de l'apprentissage (`mode`,
+`pulses_done`, `pulse`, `values_kept`, `values_kept_at`, `kept_a`, `kept_b`,
+`kept_lag_s`), construit par `LearningStart.public()` pour le mode dans lequel se
+trouve le modèle. Les états d'impulsion y sont traduits (`none`, `rest`,
+`full power`, `stop`).
 
 `analysis.learning.learn_ok_count` et `learn_skip_count` sont des compteurs
 d'exécution relatifs au processus Home Assistant courant. Les compteurs
@@ -813,16 +1120,7 @@ dernières 24 heures sous forme de paires `[motif, nombre]` (valeurs numériques
 retirées des motifs ; les événements des pools sont préfixés par `pool:`).
 `analysis.learning.balance_pool` donne le nombre de segments en attente de
 chaque pool et le pas de capteur utilisé pour leur incertitude ; ces valeurs
-sont propres à la session Home Assistant courante. Quand le jumeau thermique est exploitable, ses champs
-publics sont exposés sous `analysis.twin`.
-
-`feedforward.fftrim.command_ownership` indique si le scheduler émet des reçus
-et expose le dernier état de rattachement, son motif de rejet, l’identifiant de
-requête (`request_sequence`), le type de reçu, les puissances demandée et
-appliquée et leur delta, les durées ON/OFF appliquées, les altérations du reçu,
-l’indicateur de contrainte temporelle et les compteurs de rejet de la session
-Home Assistant courante. Ces valeurs sont des observations : elles expliquent
-une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
+sont propres à la session Home Assistant courante.
 
 ---
 
@@ -861,21 +1159,9 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `RESPONSE_LAG_MIN_ESTIMATES`   | `3`    |
 | `RESPONSE_LAG_RESOLVE_EPISODES` | `4`   |
 | `RESPONSE_LAG_PHASE_MIN_OFF_S` | `600` |
-| `RESPONSE_LAG_MAX_REL_UNC`     | `0.15` |
-| `RESPONSE_LAG_UNC_FLOOR_S`     | `30`   |
-| `RESPONSE_LAG_MIN_OFF_S`       | `1800` |
-| `RESPONSE_LAG_MIN_OFF_LAGS`    | `5`    |
-| `RESPONSE_LAG_MIN_CROSSINGS`   | `3`    |
 | `RESPONSE_LAG_MODEL_CHANGE_REL` | `0.5` |
 | `RESPONSE_LAG_U_TOL`           | `0.05` |
-| `RESPONSE_LAG_RESTART_MAX_GAP_S` | `600` |
-| `RESPONSE_LAG_PASSIVE_SPAN_S`  | `3600` |
-| `RESPONSE_LAG_MIN_INVERSION_SLOPE` | `0.05` |
-| `RESPONSE_LAG_RESOLVABLE_FRAC` | `0.9`  |
-| `RESPONSE_LAG_B_REL_UNC`       | `0.10` |
-| `RESPONSE_LAG_MAX_S`           | `DT_MAX_MIN` × 60 (`14400`) |
-| `AB_SETTLE_K_ACTIVE`           | `3`    |
-| `AB_SETTLE_K_PASSIVE`          | `3`    |
+| `RESTART_BRIDGE_MAX_GAP_S` (`RESPONSE_LAG_RESTART_MAX_GAP_S`) | `600` |
 | `AB_SETTLE_ACTIVE_CAP_FRAC`    | `0.5`  |
 
 ### 6.2 Régulation
@@ -887,11 +1173,9 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `GAIN_TI_LAMBDA_FACTOR`       | `4.0`   |
 | `NEAR_SETPOINT_UNWIND_STEPS`  | `1.5`   |
 | `RECOVERY_ERROR_FLOOR_DEADBAND_RATIO` | `2.0` |
-| `RECOVERY_PLATEAU_SLOPE_ABS_H` | `0.12` |
-| `RECOVERY_PLATEAU_BLOCK_CYCLES` | `3` |
-| `RECOVERY_PLATEAU_BLOCKS` | `2` |
-| `RECOVERY_PLATEAU_PROGRESS_BLOCKS` | `4` |
-| `RECOVERY_PLATEAU_PROGRESS_MIN_C` | `0.03` |
+| `ANTICIPATION_MAX_C` | `1.0` |
+| `ANTICIPATION_MIN_WINDOW_S` | `600` |
+| `ANTICIPATION_MAX_WINDOW_S` | `1800` |
 | `GUARD_CUT_RESET_STEPS`       | `1.5`   |
 | `MAX_STEP_PER_MINUTE`         | `0.25`  |
 | `SETPOINT_BOOST_RATE`         | `0.50`  |
@@ -910,29 +1194,42 @@ une acceptation ou un rejet causal sans modifier la décision d’apprentissage.
 | `SETPOINT_BOOST_THRESHOLD` | `0.3`   |
 | `SETPOINT_BOOST_ERROR_MIN` | `0.3`   |
 
-### 6.4 Auto-calibration et FF
+### 6.4 Calibration
 
-| Constante                         | Valeur |
-| --------------------------------- | ------ |
-| `AUTOCALIB_SNAPSHOT_PERIOD_H`     | `120`  |
-| `AUTOCALIB_DT_COOL_FALLBACK_DAYS` | `7`    |
-| `AUTOCALIB_COOLDOWN_H`            | `24`   |
-| `AUTOCALIB_A_MAD_THRESHOLD`       | `0.25` |
-| `AUTOCALIB_B_MAD_THRESHOLD`       | `0.30` |
-| `AUTOCALIB_MAX_RETRIES`           | `3`    |
-| `AUTOCALIB_RETRY_DELAY_H`         | `6`    |
-| `AUTOCALIB_EXIT_NEW_OBS_MIN`      | `1`    |
-| `FF_TRIM_RHO`                     | `0.15` |
-| `FF_TRIM_LAMBDA`                  | `0.05` |
-| `FF3_DELTA_U`                     | `0.05` |
-| `FF3_MAX_AUTHORITY`               | `0.20` |
-| `FF3_NEARBAND_GAIN`               | `0.50` |
-| `FF3_MIN_HORIZON_CYCLES`          | `2`    |
-| `FF3_RESPONSE_LOOKAHEAD_CYCLES`   | `2`    |
-| `FF3_MAX_HORIZON_CYCLES`          | `8`    |
-| `FF3_ACTION_SENSITIVITY_EPS_C`    | `1e-4` |
-| `FF3_SCORE_EPS_COST`              | `1e-4` |
-| `FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR` | `0.5` |
+| Constante                         | Valeur    |
+| --------------------------------- | --------- |
+| `CALIBRATION_MAX_S`               | `172800`  |
+| `CALIBRATION_MIN_INTERVAL_S`      | `86400`   |
+| `CALIBRATION_CORRECT_REL`         | `0.30`    |
+| `CALIBRATION_CORRECT_B`           | `False`   |
+| `CALIBRATION_SKIP_WHEN_OWN_AGREE` | `False`   |
+| `CALIBRATION_OWN_RECENT`          | `3`       |
+| `CALIBRATION_START_OVER_C`        | `0.2`     |
+| `CALIBRATION_GAP_MIN_S`           | `3600`    |
+| `CALIBRATION_GAP_MAX_S`           | `21600`   |
+| `CALIBRATION_REST_EXTRA_S`        | `1200`    |
+| `CALIBRATION_HEAT_MIN_S`          | `7200`    |
+| `CALIBRATION_STEP_MAX_S`          | `14400`   |
+| `CALIBRATION_DEPTH_CAP_C`         | `0.8`     |
+| `CALIBRATION_FALL_WINDOW_S`       | `900`     |
+
+`CALIBRATION_MAX_S` est dans `const.py`, les autres dans `calibration.py`. Pour le reste, les impulsions d'une calibration utilisent les constantes des impulsions de mesure (`measure_pulse.py`). `CALIBRATION_MIN_INTERVAL_S` ne conditionne que la calibration automatique.
+
+### 6.5 Moment des impulsions et calibration automatique
+
+| Constante                     | Valeur   | Module                |
+| ----------------------------- | -------- | --------------------- |
+| `QUIET_STABLE_S`              | `3600`   | `pulse_timing.py`     |
+| `QUIET_DAYS`                  | `2`      | `pulse_timing.py`     |
+| `WINDOW_MIN_S`                | `10800`  | `pulse_timing.py`     |
+| `WINDOW_MAX_S`                | `21600`  | `pulse_timing.py`     |
+| `WINDOW_LAG_FACTOR`           | `6`      | `pulse_timing.py`     |
+| `LOG_KEEP_S`                  | `259200` | `pulse_timing.py`     |
+| `LOG_MAX`                     | `256`    | `pulse_timing.py`     |
+| `LOG_GAP_S`                   | `3600`   | `pulse_timing.py`     |
+| `AUTO_CALIBRATION_WAIT_S`     | `259200` | `auto_calibration.py` |
+| `AUTO_CALIBRATION_ATTEMPTS`   | `3`      | `auto_calibration.py` |
+| `AUTO_CALIBRATION_RETRY_S`    | `72000`  | `auto_calibration.py` |
 
 ---
 
@@ -957,7 +1254,7 @@ Cette gouvernance est centrale :
 - elle évite de faire bouger les gains dans des régimes peu informatifs,
 - elle laisse malgré tout l'apprentissage thermique actif dans certains régimes contraints comme `SATURATED`.
 
-La matrice pilote uniquement la mise à jour des gains et l'apprentissage thermique. Une transition de régime (`REGIME_TRANSITION`) gèle les gains et l'apprentissage mais ne maintient pas l'intégrale. L'intégrale n'est maintenue que par les sources listées dans les protections de la section 4 (deadtime, phases de reprise, `vt_safety`) et par deux sources liées à la gouvernance : `deadband_hysteresis_shell` (état de deadband hystérétique actif, erreur hors de la deadband centrale) et `governance_sensor_invalid` (régime `DEGRADED` avant la réception d'une première température extérieure). Lorsque la sonde extérieure cesse de fournir des valeurs après une première valeur, le régime est `DEGRADED` : les gains, l'apprentissage thermique et le trim FF restent gelés, l'intégrale continue d'intégrer, et la chaîne de commande utilise la dernière température extérieure valide.
+La matrice pilote uniquement la mise à jour des gains et l'apprentissage thermique. Une transition de régime (`REGIME_TRANSITION`) gèle les gains et l'apprentissage mais ne maintient pas l'intégrale. L'intégrale n'est maintenue que par les sources listées dans les protections de la section 4 (deadtime, phases de reprise, `vt_safety`, `calibration_recovery`) et par deux sources liées à la gouvernance : `deadband_hysteresis_shell` (état de deadband hystérétique actif, erreur hors de la deadband centrale) et `governance_sensor_invalid` (régime `DEGRADED` avant la réception d'une première température extérieure). Lorsque la sonde extérieure cesse de fournir des valeurs après une première valeur, le régime est `DEGRADED` : les gains et l'apprentissage thermique restent gelés, l'intégrale continue d'intégrer, et la chaîne de commande utilise la dernière température extérieure valide.
 
 ---
 
@@ -966,5 +1263,3 @@ La matrice pilote uniquement la mise à jour des gains et l'apprentissage thermi
 1. **Astrom K.J. et Hagglund T.**, travaux sur la régulation PID et l'usage de modèles FOPDT.
 2. **Sundaresan K.R. et Krishnaswamy P.R.**, estimation des paramètres de délai et de constante de temps.
 3. Régression **OLS** avec test t de Student pour la validation de pente.
-
-Ce document sert de référence alignée sur l'implémentation SmartPI actuelle.

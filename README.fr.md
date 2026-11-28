@@ -23,10 +23,13 @@ SmartPI est un algorithme de contrôle thermique avancé basé sur un modèle de
 
 - **Modèle thermique 1R1C** : Apprend le gain de chauffe, le taux de déperdition et les temps morts de votre pièce à partir d'observations réelles — aucun réglage manuel nécessaire
 - **Gains PI auto-calculés** : Calcule Kp et Ki automatiquement à partir de la constante de temps et du temps mort appris, via des règles IMC et heuristiques
-- **Feed-forward basé sur le modèle** : Estime la puissance de maintien nécessaire au point de consigne, complétée par un biais lent et une correction prédictive FF3 activée par défaut en cas de perturbation
-- **Trajectoire analytique de consigne** : Façonne la référence proportionnelle avec une trajectoire de freinage tardif basée sur le modèle, en chauffage comme en refroidissement, pour atteindre la cible rapidement tout en limitant le dépassement
+- **Feed-forward basé sur le modèle** : Estime la puissance de maintien nécessaire au point de consigne, introduite progressivement pendant que le modèle est appris
+- **Anticipation (chauffage et refroidissement)** : Lit la température que la pièce s'apprête à atteindre, à partir de sa pente et du temps entre une commande et son effet, pour baisser la commande en avance et limiter le dépassement des émetteurs lents
 - **Gouvernance Safety-First** : Une matrice par régime gèle ou déverrouille l'apprentissage et l'adaptation des gains selon le contexte opérationnel
-- **Auto-calibration** : Surveille la qualité du modèle et déclenche une séquence de recalibration lorsque l'apprentissage stagne
+- **Choix du démarrage de l'apprentissage** : amorçage (cycles d'hystérésis à pleine puissance jusqu'à ce que le modèle soit appris) ou démarrage direct (régulation PI dès la première minute avec des impulsions de mesure légères)
+- **Pause de l'apprentissage** : par service, par une entité de perturbation (invités, cheminée, soleil) ou par une entité de chauffage indisponible (chaudière arrêtée, dégivrage) ; la régulation continue avec le modèle déjà appris
+- **Chauffage et refroidissement** : chaque mode conserve son propre taux de chauffe ou de refroidissement appris, son temps mort et sa réponse de l'émetteur
+- **Calibration sur demande** : quelques impulsions de mesure près de la consigne mesurent de nouveau la pièce et corrigent le modèle appris lorsqu'il est nettement faux ; peut être appelée par une automatisation
 - **Linéarisation de courbe de vanne** : Traduit la demande SmartPI en position de vanne adaptée au comportement non linéaire des vannes thermostatiques (TRV)
 - **Diagnostics détaillés** : Publie l'état de l'apprentissage, l'état du modèle et les données de régulation — consultable via une carte Markdown Home Assistant dédiée ou le panel de régulation [Equinox](https://github.com/KipK/equinox)
 
@@ -82,6 +85,7 @@ Home Assistant antérieur à 2026.11 : [ouvrir dans HACS](https://my.home-assist
 La documentation complète est disponible en français :
 
 - 🇫🇷 [Documentation utilisateur (Français)](documentation/fr/vtherm_smartpi.md)
+- 🇫🇷 [Bonnes pratiques pour bien apprendre (Français)](documentation/fr/bonnes_pratiques.md)
 - 🇫🇷 [Documentation technique (Français)](documentation/fr/technical_doc.md)
 
 ## 👥 Auteurs
@@ -113,4 +117,4 @@ Si SmartPI vous est utile, vous pouvez soutenir son développement ici :
 
 ## 📄 Licence
 
-Ce projet est distribué selon les conditions de licence Smart-PI. Voir [LICENSE.md](LICENSE.md) pour plus de détails.
+Ce projet est distribué selon les conditions de la licence Apache 2. Voir [LICENSE](LICENSE) pour plus de détails.

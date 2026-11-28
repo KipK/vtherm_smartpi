@@ -18,21 +18,7 @@ class SmartPIPhase(str, Enum):
     """Phases of the Smart-PI algorithm."""
     HYSTERESIS = "Hysteresis"  # Learning phase with ON/OFF control
     STABLE = "Stable"          # PI control with reliable model
-    CALIBRATION = "Calibration" # Forced calibration cycle in progress
-
-class SmartPICalibrationPhase(str, Enum):
-    """Phases of the Smart-PI forced calibration."""
-    IDLE = "Idle"
-    COOL_DOWN = "CoolDown"
-    HEAT_UP = "HeatUp"
-    COOL_DOWN_FINAL = "CoolDownFinal"
-
-class SmartPICalibrationResult(str, Enum):
-    """Resolution status of a Smart-PI forced calibration cycle."""
-    PENDING = "Pending"
-    SUCCESS = "Success"
-    CANCELLED = "Cancelled"
-    UNREACHABLE = "Unreachable"
+    CALIBRATION = "Calibration" # A pulse of a calibration commands the output
 
 # ########################################################################
 #                      SAFETY-FIRST GOVERNANCE ENUMS                   #
@@ -148,7 +134,7 @@ SETPOINT_BOOST_RATE = 0.50       # boosted rate limit (/min) vs MAX_STEP_PER_MIN
 
 # Setpoint change handling (mode change vs adjustment)
 # - Large change (>= threshold): mode change (eco ↔ comfort) -> restart error history, integral preserved
-# - Small change (< threshold): integral preserved, servo via P + SP filter + FF
+# - Small change (< threshold): integral preserved, servo via P + FF
 SETPOINT_MODE_DELTA_C = 0.5      # °C threshold for mode change detection
 OVERSHOOT_I_CLAMP_EPS_C = 0.04  # Guard band below setpoint where integral cannot increase (°C)
 
@@ -188,27 +174,13 @@ NEAR_BAND_HYSTERESIS_C = 0.05
 # threshold, so that a reading flickering between two levels cannot re-trigger it.
 GUARD_CUT_RESET_STEPS = 1.5
 
-class TrajectoryPhase(str, Enum):
-    """Trajectory state for setpoint shaping."""
-    IDLE = "idle"
-    TRACKING = "tracking"
-    RELEASE = "release"
-
-
-# Trajectory generator
-TRAJECTORY_ENABLE_ERROR_THRESHOLD = 0.3  # °C — signed raw error needed to arm the trajectory
-TRAJECTORY_COMPLETE_EPS_C = 0.05         # °C — convergence epsilon to finish tracking
-TRAJECTORY_MIN_P_ERROR_RATIO = 0.25      # Fraction of the raw signed error kept on the P path during braking
-TRAJECTORY_BRAKE_GAIN = 1.20             # Safety factor applied to the predicted inertial rise before braking
-TRAJECTORY_BRAKE_RELEASE_HYST_C = 0.10   # Extra signed-error margin to keep an active trajectory in tracking
-TRAJECTORY_RELEASE_TAU_FACTOR = 0.5      # Make the return to the raw target faster than braking while staying smooth
-TRAJECTORY_BUMPLESS_MAX_U_DELTA = 0.03   # Maximum allowed proportional command step when releasing trajectory
 RECOVERY_ERROR_FLOOR_DEADBAND_RATIO = 2.0  # Residual error (multiples of the deadband) under which a recovery counts as closed
-RECOVERY_PLATEAU_SLOPE_ABS_H = 0.12  # Mean-error change (°C/h) under which a recovery block counts as stationary
-RECOVERY_PLATEAU_BLOCK_CYCLES = 3.0  # Block length (cycles) of the mean-error test that detects a stuck recovery
-RECOVERY_PLATEAU_BLOCKS = 2  # Consecutive stationary blocks before a disturbance recovery counts as stuck
-RECOVERY_PLATEAU_PROGRESS_BLOCKS = 4  # Look-back (blocks) of the net-progress test of a plateau
-RECOVERY_PLATEAU_PROGRESS_MIN_C = 0.03  # Net fall of the mean error over the look-back that still counts as a recovering tail
+
+# Anticipation of the measured temperature (heating and cooling)
+ANTICIPATION_MAX_C = 1.0                 # °C — largest correction added to the measured temperature
+ANTICIPATION_MIN_WINDOW_S = 600.0        # s — shortest window of the least-squares slope
+ANTICIPATION_MAX_WINDOW_S = 1800.0       # s — longest slope window: beyond 30 min the slope comes too late for long-horizon rooms
+
 # Error filter time constant
 ERROR_FILTER_TAU = 25.0 # Minutes (matches alpha ~0.35 at 10min)
 
@@ -260,6 +232,8 @@ AB_DRIFT_RECENTER_ALPHA: float = 0.25
 AB_DRIFT_RECENTER_STEP_MAX_FACTOR: float = 2.0
 AB_DRIFT_MAD_FLOOR_ABS: float = 1e-4
 AB_DRIFT_SEQ_GAP_MAX: int = 3
+# Relative floor of the outlier gate width: measures that agree closely must not shrink the gate to a sliver of the median.
+AB_MAD_REL_FLOOR: float = 0.02
 
 # --- SmartPI Learning Window Constants ---
 # Absolute timeout for a learning window (both A and B).
@@ -288,56 +262,40 @@ AB_BALANCE_POOL_MAX_AGE_S = 86400.0    # Segments older than this are dropped
 AB_BALANCE_POOL_MAX_SEGMENTS = 12      # Oldest segments are dropped beyond this count
 AB_BALANCE_MIN_SEGMENT_MIN = 15.0      # Shorter segments are dominated by noise and actuator lag
 
-# Response lag (ramp asymptote intercept after a power step).
-# Over a learning window the room behaves as an integrator behind fast lags
-# (actuator, emitter, air mixing, sensor housing) and a pure delay: after a
-# power step the slope settles and its asymptote is delayed by the lag. The
-# lag is estimated on constant-power active episodes and sets the settling
-# gates and the delivered power model of the a learning.
-RESPONSE_LAG_HISTORY = 7               # Estimates kept (published value: their median)
-RESPONSE_LAG_MIN_ESTIMATES = 3         # Estimates required before the lag is published
-# Heating phases after which an unpublished lag is given up for the a
-# bootstrap (the applied power is then used for the a measurements).
+# Power steps of the a/b learning (smartpi/power_steps.py): heating episodes and their durations.
+RESPONSE_LAG_HISTORY = 7               # Episode durations kept (median: cap of the active gate)
+RESPONSE_LAG_MIN_ESTIMATES = 3         # Durations required before their median is used
+# Heating phases after which the a learning goes on without a response model
+# (the applied power is then used for the a measurements).
 RESPONSE_LAG_RESOLVE_EPISODES = 4
 # Power cut shorter than this between two active episodes: same heating phase.
 RESPONSE_LAG_PHASE_MIN_OFF_S = 600.0
-# Publication: combined standard deviation of the inverse-variance weighted
-# estimates at most this fraction of their weighted median (floor for short lags).
-RESPONSE_LAG_MAX_REL_UNC = 0.15
-RESPONSE_LAG_UNC_FLOOR_S = 30.0
-RESPONSE_LAG_B_REL_UNC = 0.10          # Assumed relative uncertainty of a published b
-# Slope of the intercept inversion below which an episode cannot resolve the lag.
-RESPONSE_LAG_MIN_INVERSION_SLOPE = 0.05
-RESPONSE_LAG_MIN_OFF_S = 1800.0        # Passive time before an episode for a settled baseline
-RESPONSE_LAG_MIN_OFF_LAGS = 5.0        # Same, in known lags (residual power below 1 %)
-RESPONSE_LAG_PASSIVE_SPAN_S = 3600.0   # Max OFF tail used to measure the passive slope
-RESPONSE_LAG_MIN_CROSSINGS = 3        # Level crossings required for the late line
-# Relative change of the published lag that restarts the a collection during
-# the bootstrap (measurements of different power models are not comparable).
+# Relative change of the response model (sum and dead time, of the former sum) that recomputes the a collection
+# during the learning stage (measurements of different power models are not comparable).
 RESPONSE_LAG_MODEL_CHANGE_REL = 0.5
 RESPONSE_LAG_U_TOL = 0.05              # Power deviation ending a constant-power episode
-# Longest stop of the regulation (restart) across which the passive period or
-# the active episode in progress is resumed. A restart of Home Assistant or of
-# the thermostat takes a few minutes and keeps the last actuator state; over a
-# longer stop (host down, power outage, update) the heater power is unknown.
-RESPONSE_LAG_RESTART_MAX_GAP_S = 600.0
-RESPONSE_LAG_MAX_S = DT_MAX_MIN * 60.0  # Upper bound of an estimate
-# An intercept at or beyond this fraction of its asymptotic limit (infinite
-# lag) cannot be resolved from the episode.
-RESPONSE_LAG_RESOLVABLE_FRAC = 0.9
-# Settling gates, in published lags: the slope deficit after k lags is at most
-# exp(-k) for a single lag, whatever the pure delay share.
-AB_SETTLE_K_ACTIVE = 3.0               # Delivered power model corrects the remainder
-AB_SETTLE_K_PASSIVE = 3.0              # b is not corrected (learned before a)
-AB_SETTLE_ACTIVE_CAP_FRAC = 0.5        # Active gate cap, fraction of the median episode
-# Passive gate floor, in passive dead times. After a cut, a first-order
-# emitter keeps delivering u0 * exp(-t / tau) and the room only starts to
-# cool once this falls below the loss power u_ss: the passive dead time,
-# learned after full-power phases, is at least tau * ln(1 / u_ss) plus the
-# detection delay. The gate lasts the longer of this floor and the settling
-# time of the published lag, since either one may fall short of the emitter
-# decay.
-AB_SETTLE_K_PASSIVE_DEADTIME = 1.5
+# Longest stop of the regulation (restart) that can be bridged (restart_bridge.py):
+# the work in progress resumes and the stop is only a gap in the observations. A
+# reload of the integration or a restart of Home Assistant keeps the last
+# actuator state; over a longer stop (host down, power outage, update) the
+# heater power is unknown.
+RESTART_BRIDGE_MAX_GAP_S = 600.0
+# Same bound for the power-step episode resumed across a restart.
+RESPONSE_LAG_RESTART_MAX_GAP_S = RESTART_BRIDGE_MAX_GAP_S
+# Measurement events (smartpi/measure_event.py): a rest, a heating phase, its cut and the peak that follows.
+EVENT_MIN_REST_S = 1800.0    # Rest before the heating, for a settled baseline
+EVENT_BASELINE_SPAN_S = 3600.0  # Max rest tail used to fit the baseline
+EVENT_MIN_ON_S = 600.0       # Full-power seconds required in a regulation event
+EVENT_PHASE_MIN_OFF_S = RESPONSE_LAG_PHASE_MIN_OFF_S  # Shorter cut: same phase
+EVENT_PEAK_BIN_S = 300.0     # Width of the bins of the peak search
+EVENT_PEAK_CONFIRM_S = 1800.0  # A bin this long after the best bin confirms the peak
+EVENT_PEAK_MAX_S = 4 * 3600.0  # Longest wait for the peak after the cut
+# Early confirmation of a peak (smartpi/peak_search.py, a search built with a drop floor): a closed bin after the best
+# one, lower than it by max(the drop floor, STOP_PEAK_DROP_RISE_FRAC of the rise since the cut).
+STOP_PEAK_DROP_RISE_FRAC = 0.5
+EVENT_MIN_RISE_C = 0.3       # Smallest temperature rise of a regulation event read by the response model
+# Active gate cap, fraction of the median episode (the settling waits: smartpi/response_model.py).
+AB_SETTLE_ACTIVE_CAP_FRAC = 0.5
 
 # Indoor temperature histories of the dead time estimator (learning slopes and
 # dead time inflection lookback). Samples are kept by age so that a learning
@@ -346,16 +304,11 @@ AB_SETTLE_K_PASSIVE_DEADTIME = 1.5
 # arrive on average more often than every 10 s (a sample is added on each
 # value change or after 60 s).
 TIN_HISTORY_RETENTION_MIN = DT_MAX_MIN + 60
-# Dead time detection: an active response (power on) is attributed to the
-# power step within this delay. A passive response (power off) may follow a
-# long release of the heat stored in the emitter (floor heating): in the
-# bootstrap its wait only ends by a detection or by a power restart, which
-# needs a drop the detection sees first, so the delay only bounds how late a
-# drop is still attributed to the power cut.
+# Dead time detection: the response to a power start is attributed to the
+# power step within this delay.
 DEADTIME_ACTIVE_TIMEOUT_S = 14400.0
-DEADTIME_PASSIVE_TIMEOUT_S = 43200.0
 # Free-running trend before an active power start: fitted on the raw samples of
-# the last 30 min of the OFF period (after the passive delay of the last stop),
+# the last 30 min of the OFF period (one emitter lag after the last stop),
 # with at least 15 min and 4 samples (3 per half window to compare the slopes
 # of the two halves). A trend whose fitted change stays within one sensor step
 # (floored at this value) is flat.
@@ -381,41 +334,10 @@ NEAR_BAND_TAPER_KP_MIN = 0.75
 NEAR_BAND_TAPER_KI_MIN = 0.45
 
 
-# --- Forced Calibration Constants ---
-CALIBRATION_TIMEOUT_MIN = 600  # 10 hours timeout
-# A calibration threshold is reachable when the twin equilibrium of the phase
-# lies at least this far beyond it (deg C)
-CALIBRATION_REACHABILITY_MARGIN_C = 0.5
+# --- Calibration ---
+CALIBRATION_MAX_S = 48.0 * 3600.0  # longest calibration, from its first calculation
 
-# --- AutoCalibTrigger Enums ---
-
-class AutoCalibState(str, Enum):
-    """State machine states for AutoCalibTrigger."""
-    IDLE = "idle"
-    WAITING_SNAPSHOT = "waiting_snapshot"
-    MONITORING = "monitoring"
-    TRIGGERED = "triggered"
-
-
-class AutoCalibWaitingReason(str, Enum):
-    """Reason for remaining in waiting_snapshot state."""
-    NONE = "none"
-    DEADTIME_COOL_PENDING = "deadtime_cool_pending"
-    FALLBACK_7D_COUNTDOWN = "fallback_7d_countdown"
-
-
-# --- AutoCalibTrigger Constants ---
-AUTOCALIB_SNAPSHOT_PERIOD_H = 120          # Rolling snapshot period: 5 days
-AUTOCALIB_DT_COOL_FALLBACK_DAYS = 7       # Days before fallback if cool deadtime never reliable
-AUTOCALIB_COOLDOWN_H = 24                  # Minimum hours between calibrations
-AUTOCALIB_A_MAD_THRESHOLD = 0.25          # MAD/med threshold for 'a' stagnation
-AUTOCALIB_B_MAD_THRESHOLD = 0.30          # MAD/med threshold for 'b' stagnation
-AUTOCALIB_TEXT_GRADIENT_C = 5.0           # Min Tin-Text gradient to check deadtime_cool stagnation
-AUTOCALIB_MAX_RETRIES = 3                  # Max retries before declaring model degraded
-AUTOCALIB_RETRY_DELAY_H = 6               # Hours between a failed attempt and its retry
-AUTOCALIB_EXIT_NEW_OBS_MIN = 1            # Minimum new observations (a/b) for positive exit
-
-# --- FFv2 Governance Enums ---
+# --- AB confidence ---
 
 class ABConfidenceState(str, Enum):
     """Confidence state for a,b model parameters."""
@@ -429,60 +351,8 @@ class ABConfidenceState(str, Enum):
 AB_CONFIDENCE_MIN_SAMPLES_A = 11
 AB_CONFIDENCE_MIN_SAMPLES_B = 11
 
-# --- FFv2 Normative Constants ---
-
-# Trim slow correction
-FF_TRIM_RHO = 0.15        # Max trim authority relative to u_ff_ab (dimensionless ratio)
-FF_TRIM_LAMBDA = 0.05     # Trim EMA learning rate per admissible episode
-FF_TRIM_EPSILON = 0.02    # Min u_ff_ab denominator for relative budget (avoids div-by-~0)
-FF_TRIM_REBOOT_FREEZE_CYCLES = 3  # Freeze trim learning for a few cycles after reboot
-FF_TRIM_MAX_ERROR_C = 0.3         # Max |error| (°C) across an admissible thermal window
-FF_TRIM_MAX_SLOPE_H = 0.6        # Max |mean slope| (°C/h) for an admissible thermal window
-FF_TRIM_PERSISTENCE = 3          # Same-direction independent windows required before applying trim
-FF_TRIM_BUFFER_SIZE = 5          # Rolling sample count used for median trim correction
-FF_TRIM_DELTA_EPSILON = 0.001    # Ignore power corrections below actuator precision scale
-FF_TRIM_PI_STABILITY_EPSILON = 0.01  # Max PI output range across a near-band trim window
-FF_TRIM_MIN_WINDOW_MIN = 30.0
-FF_TRIM_MIN_WINDOW_CYCLES = 6
-FF_TRIM_DEADTIME_WINDOW_FACTOR = 2.0
-FF_TRIM_MIN_DISTINCT_MEASUREMENTS = 3
-FF_TRIM_MIN_POWER_COVERAGE = 0.995
-FF_TRIM_PERIODIC_MIN_DISTINCT_MEASUREMENTS = 5
-FF_TRIM_PERIODIC_MIN_POWER_RANGE = 0.01
-FF_TRIM_PERIODIC_ALLOWED_REGIMES = frozenset({  # Regimes in which a phase-closed periodic cycle may feed the trim
-    GovernanceRegime.NEAR_BAND,
-    GovernanceRegime.DEAD_BAND,
-    GovernanceRegime.HOLD,
-    GovernanceRegime.SATURATED,
-})
-FF_TRIM_PERIODIC_NEGLIGIBLE_LIMIT_S = 5.0
-# Trim freeze reasons a periodic cycle tolerates: its samples, pending proposals
-# and proposal collection survive them; the trim itself is never mutated while frozen.
-FF_TRIM_PERIODIC_TOLERATED_FREEZE_REASONS = frozenset({"saturated"})
-FF_TRIM_TRANSFER_MAX_ERROR_C = 0.10
-FF_TRIM_TRANSFER_MAX_SLOPE_H = 0.10
-FF_TRIM_TRANSFER_MAX_P_POWER = 0.01
-FF_TRIM_TRANSFER_MAX_POWER_RANGE = 0.005
-FF_TRIM_TRANSFER_MAX_DELIVERY_RESIDUAL = 0.005
-FF_TRIM_TRANSFER_COMMAND_EPSILON = 0.001
-
 # Deadband output shaping
 DEADBAND_EDGE_PERSISTENCE = 2
-
-# --- FF3 conservative pseudo-MPC constants ---
-FF3_DELTA_U = 0.05
-FF3_MAX_AUTHORITY = 0.20
-FF3_NEARBAND_GAIN = 0.50
-FF3_MIN_HORIZON_CYCLES = 2
-FF3_RESPONSE_LOOKAHEAD_CYCLES = 2
-FF3_MAX_HORIZON_CYCLES = 8
-FF3_ACTION_SENSITIVITY_EPS_C = 1e-4
-FF3_COST_TRACKING_WEIGHT = 1.0
-FF3_COST_TERMINAL_WEIGHT = 2.0
-FF3_COST_OVERSHOOT_WEIGHT = 4.0
-FF3_COST_DU_WEIGHT = 0.05
-FF3_SCORE_EPS_COST = 1e-4
-FF3_UNRELIABLE_MODEL_AUTHORITY_FACTOR = 0.5
 
 # --- Adaptive T_int Filter ---
 ENABLE_ADAPTIVE_TINT_FILTER = True

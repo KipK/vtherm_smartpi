@@ -24,7 +24,7 @@ def _make_smartpi() -> SmartPI:
 
 
 def test_update_learning_forwards_causal_setpoint_gate_reasons() -> None:
-    """Only a setpoint transition blocks A learning; a trajectory does not."""
+    """Only a setpoint transition blocks A learning."""
     smartpi = _make_smartpi()
     smartpi.learn_win.update = MagicMock(return_value=(0, 0))
 
@@ -34,21 +34,6 @@ def test_update_learning_forwards_causal_setpoint_gate_reasons() -> None:
     assert kwargs["a_learning_allowed"] is False
     assert kwargs["a_learning_block_reason"] == "skip: setpoint transition"
 
-    smartpi.sp_mgr._trajectory_source = "setpoint"
-    smartpi.update_learning(10.0, 20.0, 10.0, 0.5)
-
-    kwargs = smartpi.learn_win.update.call_args.kwargs
-    assert kwargs["a_learning_allowed"] is True
-    assert kwargs["a_learning_block_reason"] is None
-
-    smartpi.sp_mgr.set_passthrough(20.0)
-    smartpi.update_learning(10.0, 20.0, 10.0, 0.5)
-
-    kwargs = smartpi.learn_win.update.call_args.kwargs
-    assert kwargs["a_learning_allowed"] is True
-    assert kwargs["a_learning_block_reason"] is None
-
-    smartpi.sp_mgr._trajectory_source = "disturbance"
     smartpi.update_learning(10.0, 20.0, 10.0, 0.5)
 
     kwargs = smartpi.learn_win.update.call_args.kwargs
@@ -97,7 +82,8 @@ def test_disabled_learning_blocks_hysteresis_deadtime_updates() -> None:
 
 
 def test_learning_change_starts_with_clean_observations() -> None:
-    """Each flag transition must discard transients but preserve learned data."""
+    """Each flag transition discards the transients of the learning but keeps the learned data, the temperature
+    history (the anticipation reads it) and the heating episode (the dead-time integral hold reads it)."""
     smartpi = _make_smartpi()
     smartpi.est.a = 0.015
     smartpi.est.b = 0.003
@@ -108,7 +94,7 @@ def test_learning_change_starts_with_clean_observations() -> None:
     smartpi.learn_win._active = True
     smartpi.dt_est.state = "WAITING_HEAT_RESPONSE"
     smartpi.dt_est.heat_start_time = 100.0
-    smartpi.dt_est._tin_history.append((100.0, 19.0))
+    smartpi.dt_est.history.raw.append((100.0, 19.0))
     smartpi._t_heat_episode_start = 100.0
 
     smartpi.set_learning_enabled(False)
@@ -121,13 +107,13 @@ def test_learning_change_starts_with_clean_observations() -> None:
     assert smartpi.learn_win_active is False
     assert smartpi.dt_est.state == "OFF"
     assert smartpi.dt_est.heat_start_time is None
-    assert not smartpi.dt_est.tin_history
-    assert smartpi._t_heat_episode_start is None
+    assert list(smartpi.dt_est.history.raw) == [(100.0, 19.0)]
+    assert smartpi._t_heat_episode_start == 100.0
 
     smartpi.learn_win._active = True
     smartpi.dt_est.state = "WAITING_COOL_RESPONSE"
     smartpi.dt_est.cool_start_time = 200.0
-    smartpi.dt_est._tin_history.append((200.0, 20.0))
+    smartpi.dt_est.history.raw.append((200.0, 20.0))
     smartpi._committed_on_percent = 0.8
 
     smartpi.set_learning_enabled(True)
@@ -136,7 +122,7 @@ def test_learning_change_starts_with_clean_observations() -> None:
     assert smartpi.learn_win_active is False
     assert smartpi.dt_est.state == "OFF"
     assert smartpi.dt_est.cool_start_time is None
-    assert not smartpi.dt_est.tin_history
+    assert list(smartpi.dt_est.history.raw) == [(100.0, 19.0), (200.0, 20.0)]
     assert smartpi.dt_est.last_power == 0.8
     assert smartpi.dt_est.deadtime_heat_s == 180.0
 
@@ -189,11 +175,12 @@ def test_published_diagnostics_expose_learning_enabled() -> None:
 
 
 def test_published_diagnostics_have_no_governor_or_landing_fields() -> None:
-    """Published setpoint diagnostics expose the trajectory only."""
+    """Published diagnostics carry no governor, landing or trajectory fields."""
     diagnostics = build_published_diagnostics(_make_smartpi())
 
     assert not any(key.startswith("governor_") for key in diagnostics["setpoint"])
     assert "reference_governor" not in diagnostics["analysis"]
-    assert "trajectory" in diagnostics["analysis"]
+    assert "trajectory" not in diagnostics["analysis"]
+    assert not any(key.startswith("trajectory_") for key in diagnostics["setpoint"])
     assert "landing" not in diagnostics["analysis"]
     assert not any(key.startswith("landing_") for key in diagnostics["setpoint"])

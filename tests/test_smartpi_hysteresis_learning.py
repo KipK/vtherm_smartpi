@@ -86,14 +86,14 @@ class TestSmartPiIntegration:
         """Verify SmartPI feeds the dead time estimator in STABLE phase."""
         hass = MagicMock()
         pi = SmartPI(hass, 10.0, 0, 0, "test_pi")
-        import time
-        pi.calibration_mgr.last_calibration_time = time.time()
         
         pi.dt_est = MagicMock()
         pi.dt_est.deadtime_heat_s = 120.0 # Set valid float
         pi.dt_est.deadtime_heat_reliable = True # Set valid bool
         pi.dt_est.deadtime_cool_reliable = True
         pi.dt_est.deadtime_cool_s = 120.0
+        pi.dt_est.active_deadtime.return_value = (120.0, True)
+        pi.dt_est.passive_deadtime.return_value = (120.0, True)
 
         # Force STABLE phase by populating history
         # We need AB_HISTORY_SIZE (31) measurements

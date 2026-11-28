@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+Changes since 0.6.7. Configurations and states saved by 0.6.x load as they are: the learned heating rate, loss coefficient and dead time are kept.
+
+### Regulation
+
+- Anticipation (heating and cooling): the proportional and integral errors read the measured temperature plus the distance the room is about to travel before a command takes effect (slope of the temperature times the emitter lag, at most 1 °C, faded in near the setpoint; inside the deadband it is kept until it dies out). It is the one mechanism of the approach to the setpoint: the setpoint trajectory (late braking) and its options "Setpoint filter" and "Release tau factor" are removed, and the proportional branch works on the raw setpoint. The slope is read over a window equal to the emitter lag, between 10 and 30 minutes. The overshoot of slow emitters is reduced; rooms with a long emitter lag may overshoot slightly more after a large step.
+- The anticipation horizon is the emitter lag of the response model of the mode (dead time plus response time constant); without a published model, the emitter lag kept from the measurement pulses, else the dead time after a start.
+- Integral holds (after a heater start, after a window or power-shedding resume, after a heating unavailable period) last the effective dead time of the response model (dead time plus half the response time constant); the heating near band reads the same model. The gains keep the dead time measured after a start.
+- Feed-forward: the holding power learned as `b / a` is the only feed-forward. The "Use FF3" option, the slow feed-forward trim, the thermal twin and its time-to-setpoint estimate are removed.
+- Restarts: a restart of up to 10 minutes in the same mode, with SmartPI in control before and after, is bridged: the command, the measurements in progress, the learning windows and a running heating cut above the setpoint resume. While the indoor temperature is missing after a restart the command of before the stop is kept, up to 10 minutes after the stop.
+
+### Learning
+
+- Response model: per mode, SmartPI fits a dead time and a response time constant of the emitter on whole measurement events (measurement pulses, bootstrap phases, calibration pulses, comfort returns of the regulation after a rest). With the home position set in Home Assistant, events in darkness are preferred. An event far from the model in force (more than twice or less than half its emitter lag) waits for a second event that confirms it.
+- Learning of the heating rate `a` and the loss coefficient `b`: the windows open one emitter lag after a power step or a cut, and the power the emitter still delivers is counted in both. The stored measurements are recomputed when `a`, `b` or the response model change. The outlier filter keeps a minimum width of 2 % of its median.
+- Start of the learning: a new option chooses how a blank thermostat learns its room. **Bootstrap** (default) runs hysteresis cycles at full power until the model is learned. **Direct start** regulates with the PI from the first minute and measures the room with at most three light pulses near the setpoint; it needs daily scheduled setpoint changes and works best with a 0.01 °C sensor. Existing configurations keep the bootstrap. The bootstrap phases also give starting values for `a` and `b`.
+- Heating and cooling: a thermostat that switches between heating and cooling keeps what it learned for each mode (rate, dead time, response model); the loss coefficient is shared.
+- Pausing the learning: the pause stops every learning while the regulation goes on. Two optional entities per thermostat: a **disturbance** entity (guests, fireplace, sun) pauses the learning while it is on; a **heating unavailable** entity (boiler off, hot-water priority, defrost) pauses it and holds the integral, which resumes after the effective dead time once the entity is off.
+- Calibration on request (`force_smartpi_calibration`): at most three measurement pulses near the setpoint, sized from the response model, instead of a deep excursion below and above the setpoint. A heating rate more than 30 % off is corrected (the loss coefficient is read and published only); the step of the holding power is moved into the integral. The request is refused while the first model is being learned, while the learning is paused or while the thermostat is off, with no minimum interval since the last calibration.
+- Automatic calibration timing: A thermostat upgraded from 0.6.x whose response model of the heating or cooling mode still holds only the values carried over asks for one calibration by itself after 3 days, at a quiet window (dark at the home position, setpoint and mode unchanged for an hour, no setpoint change in the same hours of the two previous days), at most 3 times per mode and 20 hours apart; the pulses of the direct start and of a calibration you request have no timing rule. Every calibration records its interrupted pulses, fires a `calibration_ended` event (`result`, `automatic`, `interruptions`) and, when its readings did not agree or a pulse was interrupted, creates a persistent notification with advice (a clean success dismisses it). New diagnostics: `calibration.automatic`, `calibration.interruptions`, `calibration.automatic_status`.
+- Removed learning: the dead time after a stop, the heating balance, the response-lag estimator and the emitter lag learning of the room model (`T_ar`); the response model replaces them.
+
+### Room model (observation)
+
+- SmartPI identifies a model of the room (air, walls, emitter), follows its state and publishes forecasts and their errors in `room_model`, with a daily heat balance. It only uses quiet periods (no sun, constant setpoint, valid data), found from the home position; nothing has to be declared. It never changes the command (`room_model.used_by_regulation` is `false`).
+- Requirements: `numpy` and `scipy` are installed with the integration.
+
+### Diagnostics
+
+- Added: the response model (`model.dead_time_s`, `response_time_constant_s`, `response_source`, `response_confidence`, `analysis.learning.response_model`), the anticipation (`analysis.control.anticipation_c`, `anticipation_horizon_s`, `anticipation_horizon_source`, `temperature.anticipated`), the effective dead time and the gain delay (`analysis.control.effective_dead_time_s`, `gain_delay_s`, `gain_delay_source`, `gain_closed_loop_time_s`), `learning.start`, `learning.block_reason`, the calibration by pulses (`calibration.*`), `control.last_restart` and `room_model`.
+- Removed: `setpoint.filtered_setpoint` and the trajectory fields, `analysis.trajectory`, `feedforward.fftrim`, `analysis.twin`, the FF2 and FF3 fields, `autocalib` and the `smartpi_autocalib_*` events, `calibration.retry_count`, the dead time after a stop (`model.deadtime_cool_*` in heating, `model.deadtime_heat_*` in cooling), `analysis.learning.heating_balance` and `analysis.learning.response_lag`.
+- Changed values: during a heating cut above the setpoint `control.mode` is `heating cut above the setpoint` and the published errors follow the room; with the direct start, before the first model, the sensor state is `learning_pulses`, `control.phase` `Learning` and `learning.stage` `measurement pulses`.
+- Documentation and cards: two names only, dead time and emitter lag, with a glossary; the Markdown cards show the response model.
+
+### Upgrade from 0.6.x
+
+- The response model starts from the saved dead time and emitter lag (`previous version`, provisional) until its first measured event.
+- A thermostat updated during its bootstrap with enough heating-rate measurements publishes its heating rate at once and regulates; a calibration in progress is not resumed; the first restart after the update is not bridged.
+
 ## [0.6.7]
 
 - Calibration: whether a calibration can be completed is decided from the

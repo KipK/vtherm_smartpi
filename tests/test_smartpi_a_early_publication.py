@@ -49,7 +49,7 @@ def test_fewer_agreeing_measurements_do_not_publish():
     assert est.learn_ok_count_a == 0
 
 
-def test_waiting_for_the_response_lag_blocks_the_early_publication():
+def test_waiting_for_the_delivered_power_model_blocks_the_early_publication():
     est = _estimator()
     est.a_model_ready = False
     _learn_a(est, [1.0, 1.01, 0.99, 1.0])

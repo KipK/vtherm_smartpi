@@ -39,40 +39,23 @@ class TestDeadTimeEstimatorNew:
         assert self.est.deadtime_heat_s == 300.0
         assert self.est.deadtime_heat_reliable is True
 
-    def test_nominal_cool_detection(self):
+    def test_a_stop_arms_no_detection(self):
+        """The dead time is read after a start only: a stop leaves the slot of the falling response empty in HEAT."""
         now = 1000.0
-        # Initial: Heating
-        self.est.update(now, 20.0, 0.0) # OFF first
+        self.est.update(now, 20.0, 0.0)
         now += 1000
-        self.est.update(now, 20.0, 1.0) # ON
-        # Wait enough for min power/state
-        
-        # Force state to HEATING (detected or not)
-        self.est.state = "HEATING" 
-        self.est.last_power = 1.0 # Simulate prev power
-        
-        # Stop Heat (Power 1 -> 0)
+        self.est.update(now, 20.0, 1.0)
+        self.est.state = "HEATING"
         now += 60
-        stop_time = now
-        # Prev power 1.0 > 0.8
         self.est.update(now, 22.0, 0.0)
-        assert self.est.state == "WAITING_COOL_RESPONSE"
-        assert self.est.cool_start_time == now
-        assert self.est.cool_peak_temp == 22.0
-        
-        # Inertia: Temp rises a bit
-        now += 60
-        self.est.update(now, 22.1, 0.0)
-        assert self.est.state == "WAITING_COOL_RESPONSE"
-        assert self.est.cool_peak_temp == 22.1
-        
-        # Temp Drops 0.05 from peak (22.1 - 0.05 = 22.05)
-        now += 300
-        self.est.update(now, 22.04, 0.0)
-        assert self.est.state == "COOLING"
-        # start at 2060. Peak/inflection at 2120. Diff = 60.
-        assert self.est.deadtime_cool_s == 60.0
-        assert self.est.deadtime_cool_reliable is True
+        assert self.est.state == "OFF"
+        assert self.est.last_stop_time == now
+        for temp in (22.1, 22.04, 21.9):
+            now += 300
+            self.est.update(now, temp, 0.0)
+        assert self.est.state == "OFF"
+        assert self.est.deadtime_cool_s is None
+        assert self.est.cool_start_time is None
 
     def test_active_cool_power_learns_falling_response_deadtime(self):
         """In HVAC COOL, power ON must populate the physical cool dead time."""
@@ -113,38 +96,18 @@ class TestDeadTimeEstimatorNew:
         assert self.est.deadtime_cool_reliable is True
         assert self.est.deadtime_heat_s is None
 
-    def test_cool_power_stop_learns_passive_rising_deadtime(self):
-        """In HVAC COOL, power OFF must populate the physical heat dead time."""
+    def test_a_cool_power_stop_arms_no_detection(self):
+        """In HVAC COOL a stop leaves the slot of the rising response empty."""
         now = 1000.0
         self.est.model_hvac_mode = "cool"
         self.est.last_power = 1.0
         self.est.state = "COOLING"
-        self.est.update(
-            now,
-            20.0,
-            0.0,
-            hvac_mode=VThermHvacMode_COOL,
-        )
-
-        assert self.est.state == "WAITING_HEAT_RESPONSE"
-
-        now += 120.0
-        self.est.update(
-            now,
-            20.0,
-            0.0,
-            hvac_mode=VThermHvacMode_COOL,
-        )
-        now += 60.0
-        self.est.update(
-            now,
-            20.06,
-            0.0,
-            hvac_mode=VThermHvacMode_COOL,
-        )
-
-        assert self.est.deadtime_heat_s == 120.0
-        assert self.est.deadtime_heat_reliable is True
+        self.est.update(now, 20.0, 0.0, hvac_mode=VThermHvacMode_COOL)
+        assert self.est.state == "OFF"
+        for temp in (20.0, 20.06, 20.2):
+            now += 120.0
+            self.est.update(now, temp, 0.0, hvac_mode=VThermHvacMode_COOL)
+        assert self.est.deadtime_heat_s is None
 
     def test_legacy_cool_deadtime_state_is_reset_on_first_use(self):
         """Legacy COOL transition labels are not silently reinterpreted."""
@@ -158,22 +121,6 @@ class TestDeadTimeEstimatorNew:
         assert self.est.deadtime_heat_s is None
         assert self.est.deadtime_cool_s is None
         assert self.est.model_hvac_mode == "cool"
-
-    def test_cooling_persistence(self):
-        """Test that COOLING state persists even with subsequent updates at 0 power"""
-        now = 1000.0
-        self.est.state = "COOLING"
-        self.est.last_power = 0.0
-        
-        # Update with 0 power
-        now += 60
-        self.est.update(now, 20.0, 0.0)
-        assert self.est.state == "COOLING"
-        
-        # Update again
-        now += 60
-        self.est.update(now, 19.9, 0.0)
-        assert self.est.state == "COOLING"
 
     def test_power_threshold_check(self):
         now = 1000.0
@@ -197,10 +144,11 @@ class TestDeadTimeEstimatorNew:
         # Should accept (first run, last_stop_time is None)
         assert self.est.state == "WAITING_HEAT_RESPONSE"
         
-        # OFF (shortly after)
+        # OFF (shortly after): the detection is aborted
         now += 60
         self.est.update(now, 20.0, 0.0)
-        assert self.est.state == "WAITING_COOL_RESPONSE"
+        assert self.est.state == "OFF"
+        assert self.est.last_outcome["heat"] == "aborted"
         assert self.est.last_stop_time == now
         stop_time = now
         
@@ -209,7 +157,7 @@ class TestDeadTimeEstimatorNew:
         self.est.update(now, 20.0, 1.0)
         # Should Ignore Heat Start because (now - stop_time) < 600
         assert self.est.state == "HEATING" # Ignored
-        assert self.est.heat_start_time < stop_time 
+        assert self.est.heat_start_time is None
 
     def test_timeout_heat(self):
         now = 0.0
@@ -263,8 +211,8 @@ def test_quantised_slow_ramp_slope_uses_raw_history(rate_c_per_h: float, phase_c
         raw = _quantise(20.0 + phase_c + rate_c_per_h * (now - t0) / 3600.0)
         _feed(est, filt, now, raw)
 
-        assert est.tin_history[-1] == (now, raw)
-        slope, _, _ = ABEstimator.robust_dTdt_per_min(list(est.tin_history))
+        assert est.history.raw[-1] == (now, raw)
+        slope, _, _ = ABEstimator.robust_dTdt_per_min(list(est.history.raw))
         if slope is not None:
             ratios.append(slope / true_slope_per_min)
 
@@ -282,7 +230,7 @@ def test_single_quantum_step_is_rejected_on_raw_history() -> None:
         raw = 20.0 if k < 2 else 20.1
         _feed(est, filt, 1000.0 + k * TICK_S, raw)
 
-    slope, method, jumps = ABEstimator.robust_dTdt_per_min(list(est.tin_history))
+    slope, method, jumps = ABEstimator.robust_dTdt_per_min(list(est.history.raw))
     assert slope is None
     assert method == "too_few_jumps"
     assert jumps == 1
@@ -310,9 +258,9 @@ def test_raw_history_and_filtered_lookback_routing() -> None:
 
     assert est.state == "HEATING"
     assert est.deadtime_heat_s == 300.0
-    assert [v for _, v in est.tin_history] == [30.0, 30.5, 31.0, 31.5]
+    assert [v for _, v in est.history.raw] == [30.0, 30.5, 31.0, 31.5]
     assert [v for _, v in est._tin_lp_history] == [20.0, 20.0, 20.0, 20.06]
-    assert [t for t, _ in est.tin_history] == [1000.0, start, start + 300, start + 360]
+    assert [t for t, _ in est.history.raw] == [1000.0, start, start + 300, start + 360]
 
 
 def test_tin_raw_defaults_to_tin() -> None:
@@ -321,8 +269,8 @@ def test_tin_raw_defaults_to_tin() -> None:
     est.update(1000.0, 20.0, 0.0)
     est.update(1060.0, 20.1, 0.0)
 
-    assert list(est.tin_history) == [(1000.0, 20.0), (1060.0, 20.1)]
-    assert list(est._tin_lp_history) == list(est.tin_history)
+    assert list(est.history.raw) == [(1000.0, 20.0), (1060.0, 20.1)]
+    assert list(est._tin_lp_history) == list(est.history.raw)
 
 
 def test_reset_observation_clears_both_histories() -> None:
@@ -330,12 +278,12 @@ def test_reset_observation_clears_both_histories() -> None:
     est = DeadTimeEstimator()
     est.update(1000.0, 20.0, 0.0, tin_raw=20.1)
     est.reset_observation()
-    assert not est.tin_history
+    assert not est.history.raw
     assert not est._tin_lp_history
 
     est.update(2000.0, 20.0, 0.0, tin_raw=20.1)
     est.reset()
-    assert not est.tin_history
+    assert not est.history.raw
     assert not est._tin_lp_history
 
 
@@ -386,42 +334,38 @@ def test_histories_persistence_round_trip(clock: _Clock) -> None:
     _restart(clock, downtime_s=300.0, mono_after_boot=10.0)
     restored = DeadTimeEstimator()
     restored.load_state(state)
-    assert [v for _, v in restored.tin_history] == [20.1, 20.2]
+    assert [v for _, v in restored.history.raw] == [20.1, 20.2]
     assert [v for _, v in restored._tin_lp_history] == [20.0, 20.02]
     # Samples keep their age relative to the restarted monotonic clock.
     expected_ts = [10.0 - 300.0 - 120.0, 10.0 - 300.0 - 60.0]
-    assert [t for t, _ in restored.tin_history] == pytest.approx(expected_ts)
+    assert [t for t, _ in restored.history.raw] == pytest.approx(expected_ts)
     assert [t for t, _ in restored._tin_lp_history] == pytest.approx(expected_ts)
 
 
 def _learned_estimator_waiting(clock: _Clock, *, active: bool) -> DeadTimeEstimator:
-    """Estimator with learned dead times and a detection in progress."""
+    """Estimator with a learned dead time and a detection in progress (``active`` False: the wait for the response to
+    a stop that an earlier version saved)."""
     est = DeadTimeEstimator()
-    est.deadtime_heat_s = 300.0
-    est.deadtime_cool_s = 900.0
-    est.deadtime_heat_reliable = True
-    est.deadtime_cool_reliable = True
-    est._history_heat.append(300.0)
-    est._history_cool.append(900.0)
     est.update(clock.mono - 120.0, 20.0, 0.0, tin_raw=20.05)
+    est.deadtime_heat_s = 300.0
+    est.deadtime_heat_reliable = True
+    est._history_heat.append(300.0)
     # Old stop: well beyond the minimum OFF time.
     est.last_stop_time = clock.mono - 7200.0
     if active:
         est.state = "WAITING_HEAT_RESPONSE"
         est.heat_start_time = clock.mono - 600.0
         est.heat_trough_temp = 20.0
-        est._waiting_power_on = True
     else:
         est.state = "WAITING_COOL_RESPONSE"
         est.cool_start_time = clock.mono - 600.0
         est.cool_peak_temp = 20.0
-        est._waiting_power_on = False
     return est
 
 
 @pytest.mark.parametrize("active", [True, False])
 def test_in_progress_detection_is_not_restored(clock: _Clock, active: bool) -> None:
-    """A detection spanning a restart is dropped; learned dead times and histories survive."""
+    """A detection spanning a restart is dropped; the learned dead time and the histories survive."""
     est = _learned_estimator_waiting(clock, active=active)
     state = est.save_state()
     detection_keys = {
@@ -458,17 +402,13 @@ def test_in_progress_detection_is_not_restored(clock: _Clock, active: bool) -> N
     assert restored.heat_trough_temp is None
     assert restored.cool_start_time is None
     assert restored.cool_peak_temp is None
-    assert restored._waiting_power_on is None
     assert restored.last_stop_time == pytest.approx(5.0)
     assert restored.deadtime_heat_s == 300.0
-    assert restored.deadtime_cool_s == 900.0
     assert restored.deadtime_heat_reliable
-    assert restored.deadtime_cool_reliable
     assert list(restored._history_heat) == [300.0]
-    assert list(restored._history_cool) == [900.0]
-    assert [v for _, v in restored.tin_history] == [20.05]
+    assert [v for _, v in restored.history.raw] == [20.05]
     assert [v for _, v in restored._tin_lp_history] == [20.0]
-    assert restored.tin_history[0][0] == pytest.approx(5.0 - 1800.0 - 120.0)
+    assert restored.history.raw[0][0] == pytest.approx(5.0 - 1800.0 - 120.0)
 
     # Immediately after the restart the room already moves in the waited direction.
     now = clock.mono + 10.0
@@ -478,10 +418,23 @@ def test_in_progress_detection_is_not_restored(clock: _Clock, active: bool) -> N
         restored.update(now + 60.0 * i, 20.0 + step * i, u)
 
     assert list(restored._history_heat) == [300.0]
-    assert list(restored._history_cool) == [900.0]
     assert restored.deadtime_heat_s == 300.0
-    assert restored.deadtime_cool_s == 900.0
+    assert restored.deadtime_cool_s is None
     assert restored.state not in {"WAITING_HEAT_RESPONSE", "WAITING_COOL_RESPONSE"}
+
+
+def test_bridged_restart_drops_a_saved_wait_for_the_response_to_a_stop(clock: _Clock) -> None:
+    """A wait for the response to a stop saved by an earlier version resumes as no detection; an active one resumes."""
+    for waiting_power_on, expected in ((False, "OFF"), (True, "WAITING_HEAT_RESPONSE")):
+        restored = DeadTimeEstimator()
+        restored.load_state({
+            "deadtime_heat_s": 300.0, "deadtime_heat_reliable": True, "history_heat": [300.0],
+            "model_hvac_mode": "heat",
+            "detection": {"state": "WAITING_HEAT_RESPONSE", "last_power": 0.0, "heat_start_wall": clock.wall - 600.0,
+                          "heat_trough_temp": 20.0, "waiting_power_on": waiting_power_on, "trend_slope": 0.0},
+        })
+        restored.resume_after_restart(bridged=True)
+        assert restored.state == expected
 
 
 def test_detection_arms_after_in_session_minimum_off(clock: _Clock) -> None:
@@ -509,7 +462,7 @@ def test_legacy_state_without_filtered_history_loads(clock: _Clock) -> None:
     restored._tin_lp_history.append((1.0, 19.0))
     restored.load_state(state)
 
-    assert [v for _, v in restored.tin_history] == [20.1]
+    assert [v for _, v in restored.history.raw] == [20.1]
     assert not restored._tin_lp_history
 
 
@@ -519,7 +472,7 @@ def test_legacy_null_sample_timestamps_are_dropped(clock: _Clock) -> None:
     restored.load_state(
         {"tin_history": [(None, 19.0), (clock.wall - 60.0, 20.0)]}
     )
-    assert [v for _, v in restored.tin_history] == [20.0]
+    assert [v for _, v in restored.history.raw] == [20.0]
 
 
 @pytest.mark.parametrize("stable", [False, True])
@@ -542,76 +495,5 @@ def test_smartpi_routes_raw_temperature_to_tin_history(stable: bool) -> None:
 
     t_int_lp = smartpi.tint_filter.t_int_lp
     assert t_int_lp != pytest.approx(19.5)
-    assert smartpi.dt_est.tin_history[-1][1] == 19.5
+    assert smartpi.dt_est.history.raw[-1][1] == 19.5
     assert smartpi.dt_est._tin_lp_history[-1][1] == pytest.approx(t_int_lp)
-
-
-# ---------------------------------------------------------------------------
-# Slow passive responses (floor heating): late drop after a residual rise
-# ---------------------------------------------------------------------------
-
-def _heat_then_cut(est, cut_at: float) -> float:
-    """Heat at full power from t=0 (after a long OFF), cut at ``cut_at``; return the cut time."""
-    est.update(0.0, 20.0, 0.0)
-    est.update(1000.0, 20.0, 1.0)
-    t = 1000.0
-    while t < cut_at:
-        t += 60.0
-        est.update(t, 20.0, 1.0)
-    est.update(cut_at, 20.0, 0.0)
-    return cut_at
-
-
-def test_passive_drop_after_four_hours_is_still_detected():
-    """A slab keeps warming then plateaus: the drop comes 6 h after the cut."""
-    est = DeadTimeEstimator()
-    cut = _heat_then_cut(est, 4000.0)
-    assert est.state == "WAITING_COOL_RESPONSE"
-    t = cut
-    peak_at = cut + 5 * 3600.0
-    while t < cut + 6.5 * 3600.0:
-        t += 60.0
-        temp = 20.0 + 0.6 * min(t - cut, peak_at - cut) / (peak_at - cut)  # rise to the peak, then plateau
-        if t > cut + 6 * 3600.0:
-            temp -= 0.06  # drop beyond the detection threshold
-        est.update(t, temp, 0.0)
-    assert est.deadtime_cool_reliable is True
-    # Measured to the last instant near the peak, not to the late drop.
-    assert est.deadtime_cool_s == pytest.approx(6 * 3600.0, abs=120.0)
-    assert est.last_outcome["cool"] == "detected"
-
-
-def test_passive_peak_time_does_not_need_the_temperature_history():
-    """The dead time stays right when the history no longer holds the peak."""
-    est = DeadTimeEstimator()
-    cut = _heat_then_cut(est, 4000.0)
-    t = cut
-    while t < cut + 2 * 3600.0:
-        t += 60.0
-        est.update(t, 20.0 + 0.3 * (t - cut) / 7200.0, 0.0)
-    near_peak = t
-    est._tin_lp_history.clear()  # retention dropped every sample up to now
-    est.update(t + 60.0, 20.24, 0.0)
-    assert est.deadtime_cool_s == pytest.approx(near_peak - cut, abs=1.0)
-
-
-def test_passive_wait_times_out_after_the_passive_limit():
-    est = DeadTimeEstimator()
-    cut = _heat_then_cut(est, 4000.0)
-    est.update(cut + 5 * 3600.0, 20.0, 0.0)
-    assert est.state == "WAITING_COOL_RESPONSE"
-    assert est.waiting_elapsed_s == pytest.approx(5 * 3600.0)
-    est.update(cut + est.passive_timeout_seconds + 1.0, 20.0, 0.0)
-    assert est.state == "COOLING"
-    assert est.deadtime_cool_s is None
-    assert est.last_outcome["cool"] == "timeout"
-    assert est.waiting_elapsed_s is None
-
-
-def test_power_restart_aborts_the_passive_wait():
-    est = DeadTimeEstimator()
-    cut = _heat_then_cut(est, 4000.0)
-    est.update(cut + 3600.0, 20.1, 0.0)
-    est.update(cut + 3660.0, 20.1, 1.0)
-    assert est.last_outcome["cool"] == "aborted"
-    assert est.deadtime_cool_s is None

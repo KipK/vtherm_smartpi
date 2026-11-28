@@ -249,3 +249,51 @@ def test_smartpi_diagnostics_expose_ab_drift_fields():
     assert "b_drift_state" in learning
     assert len(smartpi.est.a_drift.drift_buffer) == 0
     assert len(smartpi.est.b_drift.drift_buffer) == 0
+
+
+def _gate(est, name, value, hist):
+    """Run the outlier gate of one measure against the given accepted history."""
+    channel = est.a_drift if name == "a" else est.b_drift
+    return est._process_param_measure(
+        name=name,
+        value=value,
+        history=hist,
+        drift_channel=channel,
+        min_collect_count=3,
+        allow_drift=False,
+        seq=1,
+    )
+
+
+def test_a_gate_keeps_a_relative_width_when_first_measures_agree():
+    """Nearly equal first a measures must not shrink the gate to a sliver of the median."""
+
+    est = ABEstimator()
+    hist = [0.0785, 0.0606, 0.0604, 0.0605, 0.0606]
+    # a 5 % lower measure (0.0575) is inside the 2 % floor: 3 * 1.4826 * 0.02 * 0.0605 = 0.0054
+    assert _gate(est, "a", 0.0575, hist).accepted
+    assert _gate(est, "a", 0.0650, hist).accepted
+    # a gross outlier stays rejected
+    assert not _gate(est, "a", 0.0800, hist).accepted
+    assert not _gate(est, "a", 0.0450, hist).accepted
+
+
+def test_a_gate_still_uses_the_mad_when_it_is_wider_than_the_floor():
+    """A dispersed history keeps its own, wider gate."""
+
+    est = ABEstimator()
+    hist = [0.040, 0.050, 0.060, 0.070, 0.080]  # MAD 0.01, half-width 0.0445
+    assert _gate(est, "a", 0.100, hist).accepted
+    assert not _gate(est, "a", 0.150, hist).accepted
+
+
+def test_b_gate_is_unchanged_at_typical_values():
+    """At b of the order of 1e-3 the relative floor stays under the absolute one."""
+
+    est = ABEstimator()
+    hist = [0.0020] * 7
+    # absolute floor 1e-4: half-width 3 * 1.4826 * 1e-4 = 4.45e-4
+    assert _gate(est, "b", 0.00243, hist).accepted
+    assert not _gate(est, "b", 0.00246, hist).accepted
+    assert not _gate(est, "b", 0.00154, hist).accepted
+    assert _gate(est, "b", 0.00157, hist).accepted

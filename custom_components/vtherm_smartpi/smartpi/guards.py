@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 
-from ..hvac_mode import VThermHvacMode, VThermHvacMode_HEAT
+from ..hvac_mode import VThermHvacMode, VThermHvacMode_COOL, VThermHvacMode_HEAT
 from .const import GUARD_CUT_RESET_STEPS, NEAR_BAND_HYSTERESIS_C
 
 _LOGGER = logging.getLogger(__name__)
 
 GuardState = dict[str, int]
+
+GUARD_CUT_I_MODE = "I:OVERRIDE(guard_cut)"   # integral mode of a calculation in a guard cut
+GUARD_CUT_STATE = "heating cut above the setpoint"   # published regulation mode during a guard cut
 
 class GuardAction:
     """Action returned by check_guards."""
@@ -33,6 +36,8 @@ class SmartPIGuards:
         # Smallest observed sensor step: a reset closer to the threshold than
         # one step lets a reading flickering between two levels re-trigger.
         self.sensor_step_c: float = 0.0
+        # Setpoint error of the last calculation in a guard cut (published only: the PI is not computed then)
+        self.cut_error: float | None = None
 
     @property
     def guard_cut_active(self) -> bool:
@@ -49,6 +54,14 @@ class SmartPIGuards:
     @property
     def guard_kick_count(self) -> int:
         return self._guard_kick_count
+
+    def note_cut(self, target_temp: float | None, current_temp: float | None, hvac_mode: VThermHvacMode) -> None:
+        """A calculation in a guard cut: keep its setpoint error (setpoint - temperature, mode sign) for publication."""
+        if target_temp is None or current_temp is None:
+            self.cut_error = None
+            return
+        error = float(target_temp) - float(current_temp)
+        self.cut_error = -error if hvac_mode == VThermHvacMode_COOL else error
 
     def reset(self, keep_counts: bool = True) -> None:
         """Reset active flags."""
@@ -186,6 +199,14 @@ class SmartPIGuards:
             return GuardAction.KICK_TRIGGER
             
         return GuardAction.NONE
+
+    def restore_cut(self, active: bool) -> None:
+        """Resume a guard cut that was running when VT stopped (bridged HEAT restart only).
+
+        The heater stayed off over the stop; the usual reset threshold then releases the cut.
+        """
+        if active:
+            self._guard_cut_active = True
 
     def _reset_margin_c(self) -> float:
         """Guard cut reset hysteresis: at least NEAR_BAND_HYSTERESIS_C and GUARD_CUT_RESET_STEPS sensor steps."""

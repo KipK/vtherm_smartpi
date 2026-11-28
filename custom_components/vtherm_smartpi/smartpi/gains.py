@@ -2,12 +2,16 @@
 Smart-PI Gain Scheduler Module.
 
 Manages Kp/Ki gain calculation with IMC-based tuning and near-band adjustments.
+
+Delay L of the gain rule: the reliable active dead time after a start of the mode (dead-time estimator), as it is.
+The integral holds read the effective dead time of the response model instead (``effective_dead_time``).
 """
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from ..hvac_mode import (
     VThermHvacMode,
@@ -38,6 +42,84 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+SOURCE_RESPONSE_MODEL = "response model"
+SOURCE_DEAD_TIME = "dead time"
+
+
+class GainDelay(NamedTuple):
+    """A delay (s) read by the regulation and where it comes from (``SOURCE_RESPONSE_MODEL``, ``SOURCE_DEAD_TIME``)."""
+
+    seconds: float
+    source: str
+
+
+def start_dead_time(dt_est: "DeadTimeEstimator", hvac_mode: VThermHvacMode) -> GainDelay | None:
+    """Reliable positive active dead time of ``hvac_mode`` after a start, None without one: the delay L of the
+    gain rule."""
+    seconds, reliable = dt_est.active_deadtime(hvac_mode)
+    if reliable and isinstance(seconds, (int, float)) and seconds > 0.0:
+        return GainDelay(float(seconds), SOURCE_DEAD_TIME)
+    return None
+
+
+def effective_dead_time(
+    model: dict | None, dt_est: "DeadTimeEstimator", hvac_mode: VThermHvacMode,
+) -> GainDelay | None:
+    """Effective dead time of ``hvac_mode``: theta + tau_e / 2 of its response model (``ResponseModel.values``, None
+    without one), else ``start_dead_time``. The integral holds read it."""
+    if model is not None:
+        return GainDelay(float(model["theta_s"]) + 0.5 * float(model["tau_e_s"]), SOURCE_RESPONSE_MODEL)
+    return start_dead_time(dt_est, hvac_mode)
+
+
+def closed_loop_time_min(deadtime_s: float, cycle_min: float, valve_mode_enabled: bool = False) -> float:
+    """lambda of the IMC/SIMC rule (min): max(3 L, 2 cycles, 5 min), 4 L for a valve."""
+    deadtime_factor = (
+        GAIN_LAMBDA_VALVE_DEADTIME_FACTOR
+        if valve_mode_enabled
+        else GAIN_LAMBDA_DEADTIME_FACTOR
+    )
+    return max(
+        deadtime_factor * float(deadtime_s) / 60.0,
+        GAIN_LAMBDA_CYCLE_FACTOR * max(float(cycle_min), 0.0),
+        GAIN_LAMBDA_MIN_MIN,
+    )
+
+
+def imc_simc_gains(
+    a_abs: float,
+    deadtime_s: float,
+    tau_min: float,
+    cycle_min: float,
+    valve_mode_enabled: bool = False,
+) -> tuple[float, float]:
+    """Kp and Ki of the IMC/SIMC rule for a heating rate ``a_abs`` (C/min at full power), a delay ``deadtime_s``
+    (L, ``start_dead_time``) and a time constant ``tau_min`` (``math.inf`` when no loss coefficient is known: the
+    integral time is then the bound of a slow room, 4 (lambda + L))."""
+    L_min = float(deadtime_s) / 60.0
+    lambda_min = closed_loop_time_min(deadtime_s, cycle_min, valve_mode_enabled)
+    kp_calc = 1.0 / (abs(float(a_abs)) * (lambda_min + L_min))
+    kp = clamp(kp_calc, KP_MIN, KP_MAX)
+    # SIMC (Skogestad 2003): the integral time of a lag-dominant
+    # (integrating) process is bounded by 4 (lambda + L), so that load
+    # disturbances are rejected within the closed-loop time scale
+    # instead of the room time constant.
+    ti = min(float(tau_min), GAIN_TI_LAMBDA_FACTOR * (lambda_min + L_min))
+    ki = clamp(kp / ti, KI_MIN, KI_MAX)
+    return kp, ki
+
+
+def pre_model_gains(
+    a_abs: float,
+    deadtime_s: float,
+    cycle_min: float,
+    valve_mode_enabled: bool = False,
+) -> tuple[float, float]:
+    """Gains of the learning stage from a measured heating rate and the delay L of the gain rule, without a loss
+    coefficient: the rule of a slow room, neither gain above its fallback value."""
+    kp, ki = imc_simc_gains(a_abs, deadtime_s, math.inf, cycle_min, valve_mode_enabled)
+    return min(kp, KP_SAFE), min(ki, KI_SAFE)
+
 
 @dataclass
 class GainResult:
@@ -54,7 +136,7 @@ class GainScheduler:
     
     The gain scheduler calculates appropriate proportional (Kp) and integral (Ki)
     gains based on:
-    1. Explicit IMC/SIMC tuning when the A/B model and dead time are reliable
+    1. Explicit IMC/SIMC tuning when the A/B model is reliable and a delay L is known
     2. Safe fallback gains when the complete model is unavailable
     3. Near-band gain reduction for stability near setpoint
     4. Governance freeze application for safe operation
@@ -72,8 +154,9 @@ class GainScheduler:
         self._ki = KI_SAFE
         self._kp_source = "safe"
         self._ki_source = "safe"
-        self._generation = 0
-        self._generation_gains: tuple[float, float] | None = None
+        self._origin = "fallback"
+        self.delay: GainDelay | None = None
+        self.closed_loop_time_s: float | None = None
 
     def reset(self) -> None:
         """Reset gains to safe defaults."""
@@ -81,8 +164,9 @@ class GainScheduler:
         self._ki = KI_SAFE
         self._kp_source = "safe"
         self._ki_source = "safe"
-        self._generation = 0
-        self._generation_gains = None
+        self._origin = "fallback"
+        self.delay = None
+        self.closed_loop_time_s = None
         _LOGGER.debug("%s: GainScheduler reset to safe defaults", self._name)
 
     def calculate(
@@ -90,13 +174,14 @@ class GainScheduler:
         tau_reliable: bool,
         tau_min: float,
         estimator: "ABEstimator",
-        dt_est: "DeadTimeEstimator",
+        delay: GainDelay | None,
         in_near_band: bool,
         governance_decision: GovernanceDecision,
         near_band_ratio: float = 1.0,
         cycle_min: float = 10.0,
         valve_mode_enabled: bool = False,
         hvac_mode: VThermHvacMode = VThermHvacMode_HEAT,
+        pre_model_a: float | None = None,
     ) -> GainResult:
         """Calculate Kp and Ki gains based on model and conditions.
         
@@ -104,61 +189,46 @@ class GainScheduler:
             tau_reliable: Whether the time constant estimate is reliable.
             tau_min: Minimum time constant in minutes.
             estimator: ABEstimator instance with 'a' attribute (gain coefficient).
-            dt_est: DeadTimeEstimator with physical heat/cool response dead times.
+            delay: Delay L of the gain rule for ``hvac_mode`` (``start_dead_time``), None without one.
             in_near_band: Whether currently in near-band region.
             near_band_ratio: |error| / near-band width, clamped to [0, 1].
             governance_decision: Current governance decision for gain adaptation.
             cycle_min: PWM cycle duration in minutes.
             valve_mode_enabled: Whether valve-mode tuning should be applied.
-            hvac_mode: Active mono-mode HVAC contract for A and dead time.
+            hvac_mode: Active mono-mode HVAC contract for A.
+            pre_model_a: Heating rate (C/min at full power) measured before the first model is published;
+                with a delay it gives the gains of the learning stage
+                (``pre_model_gains``) in place of the fallback ones. None: no such rate.
             
         Returns:
             GainResult with calculated kp, ki, and their sources.
         """
-        if hvac_mode == VThermHvacMode_COOL:
-            active_deadtime_s = dt_est.deadtime_cool_s
-            active_deadtime_reliable = dt_est.deadtime_cool_reliable
-            model_sign_valid = estimator.a < -1e-6
-        else:
-            active_deadtime_s = dt_est.deadtime_heat_s
-            active_deadtime_reliable = dt_est.deadtime_heat_reliable
-            model_sign_valid = estimator.a > 1e-6
-
-        has_complete_model = (
-            tau_reliable
-            and tau_min > 0.0
-            and model_sign_valid
-            and active_deadtime_reliable
-            and active_deadtime_s is not None
-            and active_deadtime_s > 1.0
+        model_sign_valid = estimator.a < -1e-6 if hvac_mode == VThermHvacMode_COOL else estimator.a > 1e-6
+        delay_s = delay.seconds if delay is not None and delay.seconds > 1.0 else None
+        self.delay = delay if delay_s is not None else None
+        self.closed_loop_time_s = (
+            None if delay_s is None else 60.0 * closed_loop_time_min(delay_s, cycle_min, valve_mode_enabled)
         )
 
-        if not has_complete_model:
+        has_complete_model = tau_reliable and tau_min > 0.0 and model_sign_valid and delay_s is not None
+
+        pre_model_used = (
+            not has_complete_model
+            and pre_model_a is not None
+            and pre_model_a > 0.0
+            and delay_s is not None
+        )
+        if pre_model_used:
+            kp, ki = pre_model_gains(pre_model_a, delay_s, cycle_min, valve_mode_enabled)
+            kp_source = "measurement_pulses"
+            ki_source = "measurement_pulses"
+        elif not has_complete_model:
             kp = KP_SAFE
             ki = KI_SAFE
             kp_source = "safe"
             ki_source = "safe"
         else:
-            L_min = float(active_deadtime_s) / 60.0
-            cycle_min_eff = max(float(cycle_min), 0.0)
-            deadtime_factor = (
-                GAIN_LAMBDA_VALVE_DEADTIME_FACTOR
-                if valve_mode_enabled
-                else GAIN_LAMBDA_DEADTIME_FACTOR
-            )
-            lambda_min = max(
-                deadtime_factor * L_min,
-                GAIN_LAMBDA_CYCLE_FACTOR * cycle_min_eff,
-                GAIN_LAMBDA_MIN_MIN,
-            )
-            kp_calc = 1.0 / (abs(float(estimator.a)) * (lambda_min + L_min))
-            kp = clamp(kp_calc, KP_MIN, KP_MAX)
-            # SIMC (Skogestad 2003): the integral time of a lag-dominant
-            # (integrating) process is bounded by 4 (lambda + L), so that load
-            # disturbances are rejected within the closed-loop time scale
-            # instead of the room time constant.
-            ti = min(float(tau_min), GAIN_TI_LAMBDA_FACTOR * (lambda_min + L_min))
-            ki = clamp(kp / ti, KI_MIN, KI_MAX)
+            kp, ki = imc_simc_gains(estimator.a, delay_s, tau_min, cycle_min, valve_mode_enabled)
             if valve_mode_enabled:
                 kp_source = "imc_simc_valve"
                 ki_source = "imc_simc_valve"
@@ -166,8 +236,6 @@ class GainScheduler:
                 kp_source = "imc_simc"
                 ki_source = "imc_simc"
         
-        model_gains = (kp, ki)
-
         # Apply Near Band factor for stability near setpoint
         if in_near_band:
             ratio = clamp(float(near_band_ratio), 0.0, 1.0)
@@ -179,20 +247,25 @@ class GainScheduler:
             kp_source = f"{kp_source}_nearband"
             ki_source = f"{ki_source}_nearband"
         
+        # The learning stage holds the gains only while it has nothing to adapt them to
+        if pre_model_used and governance_decision == GovernanceDecision.FREEZE:
+            governance_decision = GovernanceDecision.ADAPT_ON
+
         # Apply Governance Freeze against the previously applied gains
         if governance_decision in (GovernanceDecision.HARD_FREEZE, GovernanceDecision.FREEZE):
             kp = self._kp
             ki = self._ki
             kp_source = "frozen"
             ki_source = "frozen"
-        else:
-            self._update_generation(model_gains)
-            if governance_decision == GovernanceDecision.SOFT_FREEZE_DOWN:
-                kp = min(kp, self._kp)
-                ki = min(ki, self._ki)
-                kp_source = f"{kp_source}_softfreeze"
-                ki_source = f"{ki_source}_softfreeze"
+        elif governance_decision == GovernanceDecision.SOFT_FREEZE_DOWN:
+            kp = min(kp, self._kp)
+            ki = min(ki, self._ki)
+            kp_source = f"{kp_source}_softfreeze"
+            ki_source = f"{ki_source}_softfreeze"
         
+        if governance_decision not in (GovernanceDecision.HARD_FREEZE, GovernanceDecision.FREEZE):
+            self._origin = "pulse" if pre_model_used else ("model" if has_complete_model else "fallback")
+
         # Store current values
         self._kp = kp
         self._ki = ki
@@ -205,19 +278,6 @@ class GainScheduler:
             kp_source=self._kp_source,
             ki_source=self._ki_source,
         )
-
-    def _update_generation(self, model_gains: tuple[float, float]) -> None:
-        """Start a gain generation when the untapered model gains become active.
-
-        The near-band taper is a deterministic function of the error, so it
-        does not start a generation; a model, dead-time or safe-gain change does.
-        """
-        previous = self._generation_gains
-        if previous is None or any(
-            abs(new - old) > 1e-9 for new, old in zip(model_gains, previous)
-        ):
-            self._generation += 1
-            self._generation_gains = model_gains
 
     def load_state(self, state: dict) -> None:
         """Load state from persistence dict.
@@ -263,9 +323,10 @@ class GainScheduler:
     # --- Properties for diagnostic access ---
 
     @property
-    def generation(self) -> int:
-        """Generation of the untapered model gains behind the applied gains."""
-        return self._generation
+    def origin(self) -> str:
+        """What the applied gains come from: "fallback" (safe values), "pulse" (heating rate of a measurement
+        pulse, before the first model) or "model" (complete model). A frozen gain keeps the origin it had."""
+        return self._origin
 
     @property
     def kp(self) -> float:

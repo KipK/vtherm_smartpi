@@ -12,8 +12,8 @@ from custom_components.vtherm_smartpi.smartpi.diagnostic_history import (
 def _live_diagnostics() -> dict:
     return {
         "control": {"phase": "Stable", "kp": 0.4, "ki": 0.002, "ti_min": 200.0},
-        "temperature": {"indoor": 20.5, "outdoor": 8.0, "integral_error": 75.0},
-        "setpoint": {"filtered_setpoint": 21.0, "boost_active": False},
+        "temperature": {"indoor": 20.5, "anticipated": 20.62, "outdoor": 8.0, "integral_error": 75.0},
+        "setpoint": {"boost_active": False},
         "power": {
             "applied_percent": 30.0,
             "command_percent": 35.0,
@@ -32,16 +32,52 @@ def test_history_contains_only_equinox_time_series() -> None:
     """Recorder history must contain only the stable chart contract."""
     assert build_history_diagnostics(_live_diagnostics()) == {
         "control": {"kp": 0.4, "ki": 0.002},
-        "temperature": {"indoor": 20.5, "integral_error": 75.0},
-        "setpoint": {"filtered_setpoint": 21.0},
+        "temperature": {"indoor": 20.5, "anticipated": 20.62, "integral_error": 75.0},
         "power": {
             "applied_percent": 30.0,
             "command_percent": 35.0,
             "pi_percent": 20.0,
             "ff_percent": 15.0,
         },
-        "model": {"a": 0.05, "b": 0.001},
+        "model": {"a": 0.05, "b": 0.001, "effective_dead_time_s": None},
+        "feedforward": {"source": None},
+        "room_model": {
+            "a": None,
+            "b_eq": None,
+            "forecast_error_1h_c": None,
+            "forecast_error_12h_c": None,
+        },
     }
+
+
+def test_history_carries_the_feedforward_and_room_model_series() -> None:
+    """The room model and its feed-forward are charted."""
+    live = _live_diagnostics()
+    live["feedforward"] = {"source": "learned model", "deadband_power_source": "x"}
+    live["room_model"] = {
+        "status": "identified",
+        "a": 0.031,
+        "b_eq": 0.0012,
+        "forecast_error_c": {"1h": 0.02, "2h": 0.03, "6h": 0.05, "12h": 0.08},
+        "forecast_c": {"1h": 20.1},
+    }
+    history = build_history_diagnostics(live)
+
+    assert history["feedforward"] == {"source": "learned model"}
+    assert history["room_model"] == {
+        "a": 0.031,
+        "b_eq": 0.0012,
+        "forecast_error_1h_c": 0.02,
+        "forecast_error_12h_c": 0.08,
+    }
+    assert "deadtime" not in history
+
+
+def test_history_series_are_null_before_any_forecast_check() -> None:
+    live = _live_diagnostics()
+    live["room_model"] = {"a": None, "b_eq": None, "forecast_error_c": {"1h": None, "12h": None}}
+    history = build_history_diagnostics(live)
+    assert history["room_model"]["forecast_error_1h_c"] is None
 
 
 def test_attribute_envelope_keeps_live_and_history_separate() -> None:
@@ -63,3 +99,9 @@ def test_history_does_not_depend_on_the_analysis_subtree() -> None:
     assert live == before
     del live["analysis"]
     assert build_history_diagnostics(live) == full
+
+
+def test_history_carries_the_effective_dead_time_of_the_response_model() -> None:
+    live = _live_diagnostics()
+    live["model"].update(dead_time_s=300, response_time_constant_s=1201)
+    assert build_history_diagnostics(live)["model"]["effective_dead_time_s"] == 900
